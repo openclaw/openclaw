@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import {
   readPersistedAuthProfileStateRaw,
   writePersistedAuthProfileStateRaw,
@@ -21,10 +22,7 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import {
-  encodeSessionArchiveContent,
-  readSessionArchiveContentSync,
-} from "./archive-compression.js";
+import { encodeSessionArchiveContent } from "./archive-compression.js";
 import { isSessionArchiveArtifactName } from "./artifacts.js";
 import {
   appendTranscriptEvent,
@@ -132,7 +130,7 @@ function appendTrajectory(storePath: string, sessionId: string, type: string) {
 }
 
 function readArchive(file: string) {
-  return readSessionArchiveContentSync(file)
+  return readSessionArchiveText(file)
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
@@ -299,7 +297,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       }
     });
 
-    it("conforms for exact persisted-key lookup without canonical alias fallback", async () => {
+    t("conforms for exact persisted-key lookup without canonical alias fallback", async () => {
       const scope = adapter.entryScope(paths);
       const mixedCaseScope = { ...scope, sessionKey: "AGENT:MAIN:MAIN" };
 
@@ -316,7 +314,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       });
     });
 
-    it("conforms for lifecycle entry and transcript cleanup", async () => {
+    t("conforms for lifecycle entry and transcript cleanup", async () => {
       const nowMs = Date.now();
       const oldTimestamp = nowMs - 600_000;
       const cleanupStorePath = path.join(
@@ -445,7 +443,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ]);
     });
 
-    it("conforms for raw transcript event load and append", async () => {
+    t("conforms for raw transcript event load and append", async () => {
       const scope = adapter.transcriptScope(paths);
       const readScope = adapter.transcriptReadScope(paths);
       const event = {
@@ -720,7 +718,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ]);
     });
 
-    it("rejects raw message transcript event writes", async () => {
+    t("rejects raw message transcript event writes", async () => {
       const scope = adapter.transcriptScope(paths, "session-raw-message");
       await expect(
         adapter.appendTranscriptEvent(scope, {
@@ -800,7 +798,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ]);
     });
 
-    it("conforms for transcript message append, idempotency, and update publication", async () => {
+    t("conforms for transcript message append, idempotency, and update publication", async () => {
       const scope = adapter.transcriptScope(paths, "session-2");
       const updates: unknown[] = [];
       const unsubscribe = onSessionTranscriptUpdate((update) => {

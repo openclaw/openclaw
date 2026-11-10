@@ -34,21 +34,33 @@ describe("UpdateCampaignController", () => {
     await scheduler.stop();
   });
 
-  function createController() {
-    return new UpdateCampaignController(scheduler);
+  const packageTarget = (version = "2.0.0") => ({ kind: "package" as const, version });
+  const gitTarget = {
+    kind: "git" as const,
+    upstreamRef: "origin/main",
+    upstreamSha: "frozen-sha",
+    commitsBehind: 3,
+  };
+  function fixture() {
+    const controller = new UpdateCampaignController(scheduler);
+    const apply = vi.fn(async () => "applied" as const);
+    const onChange = vi.fn();
+    const announce = (options: Partial<Parameters<typeof controller.announce>[0]> = {}) =>
+      controller.announce({
+        target: packageTarget(),
+        inspect: inspectors({ getQueueSize: () => 0 }),
+        apply,
+        onChange,
+        ...options,
+      });
+    const expectApply = (forced = false, target = packageTarget()) =>
+      expect(apply).toHaveBeenCalledWith({ forced, target });
+    return { controller, apply, onChange, announce, expectApply };
   }
 
   it("keeps the countdown deadline absolute across a clock rollback and applies once", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-    const onChange = vi.fn();
-
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
-      inspect: inspectors({ getQueueSize: () => 0 }),
-      apply,
-      onChange,
-    });
+    const { controller, apply, announce, expectApply } = fixture();
+    announce();
 
     expect(controller.getState()).toMatchObject({
       state: "countdown",
@@ -61,29 +73,21 @@ describe("UpdateCampaignController", () => {
     expect(apply).not.toHaveBeenCalled();
     await clock.advanceBy(10_000);
     expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({
-      forced: false,
-      target: { kind: "package", version: "2.0.0" },
-    });
+    expectApply();
     await clock.advanceBy(5 * 60_000);
     expect(apply).toHaveBeenCalledOnce();
   });
 
   it("ignores open terminals while persistence and queue work still delay countdown", async () => {
-    const controller = createController();
+    const { controller, announce, expectApply } = fixture();
     let queueSize = 0;
     let terminalPersistence = 1;
-    const apply = vi.fn(async () => "applied" as const);
-
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
+    announce({
       inspect: inspectors({
         getQueueSize: () => queueSize,
         getTerminalPersistence: () => terminalPersistence,
         getTerminalSessions: () => 2,
       }),
-      apply,
-      onChange: vi.fn(),
     });
     expect(controller.getState()?.state).toBe("waiting-for-idle");
 
@@ -98,22 +102,15 @@ describe("UpdateCampaignController", () => {
 
     await clock.advanceBy(60_000);
     expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({
-      forced: false,
-      target: { kind: "package", version: "2.0.0" },
-    });
+    expectApply();
   });
 
   it("keeps an announced countdown stable when active work begins", async () => {
-    const controller = createController();
+    const { controller, apply, announce } = fixture();
     let busy = 0;
-    const apply = vi.fn(async () => "applied" as const);
-
-    controller.announce({
+    announce({
       target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "one", commitsBehind: 1 },
       inspect: inspectors({ getQueueSize: () => busy }),
-      apply,
-      onChange: vi.fn(),
     });
     const applyAtMs = controller.getState()?.applyAtMs;
     busy = 1;
@@ -129,25 +126,12 @@ describe("UpdateCampaignController", () => {
   });
 
   it("starts a fresh campaign for a newer target and clears availability", () => {
-    const controller = createController();
-    const onChange = vi.fn();
+    const { controller, onChange, announce } = fixture();
     const inspect = inspectors({ getQueueSize: () => 1 });
-    const apply = vi.fn(async () => "applied" as const);
-
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
-      inspect,
-      apply,
-      onChange,
-    });
+    announce({ inspect });
     const first = controller.getState();
     clock.setTime(1_010_000);
-    controller.announce({
-      target: { kind: "package", version: "3.0.0" },
-      inspect,
-      apply,
-      onChange,
-    });
+    announce({ target: packageTarget("3.0.0"), inspect });
 
     expect(controller.getState()).toMatchObject({
       id: "campaign-2",
@@ -160,60 +144,21 @@ describe("UpdateCampaignController", () => {
     expect(onChange).toHaveBeenLastCalledWith(undefined);
   });
 
-  it("lets update.run adopt a campaign without invoking automatic apply", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-
-    expect(controller.adopt()).toEqual({ status: "absent" });
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
-      inspect: inspectors({ getQueueSize: () => 0 }),
-      apply,
-      onChange: vi.fn(),
-    });
-    expect(controller.adopt()).toEqual({
-      status: "adopted",
-      campaignId: "campaign-1",
-      target: { kind: "package", version: "2.0.0" },
-    });
-    expect(controller.getState()?.state).toBe("applying");
-    expect(controller.hold()).toBe(false);
-    await clock.advanceBy(15 * 60_000);
-    expect(apply).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "a different Git upstream",
-      target: {
-        kind: "git" as const,
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-        commitsBehind: 3,
-      },
-      requested: {
-        mode: "tracked" as const,
-        upstreamRef: "upstream/main",
-        upstreamSha: "frozen-sha",
-      },
-      matching: {
-        mode: "tracked" as const,
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-      },
-    },
-  ])("keeps $name waiting after mismatched adoption", ({ target, requested, matching }) => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-    const onChange = vi.fn();
-    controller.announce({
-      target,
+  it("keeps a different Git upstream waiting after mismatched adoption", () => {
+    const { controller, apply, onChange, announce } = fixture();
+    const matching = {
+      mode: "tracked" as const,
+      upstreamRef: "origin/main",
+      upstreamSha: "frozen-sha",
+    };
+    announce({
+      target: gitTarget,
       inspect: inspectors({ getQueueSize: () => 1 }),
-      apply,
-      onChange,
     });
 
-    expect(controller.adopt(requested)).toEqual({ status: "mismatch" });
+    expect(controller.adopt({ ...matching, upstreamRef: "upstream/main" })).toEqual({
+      status: "mismatch",
+    });
     expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "waiting-for-idle" });
     expect(onChange).toHaveBeenCalledOnce();
     expect(apply).not.toHaveBeenCalled();
@@ -221,26 +166,14 @@ describe("UpdateCampaignController", () => {
     expect(controller.adopt(matching)).toMatchObject({
       status: "adopted",
       campaignId: "campaign-1",
-      target,
+      target: gitTarget,
     });
     expect(controller.getState()?.state).toBe("applying");
   });
 
   it("keeps an applying campaign unchanged for a conflicting adoption", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-    const onChange = vi.fn();
-    controller.announce({
-      target: {
-        kind: "git",
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-        commitsBehind: 3,
-      },
-      inspect: inspectors({ getQueueSize: () => 0 }),
-      apply,
-      onChange,
-    });
+    const { controller, apply, onChange, announce } = fixture();
+    announce({ target: gitTarget });
     await clock.advanceBy(60_000);
     const transitionCount = onChange.mock.calls.length;
     const requestedTarget = {
@@ -256,14 +189,9 @@ describe("UpdateCampaignController", () => {
   });
 
   it("holds a waiting campaign once and shifts its hard deadline", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
+    const { controller, apply, announce, expectApply } = fixture();
+    announce({
       inspect: inspectors({ getQueueSize: () => 1 }),
-      apply,
-      onChange: vi.fn(),
     });
 
     expect(controller.hold()).toBe(true);
@@ -286,22 +214,13 @@ describe("UpdateCampaignController", () => {
     expect(apply).not.toHaveBeenCalled();
     await clock.advanceBy(15 * 60_000);
     expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({
-      forced: true,
-      target: { kind: "package", version: "2.0.0" },
-    });
+    expectApply(true);
   });
 
   it("holds a countdown, drops its apply deadline, and allows adoption", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
-      inspect: inspectors({ getQueueSize: () => 0 }),
-      apply,
-      onChange: vi.fn(),
-    });
+    const { controller, apply, announce } = fixture();
+    expect(controller.adopt()).toEqual({ status: "absent" });
+    announce();
     expect(controller.getState()?.state).toBe("countdown");
 
     expect(controller.hold(10_000)).toBe(true);
@@ -315,26 +234,20 @@ describe("UpdateCampaignController", () => {
     expect(controller.getState()?.state).toBe("waiting-for-idle");
     expect(apply).not.toHaveBeenCalled();
 
-    expect(controller.adopt()).toMatchObject({
+    expect(controller.adopt()).toEqual({
       status: "adopted",
       campaignId: "campaign-1",
-      target: { kind: "package", version: "2.0.0" },
+      target: packageTarget(),
     });
     expect(controller.getState()?.state).toBe("applying");
+    expect(controller.hold()).toBe(false);
     await clock.advanceBy(20 * 60_000);
     expect(apply).not.toHaveBeenCalled();
   });
 
   it("preserves a consumed hold while returning to countdown without spinning timers", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
-      inspect: inspectors({ getQueueSize: () => 0 }),
-      apply,
-      onChange: vi.fn(),
-    });
+    const { controller, apply, announce } = fixture();
+    announce();
     expect(controller.hold(10_000)).toBe(true);
 
     await clock.advanceBy(10_000);
@@ -349,47 +262,29 @@ describe("UpdateCampaignController", () => {
   });
 
   it("clears a failed apply and lets the next announcement start fresh", async () => {
-    const controller = createController();
-    const onChange = vi.fn();
-    const announcement = {
-      target: { kind: "package" as const, version: "2.0.0" },
-      inspect: inspectors({ getQueueSize: () => 0 }),
-      apply: vi.fn(async () => "failed" as const),
-      onChange,
-    };
+    const { controller, onChange, announce } = fixture();
+    const announcement = { apply: vi.fn(async () => "failed" as const) };
 
-    controller.announce(announcement);
+    announce(announcement);
     await clock.advanceBy(60_000);
 
     expect(controller.getState()).toBeUndefined();
     expect(onChange).toHaveBeenLastCalledWith(undefined);
 
-    controller.announce(announcement);
+    announce(announcement);
     expect(controller.getState()).toMatchObject({ id: "campaign-2", state: "countdown" });
   });
 
   it("keeps the applying campaign owner when a newer target is announced", async () => {
-    const controller = createController();
+    const { controller, onChange, announce } = fixture();
     const firstApply = vi.fn(async () => "handoff" as const);
     const nextApply = vi.fn(async () => "handoff" as const);
-    const onChange = vi.fn();
-    const inspect = inspectors({ getQueueSize: () => 0 });
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
-      inspect,
-      apply: firstApply,
-      onChange,
-    });
+    announce({ apply: firstApply });
     await clock.advanceBy(60_000);
     const applying = controller.getState();
     onChange.mockClear();
 
-    controller.announce({
-      target: { kind: "package", version: "3.0.0" },
-      inspect,
-      apply: nextApply,
-      onChange,
-    });
+    announce({ target: packageTarget("3.0.0"), apply: nextApply });
     await clock.advanceBy(15 * 60_000);
 
     expect(controller.getState()).toEqual(applying);
@@ -400,7 +295,7 @@ describe("UpdateCampaignController", () => {
   });
 
   it("does not clear a replacement campaign when an earlier apply fails", async () => {
-    const controller = createController();
+    const { controller, announce } = fixture();
     const applying = createDeferredCore();
     const outcome = createDeferredCore<"failed">();
     const apply = vi.fn(() => {
@@ -408,24 +303,14 @@ describe("UpdateCampaignController", () => {
       return outcome.promise;
     });
 
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
-      inspect: inspectors({ getQueueSize: () => 0 }),
-      apply,
-      onChange: vi.fn(),
-    });
+    announce({ apply });
     const wake = clock.advanceBy(60_000);
     try {
       await applying.promise;
       expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "applying" });
 
       controller.clear();
-      controller.announce({
-        target: { kind: "package", version: "3.0.0" },
-        inspect: inspectors({ getQueueSize: () => 0 }),
-        apply: vi.fn(async () => "applied" as const),
-        onChange: vi.fn(),
-      });
+      announce({ target: packageTarget("3.0.0") });
       expect(controller.getState()).toMatchObject({ id: "campaign-2", state: "countdown" });
     } finally {
       outcome.resolve("failed");

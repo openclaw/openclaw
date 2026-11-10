@@ -40,14 +40,6 @@ beforeAll(async () => {
     callGatewayMock: hoisted.callGatewayMock,
     getRuntimeConfig: () => hoisted.configOverride,
     resolveAgentConfig: resolveAgentConfigFromEntries,
-    resolveSandboxRuntimeStatus: ({ cfg = {}, sessionKey }) => {
-      const agent = resolveAgentConfigFromEntries(cfg, sessionKey?.split(":")[1] ?? "");
-      const explicitMode = agent?.sandbox?.mode;
-      const defaultMode = (cfg.agents as AgentTree | undefined)?.defaults?.sandbox?.mode;
-      return {
-        sandboxed: explicitMode === "all" || (explicitMode !== "off" && defaultMode === "all"),
-      };
-    },
     resetModules: false,
     sessionStorePath: "/tmp/subagent-spawn-allowlist-session-store.json",
   }));
@@ -61,7 +53,7 @@ beforeEach(async () => {
 });
 
 it("forbids cross-agent targets outside the requester's allowlist", async () => {
-  setConfig({ subagents: { allowAgents: ["alpha"] } });
+  setConfig({ subagents: { allowAgents: ["alpha"] } }, { alpha: {}, beta: {} });
   expectRejected(await spawn("beta"));
 });
 

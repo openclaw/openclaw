@@ -9,8 +9,9 @@ type BuildIdentityOptions = {
   readGitCommit: () => string | null;
 };
 
-export function readCurrentGitCommit(): string | null {
+export function readCurrentGitCommit(cwd?: string): string | null {
   const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });

@@ -1,11 +1,12 @@
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
+  defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { requireRecord, requireString } from "./chat-flow.test-support.ts";
+import { captureUiProofEnabled, requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI composer outbox" });
@@ -25,7 +26,7 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await pauseVirtualClock(page);
         await gateway.setMethodResponse("chat.send", {
           __mockError: {
@@ -42,7 +43,9 @@ suite.define(() => {
         await page.clock.runFor(2_000);
         const queue = page.locator(".chat-queue__item");
         await queue.getByText(prompt, { exact: true }).waitFor();
-        await page.screenshot({ path: suite.artifactDir + "/" + name + "-suspended.png" });
+        if (captureUiProofEnabled) {
+          await page.screenshot({ path: suite.artifactDir + "/" + name + "-suspended.png" });
+        }
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await composer.inputValue()).toBe("");
         expect(await queue.count()).toBe(1);
@@ -91,19 +94,32 @@ suite.define(() => {
         await page.locator(".chat-group.user").getByText(prompt, { exact: true }).waitFor();
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         expect(await page.getByText(prompt, { exact: true }).count()).toBe(1);
-        await page.screenshot({ path: suite.artifactDir + "/" + name + "-resumed.png" });
+        if (captureUiProofEnabled) {
+          await page.screenshot({ path: suite.artifactDir + "/" + name + "-resumed.png" });
+        }
       });
     },
   );
 
   it("keeps server-queued inputs in the composer through reconnect until consumption or cancellation", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+    const contextOptions = {
+      viewport: { width: 1280, height: 900 },
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } } }
+        : {}),
+    };
+    const video = await suite.withPage(contextOptions, async ({ page }) => {
       const sessionKey = "agent:main:main";
       const sessionId = "session:" + sessionKey;
       const prompt = "Please also review the installation notes.";
-      const gateway = await installMockGateway(page, { sessionKey });
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        featureMethods: [...defaultControlUiFeatureMethods, "chat.pendingInputs.dismiss"],
+        models: [{ id: "fixture-model", name: "Fixture model", provider: "fixture" }],
+        agentModel: "fixture/fixture-model",
+      });
       await page.goto(suite.server.baseUrl + "chat");
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await gateway.setOnline(false);
       await page.locator(".agent-chat__input--offline").waitFor();
       await waitForControlUiGatewayReconnecting(page);
@@ -149,31 +165,30 @@ suite.define(() => {
         messages: [],
         sessionInfo: { key: sessionKey, sessionId, hasActiveRun: false, status: "done" },
       };
-      await gateway.setMethodResponse("chat.history", {
+      const queuedHistory = {
         ...history,
         pendingInputs: { items: [pending], total: 1, queuedCount: 1 },
         inputReceipts: [{ runId, state: "pending", queued: true }],
-      });
+      };
+      await gateway.setMethodResponse("chat.history", queuedHistory);
+      await gateway.setMethodResponse("chat.startup", queuedHistory);
       await gateway.resolveDeferred("chat.send", { runId, status: "queued" });
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey,
         agentId: "main",
         reason: "agent.input.settled",
       });
-      // Accepted custody has no persisted entry ID until the input is consumed.
-      await page.waitForFunction(
-        ({ runId: expectedRunId, sessionId: expectedSessionId }) =>
-          document
-            .querySelector<
-              HTMLElement & {
-                state?: { chatQueue: Array<{ sendRunId?: string; sessionId?: string }> };
-              }
-            >("openclaw-chat-pane")
-            ?.state?.chatQueue.some(
-              (item) => item.sendRunId === expectedRunId && item.sessionId === expectedSessionId,
+      // The ACK retires local delivery; the Gateway's pending input owns the queued row.
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (pane) =>
+                (pane as HTMLElement & { state: { chatQueue: unknown[] } }).state.chatQueue.length,
             ),
-        { runId, sessionId },
-      );
+        )
+        .toBe(0);
       await queue.getByText(prompt, { exact: true }).waitFor();
       expect(await page.getByText(prompt, { exact: true }).count()).toBe(1);
       expect(await queue.count()).toBe(1);
@@ -184,7 +199,9 @@ suite.define(() => {
         await queue.locator(".chat-queue__steer, .chat-queue__retry, .chat-queue__grip").count(),
       ).toBe(0);
       expect(await statusBand.count()).toBe(0);
-      await page.screenshot({ path: suite.artifactDir + "/queued-message.png" });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: suite.artifactDir + "/queued-message.png" });
+      }
 
       await reconnectMockGateway(page, gateway);
       await queue.getByText(prompt, { exact: true }).waitFor();
@@ -276,10 +293,12 @@ suite.define(() => {
         reason: "agent.input.settled",
       });
       await page.locator('[data-chat-queue-item="pending-input:other-client-input"]').waitFor();
-      await page.screenshot({ path: suite.artifactDir + "/queued-attachment.png" });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: suite.artifactDir + "/queued-attachment.png" });
+      }
       await queue.getByText(cancelText, { exact: true }).waitFor();
       expect(await queue.count()).toBe(2);
-      await page.getByRole("button", { name: "Show earlier messages", exact: true }).click();
+      await page.getByRole("button", { name: "Show earlier unsent messages", exact: true }).click();
       await page.locator(".chat-group.user").getByText(olderText, { exact: true }).waitFor();
       expect(await queue.count()).toBe(2);
       expect(await queue.getByText(prompt, { exact: true }).count()).toBe(1);
@@ -287,7 +306,9 @@ suite.define(() => {
       expect(
         await page.locator(".chat-group.user").getByText(prompt, { exact: true }).count(),
       ).toBe(0);
-      await page.screenshot({ path: suite.artifactDir + "/queued-attachment-history.png" });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: suite.artifactDir + "/queued-attachment-history.png" });
+      }
 
       const promoted = {
         ...pendingMessage,
@@ -331,6 +352,7 @@ suite.define(() => {
         totalMessages: 100,
         hasMore: true,
         nextOffset: 1,
+        olderCursor: "older-outbox-history",
         pendingInputs: { items: [cancelInput], total: 2, nextBefore: 21, queuedCount: 1 },
         inputReceipts: [{ runId: cancelRunId, state: "pending", queued: true }],
       };
@@ -339,7 +361,11 @@ suite.define(() => {
       await gateway.setMethodResponse("chat.startup", recentHistory);
       await reconnectMockGateway(page, gateway);
       await page.locator(".chat-group.assistant").getByText(recentReply, { exact: true }).waitFor();
-      await page.screenshot({ path: suite.artifactDir + "/queue-after-consumption-reconnect.png" });
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          path: suite.artifactDir + "/queue-after-consumption-reconnect.png",
+        });
+      }
       expect(await queue.getByText(prompt, { exact: true }).count()).toBe(0);
       expect(await queue.count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
@@ -378,9 +404,9 @@ suite.define(() => {
       await gateway.setMethodResponse("chat.history", historyResponses(cancelledHistory));
       await gateway.resolveDeferred("chat.abort", { aborted: true, runIds: [cancelRunId] });
       await queue.waitFor({ state: "detached" });
-      await page.getByRole("button", { name: "Show latest messages", exact: true }).click();
+      await page.getByRole("button", { name: "Show latest unsent messages", exact: true }).click();
       await page
-        .getByRole("button", { name: "Show latest messages", exact: true })
+        .getByRole("button", { name: "Show latest unsent messages", exact: true })
         .waitFor({ state: "detached" });
       const expectRemoved = async () => {
         await page
@@ -392,15 +418,16 @@ suite.define(() => {
         expect(await page.getByText(cancelPrompt, { exact: true }).count()).toBe(0);
         expect(
           await page
-            .getByText(
-              "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
-              { exact: true },
-            )
+            .getByText("This message was not sent to the agent. Copy it and send again.", {
+              exact: true,
+            })
             .count(),
         ).toBe(0);
       };
       await expectRemoved();
-      await page.screenshot({ path: suite.artifactDir + "/removed-message.png" });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: suite.artifactDir + "/removed-message.png" });
+      }
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
       await gateway.setMethodResponse("chat.startup", cancelledHistory);
@@ -409,10 +436,12 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
       await page.reload();
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await expectRemoved();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await page.screenshot({ path: suite.artifactDir + "/removed-message-after-reload.png" });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: suite.artifactDir + "/removed-message-after-reload.png" });
+      }
 
       const stopRunId = "ordinary-stopped-input";
       const stopText = "Keep this stopped request available to send again.";
@@ -441,7 +470,7 @@ suite.define(() => {
       await gateway.setMethodResponse("chat.history", historyResponses(activeHistory));
       await gateway.setMethodResponse("chat.startup", activeHistory);
       await reconnectMockGateway(page, gateway);
-      const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       await stop.waitFor();
 
       const stoppedHistory = {
@@ -450,7 +479,10 @@ suite.define(() => {
         inFlightRun: null,
         pendingInputs: {
           ...activeHistory.pendingInputs,
-          items: [...cancelledHistory.pendingInputs.items, { ...stoppedInput, state: "cancelled" }],
+          items: [
+            ...cancelledHistory.pendingInputs.items,
+            { ...stoppedInput, state: "cancelled", cancelledByUser: true },
+          ],
         },
       };
       await gateway.setMethodResponse("chat.history", historyResponses(stoppedHistory));
@@ -458,7 +490,7 @@ suite.define(() => {
       await gateway.setMethodResponse("chat.abort", { aborted: true, runIds: [stopRunId] });
       await stop.click();
       const stopped = await gateway.waitForRequest("chat.abort");
-      expect(stopped.params).toEqual({ sessionKey, runId: stopRunId });
+      expect(stopped.params).toMatchObject({ sessionKey, runId: stopRunId });
       await stop.waitFor({ state: "detached" });
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey,
@@ -466,16 +498,69 @@ suite.define(() => {
         reason: "agent.input.settled",
       });
       await page.getByText(stopText, { exact: true }).waitFor();
-      await page
-        .getByText(
-          "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
-          { exact: true },
-        )
-        .waitFor();
+      const notice = page.getByText(
+        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+        { exact: true },
+      );
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: suite.artifactDir + "/user-stopped-message.png" });
+      }
+      expect(await notice.count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Dismiss all", exact: true }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: /Dismiss unsent message/ }).count()).toBe(0);
+      expect(stopped.params).toMatchObject({ userInitiated: true });
       expect(await page.getByText(cancelText, { exact: true }).count()).toBe(0);
       expect(await page.getByText(cancelPrompt, { exact: true }).count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await page.screenshot({ path: suite.artifactDir + "/stopped-message-retained.png" });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: suite.artifactDir + "/stopped-message-retained.png" });
+      }
+      await page.reload();
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      await page.getByText(stopText, { exact: true }).waitFor();
+      expect(await notice.count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      const externalText = "Keep an externally cancelled request available to send again.";
+      const externalHistory = {
+        ...stoppedHistory,
+        pendingInputs: {
+          ...stoppedHistory.pendingInputs,
+          total: 4,
+          items: [
+            ...stoppedHistory.pendingInputs.items,
+            {
+              ...stoppedInput,
+              id: "external-cancelled-input",
+              runId: "external-cancelled-run",
+              state: "cancelled",
+              message: { role: "user", content: externalText },
+            },
+          ],
+        },
+      };
+      await gateway.setMethodResponse("chat.history", historyResponses(externalHistory));
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey,
+        agentId: "main",
+        reason: "agent.input.settled",
+      });
+      await page.getByText(externalText, { exact: true }).waitFor();
+      await notice.waitFor();
+      expect(await notice.count()).toBe(1);
+      await page
+        .getByRole("button", {
+          name: /Dismiss unsent message: Keep an externally cancelled request/,
+        })
+        .waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: suite.artifactDir + "/external-cancelled-message.png" });
+      }
+      return page.video();
     });
+    if (captureUiProofEnabled) {
+      await video?.saveAs(suite.artifactDir + "/user-stop.webm");
+    }
   });
 });

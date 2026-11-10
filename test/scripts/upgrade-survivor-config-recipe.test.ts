@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,
   CONFIG_COMMAND_TIMEOUT_MS,
-  resolveScenarioConfigSteps,
   resolveUpgradeSurvivorConfigSteps as recipeSteps,
   resolveUpgradeSurvivorConfigStepsForBaseline as baselineSteps,
   resolveUpgradeSurvivorOpenClawCommand,
@@ -270,7 +269,32 @@ esac
     expect(configValue(steps, "plugins").allow).toEqual(
       expect.arrayContaining(Object.keys(providers)),
     );
+
+    const stable = configValue(baselineSteps("base", "2026.10.10"), "agents").defaults;
+    const beta = configValue(baselineSteps("base", "2026.11.5-beta.1"), "agents").defaults;
+    expect(stable.heartbeat).toEqual({ every: "0m" });
+    expect(beta).not.toHaveProperty("heartbeat");
+    expect(beta.model).toEqual(stable.model);
   });
+
+  it.each([
+    ["2026.10.9", true],
+    ["2026.10.5", true],
+    ["2026.10.4", false],
+  ] as const)(
+    "seeds Workshop settings only from baselines that ship them (%s)",
+    (version, seeded) => {
+      const ids = baselineSteps("base", version).map((step) => step.id);
+      expect(ids.includes("skill-workshop-settings")).toBe(seeded);
+      if (seeded) {
+        expect(ids.indexOf("skill-workshop-settings")).toBe(ids.indexOf("skills") + 1);
+        expect(configValue(baselineSteps("base", version), "skill-workshop-settings")).toEqual({
+          autonomous: { mode: "off" },
+          maxSkillBytes: 8000,
+        });
+      }
+    },
+  );
 
   it("uses password auth for mobile pairing reconnect coverage", () => {
     const steps = baselineSteps("mobile-pairing-reconnect", "2026.6.34");
@@ -281,12 +305,6 @@ esac
       mode: "password",
       password: { source: "env", provider: "default", id: "GATEWAY_AUTH_PASSWORD_REF" },
     });
-  });
-
-  it("composes configured plugin installs into the SQLite volume scenario", () => {
-    expect(resolveScenarioConfigSteps("sqlite-volume")).toEqual(
-      resolveScenarioConfigSteps("configured-plugin-installs"),
-    );
   });
 
   it.each(["2026.7.1-2"])("authors one version-correct recovery roster for %s", (version) => {

@@ -30,6 +30,7 @@ import {
   authButton,
   authOption,
   waitForModelSetupDetection,
+  nativeModel,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
 import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
@@ -56,15 +57,7 @@ describe("ModelSetupPage first-run inference", () => {
       const refresh = vi.spyOn(agents, "refreshList");
       mockRequests(request, {
         "models.list": () => ({
-          models: [
-            {
-              provider: "acp-opencode",
-              id: "fixture-model",
-              name: "Fixture model",
-              available: true,
-              agentRuntime: { id: "acp-opencode", source: "implicit" },
-            },
-          ],
+          models: [nativeModel()],
         }),
         "openclaw.setup.detect": () => detection,
         "agents.update": () => ({ ok: true, agentId: "main" }),
@@ -255,14 +248,14 @@ describe("ModelSetupPage first-run inference", () => {
     await clickCandidate(page, "openai-api-key");
 
     await waitForFast(() => {
-      expect(page.textContent).toContain("Connection verified");
+      expect(page.textContent).toContain("Model verified");
       expect(page.textContent).toContain("config.get failed after model commit");
     });
     expect(context.navigate).not.toHaveBeenCalled();
     clearFirstRunActivationReceipt();
     await page.updateComplete;
     expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(page.textContent).not.toContain("Connection verified");
+    expect(page.textContent).not.toContain("Model verified");
     expect(context.navigate).not.toHaveBeenCalled();
   });
 
@@ -309,7 +302,7 @@ describe("ModelSetupPage first-run inference", () => {
         activation.resolve(activated(expected, { gatewayRestartRequired: true }));
       } else {
         await waitForFast(() => {
-          expect(page.textContent).toContain("The model could not be activated");
+          expect(page.textContent).toContain("Couldn’t use the model");
           expect(page.textContent).toContain(expected);
         });
         expect(context.navigate).not.toHaveBeenCalled();
@@ -466,7 +459,7 @@ describe("ModelSetupPage first-run application recovery", () => {
         { timeoutMs: null, signal: expect.any(AbortSignal) },
       ),
     );
-    await waitForText(page, "Gateway no longer has this setup session");
+    await waitForText(page, "This setup may have finished");
     await waitForFast(() => {
       expect(authButton(page, "custom-api-key")!.disabled).toBe(true);
       expect(readFirstRunActivationReceipt(relaunched.context)).not.toBeNull();

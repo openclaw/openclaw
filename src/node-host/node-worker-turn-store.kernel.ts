@@ -69,8 +69,8 @@ function readReceipt(
   }
   if (turn.state === "running" && owner.state !== "pending" && owner.state !== "running") {
     // A predecessor can finish the physical journal without knowing about turn receipts.
-    settleNodeWorkerActiveTurns(database, owner);
-    turn = readRow(database, turnId)!;
+    // The active-owner index bounds settlement to this one running turn.
+    turn = settleNodeWorkerActiveTurns(database, owner, undefined, true)!;
   }
   return turnReceiptFromRow(turn, owner);
 }

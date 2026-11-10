@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import http from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -14,16 +13,34 @@ import {
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
 import { buildMcpToolSchema } from "../../gateway/mcp-http.schema.js";
-import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveBundleMcpServerInstructions } from "../agent-bundle-mcp-instructions.js";
-import { setSessionMcpRuntimeScheduler } from "../agent-bundle-mcp-manager-api.js";
-import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-tools.js";
-import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
+  readMcpFixtureMessage,
+  replyMcpFixtureResult,
+  startMcpHttpFixture,
+} from "../agent-bundle-mcp-lifecycle.test-support.js";
+import { setSessionMcpRuntimeScheduler } from "../agent-bundle-mcp-manager-api.js";
+import {
+  acquireSessionMcpRuntime,
+  disposeAllSessionMcpRuntimes,
+  materializeBundleMcpToolsForRun,
+} from "../agent-bundle-mcp-tools.js";
+import {
+  createClaudeMcpCliBackend,
+  testing as cliBackendsTesting,
+} from "../cli-backends.test-support.js";
+import {
+  createPersistedCompletionHandoff,
   createCliRunnerPrepareFixture,
   createTestMcpLoopbackClientGrant,
 } from "../cli-runner.test-helpers.js";
+import { createMcpProofPluginRegistry } from "../mcp-connection-resolver.test-fixtures.js";
+import { completeMcpOAuthAuthorization, startMcpOAuthAuthorization } from "../mcp-oauth.js";
+import { requesterIdentity } from "../mcp-oauth.test-harness.js";
+import { saveMcpOAuthAccessTokenForTest } from "../mcp-oauth.test-support.js";
+import { resolveMcpTransportConfig } from "../mcp-transport-config.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
 import { mockCliMcpPreparation } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -34,93 +51,98 @@ const PROBE_SERVER_INSTRUCTIONS =
   "x".repeat(2_500) +
   "\nPROBE_TAIL: preserve the complete native guidance.";
 
-const claudeBackend: CliBackendPlugin & { pluginId: string } = {
-  id: "claude-cli",
-  pluginId: "anthropic",
-  bundleMcp: true,
-  bundleMcpMode: "claude-config-file",
-  nativeToolMode: "selectable",
-  toolAvailabilityEnforcement: "execution-args",
-  resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
-  config: {
-    command: "claude",
-    args: ["--print"],
-    output: "jsonl",
-    jsonlDialect: "claude-stream-json",
-    input: "stdin",
-    sessionMode: "existing",
-  },
-};
+const claudeBackend = createClaudeMcpCliBackend();
 
 async function startProbeServer() {
-  const state = { calls: 0 };
-  const server = http.createServer((request, response) => {
-    void (async () => {
-      if (request.method !== "POST") {
-        response.writeHead(request.method === "DELETE" ? 200 : 405).end();
-        return;
-      }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const message = JSON.parse(Buffer.concat(chunks).toString()) as {
-        id?: number;
-        method: string;
-        params?: { protocolVersion?: string; arguments?: { word?: string } };
-      };
-      if (message.method === "tools/call") {
-        state.calls += 1;
-      }
-      const result =
-        message.method === "initialize"
-          ? {
-              protocolVersion: message.params?.protocolVersion,
-              capabilities: { tools: {} },
-              serverInfo: { name: "probe", version: "1" },
-              instructions: PROBE_SERVER_INSTRUCTIONS,
-            }
-          : message.method === "tools/list"
-            ? {
-                tools: [
-                  {
-                    name: "echo",
-                    description: "Echo a word.",
-                    inputSchema: { type: "object", properties: { word: { type: "string" } } },
-                  },
-                ],
-              }
-            : message.method === "tools/call"
-              ? {
-                  content: [{ type: "text", text: `probe:${message.params?.arguments?.word}` }],
-                }
-              : undefined;
-      if (!result) {
-        response.writeHead(202).end();
-        return;
-      }
+  const state = {
+    calls: 0,
+    authorizations: [] as string[],
+    tokenRequests: 0,
+    beforeToken: async () => {},
+  };
+  const server = await startMcpHttpFixture(async (request, response) => {
+    // Minimal authorization server so an expired requester token must refresh.
+    const origin = `http://${request.headers.host}`;
+    const oauth = request.url?.startsWith("/.well-known/oauth-protected-resource")
+      ? { resource: `${origin}/mcp`, authorization_servers: [origin] }
+      : request.url === "/.well-known/oauth-authorization-server"
+        ? {
+            issuer: origin,
+            authorization_endpoint: `${origin}/authorize`,
+            token_endpoint: `${origin}/token`,
+            registration_endpoint: `${origin}/register`,
+            response_types_supported: ["code"],
+            code_challenge_methods_supported: ["S256"],
+          }
+        : request.url === "/register"
+          ? { ...(await readMcpFixtureMessage(request)), client_id: "probe-client" }
+          : undefined;
+    if (request.url === "/token") {
+      state.tokenRequests += 1;
+      await state.beforeToken();
       response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
-    })().catch(() => response.writeHead(500).end());
+      response.end(
+        JSON.stringify({ access_token: "refreshed", refresh_token: "r2", token_type: "Bearer" }),
+      );
+      return;
+    }
+    if (oauth) {
+      response.writeHead(request.url === "/register" ? 201 : 200, {
+        "content-type": "application/json",
+      });
+      response.end(JSON.stringify(oauth));
+      return;
+    }
+    if (request.method !== "POST") {
+      response.writeHead(request.method === "DELETE" ? 200 : 405).end();
+      return;
+    }
+    const message = await readMcpFixtureMessage<{
+      protocolVersion?: string;
+      arguments?: { word?: string };
+    }>(request);
+    if (message.method === "tools/call") {
+      state.calls += 1;
+      state.authorizations.push(request.headers.authorization ?? "none");
+    }
+    const result =
+      message.method === "initialize"
+        ? {
+            protocolVersion: message.params?.protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: "probe", version: "1" },
+            instructions: PROBE_SERVER_INSTRUCTIONS,
+          }
+        : message.method === "tools/list"
+          ? {
+              tools: [
+                {
+                  name: "echo",
+                  description: "Echo a word.",
+                  inputSchema: { type: "object", properties: { word: { type: "string" } } },
+                },
+              ],
+            }
+          : message.method === "tools/call"
+            ? {
+                content: [{ type: "text", text: `probe:${message.params?.arguments?.word}` }],
+              }
+            : undefined;
+    if (!result) {
+      response.writeHead(202).end();
+      return;
+    }
+    replyMcpFixtureResult(response, message, result);
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("MCP probe server did not acquire a loopback port");
-  }
   return {
-    port: address.port,
+    port: new URL(server.url).port,
+    url: `${server.url}/mcp`,
+    state,
+    authorizations: state.authorizations,
     get calls() {
       return state.calls;
     },
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    close: server.close,
   };
 }
 
@@ -271,22 +293,11 @@ describe("configured MCP servers on CLI turns", () => {
             sourceReplyDeliveryMode: "automatic",
             config,
             ...(completion
-              ? {
-                  trustedInternalHandoff: {
-                    kind: "subagent-completion" as const,
-                    sourceSessionKey: childSessionKey,
-                    sourceSessionId: "configured-mcp-child",
-                    targetSessionKey: sessionTarget.sessionKey,
-                    targetSessionId: sessionTarget.sessionId,
-                    provider: "claude-cli",
-                    model: "opus",
-                  },
-                  inputProvenance: {
-                    kind: "inter_session" as const,
-                    sourceTool: "subagent_announce",
-                    sourceSessionKey: childSessionKey,
-                  },
-                }
+              ? createPersistedCompletionHandoff(
+                  childSessionKey,
+                  "configured-mcp-child",
+                  sessionTarget,
+                )
               : {}),
           });
           try {
@@ -356,4 +367,204 @@ describe("configured MCP servers on CLI turns", () => {
       expect(probeServer.calls).toBe(deny.length > 0 ? 0 : childAllow ? 2 : 3);
     },
   );
+  it.each(["shared", "per-requester OAuth", "resolver"] as const)(
+    "binds %s MCP servers to each claude-cli turn's sender with one stable catalog",
+    async (mode) => {
+      const { sessionTarget } = fixture.session;
+      const server = await startProbeServer();
+      const registry = createMcpProofPluginRegistry();
+      const http = { transport: "streamable-http" as const, url: server.url };
+      const notes = {
+        shared: { ...http, headers: { Authorization: "Bearer shared" } },
+        "per-requester OAuth": {
+          ...http,
+          auth: "oauth" as const,
+          oauth: { identity: "per-requester" as const },
+        },
+        resolver: { transport: "streamable-http" as const },
+      }[mode];
+      if (mode === "resolver") {
+        // The resolver hands out each requester's own credential; bob has none.
+        registry.apiFor("notes-plugin").registerMcpServerConnectionResolver({
+          serverName: "notes",
+          resolve: async ({ requesterSenderId }) =>
+            requesterSenderId === "alice"
+              ? { url: server.url, headers: { Authorization: "Bearer alice" } }
+              : null,
+        });
+      }
+      if (mode === "per-requester OAuth") {
+        await saveMcpOAuthAccessTokenForTest(
+          requesterIdentity("notes", server.url, "alice"),
+          "alice",
+        );
+      }
+      const config: OpenClawConfig = {
+        session: { store: sessionTarget.storePath },
+        plugins: { enabled: false },
+        tools: { allow: ["read", "notes__*"] },
+        mcp: { servers: { notes } },
+      };
+      const requester = { messageChannel: "telegram", agentAccountId: "bot" } as const;
+      const turns: Array<{ listed: string[]; result?: string }> = [];
+      const scheduler = createTestGatewayScheduler();
+      try {
+        await setSessionMcpRuntimeScheduler(scheduler);
+        await withPluginRuntimeRegistryScope(registry.registry, async () => {
+          // alice, a senderless turn (completion or automation), bob, alice again.
+          for (const senderId of ["alice", undefined, "bob", "alice"]) {
+            const context = await fixture.prepare({
+              sessionKey: sessionTarget.sessionKey,
+              sessionId: sessionTarget.sessionId,
+              provider: "claude-cli",
+              model: "opus",
+              modelHasVision: false,
+              sourceReplyDeliveryMode: "automatic",
+              config,
+              ...requester,
+              ...(senderId ? { senderId } : {}),
+            });
+            try {
+              const minted = mintGrant.mock.lastCall?.[0];
+              const scoped = await resolveMcpLoopbackScopedTools({
+                cfg: config,
+                context: minted!.context,
+                admittedRunContext: context.params.admittedRunContext,
+                ...(minted!.bundledTools ? { bundledTools: minted!.bundledTools } : {}),
+              });
+              const tool = scoped.tools.find((entry) => entry.name.startsWith("notes__"));
+              turns.push({
+                listed: buildMcpToolSchema(scoped.tools)
+                  .map((entry) => JSON.stringify(entry))
+                  .toSorted(),
+                result: tool
+                  ? getTextContent(await tool.execute("echo", { word: "hi" }))
+                  : undefined,
+              });
+            } finally {
+              await context.preparedBackend.cleanup?.();
+            }
+          }
+          // The embedded runner acquires the same owner with the turn's sender.
+          const embedded = await materializeBundleMcpToolsForRun(
+            await acquireSessionMcpRuntime({
+              sessionId: "embedded",
+              workspaceDir: fixture.session.dir,
+              cfg: config,
+              requesterSenderId: "alice",
+              ...requester,
+            }),
+          );
+          try {
+            const tool = embedded.tools.find((entry) => entry.name === "notes__echo");
+            expect(tool && getTextContent(await tool.execute("echo", { word: "hi" }))).toBe(
+              turns[0]?.result,
+            );
+          } finally {
+            await embedded.dispose();
+          }
+        });
+      } finally {
+        await disposeAllSessionMcpRuntimes();
+        await scheduler.stop();
+        await server.close();
+      }
+      // Every turn lists the same definitions, so Claude's cached prefix survives.
+      for (const turn of turns) {
+        expect(turn.listed).toEqual(turns[0]?.listed);
+      }
+      expect(turns[0]?.listed.some((entry) => entry.includes('"notes__echo"'))).toBe(true);
+      if (mode === "shared") {
+        expect(turns.map((turn) => turn.result)).toEqual(Array(4).fill("probe:hi"));
+        expect(server.authorizations).toEqual(Array(5).fill("Bearer shared"));
+        return;
+      }
+      expect(turns[0]?.result).toBe("probe:hi");
+      expect(turns[3]?.result).toBe("probe:hi");
+      // No turn borrows another requester's credential.
+      expect(turns[1]?.result).toContain("this turn has no verified user");
+      expect(turns[2]?.result).toMatch(/not connected|needs requester sign-in/);
+      expect(server.authorizations).toEqual(Array(3).fill("Bearer alice"));
+    },
+  );
+  it("stops a requester-scoped call when its grant ends during the token refresh", async () => {
+    const { sessionTarget } = fixture.session;
+    const server = await startProbeServer();
+    const notes = {
+      transport: "streamable-http" as const,
+      url: server.url,
+      auth: "oauth" as const,
+    };
+    const config: OpenClawConfig = {
+      session: { store: sessionTarget.storePath },
+      plugins: { enabled: false },
+      tools: { allow: ["read", "notes__*"] },
+      mcp: { servers: { notes: { ...notes, oauth: { identity: "per-requester" } } } },
+    };
+    const requester = { messageChannel: "telegram", agentAccountId: "bot", senderId: "alice" };
+    // alice signs in through the real OAuth flow, so her refresh needs no new registration.
+    const identity = requesterIdentity("notes", server.url, "alice");
+    const oauthConfig = resolveMcpTransportConfig("notes", config.mcp!.servers!.notes);
+    const redirectUrl = "http://127.0.0.1/oauth/mcp/callback";
+    await startMcpOAuthAuthorization(identity, oauthConfig as never, { redirectUrl });
+    await completeMcpOAuthAuthorization(identity, oauthConfig as never, { code: "login" });
+    const scheduler = createTestGatewayScheduler();
+    const results: unknown[] = [];
+    try {
+      await setSessionMcpRuntimeScheduler(scheduler);
+      const context = await fixture.prepare({
+        sessionKey: sessionTarget.sessionKey,
+        sessionId: sessionTarget.sessionId,
+        provider: "claude-cli",
+        model: "opus",
+        modelHasVision: false,
+        sourceReplyDeliveryMode: "automatic",
+        config,
+        ...requester,
+      });
+      try {
+        const minted = mintGrant.mock.lastCall?.[0];
+        const scoped = await resolveMcpLoopbackScopedTools({
+          cfg: config,
+          context: minted!.context,
+          admittedRunContext: context.params.admittedRunContext,
+          ...(minted!.bundledTools ? { bundledTools: minted!.bundledTools } : {}),
+        });
+        // An expired access token makes the next call refresh before any MCP request.
+        await saveMcpOAuthAccessTokenForTest(identity, "expired", -60);
+        let grantCurrent = true;
+        // The grant ends while the token request is in flight.
+        server.state.beforeToken = async () => {
+          grantCurrent = false;
+        };
+        for (const id of [1, 2]) {
+          results.push(
+            await handleMcpJsonRpc({
+              message: {
+                jsonrpc: "2.0",
+                id,
+                method: "tools/call",
+                params: { name: "notes__echo", arguments: { word: "hi" } },
+              },
+              tools: scoped.tools,
+              toolSchema: buildMcpToolSchema(scoped.tools),
+              authorizeToolCall: () => grantCurrent,
+            }),
+          );
+          grantCurrent = true;
+        }
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    } finally {
+      await disposeAllSessionMcpRuntimes();
+      await scheduler.stop();
+      await server.close();
+    }
+    expect(server.state.tokenRequests).toBe(2);
+    expect(JSON.stringify(results[0])).toContain("Tool call authorization expired");
+    // The refused call never reached the server; the next current grant uses the new token.
+    expect(JSON.stringify(results[1])).toContain("probe:hi");
+    expect(server.authorizations).toEqual(["Bearer refreshed"]);
+  });
 });

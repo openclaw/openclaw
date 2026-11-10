@@ -1,11 +1,11 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { MemorySearchManager } from "../../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   MemoryCliSearchOutcome,
   MemoryProviderStatus,
-  MemorySearchManager,
   MemorySearchResponse,
 } from "../../memory-host-sdk/host/types.js";
 import {
@@ -177,12 +177,12 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
     },
   });
   try {
-    // Use the transient CLI lifecycle so request cleanup cannot close a shared manager.
-    // manager.search owns the same lazy/on-search sync behavior as the existing CLI path.
+    // Resident reads borrow the service-owned index; explicit CLI reads retain
+    // their transient manager and read-scope cleanup.
     acquired = await getActiveMemorySearchManagerCore({
       cfg,
       agentId,
-      purpose: "cli",
+      purpose: assertCurrent ? "cli" : "default",
       ...(assertCurrent ? { inspectSources: true } : {}),
     });
   } catch (error) {
@@ -229,9 +229,11 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
     const { captureMemoryRebuildNotice } = loadBundledPluginPublicArtifactModuleSync<{
       captureMemoryRebuildNotice: (status: MemoryProviderStatus) => () => string | undefined;
     }>({ dirName: "memory-core", artifactBasename: "search-api.js" });
-    readRebuildWarning = captureMemoryRebuildNotice(await readMemorySearchManagerStatus(manager));
+    readRebuildWarning = captureMemoryRebuildNotice(
+      await readMemorySearchManagerStatus(manager, { includeCounts: false }),
+    );
     const results = await manager.search(searchQuery, searchOptions);
-    const status = await readMemorySearchManagerStatus(manager);
+    const status = await readMemorySearchManagerStatus(manager, { includeCounts: false });
     const staleness = resolveMemorySearchStaleness(status, agentId);
     const warning = [staleness?.warning, readRebuildWarning()]
       .filter((message): message is string => typeof message === "string")
@@ -253,10 +255,6 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
         .filter(Boolean)
         .join(" "),
     );
-  } finally {
-    if (!readScope) {
-      await manager.close?.().catch(() => {});
-    }
   }
 }
 

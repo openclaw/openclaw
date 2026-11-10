@@ -132,7 +132,7 @@ export function collectAgentDatabasePreflightTargets(options: {
   let configuredTargets: readonly AgentTarget[] = [];
   const retainedAgentIds = new Set(
     retainedDeletions
-      .filter((deletion) => deletion.cleanupCompleted || deletion.manualClawRemoval)
+      .filter((deletion) => deletion.cleanupCompleted || deletion.manualTemplateRemoval)
       .map((deletion) => deletion.agentId),
   );
   const retainedPaths = new Set<string>();

@@ -7,6 +7,10 @@ import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
+import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
@@ -17,20 +21,15 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
-import {
-  findClientToolNameConflicts,
-  isClientToolNameConflictError,
-  toClientToolDefinitions,
-  toToolDefinitions,
-} from "./agent-tool-definition-adapter.js";
+import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
-import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import type { ClientToolDefinition } from "./command/shared-types.js";
 import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
+  findClientToolNameConflicts,
+  isClientToolNameConflictError,
+} from "./embedded-agent-runner/tool-name-allowlist.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import { ToolInputError } from "./tools/common.js";
@@ -43,6 +42,9 @@ type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
 const querySchema = () => ({ type: "object", properties: { query: { type: "string" } } });
 const receipt = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
+function expectError(result: { details: unknown }, error: unknown, tool?: string) {
+  expect(result.details).toMatchObject({ status: "error", error, ...(tool ? { tool } : {}) });
+}
 
 function executeDefinition(
   def: ReturnType<typeof toToolDefinitions>[number] | undefined,
@@ -254,10 +256,7 @@ describe("agent tool definition adapter", () => {
             expect(result).toEqual(receipt("written"));
             expect(await fs.readFile(file, "utf8")).toBe("written by the admitted invocation");
           } else {
-            expect(result.details).toMatchObject({
-              status: "error",
-              error: expect.stringContaining("authority is no longer active"),
-            });
+            expectError(result, expect.stringContaining("authority is no longer active"));
             expect(await fs.readdir(dir)).toEqual([]);
           }
         } finally {
@@ -315,10 +314,7 @@ describe("agent tool definition adapter", () => {
     const args = { command: "cat bad.py | python", workdir: process.cwd() };
     const result = await executeTool(tool, "call-preflight-refused", args);
 
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("exec preflight: complex interpreter invocation"),
-    });
+    expectError(result, expect.stringContaining("exec preflight: complex interpreter invocation"));
     const terminal = createToolTerminalObserver("run-preflight-refused")({
       toolName: "exec",
       arguments: args,
@@ -406,16 +402,17 @@ async function executeClientTool(params: unknown) {
   const result = await executeDefinition(def, "call-c1", params);
   return { calledWith: captured, result };
 }
+function clientFixture(tool = makeClientTool("search")) {
+  const recorder = { reserve: vi.fn(), complete: vi.fn(), discard: vi.fn() };
+  const definition = expectDefined(toClientToolDefinitions([tool], recorder)[0], "client tool");
+  return { definition, ...recorder };
+}
 
 describe("toClientToolDefinitions – param coercion", () => {
   it("preserves input-error cancellation after client execution preparation", async () => {
     const controller = new AbortController();
     const reason = new ToolInputError("client tool cancelled");
-    const recorder = { reserve: vi.fn(), complete: vi.fn(), discard: vi.fn() };
-    const definition = expectDefined(
-      toClientToolDefinitions([makeClientTool("search")], recorder)[0],
-      "client tool definition",
-    );
+    const { definition, ...recorder } = clientFixture();
     const prepare = expectDefined(getInternalToolExecutionPreparer(definition), "client preparer");
     const prepared = await prepare({
       toolCallId: "cancelled-client-call",
@@ -442,11 +439,7 @@ describe("toClientToolDefinitions – param coercion", () => {
     async (params) => {
       const { calledWith, result } = await executeClientTool(params);
       expect(calledWith).toBeUndefined();
-      expect(result.details).toMatchObject({
-        status: "error",
-        tool: "search",
-        error: expect.stringContaining("client tool arguments"),
-      });
+      expectError(result, expect.stringContaining("client tool arguments"), "search");
       expect(result.terminate).not.toBe(true);
     },
   );
@@ -458,16 +451,10 @@ describe("toClientToolDefinitions – param coercion", () => {
 
   it("rejects missing required client arguments without completing the call", async () => {
     const clientTool = makeClientTool("search", { ...querySchema(), required: ["query"] });
-    const reserve = vi.fn();
-    const complete = vi.fn();
-    const discard = vi.fn();
-    const [definition] = toClientToolDefinitions([clientTool], { reserve, complete, discard });
+    const { definition, complete, discard } = clientFixture(clientTool);
     const result = await executeDefinition(definition, "call-required-client-args", "");
 
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("query"),
-    });
+    expectError(result, expect.stringContaining("query"));
     expect(result.terminate).not.toBe(true);
     expect(complete).not.toHaveBeenCalled();
     expect(discard).toHaveBeenCalledWith("call-required-client-args", "search");

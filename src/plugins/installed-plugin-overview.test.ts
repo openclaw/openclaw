@@ -28,13 +28,17 @@ it("reads the full installed README and package presentation without relying on 
         channels: ["local-channel"],
         contracts: { speechProviders: ["local-speech"] },
         uiCapabilities: ["link-reader"],
+        controlUi: { entry: "dist/browser/index.js" },
+        recommendedPrompts: ["Summarize the selected document. Keep the key details."],
       }),
     ),
   ).toEqual({
+    hasNativeUi: true,
     readme,
     repositoryUrl: "git+https://github.com/Acme/demo.git",
     documentationUrl: "https://example.org/docs",
     publisherName: "Acme",
+    recommendedPrompts: ["Summarize the selected document. Keep the key details."],
     capabilities: {
       providers: ["local-model"],
       channels: ["local-channel"],
@@ -43,6 +47,30 @@ it("reads the full installed README and package presentation without relying on 
     },
   });
 });
+
+// UI capabilities describe contributions, not whether browser code is included.
+it.each([
+  { controlUi: undefined, uiCapabilities: undefined, expected: false },
+  { controlUi: undefined, uiCapabilities: ["page" as const], expected: false },
+  { controlUi: { entry: "dist/browser/index.js" }, uiCapabilities: undefined, expected: true },
+])(
+  "reports native web UI from the selected manifest entry ($expected)",
+  ({ controlUi, uiCapabilities, expected }) => {
+    const rootDir = dirs.make("plugin-native-ui-");
+    expect(
+      withPluginCache(createPluginCache(), () =>
+        readInstalledPluginOverview({
+          rootDir,
+          origin: "global",
+          providers: [],
+          channels: [],
+          controlUi,
+          uiCapabilities,
+        }),
+      )?.hasNativeUi,
+    ).toBe(expected);
+  },
+);
 
 it.each(["symlink", "hardlink", "oversize"])(
   "does not disclose a %s README outside the permitted artifact contract",

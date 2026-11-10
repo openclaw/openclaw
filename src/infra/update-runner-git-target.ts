@@ -4,7 +4,13 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { ignoreMissingPath } from "./errno.js";
-import { executeGitCommand, gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
+import {
+  executeGitCommand,
+  gitNullConfigPath,
+  normalizeGitPathForFilesystem,
+  quoteGitConfig,
+} from "./git-exec.js";
+import { compareSemverStrings } from "./npm-registry-spec.js";
 import {
   DEV_BRANCH,
   isBetaTag,
@@ -12,7 +18,6 @@ import {
   selectNpmChannelVersion,
   type UpdateChannel,
 } from "./update-channels.js";
-import { compareSemverStrings } from "./update-check.js";
 import { isFullGitObjectId, type DevUpdateTarget } from "./update-dev-target.js";
 import {
   readGitRefFetchTarget,
@@ -22,7 +27,11 @@ import {
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
-import { createGitStepFactory, gitCleanCheckArgs } from "./update-runner-git-commands.js";
+import {
+  createGitStepFactory,
+  gitCleanCheckArgs,
+  resolveGitNoLazyFetchArgs,
+} from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import { readGitTargetSchemaVersions } from "./update-runner-git-schema.js";
 import { runClassifiedGitStep } from "./update-runner-git-steps.js";
@@ -71,10 +80,23 @@ export async function classifyPartialCloneGitFailure(params: {
         'git fetch "<promisor-remote>" --stdin).',
     );
   }
-  const fsck = await params
-    .runCommand(
-      ["git", "--no-lazy-fetch", "-C", params.root, "fsck", "--connectivity-only", "--no-dangling"],
-      { cwd: params.root, timeoutMs: params.timeoutMs },
+  const fsck = await resolveGitNoLazyFetchArgs(params.runCommand, {
+    cwd: params.root,
+    timeoutMs: params.timeoutMs,
+  })
+    .then((noLazyFetchArgs) =>
+      params.runCommand(
+        [
+          "git",
+          ...noLazyFetchArgs,
+          "-C",
+          params.root,
+          "fsck",
+          "--connectivity-only",
+          "--no-dangling",
+        ],
+        { cwd: params.root, timeoutMs: params.timeoutMs },
+      ),
     )
     .catch(() => undefined);
   const fsckOutput = `${fsck?.stdout ?? ""}\n${fsck?.stderr ?? ""}`.trim();
@@ -86,10 +108,6 @@ export async function classifyPartialCloneGitFailure(params: {
       "corruption with git fsck. Retry the update; if it recurs, inspect the repository with " +
       "git fsck before attempting repair.",
   );
-}
-
-function quoteGitConfig(value: string): string {
-  return `"${value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n").replace(/\t/gu, "\\t").replaceAll("\b", "\\b")}"`;
 }
 
 function gitConfigEntry(key: string, value: string): string {
@@ -379,11 +397,17 @@ export async function fetchGitUpdateTarget(params: {
   let devSource: (GitFetchTarget & { revision?: string }) | null = null;
   const result = (ok: boolean) => ({ ok, refreshedRemotes, ...(devSource ? { devSource } : {}) });
   if (channel === "dev" && devTarget?.mode === "detached" && isFullGitObjectId(devTarget.ref)) {
-    // A pinned commit needs no remote freshness. Probe privately without allowing
-    // promised-object hydration; the normal candidate/transfer owners still verify its contents.
+    // A pinned commit needs no remote freshness. Avoid promised-object hydration
+    // when Git supports it; candidate/transfer owners still verify its contents.
+    const probe = step("git-resolve-target");
+    const noLazyFetchArgs = await resolveGitNoLazyFetchArgs(probe.runCommand, {
+      cwd: root,
+      timeoutMs: probe.timeoutMs,
+      env: probe.env,
+    });
     const options = step(
       "git-resolve-target",
-      "--no-lazy-fetch",
+      ...noLazyFetchArgs,
       "cat-file",
       "--batch-check=%(objectname) %(objecttype)",
     );
@@ -520,11 +544,18 @@ export async function fetchGitUpdateTarget(params: {
   }
   if (channel === "dev") {
     // FETCH_HEAD proves freshness; an excluded source can otherwise look current.
-    const fetched =
-      devSource && devSource.remote !== "."
-        ? await runStep(step("git-resolve-target", "rev-parse", "--verify", "FETCH_HEAD^{commit}"))
-        : undefined;
-    return result(!fetched || !isFailedUpdateStep(fetched));
+    if (devSource && devSource.remote !== ".") {
+      const fetched = await runStep(
+        step("git-resolve-target", "rev-parse", "--verify", "FETCH_HEAD^{commit}"),
+      );
+      const revision = fetched.stdoutTail?.trim();
+      if (isFailedUpdateStep(fetched) || !revision) {
+        return result(false);
+      }
+      // An explicit source fetch need not have a configured remote-tracking mapping.
+      devSource.revision = revision;
+    }
+    return result(true);
   }
   if (!tagRemote) {
     steps.push({

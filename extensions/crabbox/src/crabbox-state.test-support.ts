@@ -2,7 +2,8 @@ import {
   createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { CrabboxState, WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-records.js";
+import type { CrabboxState } from "./crabbox-worker-warm-image-store.js";
 
 export const crabboxState: CrabboxState = {
   openKeyedStoreV2: (options) =>

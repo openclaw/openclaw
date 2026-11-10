@@ -59,6 +59,7 @@ export async function getXApi(accountId: string, cfg: OpenClawConfig): Promise<X
     // Transport credential rotation keeps the same in-flight OAuth refresh owner.
     existing.options.clientSecret = clientSecret;
     existing.options.bearerToken = bearerToken;
+    existing.options.spend = spend;
     return existing.api;
   }
   const accountClients = accounts;

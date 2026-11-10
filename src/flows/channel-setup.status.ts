@@ -27,11 +27,6 @@ import {
 import { t, wizardT } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
-type ChannelStatusSummary = {
-  statusByChannel: Map<ChannelChoice, ChannelSetupStatus>;
-  statusLines: string[];
-};
-
 type ChannelSetupSelectionEntry = {
   id: ChannelChoice;
   meta: {
@@ -262,7 +257,7 @@ export async function collectChannelStatus(params: {
   accountOverrides: Partial<Record<ChannelChoice, string>>;
   installedPlugins: ChannelSetupPlugin[];
   resolveAdapter: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
-}): Promise<ChannelStatusSummary> {
+}) {
   const { installedPlugins, resolveAdapter } = params;
   const workspaceDir = params.workspaceDir ?? resolveChannelSetupWorkspaceDir(params.cfg);
   const { installedCatalogEntries, installableCatalogEntries } = resolveChannelSetupEntries({

@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as configModule from "../../config/config.js";
-import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
+import { createSnapshot } from "../../config/mutate.test-support.js";
 import {
   getRuntimeConfigAppliedHash,
   setRuntimeConfigAppliedHash,
@@ -89,25 +89,13 @@ export function useSystemAgentGatewayTestFixture() {
     | undefined;
   const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
   let previousAppliedHash: string | null = null;
-  const requireFixture = () =>
-    expectDefined(fixture, "verified inference fixture was not initialized");
-  const requireVerifiedInferenceFixture = () => requireFixture().binding;
+  const requireVerifiedInferenceFixture = () =>
+    expectDefined(fixture, "verified inference fixture was not initialized").binding;
   const installVerifiedConfigReader = () => {
-    vi.spyOn(configModule, "readConfigFileSnapshot").mockResolvedValue(
-      createConfigFileSnapshot({
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        hash: "verified-config",
-        raw: null,
-        parsed: verifiedConfig,
-        runtimeConfig: verifiedConfig,
-        sourceConfig: verifiedConfig,
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
-      }),
-    );
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockResolvedValue({
+      ...createSnapshot({ sourceConfig: verifiedConfig, hash: "verified-config", raw: null }),
+      includedPaths: [],
+    });
   };
 
   function makeVerifiedEngine(): SystemAgentChatEngine {

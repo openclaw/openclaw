@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync, writeFileSync, writeSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import { availableParallelism } from "node:os";
@@ -6,11 +6,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import v8, { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
+import { tsImport } from "tsx/esm/api";
 import { getSessionRowSelectionMetrics } from "../../src/infra/gateway-work-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 import {
   GATEWAY_PROFILE_CHANNEL,
-  GATEWAY_GC_TRACE_MARKER,
+  writeGatewayGcTraceMarker,
   GATEWAY_CPU_SAMPLE_INTERVAL_MICROS,
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   type GatewayBenchCommand,
@@ -338,14 +339,15 @@ ${source}`;
     );
   });
   let inspectorConnected = false;
-  const traceGc = process.execArgv.includes("--trace-gc-nvp");
+  const traceGc =
+    process.env.OPENCLAW_BENCH_TRACE_GC === "1" || process.execArgv.includes("--trace-gc-nvp");
+  if (traceGc) {
+    // Enable tracing here: Worker rejects this flag when inherited through execArgv.
+    v8.setFlagsFromString("--trace-gc-nvp");
+  }
   const markGc = (phase: string, profilePath?: string) => {
     if (traceGc) {
-      // Share V8's stdout descriptor without asynchronous stream buffering.
-      writeSync(
-        1,
-        `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-      );
+      writeGatewayGcTraceMarker(phase, profilePath);
     }
   };
   if (traceGc) {
@@ -449,7 +451,11 @@ ${source}`;
         }
         // Native benchmark children do not load the Gateway's source registry or loader.
         if (message.includeWorkers) {
-          workerMemoryModule ??= await import("../../src/infra/worker-cpu.ts");
+          // Scope source aliases to instrumentation; built Gateway imports stay native.
+          workerMemoryModule ??= await tsImport("../../src/infra/worker-cpu.ts", {
+            parentURL: import.meta.url,
+            tsconfig: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+          });
         }
         const workerMemory = message.includeWorkers
           ? workerMemoryModule?.sampleTrackedWorkerMemory()
@@ -573,7 +579,10 @@ ${source}`;
           throw new Error(`Gateway ${message.kind} profile already started`);
         }
         if (message.includeWorkers) {
-          workerMemoryModule ??= await import("../../src/infra/worker-cpu.ts");
+          workerMemoryModule ??= await tsImport("../../src/infra/worker-cpu.ts", {
+            parentURL: import.meta.url,
+            tsconfig: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+          });
         }
         if (message.kind === "cpu") {
           await inspector.post("Profiler.enable");

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
@@ -12,12 +13,6 @@ export type DeviceTokenVerification = {
   reason?: string;
   issuer?: DeviceAuthToken["issuer"];
 };
-export type DeviceTokenRequest = {
-  role: string;
-  scopes: string[];
-  issuer?: DeviceAuthToken["issuer"];
-};
-
 const SHARED_GATEWAY_AUTH_ISSUER_KIND = "shared-gateway-auth";
 const BROWSER_DEVICE_CLIENT_IDS = new Set(["openclaw-control-ui", "webchat-ui"]);
 const BROWSER_DEVICE_CLIENT_MODE = "webchat";
@@ -114,7 +109,12 @@ export function verifyPairedDeviceToken(
 
 export function reusablePairedDeviceToken(
   device: PairedDevice | null,
-  params: DeviceTokenRequest,
+  params: {
+    role: string;
+    scopes: string[];
+    issuer?: DeviceAuthToken["issuer"];
+    approval?: DeviceAuthToken["approval"];
+  },
 ): DeviceAuthToken | null {
   const role = params.role.trim();
   const existing = device?.tokens?.[role];
@@ -132,6 +132,7 @@ export function reusablePairedDeviceToken(
     }) &&
     scopesWithinApprovedDeviceBaseline({ role, scopes: existing.scopes, approvedScopes }) &&
     deviceTokenIssuerMatches(existing, params.issuer) &&
+    (!params.approval || isDeepStrictEqual(existing.approval, params.approval)) &&
     roleScopesAllow({
       role,
       requestedScopes,

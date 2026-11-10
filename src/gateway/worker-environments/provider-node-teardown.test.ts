@@ -337,7 +337,7 @@ describe("worker provider node teardown", () => {
         expect(destroy).not.toHaveBeenCalled();
 
         reconnect();
-        await service.reconcileOnce();
+        await service.reconcileOnce(environmentId);
 
         expect(support.testState.store.get(environmentId)).toMatchObject({
           ...retiredOwner,

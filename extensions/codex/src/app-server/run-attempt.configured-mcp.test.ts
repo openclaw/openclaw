@@ -24,6 +24,7 @@ import {
   registerCodexTestSessionIdentity,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import { isCodexTurnContextHandoff } from "./test-support.js";
 
 const { admitLocalOperatorCronAuthority, configureFakeMcp, mcpMocks, setupConfiguredMcpTestHooks } =
   await import("./run-attempt.configured-mcp.test-support.js");
@@ -538,13 +539,16 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
 
       const threadStart = harness.requests.find((request) => request.method === "thread/start");
       expect(threadStart?.params).toMatchObject({
-        developerInstructions: [systemPrompt, mcpMocks.staticDiagnosticNotice]
+        developerInstructions: `<thread_policy>\n${[systemPrompt, mcpMocks.staticDiagnosticNotice]
           .filter(Boolean)
-          .join("\n\n"),
+          .join("\n\n")}\n</thread_policy>`,
       });
-      expect(harness.requests.some((request) => request.method === "thread/inject_items")).toBe(
-        false,
-      );
+      expect(
+        harness.requests.some(
+          ({ method, params: requestParams }) =>
+            method === "thread/inject_items" && !isCodexTurnContextHandoff(requestParams),
+        ),
+      ).toBe(false);
       expect(mcpMocks.captureCalls).toHaveLength(1);
       expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
 

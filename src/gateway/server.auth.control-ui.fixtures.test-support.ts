@@ -4,7 +4,6 @@ import { expect } from "vitest";
 import {
   createSignedDevice,
   restoreGatewayToken,
-  startTestGatewayServer,
   startServer,
   startServerWithClient,
   TEST_OPERATOR_CLIENT,
@@ -53,11 +52,7 @@ export const createOperatorIdentityFixture = async (identityPrefix: string) => {
     "credentials.sqlite",
   );
   const identity = loadOrCreateDeviceIdentity({ path: identityPath });
-  return {
-    identityPath,
-    identity,
-    client: { ...TEST_OPERATOR_CLIENT },
-  };
+  return { identityPath, identity, client: { ...TEST_OPERATOR_CLIENT } };
 };
 
 export const startControlUiServerWithOperatorIdentity = async (
@@ -69,10 +64,7 @@ export const startControlUiServerWithOperatorIdentity = async (
 };
 
 export const withControlUiGatewayServer = async <T>(
-  fn: (ctx: {
-    port: number;
-    server: Awaited<ReturnType<typeof startTestGatewayServer>>;
-  }) => Promise<T>,
+  fn: Parameters<typeof withGatewayServer<T>>[0],
 ): Promise<T> =>
   withGatewayServer(fn, {
     serverOptions: { controlUiEnabled: true },
@@ -83,10 +75,7 @@ export const withControlUiServer = async <T>(
   token = "secret",
   opts?: Parameters<typeof startServer>[1],
 ): Promise<T> => {
-  const { server, port, prevToken } = await startServer(token, {
-    ...opts,
-    controlUiEnabled: true,
-  });
+  const { server, port, prevToken } = await startControlUiServer(token, opts);
   try {
     return await fn({ port });
   } finally {
@@ -117,10 +106,7 @@ export const startProxiedControlUiServer = async (token?: string) => {
   const { mutateConfigFile } = await import("../config/config.js");
   await mutateConfigFile({
     mutate(config) {
-      config.gateway = {
-        ...config.gateway,
-        trustedProxies: ["127.0.0.1"],
-      };
+      config.gateway = { ...config.gateway, trustedProxies: ["127.0.0.1"] };
     },
     afterWrite: { mode: "auto" },
   });
@@ -138,17 +124,14 @@ export const seedApprovedOperatorReadPairing = async (params: {
   const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
   const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
   const { requestDevicePairing } = await import("../infra/device-pairing.js");
-  const { identityPath, identity } = await createOperatorIdentityFixture(params.identityPrefix);
-  const scopes = params.scopes ?? ["operator.read"];
+  const { identityPrefix, scopes = ["operator.read"], ...metadata } = params;
+  const { identityPath, identity } = await createOperatorIdentityFixture(identityPrefix);
   const seeded = await requestDevicePairing({
+    ...metadata,
     deviceId: identity.deviceId,
     publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
     role: "operator",
     scopes,
-    clientId: params.clientId,
-    clientMode: params.clientMode,
-    displayName: params.displayName,
-    platform: params.platform,
   });
   await approveDevicePairing(seeded.request.requestId, {
     callerScopes: ["operator.admin"],

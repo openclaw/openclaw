@@ -37,7 +37,7 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
   let cursor = 0;
   const chunks: string[] = [];
   for (const match of text.matchAll(REASONING_PROGRESS_TAG_RE)) {
-    const offset = match.index ?? 0;
+    const offset = match.index;
     if (isInsideCode(offset, (codeRegions ??= findCodeRegions(text)))) {
       // Preserve code examples that mention reasoning tags; only actual model
       // wrapper tags outside code delimit private reasoning progress.
@@ -160,7 +160,7 @@ function shouldAppendEmptyReasoningProgressDelta(current: string, incoming: stri
 function hasReasoningProgressTagOutsideCode(text: string): boolean {
   let codeRegions: CodeRegion[] | undefined;
   for (const match of text.matchAll(REASONING_PROGRESS_TAG_RE)) {
-    if (!isInsideCode(match.index ?? 0, (codeRegions ??= findCodeRegions(text)))) {
+    if (!isInsideCode(match.index, (codeRegions ??= findCodeRegions(text)))) {
       return true;
     }
   }

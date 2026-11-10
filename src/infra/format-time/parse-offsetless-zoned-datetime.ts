@@ -10,15 +10,11 @@ const ZONED_PARSE_FORMATTER_CACHE_MAX = 64;
 // Locale and options are fixed for this cache; only the explicit zone varies.
 const zonedParseFormatters = new Map<string, Intl.DateTimeFormat>();
 
-type ZonedDateTimeParseResult =
-  | { ok: true; iso: string }
-  | { ok: false; reason: "invalid-timezone" | "invalid-datetime" };
-
 // Interpret local wall-clock ISO strings in an explicit IANA time zone.
 export function parseOffsetlessIsoDateTimeInTimeZone(
   raw: string,
   timeZone: string,
-): ZonedDateTimeParseResult {
+): { ok: true; iso: string } | { ok: false; reason: "invalid-timezone" | "invalid-datetime" } {
   const naiveMs = isOffsetlessIsoDateTime(raw) ? parseIsoCalendarTimeMs(raw) : undefined;
   if (naiveMs === undefined) {
     return { ok: false, reason: "invalid-datetime" };

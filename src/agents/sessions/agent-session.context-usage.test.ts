@@ -5,13 +5,11 @@ import type { AgentMessage } from "../runtime/index.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { AgentSession } from "./agent-session.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 
 function measuredUsage(input: number, output = 0) {
   return {
-    ...createZeroUsageFixture(),
-    input,
-    output,
-    totalTokens: input + output,
+    ...unavailable(input, output),
     contextUsage: { state: "available" as const, promptTokens: input, totalTokens: input + output },
   };
 }
@@ -42,7 +40,7 @@ function getUsage(messages: AgentMessage[], branchEntries: unknown[], contextWin
   return AgentSession.prototype.getContextUsage.call({
     model: { contextWindow },
     messages,
-    sessionManager: { getBranch: () => branchEntries },
+    sessionManager: { [sessionManagerReadTranscriptBranch]: () => branchEntries },
   } as unknown as AgentSession);
 }
 

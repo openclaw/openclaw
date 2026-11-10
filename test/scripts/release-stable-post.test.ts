@@ -20,7 +20,6 @@ import {
   jsonStep,
   pendingGates,
   closeoutMain,
-  compatibilityInventory,
   githubRelease,
   macosWait,
   postState,
@@ -142,26 +141,22 @@ describe("release:stable post-publication CLI", () => {
     expect(release.readState().phases["flip-github"].status).toBe("completed");
   });
 
-  it("refuses macOS publication before approving gates when main lacks compatibility evidence", () => {
-    const release = fixture();
-    const result = release.run([
-      ...compatibilityInventory("2026.9.5"),
-      step("npm", ["view", `openclaw@${RELEASE}`, "dist.integrity"], "sha512-fixture"),
-    ]);
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain(
-      "pnpm update:compat:gen --release '<unpacked-dir>=sha512-fixture'",
-    );
-    expect(release.readState().publish.approvedGates).toEqual([]);
+  it("completes main closeout before a macOS lane failure", () => {
+    const state = postState("closeout");
+    state.phases.macos = { status: "pending" };
+    const release = fixture(state);
+    const result = release.run([...closeoutChecks(), ...macosWait(201, "failure")]);
+    expect(result.status, result.output).toBe(2);
+    expect(result.stderr).toContain("macOS validate run 201 concluded failure");
+    expect(release.readState().phases).toMatchObject({
+      closeout: { status: "completed" },
+      macos: { status: "refused" },
+    });
   });
 
   it("prints the failed preflight's notarization receipt and requires a replacement run on resume", () => {
     const release = fixture();
-    const result = release.run([
-      ...compatibilityInventory(),
-      ...macosWait(201),
-      ...macosWait(202, "failure", 3),
-    ]);
+    const result = release.run([...macosWait(201), ...macosWait(202, "failure", 3)]);
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("resume_notarization_run_id=202");
     expect(result.stderr).toContain("resume_notarization_run_attempt=3");
@@ -173,7 +168,6 @@ describe("release:stable post-publication CLI", () => {
   it("publishes macOS with both verified lane IDs, approves only mac-release, and requires main's appcast", () => {
     const release = fixture();
     const result = release.run([
-      ...compatibilityInventory(),
       ...macosWait(201),
       ...macosWait(202),
       githubRelease(false),
@@ -225,7 +219,7 @@ describe("release:stable post-publication CLI", () => {
     expect(release.readState().publish.approvedGates).toEqual(["203:71"]);
   });
 
-  it("resets only macOS and closeout, retains receipts, and uses replacement lane IDs for appcast recovery", () => {
+  it("retains completed closeout and uses replacement lane IDs for macOS appcast recovery", () => {
     const state = postState("macos");
     state.phases.macos = { status: "completed", completedAt: state.startedAt };
     state.phases.closeout = { status: "completed", completedAt: state.startedAt };
@@ -240,7 +234,6 @@ describe("release:stable post-publication CLI", () => {
     const release = fixture(state);
     const result = release.run(
       [
-        ...compatibilityInventory(),
         ...macosWait(211),
         ...macosWait(212),
         ...macosWait(203),
@@ -273,7 +266,7 @@ describe("release:stable post-publication CLI", () => {
       expect(retained.phases[phase]).toEqual(state.phases[phase]);
     }
     expect(retained.phases.macos.status).toBe("refused");
-    expect(retained.phases.closeout).toEqual({ status: "pending" });
+    expect(retained.phases.closeout).toEqual(state.phases.closeout);
     expect(retained.closeout).toEqual(state.closeout);
     expect(retained.publish).toEqual(state.publish);
     expect(retained.macos).toMatchObject({
@@ -287,24 +280,23 @@ describe("release:stable post-publication CLI", () => {
         event,
         JSON.parse(detail ?? "null"),
       ]),
-    ).toEqual([
-      ["macos", "reset", { phase: state.phases.macos, data: state.macos }],
-      ["closeout", "reset", { phase: state.phases.closeout, data: state.closeout }],
-    ]);
+    ).toEqual([["macos", "reset", { phase: state.phases.macos, data: state.macos }]]);
     expect(result.calls.some((call) => call.args[0] === "workflow")).toBe(false);
   });
 
   it.each([
     { version: "2026.9.5", notes: `## ${RELEASE}\n`, label: "version" },
+    { version: "2026.9.7-beta.1", notes: `## ${RELEASE}\n`, label: "beta version" },
+    { version: "invalid", notes: `## ${RELEASE}\n`, label: "invalid version" },
     { version: RELEASE, notes: `## ${RELEASE}\nDifferent notes.\n`, label: "changelog bytes" },
   ])(
-    "refuses closeout when main's $label differs from the shipped release",
+    "refuses closeout when main's $label violates the shipped release contract",
     ({ version, notes }) => {
       const release = fixture(postState("closeout"));
       const result = release.run(closeoutMain(version, notes));
       expect(result.status).toBe(2);
       expect(result.stderr).toContain(
-        "Main does not carry the shipped version and exact changelog.",
+        "Main must carry the shipped or a later stable version and the exact shipped changelog.",
       );
       expect(result.stderr).toContain(`pnpm release:stable ${RELEASE} --from closeout`);
       expect(release.readState().closeout.runId).toBeUndefined();
@@ -312,17 +304,20 @@ describe("release:stable post-publication CLI", () => {
   );
 
   it.each([
-    [true, false],
-    [false, true],
-  ])("verifies closeout (dispatch=%s, restart=%s)", (dispatch, restart) => {
+    { dispatch: true, restart: false, version: RELEASE },
+    { dispatch: false, restart: true, version: RELEASE },
+    { dispatch: false, restart: false, version: "2026.9.7" },
+  ])("verifies $version closeout (restart=$restart)", (options) => {
+    const { dispatch, restart, version } = options;
     const state = postState("closeout");
     if (restart) {
       state.closeout = { websiteRunId: "499", verifiedAt: state.startedAt };
+      state.macos = { publishRunId: "203", appcastVerifiedAt: state.startedAt };
     }
     const release = fixture(state);
     const result = release.run(
       [
-        ...closeoutMain(),
+        ...closeoutMain(version),
         ...(dispatch
           ? [
               closeoutAssets([]),
@@ -359,6 +354,8 @@ describe("release:stable post-publication CLI", () => {
       expect(release.readState().closeout.websiteRunId).toBe("503");
     }
     if (restart) {
+      expect(release.readState().phases.macos).toEqual(state.phases.macos);
+      expect(release.readState().macos).toEqual(state.macos);
       expect(result.calls.flatMap(({ args }) => args)).not.toContain(
         "repos/openclaw/openclaw.ai/actions/runs/499",
       );
@@ -366,7 +363,8 @@ describe("release:stable post-publication CLI", () => {
   });
 
   it("keeps closeout incomplete when the website verification fails despite existing receipts", () => {
-    const release = fixture(postState("closeout"));
+    const state = postState("closeout");
+    const release = fixture(state);
     const result = release.run(closeoutChecks("failure"));
     expect(result.status, result.output).toBe(2);
     expect(result.stderr).toContain("Website verification 503 concluded failure");
@@ -379,6 +377,7 @@ describe("release:stable post-publication CLI", () => {
     const resumed = release.run(closeoutChecks(), ["--from", "closeout"]);
     expect(resumed.status, resumed.output).toBe(0);
     expect(release.readState().phases.closeout.status).toBe("completed");
+    expect(release.readState().phases.macos).toEqual(state.phases.macos);
   });
 
   it.each([closeoutAsset, `${closeoutAsset}.sha256`])("refuses closeout with only %s", (name) => {
@@ -537,19 +536,25 @@ it("refuses a retained beta validation before observing or completing it", () =>
 
 it.each([
   ["openclaw.full-release-dispatch/v2", "prepared", "intended", true],
+  ["openclaw.full-release-dispatch/v2", "prepared", "uncertain", true],
   ["openclaw.full-release-dispatch/v2", "prepared", "uncertain", false],
   ["openclaw.full-release-dispatch/v2", "attempted", "created", false],
   ["openclaw.full-release-dispatch/v1", "prepared", "intended", false],
 ] as const)(
-  "offers canonical resume only before Q mutation (%s/%s/%s)",
+  "relays only helper-verified recovery advice (%s/%s/%s)",
   (kind, phase, workflow, resume) => {
     const release = fixture(phaseState("validate"));
     const pending = request();
     pending.request = { ...pending.request!, kind, phase, refs: { workflow }, run: undefined };
-    pending.exit = 1;
+    pending.exit = resume ? 0 : 1;
+    const advice = resume
+      ? 'Qualification has not dispatched. Continue the same retained request with --resume-request "/private/frv-request.json"'
+      : "Prepared qualification transport already has workflow runs; do not dispatch";
+    pending.stdout = advice;
     const result = release.run([...validateSetup(), pending]);
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("has no observed run");
+    expect(result.stderr).toContain(advice);
     expect(result.stderr).toContain("--reconcile-request");
     expect(result.stderr.includes("--resume-request")).toBe(resume);
     expect(pnpmCalls(result)).toHaveLength(1);

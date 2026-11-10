@@ -491,7 +491,7 @@ internal fun ChatComposerMicButton(
             ChatDictationState.Listening -> Icons.Default.Stop
             else -> Icons.Outlined.MicNone
           },
-        contentDescription = null,
+        contentDescription = dictationActionLabel,
         modifier = Modifier.size(20.dp),
       )
     }

@@ -1,0 +1,2 @@
+# Preserve global physical targeting and selected ownership with per-sender/qualified controls.
+7

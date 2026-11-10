@@ -28,8 +28,8 @@ it("retains canonical capacity and exact scope for a compact selection", () => {
       .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))
       .toSorted(),
   ).toEqual(targets.toSorted());
-  // Inventory growth may change canonical packing from serial to parallel.
-  // Selection preserves concurrency, then downsizes qualified serial jobs.
+  // Selection may serialize singleton owners to share setup, without increasing
+  // any original job's concurrency or its child worker allowance.
   for (const job of selected) {
     expect(job.requiresDist).toBe(false);
     expect([1, 2]).toContain(job.planConcurrency);
@@ -38,14 +38,50 @@ it("retains canonical capacity and exact scope for a compact selection", () => {
         full.find((owner) => owner.groups.some((entry) => entry.shard_name === group.shard_name)),
         "canonical compact owner",
       );
-      expect(job).toMatchObject({
-        runner:
-          original.planConcurrency === 1
-            ? "blacksmith-16vcpu-ubuntu-2404"
-            : "blacksmith-32vcpu-ubuntu-2404",
-        planConcurrency: original.planConcurrency,
-      });
+      expect(job.planConcurrency).toBeLessThanOrEqual(original.planConcurrency ?? 1);
+      expect(job.runner).toBe(
+        job.planConcurrency === 1
+          ? "blacksmith-16vcpu-ubuntu-2404"
+          : "blacksmith-32vcpu-ubuntu-2404",
+      );
       expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? String(group.fallbackMaxWorkers)).toBe("2");
     }
   }
+});
+
+it("shares selected serial setup within the shortest contributing timeout", () => {
+  const serialTargets = [
+    "src/gateway/server-methods/plugins.decisions.test.ts",
+    "src/gateway/server-methods/plugins.retention.test.ts",
+    "src/gateway/server-methods/plugins.runtime-owner.test.ts",
+    "src/gateway/server-methods/plugins.test.ts",
+    "src/gateway/server-methods/templates-add.test.ts",
+    "src/gateway/server-methods/templates.test.ts",
+    "src/gateway/server-plugin-reload.installed-package.test.ts",
+  ];
+  const targets = ["src/gateway/client-callsites.guard.test.ts", ...serialTargets];
+  const selected = expectDefined(
+    createSelectedNodeTestShardBundles(targets, {
+      runnerBackend: "hybrid",
+    }),
+    "qualified serial selection",
+  );
+  const serial = expectDefined(
+    selected.find((job) =>
+      serialTargets.every((target) =>
+        job.groups.some((group) => group.includePatterns?.includes(target)),
+      ),
+    ),
+    "shared serial selection",
+  );
+  expect(serial).toMatchObject({
+    runner: "blacksmith-32vcpu-ubuntu-2404",
+    planConcurrency: 1,
+  });
+  expect(serial.timeoutMinutes ?? 60).toBe(60);
+  expect(
+    selected
+      .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))
+      .toSorted(),
+  ).toEqual(targets.toSorted());
 });

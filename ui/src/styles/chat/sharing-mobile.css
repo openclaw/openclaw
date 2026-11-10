@@ -37,9 +37,9 @@
 .chat-sharing-options__label {
   flex: 1;
   min-width: 0;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 400;
-  line-height: 20px;
+  line-height: calc(20px * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
 }
 
@@ -49,9 +49,9 @@
   align-items: center;
   gap: 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .chat-sharing-options__public-icon,
@@ -69,15 +69,15 @@
   gap: 16px;
   min-width: 0;
   color: var(--text);
-  font: 400 14px/20px var(--font-body);
+  font: 400 var(--control-ui-text-md)/calc(20px * var(--control-ui-text-scale)) var(--font-body);
 }
 
 .chat-sharing-mobile__heading {
   margin: 0 12px 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .chat-sharing-mobile__group {
@@ -117,8 +117,8 @@
 .chat-sharing-mobile__mode-copy small,
 .chat-sharing-mobile__public-description {
   color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .chat-sharing-mobile__mode-icon,
@@ -288,7 +288,6 @@
 }
 
 .chat-sharing-mobile__search input {
-  box-sizing: border-box;
   width: 100%;
   height: 44px;
   padding: 8px 12px 8px 38px;
@@ -296,7 +295,7 @@
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--text);
-  font: 400 16px/20px var(--font-body);
+  font: 400 var(--control-ui-text-lg)/calc(20px * var(--control-ui-text-scale)) var(--font-body);
 }
 
 .chat-sharing-mobile__search input:focus-visible {
@@ -336,7 +335,7 @@
   border: 0;
   background: transparent;
   color: var(--muted);
-  font: 400 12px/18px var(--font-body);
+  font: 400 var(--control-ui-text-sm)/calc(18px * var(--control-ui-text-scale)) var(--font-body);
   cursor: default;
 }
 

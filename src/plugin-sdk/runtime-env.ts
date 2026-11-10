@@ -3,7 +3,9 @@
 
 export type { RuntimeEnv } from "../runtime.js";
 export {
-  assertRuntimeSupportsDynamicExecution,
+  annotateRuntimeExecutionError,
+  noteRuntimeDynamicExecution,
+  type RuntimeDynamicExecutionFeature,
   getRuntimeExecutionProfile,
   type RuntimeExecutionProfile,
 } from "../infra/runtime-profile.js";

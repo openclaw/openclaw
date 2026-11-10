@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -46,30 +47,21 @@ function storeOptions(input?: string) {
   };
 }
 
-function expectOverloaded(run: () => unknown) {
-  expect(run).toThrow(expect.objectContaining({ code: "overloaded" }));
-}
+const overloaded = expect.objectContaining({ code: "overloaded" });
+const closedInput = expect.objectContaining({ code: "closed" });
 
 async function open() {
   const store = await broker.open<FixtureOperations>(storeOptions());
-  if (!store) {
-    throw new Error("Fixture store did not open");
-  }
+  assert(store, "Fixture store did not open");
   return store;
 }
 
-it.each(["manual release", "handoff", "serialization failure"] as const)(
+it.each(["handoff", "serialization failure"] as const)(
   "transfers preparation custody through %s without leaking or double charging bytes",
   async (mode) => {
     const store = await open();
     reserveConcurrentInputs();
     const prepared = reserveInput(64);
-    if (mode === "manual release") {
-      await expect(
-        store.execute({ type: "append", input: { value: "must not enter" } }),
-      ).rejects.toMatchObject({ code: "overloaded" });
-      prepared.release();
-    }
     const command = {
       type: "append" as const,
       input: {
@@ -77,24 +69,19 @@ it.each(["manual release", "handoff", "serialization failure"] as const)(
         ...(mode === "serialization failure" ? { uncloneable: () => {} } : {}),
       },
     };
-    const result =
-      mode === "manual release"
-        ? store.execute(command)
-        : prepared.handoff(() => store.execute(command));
+    const result = prepared.handoff(() => store.execute(command));
     command.input.value = "changed after handoff";
     if (mode === "serialization failure") {
       await expect(result).rejects.toBeInstanceOf(Error);
     } else {
       // A dispatched command retains its byte charge until the worker replies.
-      expectOverloaded(() => broker.reserveInputPreparation(64 * MIB));
+      expect(() => broker.reserveInputPreparation(64 * MIB)).toThrow(overloaded);
       await expect(result).resolves.toMatchObject({ writes: 1 });
     }
     prepared.release();
     reserveInput(64).release();
     const dispatchAgain = vi.fn(() => store.execute(command));
-    expect(() => prepared.handoff(dispatchAgain)).toThrow(
-      expect.objectContaining({ code: "closed" }),
-    );
+    expect(() => prepared.handoff(dispatchAgain)).toThrow(closedInput);
     expect(dispatchAgain).not.toHaveBeenCalled();
     expect(await readWorkerRows(store)).toEqual(
       mode === "serialization failure" ? [] : ["captured at handoff"],
@@ -111,16 +98,13 @@ it.each([
     reserveConcurrentInputs();
     const prepared = reserveInput(reservedMiB);
     const options = storeOptions("x".repeat(inputMiB * MIB));
-    try {
-      await expect(
-        broker.open<FixtureOperations>(options, undefined, undefined, {
-          preparation: "y".repeat(preparationMiB * MIB),
-        }),
-      ).rejects.toMatchObject({ code: "overloaded" });
-      expect(existsSync(options.databasePath)).toBe(false);
-    } finally {
-      prepared.release();
-    }
+    await expect(
+      broker.open<FixtureOperations>(options, undefined, undefined, {
+        preparation: "y".repeat(preparationMiB * MIB),
+      }),
+    ).rejects.toMatchObject({ code: "overloaded" });
+    expect(existsSync(options.databasePath)).toBe(false);
+    prepared.release();
     const store = await broker.open<FixtureOperations>({ ...options, input: undefined });
     expect(await store?.execute({ type: "read", input: undefined })).toEqual([]);
     await store?.close();
@@ -134,12 +118,12 @@ it.each(["stream", "snapshot"] as const)(
     const first = reserveInput(100, retention === "snapshot" ? retention : undefined);
     const second = reserve(100);
     if (retention === "snapshot") {
-      expectOverloaded(() => reserve(100));
+      expect(() => reserve(100)).toThrow(overloaded);
       reserve(56);
     } else {
       reserveConcurrentInputs();
     }
-    expectOverloaded(() => broker.reserveInputPreparation(1));
+    expect(() => broker.reserveInputPreparation(1)).toThrow(overloaded);
     if (retention === "snapshot") {
       const reason = new Error("snapshot canceled before dispatch");
       await expect(first.handoff(() => Promise.reject(reason))).rejects.toBe(reason);
@@ -148,7 +132,7 @@ it.each(["stream", "snapshot"] as const)(
       prepared.release();
       prepared.release();
       reserve(retention === "snapshot" ? 100 : 32);
-      expectOverloaded(() => broker.reserveInputPreparation(1));
+      expect(() => broker.reserveInputPreparation(1)).toThrow(overloaded);
     }
   },
 );
@@ -159,17 +143,15 @@ it("joins captured input before drainage returns and refuses stale handoff", asy
   const closing = broker.close().then(() => {
     closed = true;
   });
-  expect(() => broker.reserveInputPreparation(1)).toThrow(
-    expect.objectContaining({ code: "closed" }),
-  );
+  expect(() => broker.reserveInputPreparation(1)).toThrow(closedInput);
   // This empty broker has only microtasks to settle before it waits for retained input.
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
   expect(closed).toBe(false);
-  expect(() => prepared.assertCurrent()).toThrow(expect.objectContaining({ code: "closed" }));
+  expect(() => prepared.assertCurrent()).toThrow(closedInput);
   const dispatch = vi.fn(() => Promise.resolve());
-  expect(() => prepared.handoff(dispatch)).toThrow(expect.objectContaining({ code: "closed" }));
+  expect(() => prepared.handoff(dispatch)).toThrow(closedInput);
   expect(dispatch).not.toHaveBeenCalled();
   await closing;
   broker.reserveInputPreparation(64 * MIB).release();

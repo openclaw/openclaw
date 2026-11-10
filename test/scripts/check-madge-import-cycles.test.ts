@@ -78,14 +78,6 @@ it.for<[string, Record<string, string>, string[], object?, boolean?]>([
     true,
   ],
   [
-    "alias, re-export and type-only cycle",
-    {
-      "src/a.ts": 'export { value } from "@fixture/b"; export type Value = number;',
-      "src/b.ts": 'import type { Value } from "./a.js"; export const value: Value = 1;',
-    },
-    ["src/a.ts", "src/b.ts"],
-  ],
-  [
     "package export cycle",
     {
       "package.json": JSON.stringify({
@@ -99,25 +91,17 @@ it.for<[string, Record<string, string>, string[], object?, boolean?]>([
     ["src/a.ts", "src/b.ts"],
   ],
   [
-    "ambient declarations do not hide a physical source cycle",
+    "alias re-exports and type-only edges retain physical cycles across batches and ambient declarations",
     {
-      "src/a.ts": 'export { value } from "@fixture/b";',
-      "src/b.ts": 'import "./a.js"; export const value = 1;',
-      "src/ambient.d.ts": 'declare module "@fixture/b" { export const value: number; }',
-    },
-    ["src/a.ts", "src/b.ts"],
-  ],
-  [
-    "type-only cycle across a large source inventory",
-    {
-      "src/a.ts": 'export type { Value } from "@fixture/z"; export type Alias = string;',
+      "src/a.ts": 'export { value } from "@fixture/z"; export type Alias = string;',
+      "src/ambient.d.ts": 'declare module "@fixture/z" { export const value: string; }',
       ...Object.fromEntries(
         Array.from({ length: 255 }, (_, i) => [
           `src/filler-${String(i).padStart(3, "0")}.ts`,
           "export {};",
         ]),
       ),
-      "src/z.ts": 'import type { Alias } from "./a.js"; export type Value = Alias;',
+      "src/z.ts": 'import type { Alias } from "./a.js"; export const value: Alias = "";',
     },
     ["src/a.ts", "src/z.ts"],
   ],

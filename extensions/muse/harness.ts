@@ -40,6 +40,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { consumeTurn } from "./src/events.js";
 import { MusePool, openMuseSession } from "./src/runtime.js";
+import { museTurnUsage } from "./src/usage.js";
 import { MuseCatalogReader } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
@@ -214,6 +215,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       let failure: unknown;
       let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
       const messages: AgentMessage[] = [];
+      const tokenUsage: unknown[] = [];
       let text = "";
       let lastToolError: AgentHarnessAttemptResult["lastToolError"];
       let assistantTranscriptOwned = false;
@@ -319,6 +321,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
             options.logger?.warn(`${message}; started a new Muse session.`);
           },
         });
+        runtime.usageObservers.set(session.sessionId, (usage) => tokenUsage.push(usage));
         assertDispatchActive();
         let sessionContext = "";
         if (freshSession) {
@@ -415,7 +418,9 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
             `Muse approval failed (${error.kind}): ${
               error.kind === "unofferedChoice"
                 ? `choice ${error.choiceId} was not offered`
-                : formatErrorMessage(error.error)
+                : error.kind === "feedbackNotAccepted"
+                  ? `choice ${error.choiceId} does not accept feedback`
+                  : formatErrorMessage(error.error)
             }`,
           );
           void stop().catch(() => runtime.close());
@@ -513,12 +518,20 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         }
         if (result.outcome.params.terminal === "failed") {
           const turnError = result.outcome.params.error;
-          throw new Error(
-            turnError?.kind === "authRequired"
-              ? `Muse Code is not signed in on the Gateway host (${turnError.message}). Run \`muse login\` there, or set META_API_KEY for the Gateway.`
-              : (turnError?.message ??
-                  result.outcome.params.reason ??
-                  "Muse model request failed. Run muse to check login and model access."),
+          const quota = turnError?.quota;
+          const authRequired = turnError?.kind === "authRequired";
+          // MSP types these classes; the status lets the host classify them without parsing text.
+          throw Object.assign(
+            new Error(
+              quota
+                ? `Muse usage limit reached (${quota.limitKind}); resets at ${new Date(quota.resetsAtMs).toISOString()}. ${turnError.message}`
+                : authRequired
+                  ? `Muse Code is not signed in on the Gateway host (${turnError.message}). Run \`muse login\` there, or set META_API_KEY for the Gateway.`
+                  : (turnError?.message ??
+                    result.outcome.params.reason ??
+                    "Muse model request failed. Run muse to check login and model access."),
+            ),
+            quota ? { status: 429 } : authRequired ? { status: 401 } : {},
           );
         }
         // A cancellation the harness started for a failure (such as an approval
@@ -555,12 +568,13 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           undefined,
           activeAttachment,
         );
+        runtime.usageObservers.delete(session?.sessionId ?? "");
         bound?.release();
         lease.release();
       }
       const toolMetas = messages
         .filter((message) => message.role === "toolResult")
-        .map((message) => ({ toolName: message.toolName }));
+        .map((message) => ({ toolName: message.toolName, isError: message.isError }));
       const interruption = timedOut
         ? { kind: "timeout" as const, phase: "prompt" as const, source: "runtime" as const }
         : aborted
@@ -578,7 +592,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       const terminal = failureMessage
         ? agentHarnessAttemptTerminal.setFailure(interruption, {
             source: "prompt",
-            error: new Error(failureMessage),
+            error: new Error(failureMessage, { cause: failure }),
           })
         : interruption;
       const lastAssistant = messages.findLast((message) => message.role === "assistant");
@@ -593,6 +607,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         assistantTranscriptIdempotencyKey: finalKey,
         toolMetas,
         lastToolError,
+        attemptUsage: museTurnUsage(tokenUsage, turn?.turnId),
         cloudCodeAssistFormatError: false,
         didSendViaMessagingTool: false,
         itemLifecycle: {

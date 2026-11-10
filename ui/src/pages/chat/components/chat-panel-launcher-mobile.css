@@ -13,9 +13,9 @@
 .chat-panel-launcher-mobile h3 {
   margin: 2px 0 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
-  line-height: 16px;
+  line-height: var(--control-ui-text-lg);
 }
 
 .chat-panel-launcher-mobile__quick,
@@ -40,12 +40,12 @@
   min-height: 52px;
   padding: 12px;
   border: 0;
-  border-radius: 12px;
-  background: var(--bg-hover);
+  border-radius: var(--radius-lg);
+  background: var(--surface-selected);
   color: inherit;
   font: inherit;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--control-ui-text-md);
+  line-height: calc(20px * var(--control-ui-text-scale));
   text-align: left;
   cursor: var(--cursor-action);
 }
@@ -57,8 +57,8 @@
   min-height: 72px;
 }
 
-.chat-panel-launcher-mobile__option:active {
-  background: color-mix(in srgb, var(--text) 9%, var(--popover));
+.chat-panel-launcher-mobile__option:not(:disabled):is(:hover, :focus-visible, :active) {
+  background: var(--surface-selected-hover);
 }
 
 .chat-panel-launcher-mobile__option:focus-visible {

@@ -11,7 +11,7 @@ export function chatControls(page: Page) {
     pane,
     composer: pane.getByRole("textbox", { name: "Chat composer", exact: true }),
     send: pane.getByRole("button", { name: "Send message", exact: true }),
-    stop: pane.getByRole("button", { name: "Stop generating", exact: true }),
+    stop: pane.getByRole("button", { name: "Stop", exact: true }),
   };
 }
 
@@ -32,18 +32,4 @@ export async function assertServedUi(page: Page, baseUrl: string) {
   expect((await asset.body()).equals(built), "served UI must be this checkout's built bundle").toBe(
     true,
   );
-}
-
-export async function assertFixtureSecretsAbsent(
-  page: Page,
-  instance: OpenClawTestInstance,
-  key: string,
-) {
-  const text = (await page.locator("body").textContent()) ?? "";
-  const { gatewayToken, hookToken, stateDir, homeDir } = instance;
-  const containsSecret = [gatewayToken, hookToken, stateDir, homeDir, key].some((secret) =>
-    text.includes(secret),
-  );
-  expect(containsSecret, "screenshot must exclude fixture credentials and paths").toBe(false);
-  expect(new URL(page.url()).hash).toBe("");
 }

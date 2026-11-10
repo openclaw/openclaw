@@ -105,17 +105,21 @@ export async function withoutWorkspaceHashContext<T>(operation: () => Promise<T>
 
 // A placement-lifetime memo self-bounds its worker entries (each remote capture
 // replaces them wholesale) but gateway entries accumulate as stat identities
-// change across turns. Reset the whole memo once its estimated footprint
-// crosses the shared byte cap so one placement cannot hold unbounded hash state.
+// change across turns. Evict the oldest identities to preserve fresh hashes when
+// a large workspace crosses the cap; clearing everything rehashes it on every read.
 export function pruneWorkspaceHashMemo(memo: WorkspaceHashMemo): void {
   let bytes = 0;
   memo.forEach((sha256, identity) => {
     // Identities and digests are ASCII, so string length equals byte length.
     bytes += identity.length + sha256.length;
-    if (bytes > MAX_WORKSPACE_HASH_MEMO_BYTES) {
-      memo.clear();
-    }
   });
+  for (const [identity, sha256] of memo) {
+    if (bytes <= MAX_WORKSPACE_HASH_MEMO_BYTES) {
+      break;
+    }
+    memo.delete(identity);
+    bytes -= identity.length + sha256.length;
+  }
 }
 
 /** Returns the placement-owned memo for a key, pruning it before each reuse. */
@@ -132,6 +136,11 @@ export function takeWorkspaceHashMemo(
 // One source for host and standalone worker execution; transformed closures cannot
 // be serialized because their compiler-owned helpers stay in the parent module.
 export const WORKSPACE_HASH_MEMO_JS = String.raw`
+const WORKSPACE_CTIME_SAFETY_MARGIN_MS = 2000;
+function workspaceCtimeIsReusable(ctimeNs, startedAtMs) {
+  // Recent files cost another hash; a backwards clock keeps them outside the reuse window.
+  return ctimeNs >= 0n && ctimeNs < BigInt(startedAtMs - WORKSPACE_CTIME_SAFETY_MARGIN_MS) * 1000000n;
+}
 function workspaceStatIdentity(owner, stats) {
   return [owner, stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(":");
 }
@@ -158,9 +167,11 @@ function selectWorkerWorkspaceHashMemoEntries(memo, maxEntries, maxBytes) {
 }`;
 
 const {
+  workspaceCtimeIsReusable,
   workspaceStatIdentity,
   selectWorkerWorkspaceHashMemoEntries,
 }: {
+  workspaceCtimeIsReusable: (ctimeNs: bigint, startedAtMs: number) => boolean;
   workspaceStatIdentity: (
     owner: "gateway" | "worker",
     stats: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint },
@@ -171,10 +182,10 @@ const {
     maxBytes: number,
   ) => Array<[string, string]>;
 } = compileFunction(
-  `${WORKSPACE_HASH_MEMO_JS}\nreturn { workspaceStatIdentity, selectWorkerWorkspaceHashMemoEntries };`,
+  `${WORKSPACE_HASH_MEMO_JS}\nreturn { workspaceCtimeIsReusable, workspaceStatIdentity, selectWorkerWorkspaceHashMemoEntries };`,
 )();
 
-export { workspaceStatIdentity };
+export { workspaceCtimeIsReusable, workspaceStatIdentity };
 
 export function serializeRemoteWorkspaceHashMemo(
   memo: WorkspaceHashMemo,

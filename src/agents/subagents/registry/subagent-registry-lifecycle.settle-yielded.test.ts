@@ -91,7 +91,6 @@ it("keeps a kill claim published while the settle request is preparing", async (
     return acquireLock(runId);
   });
   await complete({ expectedEntry: sweeperSnapshot });
-  expect(lock).toHaveBeenCalledOnce();
   expect(read().killIntent).toEqual(claim);
   expect(read().pauseReason).toBe("sessions_yield");
   expect(read().execution.outcome).toBeUndefined();

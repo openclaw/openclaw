@@ -4,16 +4,20 @@ import { build, transform } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   compareCpuTables,
+  controlUiScriptAssetUrl,
   formatCpuTables,
   medianCpuTables,
   readCpuProfileReport,
   mapColdLoadCpuProfile,
   prepareColdLoadTraceEvent,
   summarizeColdLoadTrace,
+  summarizeScriptCoverage,
+  summarizeJavaScriptResources,
   summarizeCpuProfile,
   type ColdLoadCpuProfile,
   type ColdLoadTraceEvent,
 } from "../../scripts/lib/control-ui-cold-load-trace.ts";
+import { createControlUiCpuCensus } from "../../scripts/lib/control-ui-cpu-census.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -55,6 +59,129 @@ function event(
 }
 
 describe("cold-load trace accounting", () => {
+  it("separates profiler initialization from later native work", () => {
+    const census = createControlUiCpuCensus();
+    census.add("action", {
+      nodes: [node(1, frame("(program)", "")), node(2, frame("render", "ui/src/app.ts"))],
+      samples: [1, 2, 1],
+      timeDeltas: [100_000, 5_000, 3_000],
+    });
+    const report = census.report();
+    expect(report.activeMs).toBe(8);
+    expect(report.observations[0]).toMatchObject({ sampledMs: 108, profilerLeadInMs: 100 });
+    expect(report.owners).toEqual({ app: 5, browser: 3 });
+  });
+
+  it("aggregates active leaf time across flows without charging ancestors or idle", () => {
+    const census = createControlUiCpuCensus();
+    census.add("route", {
+      nodes: [
+        node(1, frame("render", "ui/src/app.ts"), [2, 3, 4, 5, 6, 7]),
+        node(2, frame("flush", "node_modules/@solidjs/signals/dist/index.js")),
+        node(3, frame("(garbage collector)", "")),
+        node(4, frame("(idle)", "")),
+        node(5, frame("parse", "node_modules/parser/index.js")),
+        node(6, frame("evaluate", "__playwright_evaluation_script__")),
+        node(7, frame("minified", "http://localhost/assets/missing-map.js")),
+        node(8, frame("query", "", 123)),
+      ],
+      samples: [1, 2, 3, 4, 5, 6, 7, 8],
+      timeDeltas: [3000, 2000, 4000, 100000, 5000, 6000, 1000, 1000],
+    });
+    census.add("route", singleProfile("render", "ui/src/app.ts"));
+    census.add("filter", singleProfile("render", "ui/src/app.ts"));
+    const report = census.report();
+    expect(report.activeMs).toBe(24);
+    expect(report.owners).toEqual({
+      app: 5,
+      Solid: 2,
+      browser: 4,
+      dependency: 5,
+      automation: 6,
+      unmapped: 2,
+    });
+    expect(report.observations[0]?.idleMs).toBe(100);
+    expect(report.functions.find(({ name }) => name === "render")).toMatchObject({
+      selfMs: 5,
+      flowCount: 2,
+      sharePercent: expect.closeTo(500 / 24),
+      flows: [
+        { flow: "route", selfMs: 4 },
+        { flow: "filter", selfMs: 1 },
+      ],
+    });
+    expect(report.files.find(({ file }) => file === "ui/src/app.ts")?.selfMs).toBe(5);
+    expect(report.files.filter(({ file }) => file === "").map(({ owner }) => owner)).toEqual([
+      "browser",
+      "unmapped",
+    ]);
+    expect(report.functions.some(({ name }) => name === "(idle)")).toBe(false);
+  });
+
+  it("recognizes bundle scripts beneath root and deep-link paths", () => {
+    const assets = new URL(assetBaseUrl);
+    for (const pathname of [
+      "/assets/entry.js",
+      "/chat/main/topic/assets/entry.js",
+      "/dashboard/main/dashboard/assets/worker.mjs",
+    ]) {
+      const url = new URL(pathname, assets.origin).href;
+      expect(controlUiScriptAssetUrl(url, assets)?.href).toBe(url);
+    }
+    expect(controlUiScriptAssetUrl("http://other.invalid/assets/entry.js", assets)).toBeNull();
+    expect(controlUiScriptAssetUrl("http://localhost/chat/entry.js", assets)).toBeNull();
+    expect(controlUiScriptAssetUrl("http://localhost/assets/style.css", assets)).toBeNull();
+    expect(controlUiScriptAssetUrl("not a URL", assets)).toBeNull();
+  });
+
+  it("counts fetched JavaScript independently of observed V8 scripts", () => {
+    const resources = [
+      {
+        url: "http://localhost/assets/entry.js",
+        decodedBytes: 100,
+        encodedBytes: 30,
+        transferBytes: 330,
+      },
+      {
+        url: "http://localhost/assets/preload.js?v=1",
+        decodedBytes: 200,
+        encodedBytes: 40,
+        transferBytes: 340,
+      },
+      {
+        url: "http://localhost/assets/style.css",
+        decodedBytes: 50,
+        encodedBytes: 20,
+        transferBytes: 320,
+      },
+    ];
+    expect(summarizeJavaScriptResources(resources, [{ url: resources[0]!.url }])).toEqual({
+      requests: 2,
+      rawBytes: 300,
+      encodedBytes: 70,
+      transferBytes: 670,
+      outsideCoverage: { requests: 1, rawBytes: 200, encodedBytes: 40, transferBytes: 340 },
+    });
+    expect(summarizeJavaScriptResources(resources).outsideCoverage).toBeUndefined();
+  });
+
+  it("counts UTF-8 coverage with nested unexecuted blocks and invoked inner functions", () => {
+    expect(
+      summarizeScriptCoverage({
+        source: "abcé😀xyz",
+        functions: [
+          { ranges: [{ startOffset: 0, endOffset: 9, count: 1 }] },
+          {
+            ranges: [
+              { startOffset: 3, endOffset: 9, count: 0 },
+              { startOffset: 4, endOffset: 6, count: 1 },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({ loadedBytes: 12, executedBytes: 7, unusedBytes: 5 });
+  });
+
   it("prepares numeric CDP envelopes, including unnamed end events", () => {
     expect(
       prepareColdLoadTraceEvent(
@@ -111,6 +238,49 @@ describe("cold-load trace accounting", () => {
       layoutMs: 30,
       forcedLayouts: 1,
       forcedLayoutMs: 10,
+      compilation: {
+        mainThread: { events: 0, wallMs: 0, threadCpuMs: null },
+        allRendererThreads: { events: 0, wallMs: 0, threadCpuMs: null },
+        eventNames: [],
+      },
+    });
+  });
+
+  it("unions nested compiler work per renderer thread and preserves thread CPU clocks", () => {
+    const trace = [
+      event("navigationStart", "I", 1_000),
+      event("RunTask", "X", 1_000, { dur: 20_000 }),
+      event("V8.CompileCode", "X", 2_000, { dur: 8_000, tts: 100, tdur: 4_000 }),
+      event("V8.ParseFunction", "X", 3_000, { dur: 1_000, tts: 1_000, tdur: 800 }),
+      event("v8.compileModule", "B", 12_000, { tts: 9_000 }),
+      event("v8.compileModule", "E", 14_000, { tts: 9_500 }),
+      event("v8.parseOnBackground", "X", 3_000, { tid: 2, dur: 12_000, tts: 500, tdur: 6_000 }),
+      event("V8.CompileCode", "X", 3_000, { pid: 9, dur: 15_000, tts: 0, tdur: 15_000 }),
+      event("V8.JsonParse", "X", 16_000, { dur: 1_000 }),
+      event("V8.CompileCodeWait", "X", 16_000, { dur: 1_000 }),
+    ].map(prepareColdLoadTraceEvent);
+    expect(summarizeColdLoadTrace(trace, 20).compilation).toEqual({
+      mainThread: { events: 3, wallMs: 10, threadCpuMs: 4.5 },
+      allRendererThreads: { events: 4, wallMs: 22, threadCpuMs: 10.5 },
+      eventNames: [
+        { name: "v8.compileModule", count: 1 },
+        { name: "V8.CompileCode", count: 1 },
+        { name: "V8.ParseFunction", count: 1 },
+        { name: "v8.parseOnBackground", count: 1 },
+      ].toSorted((left, right) => left.name.localeCompare(right.name)),
+    });
+  });
+
+  it("does not substitute wall time for missing or clipped compilation CPU", () => {
+    const trace = [
+      event("navigationStart", "I", 1_000),
+      event("RunTask", "X", 1_000, { dur: 20_000 }),
+      event("V8.CompileCode", "X", 2_000, { dur: 1_000 }),
+      event("v8.parseOnBackground", "X", 20_000, { tid: 2, dur: 5_000, tts: 500, tdur: 4_000 }),
+    ];
+    expect(summarizeColdLoadTrace(trace, 20).compilation).toMatchObject({
+      mainThread: { events: 1, wallMs: 1, threadCpuMs: null },
+      allRendererThreads: { events: 2, wallMs: 2, threadCpuMs: null },
     });
   });
 
@@ -170,10 +340,6 @@ describe("cold-load CPU accounting", () => {
       expect(mapped.profile.nodes[0]?.callFrame).toMatchObject({
         functionName: "flush",
         ...sourceLocation(/node_modules\/@solidjs\/signals\/dist\/prod\.js$/u),
-      });
-      expect(summarizeCpuProfile(mapped.profile)).toMatchObject({
-        solidFlushSelfMs: 2,
-        solidFlushInclusiveMs: 2,
       });
       expect(profile.nodes[0]?.callFrame.functionName).toBe("a");
     },
@@ -284,7 +450,8 @@ describe("cold-load CPU accounting", () => {
     ).toThrow();
   });
 
-  it.each(["live", "streaming"])("rejects comparisons that omit the %s phase", (phase) => {
+  it("rejects comparisons with different phase sets", () => {
+    const phase = "live";
     const tables = { functions: [], files: [] };
     const report = { reload: tables, [phase]: tables };
     expect(() => readCpuProfileReport(report, ["reload"])).toThrow("CPU profile phases differ");

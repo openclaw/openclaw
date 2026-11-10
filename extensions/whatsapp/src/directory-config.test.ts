@@ -93,12 +93,12 @@ beforeEach(() => {
 
 it("filters and sorts groups through the active owner", async () => {
   const sock = socket({
-    [third]: { id: third, subject: "Beta" },
-    [first]: { id: first, subject: "Beta Team" },
+    [third]: { id: third, subject: "Cafe\u0301" },
+    [first]: { id: first, subject: "Cafe\u0301 Team" },
   });
   mocks.getController.mockReturnValue({ getCurrentSock: () => sock } as never);
-  await expect(listGroups(params({ query: "beta", limit: 1 }))).resolves.toEqual([
-    entry(first, "Beta Team"),
+  await expect(listGroups(params({ query: "CAFÉ", limit: 1 }))).resolves.toEqual([
+    entry(first, "Cafe\u0301 Team"),
   ]);
   expect(mocks.acquireOwner).not.toHaveBeenCalled();
 });

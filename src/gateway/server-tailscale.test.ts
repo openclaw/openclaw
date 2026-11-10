@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mocks, makeClaim } = vi.hoisted(() => {
   const stopRouteClaim = vi.fn<() => Promise<void>>(async () => undefined);
-  const claimFixture = (exited = new Promise<void>(() => {}), active = true) => ({
+  const claimFixture = (exited = new Promise<string>(() => {}), active = true) => ({
     exited,
     isActive: () => active,
     stop: stopRouteClaim,
@@ -110,7 +110,7 @@ describe("startGatewayTailscaleExposure", () => {
   });
 
   it("fails startup when the route owner exits after reporting readiness", async () => {
-    mocks.claimTailscaleRoute.mockResolvedValue(makeClaim(Promise.resolve(), false));
+    mocks.claimTailscaleRoute.mockResolvedValue(makeClaim(Promise.resolve("worker code 0"), false));
 
     await expect(startGatewayTailscaleExposure()).rejects.toThrow("claim exited during startup");
     expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
@@ -180,20 +180,27 @@ describe("startGatewayTailscaleExposure", () => {
     expect(logTailscale.warn).toHaveBeenCalledWith(expect.stringContaining(failure.message));
   });
 
-  it("claims Serve without an existing Funnel and owns its tailnet-only origin", async () => {
+  it.each(["serve", "funnel"] as const)("owns its managed %s origin", async (mode) => {
+    mocks.getTailnetHostname.mockResolvedValue("node.tailnet.ts.net");
     mocks.getTailnetHostnameAfterServe.mockResolvedValue("node.tailnet.ts.net");
-
-    const cleanup = await startGatewayTailscaleExposure({ preserveFunnel: true });
-
-    expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
-    expectClaim("serve");
+    const cleanup = await startGatewayTailscaleExposure({
+      tailscaleMode: mode,
+      preserveFunnel: true,
+    });
+    if (mode === "serve") {
+      expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
+      expect(resolveControlUiIdentity({}, { mode: "token", allowTailscale: true })?.url).toBe(
+        "https://node.tailnet.ts.net/",
+      );
+    } else {
+      expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
+      expectNoControlUiIdentity();
+    }
+    expectClaim(mode);
     expect(getTailscalePublishedOrigin()).toMatchObject({
       origin: "https://node.tailnet.ts.net",
-      mode: "serve",
+      mode,
     });
-    expect(resolveControlUiIdentity({}, { mode: "token", allowTailscale: true })?.url).toBe(
-      "https://node.tailnet.ts.net/",
-    );
     await cleanup?.();
     expect(getTailscalePublishedOrigin()).toBeUndefined();
     expectNoControlUiIdentity();
@@ -214,38 +221,6 @@ describe("startGatewayTailscaleExposure", () => {
       expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
     },
   );
-
-  it("clears the published origin and warns when the foreground claim exits", async () => {
-    const { promise: exited, resolve: resolveExit } = createDeferred();
-    mocks.claimTailscaleRoute.mockResolvedValue(makeClaim(exited));
-    mocks.getTailnetHostnameAfterServe.mockResolvedValue("node.tailnet.ts.net");
-    const cleanup = await startGatewayTailscaleExposure();
-    resolveExit();
-
-    await vi.waitFor(() => {
-      expect(logTailscale.warn).toHaveBeenCalledWith(expect.stringContaining("claim exited"));
-    });
-    expect(getTailscalePublishedOrigin()).toBeUndefined();
-    expectNoControlUiIdentity();
-    await cleanup?.();
-  });
-
-  it("never consults the Funnel route helper when running in funnel mode", async () => {
-    mocks.getTailnetHostname.mockResolvedValue("node.tailnet.ts.net");
-
-    await startGatewayTailscaleExposure({
-      tailscaleMode: "funnel",
-      preserveFunnel: true,
-    });
-
-    expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
-    expect(getTailscalePublishedOrigin()).toMatchObject({
-      origin: "https://node.tailnet.ts.net",
-      mode: "funnel",
-    });
-    expectNoControlUiIdentity();
-    expectClaim("funnel");
-  });
 });
 
 describe("managed Tailscale claim recovery", () => {
@@ -253,11 +228,11 @@ describe("managed Tailscale claim recovery", () => {
   afterEach(() => vi.useRealTimers());
 
   function recoverableClaim() {
-    const exited = createDeferred();
+    const exited = createDeferred<string>();
     let active = true;
     const exit = () => {
       active = false;
-      exited.resolve();
+      exited.resolve("worker code 0");
     };
     return {
       exited: exited.promise,
@@ -283,7 +258,9 @@ describe("managed Tailscale claim recovery", () => {
       const previousOrigin = getTailscalePublishedOrigin();
       original.exit();
       await vi.advanceTimersByTimeAsync(0);
+      expect(logTailscale.warn).toHaveBeenCalledWith(expect.stringContaining("claim exited"));
       expect(previousOrigin?.signal.aborted).toBe(true);
+      expectNoControlUiIdentity();
       for (let attempt = 0; attempt < 2; attempt += 1) {
         await vi.advanceTimersToNextTimerAsync();
         expect(getTailscalePublishedOrigin()).toBeUndefined();

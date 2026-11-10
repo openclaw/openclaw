@@ -1,12 +1,11 @@
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
-import type { ModelCompatConfig } from "../config/types.models.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
-import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
 import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -15,18 +14,18 @@ import type {
   AgentRunClientContext,
   AgentRunMessageContext,
   AgentRunChannelContext,
-} from "./command/shared-types.js";
+} from "./command/execution-context.types.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import type { DelegationCapability } from "./delegation-capability.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
 import type { SandboxContext } from "./sandbox/types.js";
-import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import type { OpenClawCodingToolConstructionPlan } from "./tool-catalog.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
+import type { ToolOutcomeObserver } from "./tool-outcome-observation.js";
 import type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
@@ -124,8 +123,6 @@ export type OpenClawCodingToolsOptions = {
   isTurnTainted?: () => boolean;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
-  /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
-  skillsSnapshot?: SkillSnapshot;
   /** Original identities for sandbox-materialized skill instruction paths. */
   skillUsagePaths?: SkillUsagePath[];
   /** Prepared conversation-scoped facts for callers that already resolved this run context. */
@@ -135,8 +132,6 @@ export type OpenClawCodingToolsOptions = {
   inputProvenance?: InputProvenance;
   /** Consumed in-process completion capability; never derived from model-facing input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
-  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
-  scheduledToolPolicy?: ScheduledToolPolicyContext;
 } & OpenClawSharedToolsOptions &
   Omit<ModelAwareToolContext, "requesterAgentIdOverride"> &
   AgentRunClientContext &
@@ -144,7 +139,11 @@ export type OpenClawCodingToolsOptions = {
   AgentRunChannelContext;
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  /** Describe prospective GitHub actions before policy filtering; never executable. */
+  githubPublicationPreview?: true;
   assertInvocationCurrent?: () => void;
+  /** Live harness-owned local execution, independent of the Gateway tool catalog. */
+  nativeHarnessExecution?: true;
   pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
   pluginExecutionSkillsSnapshot?: SkillSnapshot;
   awaitSessionDiffBaseline?: () => Promise<void>;

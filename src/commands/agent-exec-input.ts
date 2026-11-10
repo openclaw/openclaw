@@ -3,6 +3,7 @@ import path from "node:path";
 import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mergeDeep } from "../infra/deep-merge.js";
 import { isPlainObject } from "../infra/plain-object.js";
@@ -117,10 +118,10 @@ export async function resolveExecBaseConfig(
   }
   const { createConfigIO, captureRuntimeConfigAsyncReader } = await import("../config/io.js");
   if (!opts.config) {
-    return await captureRuntimeConfigAsyncReader()();
+    return await captureRuntimeConfigAsyncReader({ observe: false })();
   }
   // A pinned file bypasses the published runtime snapshot and fails if missing or invalid.
-  const io = createConfigIO({ configPath: path.resolve(opts.config) });
+  const io = createConfigIO({ configPath: path.resolve(opts.config), observe: false });
   if (!existsSync(io.configPath)) {
     throw new Error(`--config file not found: ${io.configPath}`);
   }
@@ -153,7 +154,7 @@ export async function applyExecConfigOverrides(
   const result = validateConfigObjectWithPlugins(merged);
   if (!result.ok) {
     throw new Error(
-      `Invalid --config-override: ${result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`,
+      `Invalid --config-override: ${formatConfigIssueLines(result.issues, "", { normalizeRoot: true }).join("; ")}`,
     );
   }
   return result.config;

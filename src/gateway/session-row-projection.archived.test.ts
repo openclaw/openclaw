@@ -326,17 +326,18 @@ it("bounds archived residency across pages and evicts the least recently read ro
     }
     cleanup.defer(yieldSessionListBackgroundWork);
     cleanup.defer(retainSessionListForegroundWork());
-    let afterExactPreparation: (() => Promise<void>) | undefined;
+    let afterExactPreparation: (() => Promise<void> | undefined) | undefined;
     const createRefresh = rowRefresh.createSessionRowRefresh;
     vi.spyOn(rowRefresh, "createSessionRowRefresh").mockImplementation((owner) => {
       const refresh = createRefresh(owner);
       return {
         ...refresh,
-        prepareExactRows(queries) {
+        prepareExactRows(...args) {
           // All materialization slices finish here while the reader still holds archive pins.
-          return refresh.prepareExactRows(queries)?.then(async () => {
-            await afterExactPreparation?.();
-          });
+          const pending = refresh.prepareExactRows(...args);
+          return pending
+            ? pending.then(() => afterExactPreparation?.())
+            : afterExactPreparation?.();
         },
       };
     });
@@ -358,32 +359,51 @@ it("bounds archived residency across pages and evicts the least recently read ro
     const pagePrepared = createDeferredCore();
     const releasePage = createDeferredCore();
     let wholePagePaused = false;
-    afterExactPreparation = async () => {
+    afterExactPreparation = () => {
       if (!wholePagePaused && projection.selectEntries().filter(ready).length === 128) {
         wholePagePaused = true;
         pagePrepared.resolve();
-        await releasePage.promise;
+        return releasePage.promise;
       }
+      return undefined;
     };
     const pendingPage = listRows(projection, {
       archived: true,
       limit: 128,
       includeLastMessage: true,
     });
+    let overlappingPage: ReturnType<typeof listProjectedSessions> | undefined;
+    const secondPrepared = createDeferredCore();
+    const releaseSecond = createDeferredCore();
     try {
       await waitForPage(pendingPage, pagePrepared, signal);
       await listRows(projection, { archived: true, limit: 1 });
       expect(projection.selectEntries().filter(ready)).toHaveLength(128);
+      let secondPaused = false;
+      afterExactPreparation = () => {
+        if (!secondPaused) {
+          secondPaused = true;
+          secondPrepared.resolve();
+          return releaseSecond.promise;
+        }
+        return undefined;
+      };
+      overlappingPage = listRows(projection, { archived: true, limit: 110, offset: 18 });
+      await waitForPage(overlappingPage, secondPrepared, signal);
+      writeRow(query.key, { sessionId: "replacement", updatedAt: 128, archivedAt: 1 });
+      releasePage.resolve();
+      const { sessions } = await pendingPage;
+      expect([sessions.length, sessions[0]?.sessionId]).toEqual([128, "replacement"]);
+      expect(projection.selectEntries().filter(ready)).toHaveLength(110);
     } finally {
       releasePage.resolve();
-      await pendingPage;
+      releaseSecond.resolve();
+      await Promise.allSettled([pendingPage, overlappingPage]);
       afterExactPreparation = undefined;
     }
-    const wholePage = await pendingPage;
-    expect(wholePage.sessions).toHaveLength(128);
-    expect(projection.selectEntries().filter(ready)).toHaveLength(128);
-    await listRows(projection, { archived: true, limit: 1 });
+    expect((await overlappingPage)?.sessions).toHaveLength(110);
     expect(projection.selectEntries().filter(ready)).toHaveLength(100);
+    const wholePage = await pendingPage;
 
     sessionChanges.emit({ all: true, scope: "catalog" });
     await projection.ensureMaterialized();
@@ -394,7 +414,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
       prepared: createDeferredCore(),
       resume: createDeferredCore(),
     }));
-    afterExactPreparation = async () => {
+    afterExactPreparation = () => {
       const readyKeys = new Set(
         projection
           .selectEntries()
@@ -405,9 +425,10 @@ it("bounds archived residency across pages and evicts the least recently read ro
         if (!barrier.paused && barrier.keys.every((key) => readyKeys.has(key))) {
           barrier.paused = true;
           barrier.prepared.resolve();
-          await barrier.resume.promise;
+          return barrier.resume.promise;
         }
       }
+      return undefined;
     };
     const pages: Array<ReturnType<typeof listProjectedSessions>> = [];
     try {

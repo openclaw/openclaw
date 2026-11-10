@@ -3,7 +3,7 @@ import {
   listSupportedVideoGenerationModes,
   resolveVideoGenerationModeCapabilities,
 } from "./capabilities.js";
-import type { VideoGenerationProvider } from "./types.js";
+import type { VideoGenerationProvider } from "./provider-types.js";
 
 function createProvider(
   capabilities: VideoGenerationProvider["capabilities"],

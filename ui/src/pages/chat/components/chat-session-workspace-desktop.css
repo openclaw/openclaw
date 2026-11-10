@@ -1,9 +1,15 @@
-.workspace-desktop {
-  container: workspace-catalog / inline-size;
+.workspace-desktop,
+.workspace-desktop__catalog,
+.workspace-desktop__session,
+.workspace-desktop__group-content {
   display: flex;
   flex-direction: column;
-  min-width: 0;
   min-height: 0;
+}
+
+.workspace-desktop {
+  container: workspace-catalog / inline-size;
+  min-width: 0;
   height: 100%;
   color: var(--text);
   font-size: calc(13px * var(--control-ui-text-scale, 1));
@@ -24,7 +30,8 @@
 }
 
 .workspace-desktop button:hover,
-.workspace-breadcrumb button:hover {
+.workspace-breadcrumb button:hover,
+.workspace-desktop__row.is-active {
   background: var(--bg-hover);
 }
 
@@ -34,7 +41,7 @@
   outline-offset: -2px;
 }
 
-.workspace-desktop__toolbar.session-panel-rail[data-presentation="desktop"] {
+.workspace-desktop__toolbar {
   gap: 6px;
 }
 
@@ -71,28 +78,23 @@
 }
 
 .workspace-desktop__search button {
-  display: grid;
-  place-items: center;
   padding: 5px;
 }
 
-.workspace-desktop__search button svg {
+.workspace-desktop__search button svg,
+.workspace-desktop__menu .oc-menu-item__icon svg,
+.workspace-desktop__folder-bar svg {
   width: var(--session-rail-icon, 16px);
   height: var(--session-rail-icon, 16px);
+  flex: none;
 }
 
 .workspace-desktop__catalog {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
   flex: 1;
 }
 
 .workspace-desktop__session {
   flex: 0 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
   max-height: 40%;
   padding: 6px 8px 8px;
   border-bottom: 1px solid var(--border);
@@ -121,8 +123,7 @@
   width: 100%;
   text-align: start;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
+  font-size: var(--control-ui-text-sm);
   border-radius: var(--radius-sm);
 }
 
@@ -135,17 +136,30 @@
   min-height: 28px;
   border-radius: var(--radius-sm);
   text-align: start;
-  font-weight: 400;
 }
 
-.workspace-desktop__row.is-active {
-  background: var(--bg-hover);
+/* Grid view: square tiles that fill the panel width; a tile is a one-column row. */
+.workspace-desktop__session-scroll--grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
 }
 
-.workspace-desktop__group-content {
-  display: flex;
+.workspace-desktop__search button,
+.workspace-desktop__folder-icon,
+.workspace-desktop__tile-media {
+  display: grid;
+  place-items: center;
+}
+
+.workspace-desktop__tile {
   flex-direction: column;
-  min-height: 0;
+  align-items: stretch;
+}
+
+.workspace-desktop__tile-media {
+  aspect-ratio: 1;
+  object-fit: cover;
+  background: var(--bg-hover);
 }
 
 .workspace-desktop--session-only .workspace-desktop__session {
@@ -156,15 +170,10 @@
 .workspace-desktop__heading > span {
   min-width: 0;
   overflow: hidden;
-  text-overflow: clip;
   white-space: nowrap;
 }
 
 .workspace-desktop__heading > svg {
-  width: 12px;
-  height: 12px;
-  flex: none;
-  color: var(--muted);
   opacity: 0;
 }
 
@@ -172,20 +181,15 @@
   opacity: 1;
 }
 
-.workspace-desktop__row .chat-attachment-file-icon {
+.workspace-desktop__row .chat-attachment-file-icon,
+.workspace-desktop__attachment-icon,
+.workspace-desktop__folder-icon {
   width: 20px;
   height: 20px;
   flex: 0 0 20px;
 }
 
 .workspace-desktop__folder-icon {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  flex: 0 0 20px;
   color: var(--muted);
 }
 
@@ -217,12 +221,14 @@
   overflow: hidden;
 }
 
-.workspace-desktop__stem.is-overflowed {
+.workspace-desktop__stem.is-overflowed,
+.workspace-desktop__location {
   mask-image: linear-gradient(to right, black calc(100% - 10px), transparent);
 }
 
-.workspace-desktop__filename > :last-child {
-  flex: 0 0 auto;
+.workspace-desktop__filename > :last-child,
+.workspace-breadcrumb__overflow {
+  flex: none;
 }
 
 .workspace-desktop__activity {
@@ -241,17 +247,16 @@
 .workspace-desktop__location {
   display: block;
   overflow: hidden;
-  mask-image: linear-gradient(to right, black calc(100% - 10px), transparent);
   white-space: nowrap;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   padding-block-start: 2px;
 }
 
 .workspace-desktop__notice {
   color: var(--muted);
   padding: 8px 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .workspace-breadcrumb {
@@ -261,9 +266,9 @@
   min-width: 0;
   flex: 1;
   color: var(--muted);
-  font-size: inherit;
 }
 
+.workspace-desktop__heading > svg,
 .workspace-breadcrumb svg {
   width: 12px;
   height: 12px;
@@ -275,19 +280,27 @@
 }
 
 .workspace-breadcrumb__part,
-.workspace-breadcrumb__source {
+.workspace-breadcrumb__source,
+.workspace-breadcrumb__overflow .oc-menu-trigger,
+.workspace-breadcrumb__overflow .oc-menu-trigger > .oc-menu-item__label {
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
   gap: 4px;
+}
+
+.workspace-breadcrumb__part,
+.workspace-breadcrumb__source {
+  flex: 0 0 auto;
   padding-inline-end: 4px;
   white-space: nowrap;
 }
 
-.workspace-breadcrumb__part.is-overflowed {
+.workspace-breadcrumb__part.is-overflowed,
+.workspace-breadcrumb__measure {
   position: absolute;
   visibility: hidden;
   pointer-events: none;
+  white-space: nowrap;
 }
 
 .workspace-breadcrumb__current {
@@ -297,14 +310,7 @@
   min-width: 0;
 }
 
-.workspace-breadcrumb__overflow {
-  flex: none;
-}
-
 .workspace-breadcrumb__overflow .oc-menu-trigger {
-  display: flex;
-  align-items: center;
-  gap: 4px;
   padding: 0;
 }
 
@@ -313,33 +319,8 @@
   height: 16px;
 }
 
-.workspace-breadcrumb__measure {
-  position: absolute;
-  visibility: hidden;
-  pointer-events: none;
-  white-space: nowrap;
-}
-
-.workspace-desktop__menu .oc-menu-item__icon svg {
-  width: var(--session-rail-icon, 16px);
-  height: var(--session-rail-icon, 16px);
-  flex: none;
-}
-
 @container workspace-catalog (max-width: 190px) {
   .workspace-desktop__row {
     --workspace-tree-step: 10px;
   }
-}
-
-.workspace-breadcrumb__overflow .oc-menu-trigger > .oc-menu-item__label {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.workspace-desktop__folder-bar.session-panel-rail[data-presentation="desktop"] svg {
-  width: var(--session-rail-icon);
-  height: var(--session-rail-icon);
-  flex: none;
 }

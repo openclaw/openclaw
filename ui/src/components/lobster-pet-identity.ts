@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+import { fnv1aUtf16 } from "../../../src/shared/fnv1a.js";
 import type {
   LobsterPetAccessory,
   LobsterPetAntennae,

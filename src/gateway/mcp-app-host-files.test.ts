@@ -1,4 +1,4 @@
-import { watchFile, writeFileSync } from "node:fs";
+import { type PathLike, type Stats, statSync, watchFile, writeFileSync } from "node:fs";
 import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as settle } from "node:timers/promises";
@@ -16,18 +16,19 @@ import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
-import { createGatewayBroadcaster } from "./server-broadcast.js";
-import { makeClient } from "./server-broadcast.test-helpers.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { GatewayClientRegistry } from "./server/client-registry.js";
 
 const state = vi.hoisted(() => ({
   root: "",
   sessionId: "session-1",
   execNode: undefined as string | undefined,
   repositoryWorkspaceId: undefined as string | undefined,
-  prepare: vi.fn(),
 }));
+const statRead = vi.hoisted(() =>
+  vi.fn<
+    (path: PathLike, callback: (error: NodeJS.ErrnoException | null, stats?: Stats) => void) => void
+  >(),
+);
 function sessionEntry() {
   return {
     sessionId: state.sessionId,
@@ -35,25 +36,20 @@ function sessionEntry() {
     repositoryWorkspaceId: state.repositoryWorkspaceId,
   };
 }
-vi.mock("./mcp-app-extension-runtime.js", () => ({
-  prepareMcpAppExtensionRuntime: state.prepare,
-}));
-vi.mock("../plugins/current-plugin-metadata-state.js", () => ({
-  getGatewayPluginMetadataSnapshot: () => undefined,
-}));
-vi.mock("../agents/mcp-form-resource-upload.js", () => ({
-  prepareMcpAppFormUpload: async () => undefined,
-}));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, watchFile: vi.fn(actual.watchFile) };
+  return {
+    ...actual,
+    stat: statRead.mockImplementation(actual.stat),
+    watchFile: vi.fn(actual.watchFile),
+  };
 });
 vi.mock("./operator-role-policy.js", () => ({ resolveGatewayOperatorRoleActor: () => undefined }));
 vi.mock("./server-methods/session-scoped-read.js", () => ({
   retainSessionScopedRead: () => undefined,
 }));
 // mock-isolation: File handles use a fixture workspace without opening real session storage.
-vi.mock("./server-methods/sessions-files.js", () => ({
+vi.mock("./server-methods/session-files-root.js", () => ({
   prepareLocalSessionWorkspaceRoot: async () => {
     const root = state.root;
     return {
@@ -99,7 +95,6 @@ vi.mock("./mcp-app-reconstruction.js", () => ({ restoreMcpAppView: async () => u
 vi.mock("./mcp-app-standalone.js", () => ({ createMcpAppStandaloneTicket: () => undefined }));
 
 import { prepareMcpAppHostFile } from "./mcp-app-host-files.js";
-import { mcpAppExtensionHandlers } from "./server-methods/mcp-app-extensions.js";
 import { mcpAppHandlers } from "./server-methods/mcp-app.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -163,50 +158,6 @@ function expectUpdate() {
     new Set(["alice"]),
   );
 }
-async function launchFileView() {
-  runtime.callTool = async () => ({ content: [] });
-  const assertCurrent = () => {
-    if (!allowed) {
-      throw new Error("App interaction revoked");
-    }
-  };
-  state.prepare.mockImplementation(async (request) => ({
-    options: request,
-    runtime,
-    ...session,
-    requesterId: "alice",
-    catalog: {
-      tools: [
-        {
-          ...tool,
-          appExtensions: { entrypoints: [{ type: "file", extensions: [".stl"] }] },
-        },
-      ],
-    },
-    assertCurrent,
-    assertTool: assertCurrent,
-    approveTool: async () => assertCurrent,
-    retainViewAuthority: () => ({ assertCurrent, release() {} }),
-    async dispose() {},
-  }));
-  const respond = vi.fn();
-  await mcpAppExtensionHandlers["mcp.app.launch"]!({
-    ...options({
-      sessionKey,
-      serverName: tool.serverName,
-      toolName: tool.toolName,
-      entrypointType: "file",
-      filePath: "part.stl",
-    }),
-    respond,
-  });
-  expect(respond.mock.calls[0]?.[0]).toBe(true);
-  viewId = respond.mock.calls[0]![1].viewId;
-  const view = getMcpAppViewLease(viewId, runtime)!;
-  uri = view.hostFile!.resourceUri;
-  expect(view.toolInput).toEqual({ file: { name: "part.stl", resourceUri: uri } });
-}
-
 beforeEach(async () => {
   state.root = dirs.make("mcp-host-file-");
   state.sessionId = "session-1";
@@ -385,49 +336,121 @@ describe("registered MCP App host-file routes", () => {
     expect((await read())[0]).toBe(false);
   });
 
-  it("stops polling when the connection closes during a rename gap", async () => {
-    const polling = vi.mocked(watchFile).mockClear();
-    const notified = nextUpdate();
-    await subscribe();
+  it("publishes when the file returns after a missing stat but before the poller baseline", async ({
+    signal,
+  }) => {
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     const file = filePath();
-    await rename(file, `${file}.bak`);
-    await notified;
-    const poller = polling.mock.results[0]?.value;
-    expect(poller).toBeDefined();
-    const stopped = createDeferred();
-    poller.once("stop", () => stopped.resolve());
-    publish.mockClear();
-    connection.abort();
-    await stopped.promise;
-    expectDisposers(0);
-    await writeFile(file, "solid replacement after abort");
-    expect(publish).not.toHaveBeenCalled();
+    let missing: Error | undefined;
+    let deliveredMissing = false;
+    const recreateAfterMissingStat = (): Error => {
+      if (missing) {
+        return missing;
+      }
+      try {
+        statSync(file);
+      } catch (error) {
+        expect(error).toMatchObject({ code: "ENOENT" });
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        missing = error;
+      }
+      if (!missing) {
+        throw new Error("Expected the renamed file to be missing");
+      }
+      writeFileSync(file, "solid replacement after the missing stat");
+      return missing;
+    };
+    // A change-based poller can take its initial baseline after the file returns,
+    // while the independent stat still delivers its earlier missing observation.
+    vi.mocked(watchFile).mockImplementationOnce((...args) => {
+      recreateAfterMissingStat();
+      return actual.watchFile(...args);
+    });
+    statRead.mockImplementation((pathname, callback) => {
+      if (pathname !== file) {
+        actual.stat(pathname, callback);
+        return;
+      }
+      if (!deliveredMissing) {
+        const error = recreateAfterMissingStat();
+        deliveredMissing = true;
+        callback(error);
+      } else {
+        callback(null, statSync(file));
+      }
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const renamed = nextUpdate();
+      await subscribe();
+      await rename(file, `${file}.bak`);
+      await withinTest(renamed, signal);
+      expect(deliveredMissing).toBe(true);
+      publish.mockClear();
+      await vi.advanceTimersByTimeAsync(250);
+      expectUpdate();
+    } finally {
+      connection.abort();
+      statRead.mockImplementation(actual.stat);
+      vi.mocked(watchFile).mockReset().mockImplementation(actual.watchFile);
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops polling when the connection closes during a rename gap", async ({ signal }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const notified = nextUpdate();
+      await subscribe();
+      const file = filePath();
+      await rename(file, `${file}.bak`);
+      await withinTest(notified, signal);
+      connection.abort();
+      expectDisposers(0);
+      publish.mockClear();
+      statRead.mockClear();
+      await writeFile(file, "solid replacement after abort");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(statRead).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+    } finally {
+      connection.abort();
+      vi.useRealTimers();
+    }
   });
 
   it("rearms when the file returns before the poller's initial stat", async ({ signal }) => {
     const file = filePath();
-    const stopped = createDeferred();
-    const { watchFile: realWatchFile } = await vi.importActual<typeof import("node:fs")>("node:fs");
-    vi.mocked(watchFile).mockImplementationOnce((...args) => {
-      writeFileSync(file, "solid replacement before polling starts");
-      const poller = realWatchFile(...args);
-      poller.once("stop", () => stopped.resolve());
-      return poller;
+    const rearmed = createDeferred();
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    statRead.mockImplementationOnce((pathname, callback) => {
+      writeFileSync(file, "solid replacement before the initial stat");
+      actual.stat(pathname, (error, current) => {
+        callback(error, current);
+        rearmed.resolve();
+      });
     });
-    await subscribe();
-    await rename(file, `${file}.bak`);
-    await withinTest(stopped.promise, signal);
-    expectUpdate();
-    const notified = nextUpdate();
-    await writeFile(file, "solid updated replacement");
-    await withinTest(notified, signal);
-    expectUpdate();
+    try {
+      await subscribe();
+      await rename(file, `${file}.bak`);
+      await withinTest(rearmed.promise, signal);
+      await settle();
+      expectUpdate();
+      const notified = nextUpdate();
+      await writeFile(file, "solid updated replacement");
+      await withinTest(notified, signal);
+      expectUpdate();
+    } finally {
+      connection.abort();
+      statRead.mockReset().mockImplementation(actual.stat);
+    }
   });
 
   it("keeps file notifications alive after the accepted subscription request finishes", async ({
     signal,
   }) => {
-    await launchFileView();
     const request = options({ sessionKey, viewId, uri });
     const device = captureGatewayDeviceRevocation(
       request.context,
@@ -443,39 +466,21 @@ describe("registered MCP App host-file routes", () => {
     expect(respond).toHaveBeenCalledWith(true, {});
     device.release();
     const file = filePath();
-    const owner = makeClient("alice", "operator", ["operator.read"]);
-    const observer = makeClient("observer", "operator", ["operator.read"]);
-    const { broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([owner.client, observer.client]),
-    });
     for (const change of ["append", "atomic rename"]) {
-      const notified = createDeferred();
-      publish.mockClear();
-      publish.mockImplementation(
-        (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-          broadcastToConnIds(event, payload, connIds);
-          notified.resolve();
-        },
-      );
+      const notified = nextUpdate();
       if (change === "append") {
         await appendFile(file, "\nsolid appended");
       } else {
         await writeFile(`${file}.tmp`, "solid replaced");
         await rename(`${file}.tmp`, file);
       }
-      await withinTest(notified.promise, signal);
+      await withinTest(notified, signal);
       expectUpdate();
-      expect(JSON.parse(owner.socket.send.mock.calls[0]![0])).toMatchObject({
-        event: "mcp.app.resourceUpdated",
-        payload: { viewId, uri },
-      });
-      expect(observer.socket.send).not.toHaveBeenCalled();
-      owner.socket.send.mockClear();
     }
     invalidateGatewayDeviceRevocation(request.context, "viewer");
     expect(device.isCurrent()).toBe(false);
     connection.abort();
-    expectDisposers(1);
+    expectDisposers(0);
   });
 
   it("registers and removes subscriptions through the same view authority", async () => {

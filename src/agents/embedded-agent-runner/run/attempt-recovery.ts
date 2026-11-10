@@ -181,6 +181,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     !isCompactionReplayCheckpoint(recoveryAssistant.providerReplay) &&
     recoveryAssistant.content.length === 0 &&
     !isContextOverflow(recoveryAssistant, runtime.contextTokenBudget) &&
+    !attempt.lastToolError &&
     !hasAttemptTerminalState(attempt) &&
     !hasComposedVisibleAnswerAfterSettledTools(attempt);
   const emptyLengthNeedsContinuation =
@@ -506,10 +507,25 @@ export async function recoverEmbeddedRunAttempt(input: {
       );
       runInput.laneController.throwIfAborted();
     }
+    // A provider rejection that streamed nothing changed no transcript state after
+    // settled tools, so the same user turn can be resent instead of continued.
+    // Native harness threads take every prompt as a new turn and keep continuing.
+    const rejectedWithoutOutput =
+      !runtime.pluginHarnessOwnsTransport &&
+      !promptError &&
+      !outputLimitFailure &&
+      attemptAssistant?.stopReason === "error" &&
+      attemptAssistant.content.length === 0 &&
+      (currentAttemptReplaySafe || settledEvidence.allToolsProvenSettled) &&
+      attempt.itemLifecycle.activeCount === 0 &&
+      toolsAllowContinuation;
     sessionPromptState.markOwnedTranscriptRetry();
     sessionPromptState.continueFromCurrentTranscript({
       includeToolFailureInstruction: Boolean(attempt.lastToolError),
-      messages: attempt.messagesSnapshot,
+      // Native snapshots contain only this attempt; embedded retries reload their full transcript.
+      // Accumulating embedded snapshots retains another history on every provider rejection.
+      messages: runtime.pluginHarnessOwnsTransport ? attempt.messagesSnapshot : undefined,
+      ...(rejectedWithoutOutput ? { replayCurrentUserTurn: true } : {}),
     });
     recordRecoveryDecision("accepted", "transient_retry");
     return retry({

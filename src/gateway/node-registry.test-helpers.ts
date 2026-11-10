@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { WebSocket } from "ws";
 import type { NodeRegistry } from "./node-registry.js";
+import type { NodeSession } from "./node-session.types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 export type TestNodeSocket = {
@@ -80,6 +81,26 @@ export function makeClient(
       sessionCapsCeiling: opts.sessionCapsCeiling,
       sessionCommandsCeiling: opts.sessionCommandsCeiling,
     } as unknown as GatewayWsClient["connect"],
+  };
+}
+
+export function makeNodeSession(
+  nodeId: string,
+  overrides: Partial<Omit<NodeSession, "nodeId">> = {},
+): NodeSession {
+  return {
+    nodeId,
+    connId: nodeId,
+    client: makeClient(nodeId, nodeId),
+    declaredCaps: [],
+    caps: [],
+    declaredCommands: overrides.commands ?? [],
+    commands: [],
+    declaredNodePluginTools: [],
+    nodePluginTools: [],
+    nodeSkills: [],
+    connectedAtMs: 0,
+    ...overrides,
   };
 }
 

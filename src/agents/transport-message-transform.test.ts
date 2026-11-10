@@ -1,6 +1,7 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { Api, Context } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
+import { transformMessages } from "../../packages/ai/src/transcript-transform.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
@@ -131,11 +132,22 @@ it("preserves unframed tool results only for a selected compaction replay window
   ).toHaveLength(1);
 });
 
+// Unbound Claude thinking crosses model switches; prefix-bound thinking stays with its model.
 // Live-verified 2026-09-02: equivalent response-model bindings retain usable reasoning.
 it.each([
   {
     source: { provider: "anthropic", model: "claude-sonnet-4-6" },
     target: "claude-fable-5",
+    keepThinking: true,
+  },
+  {
+    source: { provider: "anthropic", model: "claude-fable-5-2" },
+    target: "claude-zzz-9-9",
+    keepThinking: false,
+  },
+  {
+    source: { provider: "openai", model: "gpt-6-astra" },
+    target: "claude-zzz-9-9",
     keepThinking: false,
   },
   {
@@ -148,20 +160,33 @@ it.each([
     keepThinking: true,
   },
 ])("applies thinking binding when switching to $target", ({ source, target, keepThinking }) => {
-  const result = transformTransportMessages(
-    [thinkingMessage(source, "earlier reasoning", "sig_readable", "visible answer")],
-    makeModel("anthropic-messages", "anthropic", target),
-  );
+  for (const transform of [transformTransportMessages, transformMessages]) {
+    let targetReads = 0;
+    const model = {
+      ...makeModel("anthropic-messages", "anthropic", target),
+      get params() {
+        targetReads++;
+        return undefined;
+      },
+    };
+    const result = transform(
+      Array.from({ length: 40 }, () =>
+        thinkingMessage(source, "earlier reasoning", "sig_readable", "visible answer"),
+      ),
+      model,
+    );
 
-  expect(result[0]).toMatchObject({
-    role: "assistant",
-    content: [
-      ...(keepThinking
-        ? [{ type: "thinking", thinking: "earlier reasoning", thinkingSignature: "sig_readable" }]
-        : []),
-      text("visible answer"),
-    ],
-  });
+    expect(targetReads).toBe(1);
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [
+        ...(keepThinking
+          ? [{ type: "thinking", thinking: "earlier reasoning", thinkingSignature: "sig_readable" }]
+          : []),
+        text("visible answer"),
+      ],
+    });
+  }
 });
 
 it.each([

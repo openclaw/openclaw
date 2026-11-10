@@ -10,6 +10,9 @@ import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { expectCollected } from "../../test-utils/retention.js";
+import type { PreparedGatewayModelCatalogSnapshot } from "../server-model-catalog-auth.js";
+import { readModelAuthStatusFacts } from "./models-auth-status-facts.js";
 import { createOpenAiCodexOauthHealthSummary } from "./models-auth-status.health.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -96,6 +99,7 @@ beforeEach(() => {
     config,
     authStore: store,
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
+    isCurrent: () => true,
   });
   mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
 });
@@ -104,6 +108,41 @@ afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it("does not let retained configs keep retired auth generations alive", async () => {
+  class Generation {
+    current = true;
+  }
+  const metadataSnapshot = createPluginMetadataSnapshotFixture();
+  const configs = Array.from({ length: 20 }, () => ({}));
+  const generations: WeakRef<Generation>[] = [];
+  const readGeneration = (generationConfig: object) => {
+    const generation = new Generation();
+    generations.push(new WeakRef(generation));
+    const snapshot: PreparedGatewayModelCatalogSnapshot = {
+      agentId: "main",
+      agentDir,
+      workspaceDir: "/tmp/workspace",
+      config: generationConfig,
+      observationConfig: generationConfig,
+      catalogComplete: true,
+      entries: [],
+      routeVariants: [],
+      authModes: {},
+      authStore: store,
+      authMaterializations: [],
+      metadataSnapshot,
+      isCurrent: () => generation.current,
+    };
+    readModelAuthStatusFacts(snapshot, false, 0);
+    readModelAuthStatusFacts(snapshot, false, 0);
+  };
+  configs.forEach(readGeneration);
+  readGeneration(configs[0]!);
+  expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(21);
+  await expectCollected(...generations);
+  expect(configs).toHaveLength(20);
 });
 
 it("serves repeated Models page loads from one auth and usage refresh per provider set", async () => {

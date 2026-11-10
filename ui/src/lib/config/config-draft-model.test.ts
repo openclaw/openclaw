@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as json5Runtime from "../json5-runtime.ts";
 import { configRawForDisplay } from "./config-draft-model.ts";
+import { configSnapshot } from "./config-snapshot.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createGatewayHarness,
@@ -96,13 +98,9 @@ describe("config draft model", () => {
       if (unavailable) {
         vi.spyOn(json5Runtime, "parseJson5Text").mockImplementation(JSON.parse);
         vi.spyOn(json5Runtime, "warmJson5").mockRejectedValue(new Error("Chunk unavailable"));
-        request.mockResolvedValueOnce({
-          config: { count: 1 },
-          raw: '// operator comment\n{"count":1}',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        });
+        request.mockResolvedValueOnce(
+          configSnapshot({ count: 1 }, "hash-1", '// operator comment\n{"count":1}'),
+        );
       }
       const { runtimeConfig } = createConfigCapabilityHarness(
         request as GatewayBrowserClient["request"],
@@ -597,7 +595,7 @@ describe("config draft model", () => {
     };
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+        return configSnapshot(config, "hash-1", JSON.stringify(config));
       }
       if (method === "config.set" || method === "config.apply") {
         throw rejection;
@@ -642,7 +640,7 @@ describe("config draft model", () => {
     };
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+        return configSnapshot(config, "hash-1", JSON.stringify(config));
       }
       if (method === "config.set") {
         throw new GatewayRequestError({
@@ -678,7 +676,7 @@ describe("config draft model", () => {
     };
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+        return configSnapshot(config, "hash-1", JSON.stringify(config));
       }
       if (method === "config.set") {
         throw new GatewayRequestError({
@@ -722,13 +720,7 @@ describe("config draft model", () => {
     };
     const request = vi.fn((method: string) => {
       if (method === "config.get") {
-        return Promise.resolve({
-          config,
-          raw: JSON.stringify(config),
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        });
+        return Promise.resolve(configSnapshot(config, "hash-1", JSON.stringify(config)));
       }
       if (method === "config.set" || method === "config.apply") {
         return pendingWrite.promise;
@@ -788,13 +780,7 @@ describe("config draft model", () => {
     let setCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return {
-          config: { count: 1 },
-          raw: '{\n  "count": 1\n}\n',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        };
+        return configSnapshot({ count: 1 }, "hash-1", '{\n  "count": 1\n}\n');
       }
       if (method === "config.set") {
         setCalls += 1;

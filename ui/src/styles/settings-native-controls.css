@@ -1,9 +1,10 @@
+/* The one switch (components/solid/switch.tsx). Sizes only change geometry;
+   colors, knob, focus and direction are shared. */
 .settings-toggle {
-  --settings-toggle-height: round(1.25em, 1px);
+  --settings-toggle-height: round(calc(18px * var(--control-ui-text-scale, 1)), 1px);
   --settings-toggle-travel: round(calc(var(--settings-toggle-height) * 0.375), 1px);
   --settings-toggle-thumb: calc(
-    var(--settings-toggle-height) - 2 *
-      round(calc((var(--settings-toggle-height) - 0.75em) / 2), 1px)
+    var(--settings-toggle-height) - 2 * round(calc(var(--settings-toggle-height) * 0.2), 1px)
   );
 
   position: relative;
@@ -13,6 +14,10 @@
   font-size: var(--control-ui-text-md);
   line-height: 1.2;
   cursor: var(--cursor-action);
+}
+
+.settings-toggle--sm {
+  --settings-toggle-height: round(calc(16px * var(--control-ui-text-scale, 1)), 1px);
 }
 
 .settings-toggle__input,
@@ -32,10 +37,9 @@
   justify-content: center;
   width: calc(var(--settings-toggle-height) + 2 * var(--settings-toggle-travel));
   height: var(--settings-toggle-height);
-  box-sizing: border-box;
-  border: 1px solid var(--muted);
+  border: 1px solid transparent;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--border-strong) 60%, transparent);
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
   pointer-events: none;
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -51,21 +55,24 @@
   transition: transform var(--duration-fast) var(--ease-out);
 }
 
-.settings-toggle__input:checked + .settings-toggle__control {
+.settings-toggle__input:checked + .settings-toggle__control,
+.settings-toggle[data-checked="true"] > .settings-toggle__control {
   background: var(--accent);
   border-color: var(--accent);
 }
 
-.settings-toggle__input:checked + .settings-toggle__control::before {
+.settings-toggle__input:checked + .settings-toggle__control::before,
+.settings-toggle[data-checked="true"] > .settings-toggle__control::before {
   transform: translateX(var(--settings-toggle-travel));
-  background: var(--bg);
+  background: var(--accent-foreground);
 }
 
 .settings-toggle:dir(rtl) .settings-toggle__control::before {
   transform: translateX(var(--settings-toggle-travel));
 }
 
-.settings-toggle:dir(rtl) .settings-toggle__input:checked + .settings-toggle__control::before {
+.settings-toggle:dir(rtl) .settings-toggle__input:checked + .settings-toggle__control::before,
+.settings-toggle[data-checked="true"]:dir(rtl) > .settings-toggle__control::before {
   transform: translateX(calc(var(--settings-toggle-travel) * -1));
 }
 
@@ -90,11 +97,13 @@
   .settings-toggle__control::before {
     background: ButtonText;
   }
-  .settings-toggle__input:checked + .settings-toggle__control {
+  .settings-toggle__input:checked + .settings-toggle__control,
+  .settings-toggle[data-checked="true"] > .settings-toggle__control {
     background: Highlight;
     border-color: Highlight;
   }
-  .settings-toggle__input:checked + .settings-toggle__control::before {
+  .settings-toggle__input:checked + .settings-toggle__control::before,
+  .settings-toggle[data-checked="true"] > .settings-toggle__control::before {
     background: HighlightText;
   }
 }

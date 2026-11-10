@@ -16,6 +16,7 @@ import {
   isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
   isRenderablePayload,
+  shouldKeepPayloadDuringSilentTurn,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
@@ -62,13 +63,6 @@ async function normalizeSentMediaUrlsForDedupe(params: {
   }
 
   return [...normalizedUrls];
-}
-
-function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
-  if (payload.isError || getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression) {
-    return true;
-  }
-  return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
 function sanitizeFinalReplyText(

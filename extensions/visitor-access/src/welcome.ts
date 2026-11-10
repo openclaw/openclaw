@@ -52,8 +52,7 @@ export class VisitorWelcome {
       invitation = this.service.findActiveInvitation(grant.grantId);
       const recorded = invitation?.onboarding;
       if (recorded?.state === "ready" && recorded.welcomeSessionKey) {
-        const sessionKey = recorded.welcomeSessionKey;
-        return { status: "ready", sessionKey, agentId: agentFromKey(sessionKey), created: false };
+        return await this.readyWelcome(recorded.welcomeSessionKey);
       }
     } catch (error) {
       return failed(error);
@@ -66,15 +65,34 @@ export class VisitorWelcome {
     }
     this.inFlight.add(invitation.grantId);
     try {
-      return await this.setUp(invitation, guest);
+      return await this.setUp(invitation, guest, client.preparedSessionProfile?.githubLogin);
     } finally {
       this.inFlight.delete(invitation.grantId);
     }
   }
 
+  /**
+   * A welcome session deleted after setup stays deleted: the record keeps its key so setup
+   * never recreates it, and the guest is not sent to a session that no longer exists.
+   * Before ready, retries deliberately resume the reserved key, even for a removed partial session.
+   */
+  private async readyWelcome(sessionKey: string): Promise<WelcomeEnsureResult> {
+    const agentId = agentFromKey(sessionKey);
+    // The guest role holds only session scopes; ask for the session read it implies.
+    const { session } = await this.gateway.request<{ session: unknown }>(
+      "sessions.describe",
+      { key: sessionKey, agentId },
+      { scopes: ["operator.sessions.read"] },
+    );
+    return session
+      ? { status: "ready", sessionKey, agentId, created: false }
+      : { status: "not_applicable" };
+  }
+
   private async setUp(
     invitation: ActiveVisitorInvitation,
     guest: GuestProfile,
+    githubLogin: string | null | undefined,
   ): Promise<WelcomeEnsureResult> {
     const { grantId, onboarding: recorded } = invitation;
     const advance = (
@@ -101,20 +119,45 @@ export class VisitorWelcome {
       }
       reservation = reserved.onboarding;
       const name = guest.displayName?.replace(/\s+/gu, " ").trim() || undefined;
+      const titleName = name || githubLogin?.trim();
       // Create as the guest: the caller-bound request makes the guest the session owner.
       // A retry adopts the reserved key, so it never creates a second session.
       await this.gateway.request("sessions.create", {
         key: sessionKey,
         agentId,
-        displayName: name ? `Welcome, ${name}` : "Welcome",
+        displayName: titleName ? `Welcome ${titleName}` : "Welcome",
       });
-      const message = welcomeMessage({
-        invitation,
-        config,
-        agentId,
-        guestName: name,
-        guestProfileId: guest.profileId,
-      });
+      // Legacy grants have no inviter; nobody can mention themselves.
+      const inviter =
+        invitation.invitedBy?.profileId === guest.profileId ? undefined : invitation.invitedBy;
+      const label = inviter?.label?.replace(/\s+/gu, " ").trim() || undefined;
+      const greeting = name ? `Welcome to OpenClaw, ${name}.` : "Welcome to OpenClaw.";
+      const access =
+        invitation.expiresAt === null
+          ? "Your guest access does not expire."
+          : `Your guest access runs through ${utcMinute(invitation.expiresAt)}.`;
+      const mentionText = `@${label ?? "inviter"}`;
+      const invited = inviter
+        ? `${mentionText} invited you. ${access}`
+        : `You were invited as a guest. ${access}`;
+      const note = invitation.note?.trim();
+      const capabilities = guestCapabilities(config, agentId).map((line) => `- ${line}`);
+      const text = [
+        greeting,
+        "",
+        invited,
+        ...(note ? ["", `Note from ${label ?? "your inviter"}:`, note] : []),
+        "",
+        `This is your own session with ${agentName(config, agentId)}. As a guest you can:`,
+        ...capabilities,
+      ].join("\n");
+      const start = greeting.length + 2;
+      const message = {
+        text,
+        mentions: inviter
+          ? [{ profileId: inviter.profileId, start, end: start + mentionText.length }]
+          : [],
+      };
       // The idempotency key replays the same agent message and Inbox entry on retry.
       await this.gateway.appendAgentMessage({
         sessionKey,
@@ -124,19 +167,27 @@ export class VisitorWelcome {
         idempotencyKey: `visitor-welcome:${grantId}`,
       });
       const done = await advance(reservation, { state: "ready", welcomeSessionKey: sessionKey });
-      return done.applied
-        ? { status: "ready", sessionKey, agentId, created: true }
+      if (done.applied) {
+        return { status: "ready", sessionKey, agentId, created: true };
+      }
+      // Revoked or expired during setup: the grant record is gone, so a re-invite starts over.
+      return done.reason === "inactive"
+        ? { status: "not_applicable" }
         : { status: "pending", retryAfterMs: RETRY_AFTER_MS };
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       this.logger.warn(`visitor-access: welcome setup failed: ${detail}`);
       if (reservation) {
         // Keep the reserved key so the next call resumes against the same session.
-        await advance(reservation, {
+        const recordedFailure = await advance(reservation, {
           state: "failed",
           welcomeSessionKey: reservation.welcomeSessionKey,
           error: detail,
         }).catch(() => undefined);
+        // Access ending mid-setup refuses the Gateway writes; there is nothing left to retry.
+        if (recordedFailure && !recordedFailure.applied && recordedFailure.reason === "inactive") {
+          return { status: "not_applicable" };
+        }
       }
       return failed(error);
     }
@@ -208,51 +259,4 @@ function guestCapabilities(config: OpenClawConfig, agentId: string): string[] {
     lines.push("read and reply in other people's sessions");
   }
   return lines;
-}
-
-/** Plain, short welcome text; the inviter is a structured mention when recorded. */
-function welcomeMessage({
-  invitation,
-  config,
-  agentId,
-  guestName,
-  guestProfileId,
-}: {
-  invitation: ActiveVisitorInvitation;
-  config: OpenClawConfig;
-  agentId: string;
-  guestName?: string;
-  guestProfileId: string;
-}): { text: string; mentions: Array<{ profileId: string; start: number; end: number }> } {
-  // Legacy grants have no inviter; nobody can mention themselves.
-  const inviter =
-    invitation.invitedBy?.profileId === guestProfileId ? undefined : invitation.invitedBy;
-  const label = inviter?.label?.replace(/\s+/gu, " ").trim() || undefined;
-  const greeting = guestName ? `Welcome to OpenClaw, ${guestName}.` : "Welcome to OpenClaw.";
-  const access =
-    invitation.expiresAt === null
-      ? "Your guest access does not expire."
-      : `Your guest access runs through ${utcMinute(invitation.expiresAt)}.`;
-  const mentionText = `@${label ?? "inviter"}`;
-  const invited = inviter
-    ? `${mentionText} invited you. ${access}`
-    : `You were invited as a guest. ${access}`;
-  const note = invitation.note?.trim();
-  const capabilities = guestCapabilities(config, agentId).map((line) => `- ${line}`);
-  const text = [
-    greeting,
-    "",
-    invited,
-    ...(note ? ["", `Note from ${label ?? "your inviter"}:`, note] : []),
-    "",
-    `This is your own session with ${agentName(config, agentId)}. As a guest you can:`,
-    ...capabilities,
-  ].join("\n");
-  const start = greeting.length + 2;
-  return {
-    text,
-    mentions: inviter
-      ? [{ profileId: inviter.profileId, start, end: start + mentionText.length }]
-      : [],
-  };
 }

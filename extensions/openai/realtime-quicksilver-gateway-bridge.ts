@@ -8,7 +8,7 @@ import type {
   RealtimeVoiceCloseDisposition,
   RealtimeVoiceCloseOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import WebSocket from "ws";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   assertOpenAIQuicksilverPcmOutput,
@@ -231,6 +231,12 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         throw openAIQuicksilverConnectAbortError(connectSignal);
       }
       this.connected = true;
+      if (this.ready) {
+        this.config.onReady?.();
+      }
+      if (this.closed || connectSignal.aborted) {
+        throw openAIQuicksilverConnectAbortError(connectSignal);
+      }
       if (!this.timer) {
         this.scheduleExpiry(QUICKSILVER_SESSION_TTL_MS);
       }
@@ -261,14 +267,16 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     if (!this.closed && this.audioOutput) {
       this.directSocket?.setAudioOutputPort(this.audioOutput);
     }
-    this.sendSocketEvent(
-      buildOpenAIQuicksilverSessionUpdate({
-        model: this.config.model,
-        hostControlsInput: true,
-        instructions: this.config.instructions,
-        voice: this.config.voice,
-      }),
-    );
+    const event = buildOpenAIQuicksilverSessionUpdate({
+      model: this.config.model,
+      hostControlsInput: true,
+      instructions: this.config.instructions,
+      voice: this.config.voice,
+    });
+    const socket = this.sideband;
+    if (socket?.readyState === WEBSOCKET_OPEN) {
+      socket.send(JSON.stringify(event));
+    }
     await waitForOpenAIQuicksilverConnectStep(ready.promise, connectSignal);
   }
 
@@ -344,8 +352,10 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     if (call.kind !== "gpt-live") {
       throw new Error("GPT-Live gateway relay unexpectedly used the GA realtime call shape");
     }
-    await waitForOpenAIQuicksilverConnectStep(this.peer.applyAnswer(call.answerSdp), connectSignal);
+    // Applying the answer can emit the only session.started event.
     await this.connectSocket(auth, requestIds, call.sidebandUrl, connectSignal);
+    connectSignal.throwIfAborted();
+    await waitForOpenAIQuicksilverConnectStep(this.peer.applyAnswer(call.answerSdp), connectSignal);
   }
 
   private async connectSocket(
@@ -405,14 +415,22 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       throw connectSignal.reason;
     }
     this.sideband = connected.socket;
-    this.attachSidebandHandlers(connected.socket);
-    this.adoptConnectedSocket(connected, directSocket);
-  }
-
-  private adoptConnectedSocket(
-    connected: Awaited<ReturnType<typeof connectOpenAIQuicksilverSideband>>,
-    directSocket: QuicksilverMediaSocket | undefined,
-  ): void {
+    const socket = connected.socket;
+    socket.on("message", (data, isBinary) => this.delegations?.handleFrame(data, isBinary));
+    socket.on("error", (error) => this.fail(error));
+    socket.on("close", (code, rawReason) => {
+      const closeCode = code ?? 1006;
+      const reason = normalizeSidebandCloseReason(rawReason);
+      if (!this.closed) {
+        if (isOpenAIGptLiveApiModel(this.config.model) && !this.providerSessionClosed) {
+          this.fail(new Error("GPT-Live transport ended without session.closed"));
+        } else if (closeCode === 1000) {
+          void this.teardown("completed");
+        } else {
+          this.fail(new Error(describeSidebandClose(closeCode, reason)));
+        }
+      }
+    });
     const terminalEvent = connected.detachBuffer();
     if (!terminalEvent && directSocket) {
       // Failed candidates never own capture. Transfer the bounded opening/backoff
@@ -420,15 +438,15 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       this.directSocket = directSocket;
       directSocket.sendAudio(this.pendingRawAudio.take());
     }
-    for (const frame of connected.bufferedFrames) {
-      this.delegations?.handleFrame(frame.data, frame.isBinary);
-    }
     if (terminalEvent?.kind === "error") {
       throw terminalEvent.error;
     }
     if (terminalEvent?.kind === "close") {
       const reason = normalizeSidebandCloseReason(terminalEvent.reason);
       throw new Error(describeSidebandClose(terminalEvent.code, reason));
+    }
+    for (const frame of connected.bufferedFrames) {
+      this.delegations?.handleFrame(frame.data, frame.isBinary);
     }
   }
 
@@ -462,15 +480,13 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
             );
           }
           if (!this.ready) {
-            this.connected = true;
             this.ready = true;
             if (this.transport === "direct") {
               this.directSocket?.startAudio();
             }
-            if (this.closed) {
-              return;
+            if (this.connected && !this.closed) {
+              this.config.onReady?.();
             }
-            this.config.onReady?.();
           }
           params?.onSessionStarted?.();
         },
@@ -496,31 +512,6 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     );
   }
 
-  private sendSocketEvent(event: object): void {
-    const socket = this.sideband;
-    if (socket?.readyState === WEBSOCKET_OPEN) {
-      socket.send(JSON.stringify(event));
-    }
-  }
-
-  private attachSidebandHandlers(socket: OpenAIQuicksilverSocket): void {
-    socket.on("message", (data, isBinary) => this.delegations?.handleFrame(data, isBinary));
-    socket.on("error", (error) => this.fail(error));
-    socket.on("close", (code, rawReason) => {
-      const closeCode = code ?? 1006;
-      const reason = normalizeSidebandCloseReason(rawReason);
-      if (!this.closed) {
-        if (isOpenAIGptLiveApiModel(this.config.model) && !this.providerSessionClosed) {
-          this.fail(new Error("GPT-Live transport ended without session.closed"));
-        } else if (closeCode === 1000) {
-          void this.teardown("completed");
-        } else {
-          this.fail(new Error(describeSidebandClose(closeCode, reason)));
-        }
-      }
-    });
-  }
-
   private scheduleExpiry(ttlMs: number): void {
     if (this.timer) {
       clearTimeout(this.timer);
@@ -530,8 +521,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         void this.teardown("completed");
       },
       Math.max(0, ttlMs),
-    );
-    this.timer.unref?.();
+    ).unref();
   }
 
   private fail(error: Error): void {

@@ -1,0 +1,3 @@
+30
+# Source-pinned legacy update payload identity, same-version rejection,
+# selected-source refusal, and deferred 2026.9.2 Doctor observation order.

@@ -256,8 +256,11 @@ function cleanSchemaForGeminiWithDefs(
         continue;
       }
       if (key === "type" && isStringArray(value)) {
-        const types = value.filter((entry) => entry !== "null");
-        cleaned.type = types.length === 1 ? types[0] : types;
+        // Gemini needs one type; use the same representative choice as union flattening.
+        const type = value.find((entry) => entry !== "null");
+        if (type) {
+          cleaned.type = type;
+        }
         continue;
       }
 

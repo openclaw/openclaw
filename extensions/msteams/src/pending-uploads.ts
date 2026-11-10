@@ -22,7 +22,16 @@ export interface PendingUpload {
 
 const pendingUploads = resolveGlobalSingleton(
   Symbol.for("openclaw.msteams.pendingUploadState"),
-  () => new Map<string, { upload: PendingUpload; timer: ReturnType<typeof setTimeout> }>(),
+  () =>
+    new Map<
+      string,
+      {
+        upload: PendingUpload;
+        timer: ReturnType<typeof setTimeout>;
+        // In-process expiry deadline on the monotonic clock; createdAt stays the public epoch.
+        expiresAtMonotonic: number;
+      }
+    >(),
   (state) => {
     for (const { timer } of state.values()) {
       clearTimeout(timer);
@@ -47,7 +56,11 @@ export function storePendingUpload(upload: Omit<PendingUpload, "id" | "createdAt
   const timer = setTimeout(() => {
     pendingUploads.delete(id);
   }, PENDING_UPLOAD_TTL_MS);
-  pendingUploads.set(id, { upload: entry, timer });
+  pendingUploads.set(id, {
+    upload: entry,
+    timer,
+    expiresAtMonotonic: performance.now() + PENDING_UPLOAD_TTL_MS,
+  });
 
   return id;
 }
@@ -56,18 +69,19 @@ export function getPendingUpload(id?: string): PendingUpload | undefined {
   if (!id) {
     return undefined;
   }
-  const entry = pendingUploads.get(id)?.upload;
-  if (!entry) {
+  const slot = pendingUploads.get(id);
+  if (!slot) {
     return undefined;
   }
 
-  // Check if expired (in case timeout hasn't fired yet)
-  if (Date.now() - entry.createdAt > PENDING_UPLOAD_TTL_MS) {
+  // Check if expired (in case timeout hasn't fired yet); the wall clock may step, so the
+  // deadline rides the monotonic clock.
+  if (performance.now() > slot.expiresAtMonotonic) {
     removePendingUpload(id);
     return undefined;
   }
 
-  return entry;
+  return slot.upload;
 }
 
 /**

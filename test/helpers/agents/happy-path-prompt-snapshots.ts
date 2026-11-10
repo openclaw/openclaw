@@ -1,5 +1,4 @@
 // Happy path prompt snapshot helper reads expected prompt snapshot files.
-import fs from "node:fs";
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import {
@@ -30,7 +29,6 @@ import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-ut
 import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 import { preparePromptSnapshotReply } from "./prepared-reply-prompt.js";
 import {
-  CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO,
   CODEX_PROMPT_SNAPSHOT_FILES,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -42,15 +40,6 @@ const WORKSPACE_DIR = "/tmp/openclaw-happy-path/workspace";
 const AGENT_DIR = "/tmp/openclaw-happy-path/agent";
 const SESSION_FILE = "/tmp/openclaw-happy-path/session.jsonl";
 const MODEL_ID = "gpt-5.5";
-const CODEX_PROMPT_PERSONALITY = "pragmatic";
-const CODEX_MODEL_PROMPT_FIXTURE_PATH = path.join(
-  CODEX_MODEL_PROMPT_FIXTURE_DIR,
-  `${MODEL_ID}.${CODEX_PROMPT_PERSONALITY}.instructions.md`,
-);
-const CODEX_MODEL_PROMPT_SOURCE_PATH = path.join(
-  CODEX_MODEL_PROMPT_FIXTURE_DIR,
-  `${MODEL_ID}.${CODEX_PROMPT_PERSONALITY}.source.json`,
-);
 const CODEX_YOLO_PERMISSION_INSTRUCTIONS = [
   "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled.",
   "Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.",
@@ -242,22 +231,22 @@ async function withScenarioChannelRegistry<T>(
 
 const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   {
-    path: path.join(WORKSPACE_DIR, "MEMORY.md"),
+    path: path.posix.join(WORKSPACE_DIR, "MEMORY.md"),
     content: "<MEMORY.md contents will be here>",
   },
 ] as const;
 
 const CODEX_WORKSPACE_PERSONA_FILES = [
   {
-    path: path.join(WORKSPACE_DIR, "IDENTITY.md"),
+    path: path.posix.join(WORKSPACE_DIR, "IDENTITY.md"),
     content: "<IDENTITY.md contents will be here>",
   },
   {
-    path: path.join(WORKSPACE_DIR, "SOUL.md"),
+    path: path.posix.join(WORKSPACE_DIR, "SOUL.md"),
     content: "<SOUL.md contents will be here>",
   },
   {
-    path: path.join(WORKSPACE_DIR, "USER.md"),
+    path: path.posix.join(WORKSPACE_DIR, "USER.md"),
     content: "<USER.md contents will be here>",
   },
 ] as const;
@@ -358,10 +347,6 @@ function markdownFence(info: string, value: string): string {
   );
   const fence = "`".repeat(longestBacktickRun);
   return [`${fence}${info}`, body, fence].join("\n");
-}
-
-function readFixture(pathFromRepoRoot: string): string {
-  return fs.readFileSync(path.resolve(pathFromRepoRoot), "utf8");
 }
 
 function approximateTokens(value: string): number {
@@ -644,6 +629,7 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
 function selectedThreadStartParams(value: Record<string, unknown>): Record<string, unknown> {
   return {
     ...value,
+    baseInstructions: "<see Reconstructed Model-Bound Prompt Layers>",
     developerInstructions: "<see Reconstructed Model-Bound Prompt Layers>",
     dynamicTools: Array.isArray(value.dynamicTools)
       ? flattenCodexDynamicToolSpecs(value.dynamicTools as CodexDynamicToolSpec[]).map(
@@ -656,6 +642,7 @@ function selectedThreadStartParams(value: Record<string, unknown>): Record<strin
 function selectedThreadResumeParams(value: Record<string, unknown>): Record<string, unknown> {
   return {
     ...value,
+    baseInstructions: "<see Reconstructed Model-Bound Prompt Layers>",
     developerInstructions: "<see Reconstructed Model-Bound Prompt Layers>",
   };
 }
@@ -684,8 +671,7 @@ function renderModelBoundPromptLayers(params: {
   codexSnapshot: Awaited<ReturnType<CodexPromptSnapshotApi["buildCodexHarnessPromptSnapshot"]>>;
   dynamicToolsJson: string;
 }): string[] {
-  const codexModelInstructions = readFixture(CODEX_MODEL_PROMPT_FIXTURE_PATH);
-  const codexModelSource = JSON.parse(readFixture(CODEX_MODEL_PROMPT_SOURCE_PATH)) as unknown;
+  const openClawBaseInstructions = String(params.codexSnapshot.threadStartParams.baseInstructions);
   const codexConfigInstructions =
     typeof params.codexSnapshot.threadStartParams.config === "object" &&
     params.codexSnapshot.threadStartParams.config &&
@@ -693,7 +679,10 @@ function renderModelBoundPromptLayers(params: {
     typeof params.codexSnapshot.threadStartParams.config.instructions === "string"
       ? params.codexSnapshot.threadStartParams.config.instructions
       : "";
-  const openClawDeveloperInstructions = params.codexSnapshot.developerInstructions;
+  const openClawDeveloperInstructions =
+    typeof params.codexSnapshot.threadStartParams.developerInstructions === "string"
+      ? params.codexSnapshot.threadStartParams.developerInstructions
+      : "";
   const parentLocalInstructions = params.codexSnapshot.parentLocalInstructions ?? "";
   const codexCollaborationModeInstructions =
     typeof params.codexSnapshot.turnStartParams.collaborationMode?.settings
@@ -717,7 +706,7 @@ function renderModelBoundPromptLayers(params: {
     });
   const additionalContextText = additionalContextLayers.map(({ text }) => text).join("\n\n");
   const textOnlyTotal = [
-    codexModelInstructions,
+    openClawBaseInstructions,
     parentLocalInstructions,
     CODEX_YOLO_PERMISSION_INSTRUCTIONS,
     codexConfigInstructions,
@@ -733,23 +722,20 @@ function renderModelBoundPromptLayers(params: {
   return [
     "## Reconstructed Model-Bound Prompt Layers",
     "",
-    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, native collaboration-mode instructions, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
+    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, native collaboration-mode instructions, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
     "",
     "### Layer Metadata",
     "",
     markdownFence(
       "json",
       stableJson({
-        codexModelInstructions: {
-          fixture: CODEX_MODEL_PROMPT_FIXTURE_PATH,
-          source: codexModelSource,
-        },
         codexPermissions: {
           sandbox: "danger-full-access",
           approvalPolicy: "never",
           networkAccess: "enabled",
         },
         openClawRuntime: {
+          baseInstructionsFrom: "extensions/codex app-server thread/start baseInstructions",
           configInstructionsFrom: "extensions/codex app-server thread/start config.instructions",
           workspaceBootstrapContextFrom:
             "extensions/codex app-server turn/start input OpenClaw runtime context",
@@ -775,7 +761,7 @@ function renderModelBoundPromptLayers(params: {
     markdownFence(
       "json",
       stableJson({
-        codexModelInstructions: textStats(codexModelInstructions),
+        openClawBaseInstructions: textStats(openClawBaseInstructions),
         codexPermissionDeveloperInstructions: textStats(CODEX_YOLO_PERMISSION_INSTRUCTIONS),
         codexWorkspaceBootstrapConfigInstructions: textStats(codexConfigInstructions),
         openClawDeveloperInstructions: textStats(openClawDeveloperInstructions),
@@ -789,9 +775,9 @@ function renderModelBoundPromptLayers(params: {
       }),
     ),
     "",
-    `### System: Codex Model Instructions (${MODEL_ID}, ${CODEX_PROMPT_PERSONALITY})`,
+    "### System: OpenClaw Base Instructions",
     "",
-    markdownFence("text", codexModelInstructions),
+    markdownFence("text", openClawBaseInstructions),
     "",
     "### Request Instructions: OpenClaw Parent-Local Context",
     "",
@@ -921,7 +907,6 @@ async function renderScenarioSnapshot(
         channel: scenario.ctx.Provider,
         chatType: scenario.ctx.ChatType,
         toolSnapshot: scenario.toolSnapshotFile,
-        codexModelInstructionsFixture: CODEX_MODEL_PROMPT_FIXTURE_PATH,
         simulatedWorkspaceBootstrapFiles: CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.map(
           (file) => file.path,
         ),
@@ -982,7 +967,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "- Codex harness default coverage for tool-only visible source replies.",
     "- Telegram direct chat and Discord group chat with ordinary visible replies through the message tool.",
     "",
-    "The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.",
+    "The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: OpenClaw base instructions, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.",
     "",
     "The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how managed OpenClaw inference adds profile files to parent-only request instructions and keeps `MEMORY.md` in turn input. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.",
     "",
@@ -1001,10 +986,6 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "Use `telegram-direct` to inspect the complete base catalog.",
     "",
-    "The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from Codex's runtime cache or, when present, a local Codex checkout with:",
-    "",
-    markdownFence("sh", "pnpm prompt:snapshots:sync-codex-model"),
-    "",
     "These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.",
     "",
     "Regenerate with:",
@@ -1021,17 +1002,6 @@ function renderReadme(scenarios: PromptScenario[]): string {
       scenario === CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO ? `- ${fileName}` : `- ${fileName}.diff`,
     ),
     ...scenarios.map((scenario) => `- ${scenario.toolSnapshotFile}`),
-    "",
-    "Codex model prompt fixtures:",
-    "",
-    `- ${path.relative(
-      CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
-      CODEX_MODEL_PROMPT_FIXTURE_PATH,
-    )}`,
-    `- ${path.relative(
-      CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
-      CODEX_MODEL_PROMPT_SOURCE_PATH,
-    )}`,
     "",
   ].join("\n");
 }

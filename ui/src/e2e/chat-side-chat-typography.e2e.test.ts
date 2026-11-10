@@ -61,6 +61,12 @@ suite.define(() => {
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.25"),
       );
       expect(await textStyle(side, questionText)).toEqual(await textStyle(main, questionText));
+      for (const surface of [main, side]) {
+        expect(await typography(surface.locator(".code-block-viewport code"))).toMatchObject({
+          size: "15px",
+          lineHeight: "22.5px",
+        });
+      }
       const mainInput = await typography(
         page.getByRole("textbox", {
           name: "Chat composer",
@@ -70,10 +76,20 @@ suite.define(() => {
       );
       const sideInput = await typography(side.getByRole("textbox"));
       if (width === 390) {
-        // The collapsed mobile composer has a compact 22px row; Side chat
-        // retains its multiline editor. Both consume the same text scale.
-        expect(mainInput).toMatchObject({ size: "20px", lineHeight: "22px", weight: "500" });
-        expect(sideInput).toEqual({ ...mainInput, lineHeight: "30px", weight: "400" });
+        // The compact row and multiline Side chat share type and text scaling,
+        // while each layout owns its line height.
+        expect(mainInput.size).toBe("17.5px");
+        expect(sideInput).toMatchObject({
+          family: mainInput.family,
+          size: mainInput.size,
+          weight: mainInput.weight,
+          smoothing: mainInput.smoothing,
+        });
+        for (const input of [mainInput, sideInput]) {
+          expect(Number.parseFloat(input.lineHeight)).toBeGreaterThanOrEqual(
+            Number.parseFloat(input.size),
+          );
+        }
       } else {
         expect(sideInput).toEqual(mainInput);
       }

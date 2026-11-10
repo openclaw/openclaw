@@ -66,7 +66,7 @@ export function WidgetCardMenu(props: {
       panelClass="chat-tool-card__widget-actions-panel"
       placement="bottom-end"
       label={t("chat.toolCards.widgetActions")}
-      triggerClass="btn btn--ghost btn--icon chat-tool-card__widget-actions-trigger"
+      triggerClass="oc-icon-button chat-tool-card__widget-actions-trigger"
       triggerAttributes={{ title: t("chat.toolCards.widgetActions") }}
       trigger={<Icon name="moreHorizontal" />}
       items={entries()()}

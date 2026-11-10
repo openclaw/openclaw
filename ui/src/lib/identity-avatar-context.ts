@@ -7,6 +7,7 @@ import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
 let appGatewayOrigin: string | null = null;
 let appGatewayResourceBasePath = "";
 let appGatewayAuthTokens: readonly string[] = [];
+let appGatewayStorageScope: string | undefined;
 let gatewayRequests = new AbortController();
 // More than one cache is keyed by the Gateway HTTP context (avatars,
 // geolocation), so every subscriber must be notified on a switch. A single slot
@@ -20,6 +21,7 @@ export function readAvatarGatewayContext() {
     origin: appGatewayOrigin,
     resourceBasePath: appGatewayResourceBasePath,
     authTokens: appGatewayAuthTokens,
+    storageScope: appGatewayStorageScope,
   };
 }
 
@@ -27,15 +29,20 @@ export function readAvatarGatewayContext() {
 export async function fetchGatewayContextResource(
   url: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const origin = appGatewayOrigin ?? globalThis.location?.origin ?? "http://localhost";
   if (new URL(url, origin).origin !== origin) {
     throw new Error("Resource must belong to the connected Gateway");
   }
-  const signal = AbortSignal.any([gatewayRequests.signal, AbortSignal.timeout(timeoutMs)]);
+  const requestSignal = AbortSignal.any([
+    gatewayRequests.signal,
+    AbortSignal.timeout(timeoutMs),
+    ...(signal ? [signal] : []),
+  ]);
   const response = await fetchWithControlUiAuth(
     url,
-    { credentials: "include", signal },
+    { credentials: "include", signal: requestSignal },
     appGatewayAuthTokens,
     () => true,
   );
@@ -66,6 +73,7 @@ export function setAvatarGatewayOrigin(
   gatewayUrl: string | null | undefined,
   authTokens: readonly string[] = [],
   resourceBasePath = "",
+  storageScope?: string,
 ): void {
   const nextOrigin =
     gatewayUrl && isConfiguredUiDevGateway(gatewayUrl)
@@ -77,6 +85,8 @@ export function setAvatarGatewayOrigin(
   if (
     appGatewayOrigin !== nextOrigin ||
     appGatewayResourceBasePath !== nextResourceBasePath ||
+    // Initial admission adopts pending reads; replacement or retirement invalidates them.
+    (appGatewayStorageScope !== undefined && appGatewayStorageScope !== storageScope) ||
     appGatewayAuthTokens.length !== authTokens.length ||
     appGatewayAuthTokens.some((token, index) => token !== authTokens[index])
   ) {
@@ -89,4 +99,5 @@ export function setAvatarGatewayOrigin(
   appGatewayOrigin = nextOrigin;
   appGatewayResourceBasePath = nextResourceBasePath;
   appGatewayAuthTokens = [...authTokens];
+  appGatewayStorageScope = storageScope;
 }

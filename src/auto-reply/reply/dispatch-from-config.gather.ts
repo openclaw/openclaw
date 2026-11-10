@@ -37,7 +37,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
-import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import { prepareTtsPreferences, type PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -164,12 +164,15 @@ export async function gatherDispatchRequest(
   };
   const { cfg, dispatcher } = normalizedParams;
   bindReplyDispatcherConversationContext(dispatcher, ctx.agentText);
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey;
   const targetAgentId = resolveSessionAgentId({
-    sessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
+    sessionKey: targetSessionKey,
     config: cfg,
     fallbackAgentId: ctx.AgentId,
   });
-  await waitForAgentDatabaseWriteAdmission(targetAgentId, {
+  await waitForAgentInputAdmission(targetAgentId, {
+    cfg,
+    sessionKey: targetSessionKey,
     signal: params.replyOptions?.abortSignal,
   });
   const refusal = readAgentDatabaseAdmissionRefusal(targetAgentId);

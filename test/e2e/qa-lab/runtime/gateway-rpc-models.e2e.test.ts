@@ -48,6 +48,7 @@ it(
         );
         expect(payload.models).toEqual([
           expect.objectContaining({
+            agentRuntime: expect.objectContaining({ id: "openclaw", source: "implicit" }),
             alias: "Catalog Alias",
             contextWindow: 8192,
             id: "catalog-model",
@@ -57,7 +58,7 @@ it(
             supportsTools: true,
           }),
         ]);
-        for (const field of ["agentRuntime", "apiKey", "baseUrl"]) {
+        for (const field of ["apiKey", "baseUrl"]) {
           expect(payload.models[0] ?? {}).not.toHaveProperty(field);
         }
         expect(JSON.stringify(payload)).not.toContain("rpc-model-secret");

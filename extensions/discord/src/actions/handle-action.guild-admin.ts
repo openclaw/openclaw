@@ -101,7 +101,16 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     runtimeAction: string,
     values: Record<string, unknown>,
     options?: DiscordMessagingActionOptions,
-  ) => handleDiscordAction({ action: runtimeAction, accountId, ...values }, cfg, options);
+  ) =>
+    handleDiscordAction(
+      { action: runtimeAction, accountId, ...values },
+      cfg,
+      // Read-policy scoping stays with the caller's options; invocation cancellation
+      // is common to metadata reads, mutations, and moderation.
+      actionOptions.callerSignal
+        ? { ...options, callerSignal: actionOptions.callerSignal }
+        : options,
+    );
 
   const metadataRead = guildMetadataReads[action];
   if (metadataRead) {

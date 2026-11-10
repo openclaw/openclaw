@@ -3,27 +3,28 @@ import { en } from "./en.ts";
 
 const catalog = {
   chat: {
+    view: {
+      activityDetails: "View activity details",
+      workingDetails: "Agent is working. View details",
+    },
     composer: {
-      running: "running",
       composerInput: "Chat composer",
       usePrediction: "Use suggestion",
       predictionShortcut: "Tab",
       dismissPrediction: "Dismiss suggestion",
       predictionAvailable:
-        "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It will not be sent automatically.",
+        "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
-      emptyHint: "Write a message to send.",
-      placeholderWithAttachments: "Add a message or paste more images...",
-      preparingModel: "Preparing model...",
-      responding: "{name} is responding...",
-      sendingMessage: "Sending message...",
-      working: "{name} is working...",
+      emptyHint: "Type a message first.",
+      preparingModel: "Preparing model…",
+      responding: "{name} is responding…",
+      sendingMessage: "Sending message…",
+      working: "{name} is working…",
       runDone: "Done",
       runInterrupted: "Interrupted",
       localCancellationCaveat: "Cancellation requested; the local model may still be finishing.",
-      runStatus: "Run status: {status}",
-      compactingContext: "Compacting context...",
+      compactingContext: "Compacting context…",
       contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
       modelFallbackEvent: "Model fallback: {from} → {to}",
@@ -40,7 +41,6 @@ const catalog = {
       browserAnnotationPreview: "Browser annotation preview",
       browserAnnotationRegion: "{count} marked region",
       browserAnnotationRegions: "{count} marked regions",
-      browserAnnotationInspectedElement: "Element inspected",
       browserAnnotationRemoved: "Browser annotation removed.",
       browserAnnotationUndoUnavailable:
         "Undo is unavailable because the browser annotation limit has been reached.",
@@ -51,74 +51,48 @@ const catalog = {
       removeNamedAttachment: "Remove {name}",
       removeBrowserAnnotation: "Remove browser annotation: {name}",
       addAttachment: "Add attachment",
-      attach: "Attach…",
+      attach: "Add attachment…",
       attachPhoto: "Photo",
+      attachMedia: "Media",
       attachFileOption: "File",
       menu: {
-        back: "Back",
-        skills: "Skills",
-        connectors: "Plugins",
-        webSearch: "Web search",
-        webSearchGloballyDisabled:
-          "Web search is disabled in config (tools.web.search.enabled). Session overrides cannot turn it back on.",
-        webSearchClearStaleEnable:
-          "Web search is disabled in config. Click to clear this session’s enable override.",
-        managePlugins: "Manage plugins",
-        manageSkills: "Manage skills",
-        addMcpServer: "Add MCP server…",
-        addMcpServerTitle: "Add MCP server",
-        addMcpServerDescription: "Configure the server and choose where it is enabled.",
-        scopeLabel: "Availability",
-        scopeSession: "This session",
-        scopeEverywhere: "Everywhere",
-        scopeSessionHint:
-          "The server is saved globally disabled and enabled only for this session.",
-        scopeEverywhereHint: "The server is saved and enabled for every session.",
         toolAccess: {
-          label: "Tool access",
-          loading: "Loading tools…",
-          loadFailed: "Couldn’t load tools.",
-          noTools: "No tools available for this MCP server.",
-          summary: "{enabled} of {total} tools on",
-          summaryOne: "{enabled} of {total} tool on",
+          loadFailed: "Couldn’t load tools. Try again.",
         },
-        enabledCount: "{count} on",
-        loadingSkills: "Loading skills…",
-        skillsLoadFailed: "Couldn’t load skills.",
-        noSkills: "No skills available.",
-        noConnectors: "No MCP servers configured.",
-        depsMissing: "deps missing",
-        skillBlocked: "not available for this agent",
-        sessionTag: "session",
-        offlineBlocked: "Connect to the gateway to change session capabilities.",
-        adminBlocked: "Admin access is required to manage MCP servers.",
-        savingBlocked: "Wait for the current session capability change to finish.",
+        offlineBlocked: "Reconnect to change tools for this session.",
+        adminBlocked: "You need admin access to manage MCP servers.",
+        savingBlocked: "Saving… Try again in a moment.",
       },
       overrides: {
         count: "{count} overrides",
         countOne: "{count} override",
-        clear: "Clear session overrides",
       },
       contextUsage: {
         title: "Context usage details",
-        open: "Open context usage details",
+        percentUsed: "Context: {pct}% used",
         summary: "Session context usage: {used} of {limit} ({pct}%)",
         contextWindow: "Context window",
         promptBudget: "Prompt budget",
-        latestRunTokens: "Latest run tokens",
-        estimatedCost: "Est. cost",
-        planUsage: "Plan usage",
+        latestRun: "Latest run",
+        inputShort: "In",
+        outputShort: "Out",
+        costShort: "Cost",
+        quotaAccountUnknown: "Quota account unknown",
         openUsage: "Open usage dashboard",
         resets: "Resets {time}",
         usageCredits: "Usage credits",
         budgetValue: "{used} of {limit}",
-        limitFiveHour: "5-hour limit",
+        limitFiveHour: "5-hour",
         limitWeekly: "Weekly",
-        limitDaily: "Daily limit",
-        limitHours: "{hours}-hour limit",
+        limitDaily: "Daily",
+        limitHours: "{hours}-hour",
+        compact: "Compact",
+        compacting: "Compacting",
+        compactDescription: "Summarizes older messages to free up space.",
+        compactAfterRun: "Available after this reply finishes.",
       },
-      takePhoto: "Take photo",
-      cameraAccessFailed: "Unable to access the camera.",
+      cameraAccessFailed:
+        "Couldn’t access the camera. Check this browser’s camera permission and try again.",
       cameraBusy: "The camera is busy or unavailable to the browser.",
       cameraFallback: "Camera {number}",
       cameraInput: "Camera",
@@ -129,7 +103,8 @@ const catalog = {
         "Camera access is blocked. Allow camera access in browser site settings.",
       cameraPreview: "Camera preview",
       dismissVoiceInputError: "Dismiss voice input error",
-      microphoneAccessFailed: "Unable to access microphone inputs.",
+      microphoneAccessFailed:
+        "Couldn’t access microphones. Check this browser’s microphone permission and try again.",
       microphoneAccessPending:
         "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
       microphoneBusy: "Microphone inputs are busy or unavailable to the browser.",
@@ -149,26 +124,22 @@ const catalog = {
       realtimeTalkProviderUnavailable: "No realtime voice provider is configured.",
       dictationProviderUnavailableShort: "No transcription provider is configured.",
       talkCapabilityChecking: "Checking provider availability…",
-      talkCapabilityUnknown: "Provider availability could not be verified.",
-      openRealtimeTalkSettings: "Talk settings",
-      openDictationSettings: "Transcription setup",
+      talkCapabilityUnknown: "Couldn’t check provider availability. Try again.",
       configureCapability: "Configure",
-      holdToRecordSetting: "Hold microphone button to start dictation",
-      holdToDictate: "Hold to start dictation",
+      holdToRecordSetting: "Hold the mic button to dictate",
+      holdToDictate: "Hold to dictate",
       holdToRecordSettingDescription:
         "Hold until dictation starts, then release and keep speaking. Tap Stop to insert the transcript.",
       dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
       dictationBrowserAudioUnsupported: "This browser cannot capture dictation audio at 8 kHz.",
       dictationDisconnected: "Dictation stopped because the Gateway disconnected.",
-      dictationFailed: "Dictation failed.",
+      dictationFailed: "Couldn’t transcribe your voice.",
       dictationInterruptedRecovery:
         "Captured text was inserted. Check your connection and try again.",
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
       dictationFinalizing: "Finishing dictation…",
       dictationListening: "Listening…",
       dictationStopAndKeep: "Stop and keep text",
-      dictationProviderUnavailable:
-        "No transcription provider is configured for dictation. Choose one in Settings to dictate.",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
       realtimeTalkRelayUnresponsive:
@@ -179,7 +150,7 @@ const catalog = {
       selectedCameraUnavailable:
         "The selected camera is unavailable. Choose another camera or System default.",
       startVoiceInput: "Start voice input",
-      voiceGestureHint: "Tap to talk · Hold to start dictation",
+      voiceGestureHint: "Tap for voice chat · Hold to dictate",
       stillListening: "Still listening",
       stopVoiceInput: "Stop voice input",
       systemDefaultMicrophone: "System default",
@@ -191,21 +162,32 @@ const catalog = {
       voiceTranscript: "Voice transcript",
     },
     queue: {
+      storageFailed: "Couldn’t save this message. Free browser storage or reconnect to send it.",
+      draftStorageFailed:
+        "Couldn’t save the previous draft. Keep this tab open or copy it before reloading.",
       reviewEdit: "Review edit",
       reloadBlocked: "Save or cancel your queued message edit before reloading.",
+      memoryOnlyReloadBlocked:
+        "This pending message is only saved in this tab. Keep it open until the message is sent, or copy it before discarding and reloading.",
+      memoryOnlyReview: "Review pending input",
+      memoryOnlyTitle: "Unsent pending message",
+      memoryOnlyDescription:
+        "This pending message stays only in this tab. Copy its text or download its attachments before discarding the local copy to refresh. Discarding does not cancel a message already received by the Gateway.",
+      memoryOnlyText: "Message text",
+      memoryOnlyDiscard: "Discard local copy and refresh",
+      memoryOnlyChanged:
+        "The pending input changed or is being edited. Review it before refreshing. It hasn’t been discarded.",
+      memoryOnlyUnavailable:
+        "Couldn’t open the pending input. It’s saved in this tab. Try Review pending input again.",
       connectionPending: "Finishing connection recovery. Try sending again when it is ready.",
       editSourceChanged:
-        "This queued message changed while you were editing. Your edit is still here. Copy it, cancel the edit, and review the queue before trying again.",
+        "The queued message changed. Your edit is still here. Copy it, cancel editing, then review the queue and try again.",
       editStorageFailed:
-        "Your edit could not be saved in this browser. Keep this tab open and copy your edit before freeing browser storage, then try again.",
-      full: "The message queue is full. Wait for a queued message to send or remove one, then try again.",
+        "Couldn’t save your edit. Keep this tab open. Copy your edit, free browser storage, then try again.",
+      full: "Couldn’t queue this message. Wait for one to send or remove one, then try again.",
       initialTurnPending:
-        "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
+        "The first message is unresolved. Reconnect if needed, then review it before sending another.",
       notSent: "Not sent",
-      deliveryUnconfirmed: "Delivery unconfirmed",
-      checkDelivery: "Check delivery",
-      checkDeliveryHelp:
-        "Delivery is unconfirmed. Check delivery looks for the original message without resending it or starting a worker. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt.",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
       discard: "Discard",
@@ -213,6 +195,9 @@ const catalog = {
         "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
+      resume: "Resume",
+      clearPaused: "Clear",
+      clearPausedQueue: "Clear paused messages",
       removeQueuedMessage: "Remove queued message",
       reorderQueuedMessage: "Reorder queued message with the arrow keys",
       reorderUnavailable: "This message holds its place and cannot be reordered",
@@ -220,26 +205,29 @@ const catalog = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
-        applyingSettings: "Applying chat settings",
-        blockedByUnconfirmed:
-          "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
+        followup: "Queued",
+        applyingSettings: "Applying session settings",
+        blockedByReview:
+          "Queue paused. Review or discard the earlier held message in the conversation.",
+        pausedByStop: "Queue paused",
+        pausedByStopReason: "You stopped the run",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
-        editing: "Editing",
-        needsReview: "Delivery uncertain",
+        needsReview: "Needs review",
       },
       imageCount: "Image ({count})",
+      annotationCount: "{count} annotation",
+      annotationsCount: "{count} annotations",
     },
     mentions: {
       menu: "Mention a person",
       empty: "No people found",
       truncated: "Keep typing to find more people.",
       online: "Online",
-      offline: "Offline",
       unavailable: "Could not load people. Try again.",
       accessDenied: "Mention access denied. Sign in or contact an admin.",
       profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
-      rejected: "Mention search rejected. Check access or use another chat.",
+      rejected: "Mention search rejected. Check access or use another session.",
       limit: "You can mention up to 10 people per message.",
       selectedLabel: "Will notify",
       selected: "Will notify: {names}",
@@ -247,63 +235,31 @@ const catalog = {
       restoreFailed:
         "Mention selection could not be restored. Edit this message and select its recipients again.",
       unsupported:
-        "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
+        "Human mentions are not available in this mode. Remove the selected mentions or send from a normal session.",
     },
-    permissions: {
-      title: "Grant {permissions}",
-      neededOn: "OpenClaw needs access on {node} to continue this action.",
-      openApp:
-        "Grant access in the OpenClaw Mac app on that device: Settings → This Mac → Permissions. Then tell the agent to try again.",
-      ready: "Access is available. You can ask the agent to try again.",
-      following: "Then grant the remaining permissions: {permissions}.",
-      actions: {
-        "not-determined": "Grant {permissions}",
-        denied: "Open System Settings",
-        "restart-required": "Relaunch OpenClaw",
-        "stale-grant": "Open System Settings",
-        "disabled-in-openclaw": "Enable {permissions}",
-      },
-      tryAgain: "Try again",
-      retryMessage: "I granted {permissions}, try again.",
-      states: {
-        "not-determined": "Choose Grant to review the permission request.",
-        denied: "Open System Settings to allow access for OpenClaw.",
-        "restart-required":
-          "If you enabled access in System Settings, relaunch OpenClaw to make it available.",
-        "stale-grant":
-          "macOS may be using a stale permission grant. Open System Settings to review it.",
-        "disabled-in-openclaw": "Choose Enable to review and enable this capability in OpenClaw.",
-      },
-      capabilities: {
-        notifications: "Notifications",
-        accessibility: "Accessibility",
-        eventPosting: "Event Posting",
-        screenRecording: "Screen Recording",
-        microphone: "Microphone",
-        speechRecognition: "Speech Recognition",
-        camera: "Camera",
-        cameraEnabled: "Camera in OpenClaw",
-        location: "Location",
-        computerControl: "Computer Control",
-        canvas: "Canvas",
-        automation: "Automation",
-      },
-    },
+    permissions: {},
     voice: {
-      asking: "Asking OpenClaw...",
+      asking: "Asking the agent…",
       replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
       replyTimedOut:
-        "Talk stopped waiting. The agent's answer will appear in chat when it finishes.",
-      preparing: "Preparing voice session...",
-      connecting: "Connecting voice input...",
-      listening: "Listening...",
-      selectionFailed: "Could not change voices. Restart the call.",
+        "Talk stopped waiting. The agent’s reply will appear in Chat when it finishes.",
+      preparing: "Preparing voice session…",
+      connecting: "Connecting voice input…",
+      listening: "Listening…",
+      selectionFailed: "Couldn’t change the voice. Restart the call.",
       selectionTimedOut: "Voice change timed out. Restart the call.",
       selectionConfirmationFailed: "Voice change unconfirmed.",
     },
     sendErrors: {
-      outboxPayloadCopied:
-        "This queued message was copied from another tab. Check the conversation and retry only if it has not arrived.",
+      disconnected: "Reconnect to continue.",
+      newSessionBusy:
+        "Wait for the current reply and queued messages before starting a new session.",
+      newSessionLoading: "Sessions are still loading. Try again in a moment.",
+      newSessionFailed: "Couldn’t create a new session. Try again.",
+      sendFailed: "Couldn’t send your message. Try again.",
+      messageNotAccepted: "Your message wasn’t accepted before the reply ended. Try again.",
+      detachedMessageNotAccepted:
+        "The current reply ended before your message was accepted. Try again.",
       outboxPayloadCapacity:
         "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
       outboxPayloadUnavailable:
@@ -312,13 +268,13 @@ const catalog = {
         "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",
     },
-    outboxRecoveryReviewTitle: "Review in this chat?",
+    outboxRecoveryReviewTitle: "Review in this session?",
     outboxRecoveryConfirm: "Add this saved copy to “{chat}” for review? Nothing will be sent.",
     outboxRecoveryRestore: "Restore",
     outboxRecoveryConflict:
-      "Keep or clear the draft and pending messages in this chat first, or open another non-Incognito chat. Your saved copy is unchanged.",
+      "Keep or clear the draft and pending messages in this session first, or open another non-Incognito session. Your saved copy is unchanged.",
     outboxRecoveryStorageFailed:
-      "We could not access your saved messages. Reload to try again. Do not clear browser site data if you want to keep them.",
+      "Couldn’t access your saved messages. Reload to try again. Do not clear browser site data if you want to keep them.",
     outboxRecoveryFull:
       "There are more saved messages than we can show. Review or delete the copies below to make room. The remaining messages are still saved in this browser.",
     outboxRecoveryDraft: "Draft",
@@ -328,15 +284,12 @@ const catalog = {
     outboxRecoveryGoal: "Includes an unsent goal change",
     outboxRecoveryReply: "Reply to: {text}",
     outboxRecoveryAttachments: "Attachments: {files}",
-    outboxRecoveryUnconfirmedLabel: "may have been sent",
-    outboxRecoveryUnconfirmed:
-      "Delivery unconfirmed. This message may already have been sent. Check the original chat before sending it again.",
     outboxRecoveryAttachmentMissing:
       "An attachment could not be loaded. Review the message and reattach the file before sending.",
     outboxRecoveryDelete: "Delete",
     outboxRecoveryDeleteTitle: "Delete this saved copy?",
     outboxRecoveryDeleteConfirm:
-      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a chat will not be deleted.",
+      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a session won’t be deleted.",
     outboxRecoveryDeleteConflict:
       "This saved copy changed while you were reviewing it. Nothing was deleted. Reload and review it again.",
     attachments: {
@@ -346,6 +299,7 @@ const catalog = {
       download: "Download",
       expand: "Open {filename} in the side panel",
       open: "Open",
+      chooseLinkedFile: "Browse Files to choose “{path}”. This attachment stays open.",
       previewUnavailable: "Preview unavailable",
       textPreviewUnavailable:
         "Could not preview this file. Text previews require UTF-8 files up to 256 KiB. Download it to read the full file.",
@@ -369,11 +323,14 @@ const catalog = {
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
       failureDeliveryFailed: "Delivery failed. Try sending this file again.",
+      failureFileTooLarge: "Too large to attach. Look for this file in Files.",
+      findInFiles: "Find in Files",
+      findInFilesFor: "Find {name} in Files",
       failureInvalidReference:
         "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",
       failureUnsupportedFormat:
-        "Rejected by the local attachment allowlist. Send a supported file type.",
+        "This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file.",
       history: "History",
       image: "Image",
       notSent: "Not sent",
@@ -431,6 +388,7 @@ const catalog = {
 export const registerChatComposerEnglish = Object.assign(
   () => {
     const {
+      view,
       composer,
       queue,
       mentions,
@@ -443,7 +401,10 @@ export const registerChatComposerEnglish = Object.assign(
       ...outboxRecovery
     } = catalog.chat;
     Object.assign(en.chat, outboxRecovery);
-    Object.assign(en.chat.composer, composer);
+    Object.assign(en.chat.view, view);
+    const { menu, ...composerLabels } = composer;
+    Object.assign(en.chat.composer, composerLabels);
+    en.chat.composer.menu ??= menu;
     Object.assign(en.chat.queue, queue);
     Object.assign(en.chat.mentions, mentions);
     Object.assign(en.chat.permissions, permissions);

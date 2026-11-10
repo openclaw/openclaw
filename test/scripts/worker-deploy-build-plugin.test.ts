@@ -258,7 +258,9 @@ try {
     },
   }).find(tool => tool.name === "exec");
   const result = await exec.execute("permission-proof", { command: "echo permission-proof" });
-  assert.match(JSON.stringify(result), /approval_required.*worker workspace permission mode/is);
+  // Without the Gateway approval transport, workers fail closed before review or execution.
+  assert.match(JSON.stringify(result), /approval_required.*Worker exec approval is unavailable/is);
+  assert.equal(result.details?.approvalReviewOutcome, "denied");
   console.log("relocated worker exec permission denied without Gateway storage");
 } finally {
   await closeOpenClawStateDatabaseAsync();

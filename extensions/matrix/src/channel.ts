@@ -5,14 +5,20 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelDoctorAdapter,
+  ChannelGroupContext,
   ChannelThreadingToolContext,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelMessageAdapterFromOutbound,
+  createRuntimeOutboundDelegates,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderOpenWarningCollector,
   createConditionalWarningCollector,
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
@@ -27,6 +33,7 @@ import {
   createLazyRuntimeNamedExport,
   createLazyRuntimeModule,
 } from "openclaw/plugin-sdk/lazy-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -37,13 +44,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  chunkTextForOutbound,
-  sanitizeAssistantVisibleText,
-} from "openclaw/plugin-sdk/text-chunking";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
-import { createMatrixMessageAdapter } from "./channel-message-adapter.js";
 import { matrixPluginBase } from "./channel.setup.js";
 import {
   legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
@@ -51,19 +54,17 @@ import {
 } from "./doctor-contract.js";
 import { shouldSuppressLocalMatrixExecApprovalPrompt } from "./exec-approvals.js";
 import {
-  resolveMatrixGroupRequireMention,
-  resolveMatrixGroupToolPolicy,
-} from "./group-mentions.js";
-import {
   resolveDefaultMatrixAccountId,
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
 import { prepareMatrixConversationRouteOwnersAsync } from "./matrix/conversation-route-owner.js";
 import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
+import { buildMatrixRoomScopeTree, resolveMatrixRoomScopePath } from "./matrix/monitor/rooms.js";
 import type { MatrixProbe } from "./matrix/probe.js";
 import {
   normalizeMatrixMessagingTarget,
+  normalizeMatrixResolvableTarget,
   resolveMatrixDirectUserId,
   resolveMatrixTargetIdentity,
 } from "./matrix/target-ids.js";
@@ -108,6 +109,23 @@ const matrixDoctor: ChannelDoctorAdapter = {
   legacyConfigRules: MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: normalizeMatrixCompatibilityConfig,
 };
+
+function resolveMatrixGroupScope(params: ChannelGroupContext) {
+  const matrixConfig = resolveMatrixAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const tree = buildMatrixRoomScopeTree(matrixConfig.groups ?? matrixConfig.rooms);
+  const roomId = normalizeMatrixResolvableTarget(params.groupId ?? "");
+  const groupChannel = normalizeMatrixResolvableTarget(params.groupChannel ?? "");
+  // Core may fall back to the display name; only recover the same room ID's casing.
+  const aliases =
+    roomId && groupChannel.toLowerCase() === roomId.toLowerCase() ? [groupChannel] : [];
+  return {
+    tree,
+    path: resolveMatrixRoomScopePath({ tree, roomId, aliases }),
+  };
+}
 
 function resolveMatrixDirectoryAccount(cfg: CoreConfig, accountId?: string | null) {
   return resolveMatrixAccountConfig({
@@ -268,7 +286,7 @@ function matchesMatrixToolContextRoom(params: {
 
 const matrixChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkTextForOutbound,
+  chunker: (text, limit) => chunkMarkdownTextWithMode(text, limit, "length"),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
@@ -310,10 +328,59 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
   }),
 };
 
-const matrixMessageAdapter = createMatrixMessageAdapter({
+const matrixMessageAdapterBase = createChannelMessageAdapterFromOutbound({
+  id: "matrix",
   outbound: matrixChannelOutbound,
-  getRuntime: loadMatrixChannelRuntime,
+  live: {
+    capabilities: {
+      draftPreview: true,
+      previewFinalization: true,
+      progressUpdates: true,
+      quietFinalization: true,
+    },
+    finalizer: {
+      capabilities: {
+        finalEdit: true,
+        normalFallback: true,
+        discardPending: true,
+        previewReceipt: true,
+      },
+    },
+  },
 });
+
+const matrixMessageAdapter = {
+  ...matrixMessageAdapterBase,
+  durableFinal: {
+    ...matrixMessageAdapterBase.durableFinal,
+    automaticUnknownSendReconciliation: true,
+    capabilities: {
+      ...matrixMessageAdapterBase.durableFinal?.capabilities,
+      afterCommit: true,
+      reconcileUnknownSend: true,
+    },
+    reconcileUnknownSendKinds: { text: true, media: true },
+    reconcileUnknownSend: async (ctx) =>
+      await (await loadMatrixChannelRuntime()).reconcileMatrixUnknownSend(ctx),
+    afterUnknownSendTerminal: async (ctx) =>
+      await (await loadMatrixChannelRuntime()).cleanupMatrixDeliveryPlans({ queueId: ctx.queueId }),
+  },
+  send: {
+    ...matrixMessageAdapterBase.send,
+    lifecycle: {
+      afterCommit: async (ctx) => {
+        if (!ctx.deliveryQueueId) {
+          return;
+        }
+        await (
+          await loadMatrixChannelRuntime()
+        ).cleanupMatrixDeliveryPlans({
+          queueId: ctx.deliveryQueueId,
+        });
+      },
+    },
+  },
+} satisfies typeof matrixMessageAdapterBase;
 
 export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
   createChatChannelPlugin<ResolvedMatrixAccount, MatrixProbe>({
@@ -330,8 +397,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       },
       approvalCapability: matrixApprovalCapability,
       groups: {
-        resolveRequireMention: resolveMatrixGroupRequireMention,
-        resolveToolPolicy: resolveMatrixGroupToolPolicy,
+        resolveRequireMention: (params) =>
+          resolveScopeRequireMention(resolveMatrixGroupScope(params)),
+        resolveToolPolicy: (params) => resolveScopeToolsPolicy(resolveMatrixGroupScope(params)),
       },
       conversationBindings: {
         supportsCurrentConversationBinding: true,

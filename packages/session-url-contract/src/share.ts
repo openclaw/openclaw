@@ -15,7 +15,7 @@ export const CONTROL_UI_RESERVED_ROUTE_SEGMENTS: readonly string[] = Object.free
   "automations",
   "channels",
   "chat",
-  "claws",
+  "templates",
   "communications",
   "config",
   "cron",

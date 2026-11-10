@@ -20,23 +20,25 @@ import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import {
+  TOOL_SEARCH_CONTROL_TOOL_NAMES,
+  type CatalogSource,
+  type CatalogVisibilityOptions,
+} from "./tool-search-protocol.js";
 import { disposeToolSearchSchedule } from "./tool-search-scheduling.js";
 import {
   createToolSearchSelectionMatcher,
   type ToolSearchSelection,
 } from "./tool-search-selection.js";
-import {
-  TOOL_SEARCH_CONTROL_TOOL_NAMES,
-  type CatalogSource,
-  type CatalogTool,
-  type CatalogVisibilityOptions,
-  type ToolSearchCatalogApplyResult,
-  type ToolSearchCatalogCompactionParams,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
-  type ToolSearchCatalogSession,
-  type ToolSearchCatalogTelemetry,
-  type ToolSearchToolContext,
+import type {
+  CatalogTool,
+  ToolSearchCatalogApplyResult,
+  ToolSearchCatalogCompactionParams,
+  ToolSearchCatalogEntry,
+  ToolSearchCatalogRef,
+  ToolSearchCatalogSession,
+  ToolSearchCatalogTelemetry,
+  ToolSearchToolContext,
 } from "./tool-search-types.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
@@ -142,24 +144,12 @@ function sameCatalogSchema(source: CatalogSource, a: unknown, b: unknown): boole
 function rebindCatalogExecutors(
   existingEntries: ToolSearchCatalogEntry[],
   currentEntries: readonly ToolSearchCatalogEntry[],
-): ToolSearchCatalogEntry[] | undefined {
-  const currentTools = new Map(currentEntries.map((entry) => [entry.id, entry.tool]));
-  if (currentTools.size !== currentEntries.length || currentTools.size !== existingEntries.length) {
-    return undefined;
-  }
+): ToolSearchCatalogEntry[] {
   // Keep identical same-run entries; changed executors need a detached descriptor snapshot.
-  // Every exact ID must still resolve, so missing entries fail the reuse check below.
-  const rebound = existingEntries.every(
-    (entry) => entry.tool && currentTools.get(entry.id) === entry.tool,
-  )
+  // The caller already compared the ordered, unique descriptors position by position.
+  return existingEntries.every((entry, index) => entry.tool === currentEntries[index]!.tool)
     ? existingEntries
-    : existingEntries.map((entry) => {
-        const tool = currentTools.get(entry.id);
-        return tool ? { ...entry, tool } : undefined;
-      });
-  return rebound.every((entry): entry is ToolSearchCatalogEntry => entry !== undefined)
-    ? rebound
-    : undefined;
+    : existingEntries.map((entry, index) => ({ ...entry, tool: currentEntries[index]!.tool }));
 }
 
 export function prepareToolSearchCatalogExecutionTool(
@@ -355,7 +345,11 @@ function registerToolSearchCatalog(params: {
     params.mode === "reuse" &&
     existing &&
     metadata &&
-    stableStringify(metadata.toolExecutionAllow) === stableStringify(toolExecutionAllow) &&
+    (metadata.toolExecutionAllow === toolExecutionAllow ||
+      (metadata.toolExecutionAllow !== undefined &&
+        toolExecutionAllow !== undefined &&
+        metadata.toolExecutionAllow.length === toolExecutionAllow.length &&
+        metadata.toolExecutionAllow.every((name, index) => name === toolExecutionAllow[index]))) &&
     sameCatalogDescriptors(existing.entries, entries)
       ? rebindCatalogExecutors(existing.entries, entries)
       : undefined;
@@ -531,7 +525,11 @@ export function compactToolSearchCatalogEntry(
     name: entry.name,
     label: entry.label,
     description: entry.description,
-    input: entry.source === "openclaw" ? compactToolInputHint(entry.parameters) : "unknown",
+    // tool_describe already returns MCP input schemas whole, so search summarizes them
+    // with the same bounded, structure-only renderer. Client tools stay "unknown":
+    // Code Mode renders their compact entries into its system-prompt index, and
+    // caller-supplied schema text stays out of the prompt.
+    input: entry.source === "client" ? "unknown" : compactToolInputHint(entry.parameters),
     ...(instructionsHint ? { instructionsHint } : {}),
     ...(output ? { output } : {}),
   };

@@ -4,6 +4,7 @@ import path from "node:path";
 import { SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END } from "@openclaw/ai/internal/shared";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { makeAgentUserMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -15,6 +16,7 @@ import type { PluginHookBeforeAgentRunEvent } from "../../plugins/hook-types.js"
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { prepareSkillBundle } from "../../skills/library/bundle.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { runWorkerEmbeddedTurn } from "../../worker/embedded-agent.runtime.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
@@ -41,11 +43,33 @@ import {
   sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
-  unusedEnvironments,
+  workerTurnEnvironments,
+  type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
 afterAll(closeStateDatabaseForTest);
+
+function executeTurn(
+  input: Parameters<ReturnType<typeof createWorkerSessionTurnPlacementProvider>["executeTurn"]>[1],
+  environment: ReturnType<typeof attachedEnvironment>,
+  launchTurn: NonNullable<ReturnType<typeof createWorkerTurnTunnel>["launchTurn"]>,
+  options: Partial<Pick<WorkerTurnLauncherOptions, "reconcileActivePlacement">> = {},
+) {
+  const tunnel = createWorkerTurnTunnel({
+    launchTurn,
+    stageAttachments: async () => {},
+    reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+  });
+  return createWorkerSessionTurnPlacementProvider({
+    placements,
+    ...options,
+    environments: workerTurnEnvironments(tunnel, {
+      get: () => environment,
+      acknowledgeCredentialDelivery: async () => true,
+    }),
+  }).executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn());
+}
 
 describe("worker-side before_agent_run admission", () => {
   beforeEach(async () => {
@@ -66,12 +90,23 @@ describe("worker-side before_agent_run admission", () => {
     { modern: true, block: true, recorderOwned: true, forged: false },
     { modern: false, block: true, recorderOwned: false, forged: false },
     { modern: false, block: false, recorderOwned: false, forged: false },
+    { modern: false, block: true, recorderOwned: true, forged: false },
+    { modern: false, block: false, recorderOwned: true, forged: false },
     { modern: true, block: false, recorderOwned: false, forged: true },
   ])(
     "gates the final worker prompt before inference and persistence (%j)",
     async ({ modern, block, recorderOwned, forged }) => {
       await seedActivePlacement();
-      const input = turn(`admission-${modern}-${block}-${recorderOwned}`);
+      const image = {
+        type: "image" as const,
+        data: createSolidPngBuffer(1, 1, { r: 1, g: 2, b: 3 }).toString("base64"),
+        mimeType: "image/png",
+      };
+      const input = {
+        ...turn(`admission-${modern}-${block}-${recorderOwned}`),
+        images: [image],
+        modelHasVision: true,
+      };
       const retainedHistory = forged
         ? [makeAgentUserMessage({ content: "Gateway-retained policy context", timestamp: 1 })]
         : [];
@@ -88,6 +123,8 @@ describe("worker-side before_agent_run admission", () => {
       const handler = vi.fn(async (event: PluginHookBeforeAgentRunEvent) => {
         // Both Gateway persistence owners must wait for the policy decision.
         messagesAtGate = (await openSessionManager()).buildSessionContext().messages;
+        expect(event.images).toEqual([image]);
+        event.images![0]!.data = "hook mutation";
         return block || (modern && !event.systemPrompt?.includes("stable prefix"))
           ? { outcome: "block" as const, reason: "Synthetic policy", message: "Request blocked." }
           : { outcome: "pass" as const };
@@ -118,6 +155,13 @@ describe("worker-side before_agent_run admission", () => {
       let promptForWorker: string | undefined;
       const stream = vi.fn<Parameters<typeof runWorkerEmbeddedTurn>[0]["inference"]["stream"]>(
         ({ context }) => {
+          expect(
+            context.messages.flatMap((message) =>
+              Array.isArray(message.content)
+                ? message.content.filter((part) => part.type === "image")
+                : [],
+            ),
+          ).toEqual([image]);
           const event = handler.mock.calls[0]?.[0];
           if (modern) {
             expect(event?.systemPrompt).toBe(context.systemPrompt);
@@ -133,8 +177,12 @@ describe("worker-side before_agent_run admission", () => {
       const launch = vi.fn<NonNullable<ReturnType<typeof createWorkerTurnTunnel>["launchTurn"]>>(
         async ({ plan, turnClaim, onDispatchReady, assertCurrent }) => {
           onDispatchReady?.();
-          assert(typeof plan.assignment.prompt === "string");
-          promptForWorker = plan.assignment.prompt;
+          promptForWorker =
+            typeof plan.assignment.prompt === "string"
+              ? plan.assignment.prompt
+              : plan.assignment.prompt
+                  .flatMap((part) => (part.type === "text" ? [part.text] : []))
+                  .join("\n");
           const identity = {
             environmentId: environment.environmentId,
             ownerEpoch: environment.ownerEpoch,
@@ -220,37 +268,18 @@ describe("worker-side before_agent_run admission", () => {
                 }
               : undefined,
           });
-          return {
-            stdout: "",
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
+          return createCommandResult();
         },
       );
-      const tunnel = createWorkerTurnTunnel({
-        launchTurn: launch,
-        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-      });
-      const environments = {
-        ...unusedEnvironments(),
-        get: () => environment,
-        acquireTurnCredential: async () => credential(),
-        startTunnel: async () => tunnel,
-        acknowledgeCredentialDelivery: async () => true,
-      };
-      const provider = createWorkerSessionTurnPlacementProvider({ placements, environments });
       try {
-        const execution = provider.executeTurn(
-          { ...sessionTarget, runId: input.runId },
+        const execution = executeTurn(
           {
             ...input,
             pluginGeneration: runtime.pluginGeneration,
             userTurnTranscriptRecorder: recorder,
           },
-          vi.fn(),
+          environment,
+          launch,
         );
         if (block) {
           const result = await execution;
@@ -266,6 +295,7 @@ describe("worker-side before_agent_run admission", () => {
             }),
           ]);
           expect(JSON.stringify(readWorkerTurnTranscriptStorageRows())).not.toContain(input.prompt);
+          expect(JSON.stringify(readWorkerTurnTranscriptStorageRows())).not.toContain(image.data);
         } else {
           await expect(execution).rejects.toThrow(observedModel.message);
           expect(stream).toHaveBeenCalledOnce();
@@ -273,7 +303,11 @@ describe("worker-side before_agent_run admission", () => {
             ...retainedHistory,
             expect.objectContaining({
               role: "user",
-              content: recorderOwned ? input.prompt : [{ type: "text", text: input.prompt }],
+              content: recorderOwned
+                ? input.prompt
+                : expect.arrayContaining([
+                    { type: "text", text: expect.stringContaining(input.prompt) },
+                  ]),
             }),
           ]);
         }
@@ -342,24 +376,8 @@ describe("worker-side before_agent_run admission", () => {
         return { ...result, signal: null, killed: false, termination: "exit" };
       },
     );
-    const tunnel = createWorkerTurnTunnel({
-      launchTurn: launch,
-      reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      placements,
-      environments: {
-        ...unusedEnvironments(),
-        get: () => environment,
-        acquireTurnCredential: async () => credential(),
-        startTunnel: async () => tunnel,
-        acknowledgeCredentialDelivery: async () => true,
-      },
-    });
     try {
-      await expect(
-        provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
-      ).rejects.toThrow(error);
+      await expect(executeTurn(input, environment, launch)).rejects.toThrow(error);
       expect(readWorkerTurnTranscriptStorageRows()).toEqual([]);
     } finally {
       input.preparedRunAdmission.close();
@@ -512,39 +530,21 @@ describe("worker-side before_agent_run admission", () => {
           payload: { phase: "finishing", endedAt: 1, aborted: true },
         });
         // A valid successful result must not let finalization persist unapproved input.
-        return {
+        return createCommandResult({
           stdout: JSON.stringify({
             status: "completed",
             transcriptLeafId: null,
             transcriptNextSeq: 1,
           }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        });
       },
     );
-    const tunnel = createWorkerTurnTunnel({
-      launchTurn: launch,
-      reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      placements,
-      // The scrubbed terminal ACK hands recovery back to this external lifecycle owner.
-      reconcileActivePlacement: async () => {},
-      environments: {
-        ...unusedEnvironments(),
-        get: () => environment,
-        acquireTurnCredential: async () => credential(),
-        startTunnel: async () => tunnel,
-        acknowledgeCredentialDelivery: async () => true,
-      },
-    });
     try {
       await expect(
-        provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
+        executeTurn(input, environment, launch, {
+          // The scrubbed terminal ACK hands recovery back to this external lifecycle owner.
+          reconcileActivePlacement: async () => {},
+        }),
       ).rejects.toThrow(admissionError);
       expect(launch).toHaveBeenCalledOnce();
       expect(execute).not.toHaveBeenCalled();

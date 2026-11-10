@@ -298,62 +298,47 @@ async function startProviderAndSink() {
       if (!scenario) {
         throw new Error(`Unexpected proof prompt ${prompt.slice(0, 300)}`);
       }
-      if (prompt.includes(scenario.targetPrompt)) {
-        scenario.targetRequests.push(modelRequest);
-        if (scenario.targetRequests.length === 1) {
-          scenario.targetStarted.resolve();
-          await scenario.releaseTarget.promise;
-          // Even a forbidden call is requested, so empty delivery proves enforcement,
-          // rather than relying on the scripted provider to obey tool discovery.
-          sendMessage(scenario.recipient, scenario.marker, true);
-        } else if (scenario.spec.bootstrap && scenario.targetRequests.length === 2) {
-          sendMessage(`${scenario.recipient}-incumbent`, `${scenario.marker}_INCUMBENT_2`);
-        } else {
-          respond(response, undefined, `TARGET_COMPLETE_${scenario.spec.id}`);
-        }
+      const phase = (["target", "bootstrap", "incumbent", "source"] as const).find((candidate) =>
+        prompt.includes(scenario[`${candidate}Prompt`]),
+      )!;
+      const count =
+        phase === "bootstrap"
+          ? ++scenario.bootstrapRequestCount
+          : scenario[`${phase}Requests`].push(modelRequest);
+      if (phase === "target" && count === 1) {
+        scenario.targetStarted.resolve();
+        await scenario.releaseTarget.promise;
+        // Request even forbidden calls: empty delivery must prove enforcement, not model obedience.
+        sendMessage(scenario.recipient, scenario.marker, true);
         return;
       }
-      if (prompt.includes(scenario.bootstrapPrompt)) {
-        scenario.bootstrapRequestCount++;
-        if (scenario.bootstrapRequestCount === 1) {
-          sendTool("sessions_send", {
-            sessionKey: scenario.targetKey,
-            mode: "followup",
-            message: scenario.incumbentPrompt,
-            timeoutSeconds: 0,
-          });
-        } else {
-          scenario.bootstrapAccepted = toolResult(body);
-          respond(response, undefined, `BOOTSTRAP_COMPLETE_${scenario.spec.id}`);
-        }
+      if (
+        (phase === "target" && scenario.spec.bootstrap && count === 2) ||
+        (phase === "incumbent" && count <= 2)
+      ) {
+        sendMessage(`${scenario.recipient}-incumbent`, `${scenario.marker}_INCUMBENT_${count}`);
         return;
       }
-      if (prompt.includes(scenario.incumbentPrompt)) {
-        scenario.incumbentRequests.push(modelRequest);
-        if (scenario.incumbentRequests.length <= 2) {
-          sendMessage(
-            `${scenario.recipient}-incumbent`,
-            `${scenario.marker}_INCUMBENT_${scenario.incumbentRequests.length}`,
-          );
-        } else {
-          respond(response, undefined, `INCUMBENT_COMPLETE_${scenario.spec.id}`);
-        }
-        return;
-      }
-      scenario.sourceRequests.push(modelRequest);
-      if (scenario.sourceRequests.length === 1) {
+      if ((phase === "source" || phase === "bootstrap") && count === 1) {
+        const bootstrap = phase === "bootstrap";
         sendTool("sessions_send", {
-          ...(scenario.spec.id === "delegate"
+          ...(!bootstrap && scenario.spec.id === "delegate"
             ? { agentId: "deployment" }
             : { sessionKey: scenario.targetKey }),
-          ...(scenario.spec.busy ? { mode: scenario.spec.mode ?? "followup" } : {}),
-          message: scenario.targetPrompt,
+          ...(bootstrap || scenario.spec.busy
+            ? { mode: bootstrap ? "followup" : (scenario.spec.mode ?? "followup") }
+            : {}),
+          message: bootstrap ? scenario.incumbentPrompt : scenario.targetPrompt,
           timeoutSeconds: 0,
         });
-      } else {
-        scenario.accepted = toolResult(body);
-        respond(response, undefined, `SOURCE_COMPLETE_${scenario.spec.id}`);
+        return;
       }
+      if (phase === "bootstrap") {
+        scenario.bootstrapAccepted = toolResult(body);
+      } else if (phase === "source") {
+        scenario.accepted = toolResult(body);
+      }
+      respond(response, undefined, `${phase.toUpperCase()}_COMPLETE_${scenario.spec.id}`);
     })().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       providerErrors.push(message);
