@@ -460,6 +460,15 @@ this exact-head SDK report alongside push coverage and use the admitted runner
 backend. They use the full validation tier; the main validation tier is reserved
 for ordinary same-revision manual or scheduled validation.
 
+### Hourly plugin routing
+
+Plugin Prerelease prepares hourly extension jobs for the repository-wide Boat
+backend. Its manifest translates the resolved physical two-CPU Blacksmith class
+to `boat` (four CPUs, 8 GiB) and the four-CPU class to `boat-large` (eight CPUs,
+16 GiB). Logical planner labels and test concurrency stay unchanged. Manual
+dispatches retain their existing `ubuntu-24.04` override; runner groups, coverage,
+runtime policies, artifact identities and deadlines are unchanged.
+
 ### Boat build qualification
 
 Live Media Runner Image and Sandbox Common Smoke are prepared to use
