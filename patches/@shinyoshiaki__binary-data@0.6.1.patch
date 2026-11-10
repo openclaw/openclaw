@@ -1,0 +1,362 @@
+diff --git a/src/node_modules/internal/buffer-list.js b/src/node_modules/internal/buffer-list.js
+index 729b40e51b7c50f77a4c0b9aabd0a2dae530b1d6..bedaa163ed532d12859645edc386d88a687c2095 100644
+--- a/src/node_modules/internal/buffer-list.js	
++++ b/src/node_modules/internal/buffer-list.js
+@@ -1,6 +1,5 @@
+ 'use strict';
+ 
+-const createFunction = require('generate-function');
+ const LinkedList = require('internal/linked-list');
+ 
+ /**
+@@ -278,42 +277,26 @@ const fixedReadMethods = {
+ };
+ 
+ Object.keys(fixedReadMethods).forEach(method => {
+-  const gen = createFunction();
+-
+-  gen(`
+-    function bufferlist_${method}(offset = 0) {
+-      const start = offset + this.offset;
+-      const head = this.queue.first;
+-      const size = ${gen.formats.d(fixedReadMethods[method])};
+-      const isFirtsChunkEnough = head.length - start >= size;
+-
+-      return isFirtsChunkEnough
+-        ? head.${method}(start)
+-        : this.slice(offset, offset + size).${method}(0)
+-    }
+-  `);
+-
+-  BufferList.prototype[method] = gen.toFunction();
++  const size = fixedReadMethods[method];
++  BufferList.prototype[method] = function(offset = 0) {
++    const start = offset + this.offset;
++    const head = this.queue.first;
++    return head.length - start >= size
++      ? head[method](start)
++      : this.slice(offset, offset + size)[method](0);
++  };
+ });
+ 
+ const metaReadMethods = ['readIntBE', 'readIntLE', 'readUIntBE', 'readUIntLE'];
+ 
+ metaReadMethods.forEach(method => {
+-  const gen = createFunction();
+-
+-  gen(`
+-    function bufferlist_${method}(size, offset = 0) {
+-      const start = offset + this.offset;
+-      const head = this.queue.first;
+-      const isFirtsChunkEnough = head.length - start >= size;
+-
+-      return isFirtsChunkEnough
+-        ? head.${method}(start, size)
+-        : this.slice(offset, offset + size).${method}(0, size)
+-    }
+-  `);
+-
+-  BufferList.prototype[method] = gen.toFunction();
++  BufferList.prototype[method] = function(size, offset = 0) {
++    const start = offset + this.offset;
++    const head = this.queue.first;
++    return head.length - start >= size
++      ? head[method](start, size)
++      : this.slice(offset, offset + size)[method](0, size);
++  };
+ });
+ 
+ const fixedWriteMethods = {
+@@ -334,18 +317,12 @@ const fixedWriteMethods = {
+ };
+ 
+ Object.keys(fixedWriteMethods).forEach(method => {
+-  const gen = createFunction();
+-
+-  gen(`
+-    function bufferlist_${method}(value) {
+-      const size = ${gen.formats.d(fixedWriteMethods[method])};
+-      const buf = Buffer.allocUnsafe(size);
+-      buf.${method}(value, 0);
+-      this.append(buf);
+-    }
+-  `);
+-
+-  BufferList.prototype[method] = gen.toFunction();
++  const size = fixedWriteMethods[method];
++  BufferList.prototype[method] = function(value) {
++    const buf = Buffer.allocUnsafe(size);
++    buf[method](value, 0);
++    this.append(buf);
++  };
+ });
+ 
+ const metaWriteMethods = [
+@@ -356,17 +333,11 @@ const metaWriteMethods = [
+ ];
+ 
+ metaWriteMethods.forEach(method => {
+-  const gen = createFunction();
+-
+-  gen(`
+-    function bufferlist_${method}(value, size) {
+-      const buf = Buffer.allocUnsafe(size);
+-      buf.${method}(value, 0, size);
+-      this.append(buf);
+-    }
+-  `);
+-
+-  BufferList.prototype[method] = gen.toFunction();
++  BufferList.prototype[method] = function(value, size) {
++    const buf = Buffer.allocUnsafe(size);
++    buf[method](value, 0, size);
++    this.append(buf);
++  };
+ });
+ 
+ module.exports = BufferList;
+diff --git a/src/node_modules/lib/binary-stream.js b/src/node_modules/lib/binary-stream.js
+index 77b8015d405963ed91947f7661387d141b29ad5c..b303b1f490d24107d98e08dc8c1835533f9ee35e 100644
+--- a/src/node_modules/lib/binary-stream.js	
++++ b/src/node_modules/lib/binary-stream.js
+@@ -1,7 +1,6 @@
+ 'use strict';
+ 
+ const { Transform } = require('stream');
+-const createFunction = require('generate-function');
+ const BufferList = require('internal/buffer-list');
+ const NotEnoughDataError = require('lib/not-enough-data-error');
+ 
+@@ -132,37 +131,22 @@ const fixedReadMethods = {
+ const metaReadMethods = ['readIntBE', 'readIntLE', 'readUIntBE', 'readUIntLE'];
+ 
+ Object.keys(fixedReadMethods).forEach(method => {
+-  const gen = createFunction();
+-
+-  gen(`
+-    function binary_${method}() {
+-      const bytes = ${gen.formats.d(fixedReadMethods[method])};
+-      assertSize(bytes, this.length);
+-
+-      const res = this.buffer.${method}(0);
+-      this.consume(bytes);
+-
+-      return res;
+-    }
+-  `);
+-
+-  BinaryStream.prototype[method] = gen.toFunction({ assertSize });
++  const bytes = fixedReadMethods[method];
++  BinaryStream.prototype[method] = function() {
++    assertSize(bytes, this.length);
++    const value = this.buffer[method](0);
++    this.consume(bytes);
++    return value;
++  };
+ });
+ 
+ metaReadMethods.forEach(method => {
+-  const gen = createFunction();
+-
+-  gen(`
+-    function binary_${method}(size) {
+-      assertSize(size, this.length);
+-
+-      const res = this.buffer.${method}(size, 0);
+-      this.consume(size);
+-      return res;
+-    }
+-  `);
+-
+-  BinaryStream.prototype[method] = gen.toFunction({ assertSize });
++  BinaryStream.prototype[method] = function(size) {
++    assertSize(size, this.length);
++    const value = this.buffer[method](size, 0);
++    this.consume(size);
++    return value;
++  };
+ });
+ 
+ const fixedWriteMethods = [
+@@ -183,15 +167,9 @@ const fixedWriteMethods = [
+ ];
+ 
+ fixedWriteMethods.forEach(method => {
+-  const gen = createFunction();
+-
+-  gen(`
+-    function binary_${method}(value) {
+-      this.buffer.${method}(value);
+-    }
+-  `);
+-
+-  BinaryStream.prototype[method] = gen.toFunction();
++  BinaryStream.prototype[method] = function(value) {
++    this.buffer[method](value);
++  };
+ });
+ 
+ const metaWriteMethods = [
+@@ -202,15 +180,9 @@ const metaWriteMethods = [
+ ];
+ 
+ metaWriteMethods.forEach(method => {
+-  const gen = createFunction();
+-
+-  gen(`
+-    function binary_${method}(value, size) {
+-      this.buffer.${method}(value, size);
+-    }
+-  `);
+-
+-  BinaryStream.prototype[method] = gen.toFunction();
++  BinaryStream.prototype[method] = function(value, size) {
++    this.buffer[method](value, size);
++  };
+ });
+ 
+ /**
+diff --git a/src/node_modules/lib/transaction.js b/src/node_modules/lib/transaction.js
+index 97fae03db66f1efb3feb7d8db954e9f936ce79c0..dd732eff4889fad8f276f69714971a4992b44815 100644
+--- a/src/node_modules/lib/transaction.js	
++++ b/src/node_modules/lib/transaction.js
+@@ -1,6 +1,5 @@
+ 'use strict';
+ 
+-const createFunction = require('generate-function');
+ const NotEnoughDataError = require('lib/not-enough-data-error');
+ 
+ /**
+@@ -108,34 +107,22 @@ const methods = {
+ };
+ 
+ Object.keys(methods).forEach(method => {
+-  const gen = createFunction();
+   const bytes = methods[method];
+-
+-  gen(`
+-    function transaction_${method}() {
+-      assertSize(this.index + ${gen.formats.d(bytes)}, this.length);
+-      const value = this.stream.buffer.${method}(this.index);
+-      this.index += ${gen.formats.d(bytes)};
+-      return value;
+-    }
+-  `);
+-
+-  Transaction.prototype[method] = gen.toFunction({ assertSize });
++  Transaction.prototype[method] = function() {
++    assertSize(this.index + bytes, this.length);
++    const value = this.stream.buffer[method](this.index);
++    this.index += bytes;
++    return value;
++  };
+ });
+ 
+ ['readIntBE', 'readIntLE', 'readUIntBE', 'readUIntLE'].forEach(method => {
+-  const gen = createFunction();
+-
+-  gen(`
+-    function transaction_${method}(bytes) {
+-      assertSize(this.index + bytes, this.length);
+-      const value = this.stream.buffer.${method}(bytes, this.index);
+-      this.index += bytes;
+-      return value;
+-    }
+-  `);
+-
+-  Transaction.prototype[method] = gen.toFunction({ assertSize });
++  Transaction.prototype[method] = function(bytes) {
++    assertSize(this.index + bytes, this.length);
++    const value = this.stream.buffer[method](bytes, this.index);
++    this.index += bytes;
++    return value;
++  };
+ });
+ 
+ module.exports = Transaction;
+diff --git a/src/node_modules/types/numbers.js b/src/node_modules/types/numbers.js
+index 1cf87373cb7cbf322566f9158daf13e740fa9fe4..90833341a91d95e9a03f882a69591e3ad7cfe5f3 100644
+--- a/src/node_modules/types/numbers.js	
++++ b/src/node_modules/types/numbers.js
+@@ -1,7 +1,5 @@
+ 'use strict';
+ 
+-const createFunction = require('generate-function');
+-
+ module.exports = {
+   doublebe: createFastStub(8, 'writeDoubleBE', 'readDoubleBE'),
+   doublele: createFastStub(8, 'writeDoubleLE', 'readDoubleLE'),
+@@ -40,28 +38,15 @@ module.exports = {
+  * @private
+  */
+ function createFastStub(size, write, read) {
+-  const genread = createFunction();
+-  const genwrite = createFunction();
+-
+-  genread(`
+-    function decode_${read}(rstream) {
+-      decode_${read}.bytes = ${genread.formats.d(size)};
+-      return rstream.${read}()
+-    }
+-  `);
+-
+-  genwrite(`
+-    function encode_${write}(value, wstream) {
+-      wstream.${write}(value);
+-      encode_${write}.bytes = ${genread.formats.d(size)};
+-    }
+-  `);
+-
+-  return {
+-    encodingLength: () => size,
+-    encode: genwrite.toFunction(),
+-    decode: genread.toFunction(),
+-  };
++  function encode(value, wstream) {
++    wstream[write](value);
++    encode.bytes = size;
++  }
++  function decode(rstream) {
++    decode.bytes = size;
++    return rstream[read]();
++  }
++  return { encodingLength: () => size, encode, decode };
+ }
+ 
+ /**
+@@ -73,26 +58,13 @@ function createFastStub(size, write, read) {
+  * @private
+  */
+ function createFastStubGeneric(size, write, read) {
+-  const genread = createFunction();
+-  const genwrite = createFunction();
+-
+-  genread(`
+-    function decode_${read}(rstream) {
+-      decode_${read}.bytes = ${genread.formats.d(size)};
+-      return rstream.${read}(${genread.formats.d(size)})
+-    }
+-  `);
+-
+-  genwrite(`
+-    function encode_${write}(value, wstream) {
+-      wstream.${write}(value, ${genread.formats.d(size)});
+-      encode_${write}.bytes = ${genread.formats.d(size)};
+-    }
+-  `);
+-
+-  return {
+-    encodingLength: () => size,
+-    encode: genwrite.toFunction(),
+-    decode: genread.toFunction(),
+-  };
++  function encode(value, wstream) {
++    wstream[write](value, size);
++    encode.bytes = size;
++  }
++  function decode(rstream) {
++    decode.bytes = size;
++    return rstream[read](size);
++  }
++  return { encodingLength: () => size, encode, decode };
+ }

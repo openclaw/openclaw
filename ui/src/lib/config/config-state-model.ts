@@ -13,6 +13,7 @@ export type ConfigAutoSaveStatus =
   | "idle"
   | "saving"
   | "saved"
+  | "deferred"
   | "rejected"
   | "error"
   | "conflict"
@@ -49,8 +50,14 @@ export function createInitialConfigState(
     configSaving: false,
     configApplying: false,
     configAutoSaveStatus: initialConfigValue<ConfigAutoSaveStatus>("idle"),
+    /** A form autosave waits on its debounce or behind another write. */
+    configAutoSaveScheduled: false,
     configRecoveryError: initialConfigValue<string | null>(null),
     configNeedsApply: false,
+    configApplyPromptHeld: false,
+    configApplyPromptAfter: 0,
+    configSaveReceipts: 0,
+    configSavedNotice: false,
     configSnapshot: initialConfigValue<ConfigSnapshot | null>(null),
     configDraftBaseHash: initialConfigValue<string | null>(null),
     configSchema: initialConfigValue<unknown>(null),
@@ -73,6 +80,17 @@ export type RuntimeConfigState = Omit<
   Partial<Pick<ProducedRuntimeConfigState, "configDraftBaseHash" | "bootstrapConfig">> & {
     chatError?: string | null;
   };
+
+// The Gateway applies most writes itself within moments of accepting them.
+const CONFIG_APPLY_PROMPT_GRACE_MS = 2_000;
+
+/** A write is saved but not yet applied; only a later read can say it needs an Apply. */
+export function markConfigAwaitingApply(state: RuntimeConfigState) {
+  state.configNeedsApply = true;
+  state.configApplyPromptAfter = Date.now() + CONFIG_APPLY_PROMPT_GRACE_MS;
+  // A Gateway that doesn't report applied revisions never sends that read.
+  state.configApplyPromptHeld = state.configSnapshot?.appliedConfigHash !== undefined;
+}
 
 const requestVersionsByState = new WeakMap<RuntimeConfigState, number>();
 const connectionEpochsByState = new WeakMap<object, number>();

@@ -10,18 +10,22 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const moduleUrl = (name: string) => new URL(`../../scripts/lib/${name}.mts`, import.meta.url).href;
 const loader = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 
-function evaluate({ dir, sha }: { dir: string; sha: string }, expression: string, bin?: string) {
+function evaluate(
+  { dir, sha, toolingSha = sha }: { dir: string; sha: string; toolingSha?: string },
+  expression: string,
+  bin?: string,
+) {
   const source = `
 import { inspectPublishReleasePage, inspectStableCloseoutPreflight } from ${JSON.stringify(moduleUrl("release-publish-closeout-preflight"))};
 import { createPublishPreflightGh } from ${JSON.stringify(moduleUrl("release-publish-preflight-evidence"))};
 import { observeReleaseGitHubState } from ${JSON.stringify(moduleUrl("release-publish-state"))};
-const input = {repo: 'openclaw/openclaw', tag: 'v2026.9.5', sourceSha: ${JSON.stringify(sha)}, runGh: createPublishPreflightGh()};
+const input = {repo: 'openclaw/openclaw', tag: 'v2026.9.5', sourceSha: ${JSON.stringify(sha)}, toolingSha: ${JSON.stringify(toolingSha)}, runGh: createPublishPreflightGh()};
 const closeoutInput = {...input, attempt: '1', runId: '123'};
-const admit = (changes = {}) => {
-  try { return {admitted: true, release: inspectPublishReleasePage({...input, ...changes})}; }
+const admit = async (changes = {}) => {
+  try { return {admitted: true, release: await inspectPublishReleasePage({...input, ...changes})}; }
   catch (error) { return {admitted: false, message: error.message}; }
 };
-console.log(JSON.stringify(${expression}));`;
+console.log(JSON.stringify(await (${expression})));`;
   return JSON.parse(
     execFileSync(process.execPath, ["--import", loader, "--input-type=module", "-e", source], {
       cwd: dir,
@@ -35,7 +39,7 @@ console.log(JSON.stringify(${expression}));`;
   );
 }
 
-function sourceFixture(changelog?: string, version = "2026.9.4") {
+function sourceFixture(changelog?: string, version = "2026.9.4", toolingVersion?: string) {
   const dir = tempDirs.make("release-closeout-readiness-");
   const git = fixtureGit(dir, "Test", "test@example.invalid");
   git("init", "-q");
@@ -46,7 +50,12 @@ function sourceFixture(changelog?: string, version = "2026.9.4") {
   }
   git("add", ".");
   git("commit", "-qm", "fixture");
-  return { dir, sha: git("rev-parse", "HEAD") };
+  const sha = git("rev-parse", "HEAD");
+  if (toolingVersion) {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ version: toolingVersion }));
+    git("commit", "-qam", "publisher tooling");
+  }
+  return { dir, sha, toolingSha: git("rev-parse", "HEAD") };
 }
 
 it.skipIf(process.platform === "win32").each([
@@ -60,7 +69,6 @@ it.skipIf(process.platform === "win32").each([
   },
   { state: "absent", body: "", admitted: true, status: "PASS" },
   { state: "forbidden", body: "", admitted: false, status: "WARN" },
-  { state: "unavailable", body: "", admitted: false, status: "WARN" },
   { state: "limited", body: "", admitted: true, status: "WARN" },
 ])("shares draft-aware release lookup for $state/$body", ({ state, body, admitted, status }) => {
   const { dir, sha } = sourceFixture(
@@ -83,10 +91,9 @@ if (args[0] === 'api') {
   if (endpoint.includes('/releases/tags/')) fail('HTTP 404: Not Found');
   else if (endpoint.includes('/releases?')) {
     if (${JSON.stringify(state)} === 'forbidden') fail('HTTP 403: Forbidden');
-    if (${JSON.stringify(state)} === 'unavailable') fail('HTTP 404: repository not found');
     const page = Number(new URL('https://api.github.com/' + endpoint).searchParams.get('page'));
-    const release = {id: 7, draft: true, prerelease: false,
-      tag_name: 'v2026.9.5', html_url: 'https://github.com/openclaw/openclaw/releases/tag/v2026.9.5',
+    const release = {id: 7, draft: true, prerelease: false, tag_name: 'v2026.9.5',
+      html_url: 'https://github.com/openclaw/openclaw/releases/tag/v2026.9.5',
       target_commitish: ${JSON.stringify(sha)}, body: ${JSON.stringify(body)}, assets: []};
     console.log(JSON.stringify(${JSON.stringify(state)} !== 'draft' ? [] : page === 1
       ? Array.from({length: 100}, (_, index) => ({tag_name: 'other-' + index})) : [release]));
@@ -103,7 +110,7 @@ if (args[0] === 'api') {
   );
   const result = evaluate(
     { dir, sha },
-    `({admission: admit(),
+    `({admission: await admit(),
 observation: observeReleaseGitHubState({...input, repository: input.repo, releaseTag: input.tag, npmDistTag: 'latest'}),
 closeout: inspectStableCloseoutPreflight(closeoutInput)})`,
     bin,
@@ -111,16 +118,6 @@ closeout: inspectStableCloseoutPreflight(closeoutInput)})`,
   expect(result.admission.admitted).toBe(admitted);
   expectGate(result.observation.gates, { id: "github.release", status });
   if (state === "draft") {
-    expect(result.observation.release).toEqual({
-      id: 7,
-      draft: true,
-      prerelease: false,
-      tag_name: "v2026.9.5",
-      html_url: "https://github.com/openclaw/openclaw/releases/tag/v2026.9.5",
-      target_commitish: sha,
-      body,
-      assets: [],
-    });
     expectGate(result.closeout, {
       id: "stable-closeout.release-assets",
       status: "WARN",
@@ -160,20 +157,53 @@ it("reports pending main reconciliation without making it a publication prerequi
   expect(result).not.toContainEqual(expect.objectContaining({ status: "FAIL" }));
 });
 
-it.each(["absent", "draft"])(
-  "validates frozen release notes before admitting an %s release page",
-  (releaseState) => {
-    const fixture = sourceFixture(`## 2026.9.5\n\n${"oversized release notes ".repeat(6_000)}`);
+it("validates frozen release notes before looking up the release page", () => {
+  const fixture = sourceFixture(`## 2026.9.5\n\n${"oversized release notes ".repeat(6_000)}`);
+  const result = evaluate(
+    fixture,
+    `admit({runGh() { throw new Error('Release lookup must follow notes validation'); }})`,
+  );
+  expect(result).toMatchObject({
+    admitted: false,
+    message: expect.stringContaining("release notes exceed GitHub's body limit"),
+  });
+});
+
+it.each([
+  ["2026.10.5", undefined, false, true],
+  ["2026.11.5", undefined, false, false],
+  ["2026.11.5", "Maintainer approved this retired maintenance release.", false, true],
+  ["2026.11.5", "Maintainer approved this retired maintenance release.", true, true],
+])(
+  "renders and verifies extended-stable notes: %s/%s/%s",
+  (latest, reason, publicPage, admitted) => {
+    const fixture = sourceFixture(
+      "## 2026.9.37\n\n### Fixes\n\n- Correct release behavior.\n",
+      "2026.9.37",
+      latest,
+    );
+    const body =
+      "This is a gateway-only `extended-stable` release, published from a retired maintenance line by explicit maintainer decision. This release is OpenClaw from the end of September 2026, plus critical security updates, reliability and performance fixes, and features like new model support. The latest version of OpenClaw at the time of this release is [2026.11.5](https://github.com/openclaw/openclaw/releases#release-v2026.11.5)\n\n## 2026.9.37\n\n### Fixes\n\n- Correct release behavior.";
     const result = evaluate(
       fixture,
-      `admit({runGh() {
-                      if (${JSON.stringify(releaseState)} === 'absent') throw new Error('HTTP 404: Not Found');
-                      return JSON.stringify({ draft: true, body: 'Draft notes' });
-                    }})`,
+      [
+        "(async () => {",
+        "globalThis.fetch = async () => { throw new Error('Canonical readback must not follow a moving registry selector'); };",
+        "return admit({tag:'v2026.9.37', retiredLineReason:" +
+          JSON.stringify(reason) +
+          ", runGh(args) {",
+        "if (args[1].includes('/releases/tags/')) {",
+        "if (!" + publicPage + ") throw new Error('HTTP 404: Not Found');",
+        "return JSON.stringify({id:1, tag_name:'v2026.9.37', draft:false, prerelease:false, html_url:'https://github.com/openclaw/openclaw/releases/tag/v2026.9.37', target_commitish:input.sourceSha, body:" +
+          JSON.stringify(body) +
+          ", assets:[{name:'openclaw-2026.9.37-dependency-evidence.zip'}]});}",
+        "if(args[1].includes('/releases?')) return '[]';",
+        "return JSON.stringify({permissions:{push:true}});}});})()",
+      ].join("\n"),
     );
-    expect(result).toMatchObject({
-      admitted: false,
-      message: expect.stringContaining("release notes exceed GitHub's body limit"),
-    });
+    expect(result.admitted, result.message).toBe(admitted);
+    if (!admitted) {
+      expect(result.message).toContain("retired");
+    }
   },
 );

@@ -66,10 +66,10 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat/main/close-${closed}`);
         const paneA = page
           .locator("openclaw-chat-page openclaw-chat-pane")
-          .filter({ hasText: `Conversation Research ${surviving}` });
+          .filter({ has: page.locator(`.chat-pane__header[aria-label="Research ${surviving}"]`) });
         const paneB = page
           .locator("openclaw-chat-page openclaw-chat-pane")
-          .filter({ hasText: `Conversation Research ${closed}` });
+          .filter({ has: page.locator(`.chat-pane__header[aria-label="Research ${closed}"]`) });
         const composerA = paneA.locator(".agent-chat__composer-combobox textarea");
         const composerB = paneB.locator(".agent-chat__composer-combobox textarea");
         if (editable && composerVisible) {
@@ -127,14 +127,16 @@ suite.define(() => {
           ),
         );
         const accessibilityAfterClose = await page.locator(":focus").ariaSnapshot();
-        const draftAfterClose = await composerA.inputValue();
+        const draftAfterClose = composerVisible ? await composerA.inputValue() : "";
         if (editable && composerVisible) {
           await page.keyboard.type(" continuation");
         }
         expect.soft(draftAfterClose).toBe(editable && composerVisible ? "Draft A" : "");
-        expect
-          .soft(await composerA.inputValue())
-          .toBe(editable && composerVisible ? "Draft A continuation" : "");
+        if (composerVisible) {
+          expect.soft(await composerA.inputValue()).toBe(editable ? "Draft A continuation" : "");
+        } else {
+          expect.soft(await composerA.count()).toBe(0);
+        }
         expect
           .soft(editable ? await homeComposer.inputValue() : null)
           .toBe(editable ? "Home draft" : null);

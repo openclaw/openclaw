@@ -198,11 +198,7 @@ describe("Slack huddle browser adapter", () => {
         reason: "slack-admission-required",
       });
       document.body.children.splice(0);
-      document.body.append(
-        qaNode("huddle_toolbar__leave_button", "Leave Huddle"),
-        microphone(false),
-        channelHeader(true),
-      );
+      document.body.append(...inCall().document.body.children);
       browser.location.href = CLIENT_URL;
       expect(await browser.status()).toMatchObject({ inCall: true, micMuted: true });
     }

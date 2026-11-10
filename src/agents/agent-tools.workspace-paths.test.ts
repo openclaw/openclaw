@@ -54,12 +54,17 @@ const write = (tool: AnyAgentTool, filePath: string, content: string) =>
   tool.execute("write", { path: filePath, content });
 const edit = (tool: AnyAgentTool, filePath: string, oldText: string, newText: string) =>
   tool.execute("edit", { path: filePath, edits: [{ oldText, newText }] });
+const rejectRead = (tool: AnyAgentTool, filePath: string, error = /Path escapes sandbox root/i) =>
+  expect(tool.execute("read", { path: filePath })).rejects.toThrow(error);
+async function putFile(filePath: string, content: string) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, content);
+}
 
 async function skillWorkspace() {
   const skillDir = path.join(rootDir, "global-skills/demo");
   const skillFile = path.join(skillDir, "SKILL.md");
-  await fs.mkdir(skillDir, { recursive: true });
-  await fs.writeFile(skillFile, "# Demo skill\noriginal skill\n");
+  await putFile(skillFile, "# Demo skill\noriginal skill\n");
   const tools = workspaceTools(workspaceDir, {
     skillsSnapshot: {
       prompt: "",
@@ -122,9 +127,7 @@ it("rejects @-prefixed absolute paths outside workspace when workspaceOnly is en
   const { readTool } = workspaceTools(workspaceDir);
 
   const outsideAbsolute = path.resolve(path.parse(workspaceDir).root, "outside-openclaw.txt");
-  await expect(
-    readTool.execute("ws-read-at-prefix", { path: `@${outsideAbsolute}` }),
-  ).rejects.toThrow(/Path escapes sandbox root/i);
+  await rejectRead(readTool, `@${outsideAbsolute}`);
 });
 
 it("guards decoded file URLs while forwarding the original URL", async () => {
@@ -143,9 +146,7 @@ it("guards decoded file URLs while forwarding the original URL", async () => {
 
   expect(await readText(read, "inside-url", insideUrl)).toContain("URL_INSIDE_MARKER");
   expect(execute).toHaveBeenCalledWith("inside-url", { path: insideUrl }, undefined, undefined);
-  await expect(read.execute("outside-url", { path: pathToFileURL(outside).href })).rejects.toThrow(
-    /Path escapes sandbox root/i,
-  );
+  await rejectRead(read, pathToFileURL(outside).href);
   expect(execute).toHaveBeenCalledTimes(1);
   await expectFile(inside, "URL_INSIDE_MARKER");
   await expectFile(outside, "URL_OUTSIDE_MARKER");
@@ -156,9 +157,7 @@ it.runIf(process.platform !== "win32")("rejects hardlinked file aliases", async 
   await fs.writeFile(outside, "top-secret");
   await fs.link(outside, path.join(workspaceDir, "linked.txt"));
   const { readTool, writeTool } = workspaceTools(workspaceDir);
-  await expect(readTool.execute("read", { path: "linked.txt" })).rejects.toThrow(
-    /hardlink|sandbox/i,
-  );
+  await rejectRead(readTool, "linked.txt", /hardlink|sandbox/i);
   await expect(write(writeTool, "linked.txt", "pwned")).rejects.toThrow(/hardlink|sandbox/i);
   await expectFile(outside, "top-secret");
 });
@@ -208,19 +207,14 @@ it("allows workspaceOnly reads for resolved skill roots without allowing other f
   const guideFile = path.join(skillDir, "guide.md");
   const siblingFile = path.join(rootDir, "global-skills/other/SKILL.md");
   const outsideFile = path.join(rootDir, "outside.txt");
-  await fs.mkdir(path.dirname(siblingFile));
   await fs.writeFile(guideFile, "skill guide");
-  await fs.writeFile(siblingFile, "sibling skill");
+  await putFile(siblingFile, "sibling skill");
   await fs.writeFile(outsideFile, "outside secret");
 
   expect(await readText(readTool, "read-skill", skillFile)).toContain("original skill");
   expect(await readText(readTool, "read-skill-guide", guideFile)).toContain("skill guide");
-  await expect(readTool.execute("read-sibling", { path: siblingFile })).rejects.toThrow(
-    /Path escapes sandbox root/i,
-  );
-  await expect(readTool.execute("read-outside", { path: outsideFile })).rejects.toThrow(
-    /Path escapes sandbox root/i,
-  );
+  await rejectRead(readTool, siblingFile);
+  await rejectRead(readTool, outsideFile);
   await expect(write(writeTool, skillFile, "overwritten")).rejects.toThrow(
     /Path escapes sandbox root|outside-workspace/i,
   );
@@ -240,9 +234,7 @@ it("rejects symlink escapes inside resolved skill roots", async () => {
   await fs.writeFile(outsideFile, "outside secret");
   await fs.symlink(outsideFile, linkPath);
 
-  await expect(readTool.execute("read-skill-symlink", { path: linkPath })).rejects.toThrow(
-    /symlink|sandbox|outside|escape/i,
-  );
+  await rejectRead(readTool, linkPath, /symlink|sandbox|outside|escape/i);
 });
 it("guards file URLs before registered legacy bridge reads", async () => {
   await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
@@ -266,9 +258,7 @@ it("guards file URLs before registered legacy bridge reads", async () => {
     const statsBefore = stat.mock.calls.length;
     expect(readsBefore).toBeGreaterThan(0);
     expect(statsBefore).toBeGreaterThan(0);
-    await expect(
-      readTool.execute("legacy-outside-url", { path: pathToFileURL(outside).href }),
-    ).rejects.toThrow(/Path escapes sandbox root/i);
+    await rejectRead(readTool, pathToFileURL(outside).href);
     expect(readFile).toHaveBeenCalledTimes(readsBefore);
     expect(stat).toHaveBeenCalledTimes(statsBefore);
     await expectFile(inside, "LEGACY_URL_INSIDE_MARKER");
@@ -309,10 +299,7 @@ it("defaults to allowing sandbox mounts outside the workspace root", async () =>
   await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
     await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh");
     const { readTool, writeTool } = expectReadWriteTools(
-      createOpenClawCodingTools({
-        workspaceDir: sandbox.workspaceDir,
-        sandbox,
-      }),
+      createOpenClawCodingTools({ workspaceDir: sandbox.workspaceDir, sandbox }),
     );
     expect(await readText(readTool, "read", "/agent/secret.txt")).toContain("shh");
     await write(writeTool, "/agent/owned.txt", "x");
@@ -327,11 +314,8 @@ it("allows read-only materialized sandbox skills for sandbox reads only", async 
       const skillPath = ".openclaw/sandbox-skills/skills/demo/SKILL.md";
       const skillFile = path.join(skillsWorkspaceDir!, "skills/demo/SKILL.md");
       const shadowFile = path.join(sandbox.workspaceDir, skillPath);
-      for (const file of [skillFile, shadowFile]) {
-        await fs.mkdir(path.dirname(file), { recursive: true });
-      }
-      await fs.writeFile(skillFile, "# Demo\nmaterialized\n");
-      await fs.writeFile(shadowFile, "# Demo\nuser-owned shadow\n");
+      await putFile(skillFile, "# Demo\nmaterialized\n");
+      await putFile(shadowFile, "# Demo\nuser-owned shadow\n");
 
       const { readTool } = workspaceTools(sandbox.workspaceDir, { sandbox });
       for (const filePath of [

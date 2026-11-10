@@ -18,58 +18,79 @@ openclaw-appearance-background {
 }
 
 .settings-background-artwork {
-  display: grid;
-  gap: var(--space-2);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
   width: 100%;
   min-width: 0;
+  /* Clears the selection ring from the description above. */
+  padding-block-start: var(--space-1);
 }
 
+/* Same tile as the theme picker: the sample is the control, the label sits under it,
+   and selection is a ring and check in the theme's strongest text color. */
 .settings-background-options {
+  --settings-background-tile: calc(96px * var(--control-ui-text-scale));
+
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-2);
-  width: 100%;
+  flex: 0 1 auto;
+  grid-template-columns: repeat(3, var(--settings-background-tile));
+  gap: var(--space-3);
+  min-width: 0;
 }
 
 .settings-background-option {
-  display: flex;
-  align-items: center;
-  min-width: 0;
+  display: grid;
   gap: var(--space-2);
-  padding: var(--space-2);
-  overflow: hidden;
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--border);
+  min-width: 0;
+  padding: 0;
+  border: none;
   border-radius: var(--radius-lg);
+  background: none;
+  color: var(--muted-strong);
   text-align: start;
   cursor: var(--cursor-action);
 }
 
-.settings-background-option[aria-pressed="true"] {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-
 .settings-background-option:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .settings-background-option:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: var(--space-1);
+  outline: none;
 }
 
 .settings-background-option__sample {
+  position: relative;
   display: grid;
   place-items: center;
-  flex: none;
-  width: 36px;
-  height: 36px;
+  height: calc(56px * var(--control-ui-text-scale));
   overflow: hidden;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   color: var(--muted);
   background: var(--bg-content, var(--bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+.settings-background-option:hover:not(:disabled) .settings-background-option__sample {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 40%, transparent);
+}
+
+.settings-background-option[aria-pressed="true"] .settings-background-option__sample,
+.settings-background-option[aria-pressed="true"]:hover:not(:disabled)
+  .settings-background-option__sample {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--text-strong);
+}
+
+.settings-background-option:focus-visible .settings-background-option__sample {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--ring);
 }
 
 .settings-background-option--theme .settings-background-option__sample {
@@ -79,70 +100,82 @@ openclaw-appearance-background {
 }
 
 .settings-background-option__sample img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.settings-background-option__sample svg {
-  width: 24px;
-  height: 24px;
+.settings-background-option__sample > .icon,
+.settings-background-option__sample > svg,
+.settings-background-option__sample > span:not(.settings-background-option__check) svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-background-option__check {
+  position: absolute;
+  inset-block-start: 6px;
+  inset-inline-end: 6px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--text-strong);
+  color: var(--bg);
+}
+
+.settings-background-option__check svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3px;
 }
 
 .settings-background-option__label {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  justify-content: space-between;
-  gap: var(--space-1);
-  min-width: 0;
-  padding: 0;
+  overflow: hidden;
   font-size: var(--control-ui-text-sm);
   font-weight: 500;
-  overflow-wrap: anywhere;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.settings-background-option__label svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  color: var(--accent);
-}
-
-.settings-background-actions,
-.settings-background-visibility {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+.settings-background-option[aria-pressed="true"] .settings-background-option__label {
+  color: var(--text-strong);
 }
 
 .settings-background-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-}
-
-.settings-background-formats {
-  margin-inline-end: auto;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  /* Sits level with the samples, not their labels. */
+  margin-block-end: calc(var(--control-ui-text-sm) * 1.35 + var(--space-2));
 }
 
 @media (max-width: 640px) {
-  .settings-background-option {
+  .settings-background-artwork {
     flex-direction: column;
+    align-items: stretch;
   }
 
-  .settings-background-option__label {
-    justify-content: center;
+  .settings-background-options {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .settings-background-formats {
-    flex-basis: 100%;
+  .settings-background-actions {
+    justify-content: flex-start;
+    margin-block-end: 0;
   }
 }
 
 .settings-background-visibility {
-  flex-wrap: nowrap;
+  display: flex;
+  align-items: center;
   width: 100%;
   gap: var(--space-2);
   color: var(--muted);
@@ -150,10 +183,81 @@ openclaw-appearance-background {
 }
 
 .settings-background-visibility input {
+  --settings-range-direction: to right;
+
   width: clamp(120px, 20vw, 224px);
   flex: 1;
+  height: 16px;
   min-width: 0;
-  accent-color: var(--accent);
+  margin: 0;
+  appearance: none;
+  background: none;
+  cursor: var(--cursor-action);
+}
+
+.settings-background-visibility input:dir(rtl) {
+  --settings-range-direction: to left;
+}
+
+.settings-background-visibility input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-background-visibility input::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    var(--settings-range-direction),
+    var(--accent) var(--settings-range-fill),
+    var(--border-strong) var(--settings-range-fill)
+  );
+}
+
+.settings-background-visibility input::-moz-range-track {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+}
+
+.settings-background-visibility input::-moz-range-progress {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.settings-background-visibility input::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border: none;
+  border-radius: var(--radius-full);
+  appearance: none;
+  background: var(--text-strong);
+}
+
+.settings-background-visibility input::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--text-strong);
+}
+
+.settings-background-visibility input:focus-visible {
+  outline: none;
+}
+
+.settings-background-visibility input:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--ring);
+}
+
+.settings-background-visibility input:focus-visible::-moz-range-thumb {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--ring);
 }
 
 .settings-background-visibility__value {
@@ -161,6 +265,23 @@ openclaw-appearance-background {
   color: var(--text);
   text-align: end;
   font-variant-numeric: tabular-nums;
+}
+
+/* The note's longest state and the status line keep their room, so switching
+   artwork or saving never moves the sections below. */
+.settings-background-note {
+  min-height: calc(2 * 1.5em);
+}
+
+.settings-background-status {
+  min-height: calc(var(--control-ui-text-sm) * 1.5);
+  margin-top: calc(-1 * var(--space-2));
+}
+
+@media (max-width: 640px) {
+  .settings-background-note {
+    min-height: calc(3 * 1.5em);
+  }
 }
 
 /* The preview stays in its local DOM and paints within the measured Settings
@@ -268,16 +389,17 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 /* The page headline adopts the column of the page below it; without this the
    shell caps headers at 1120px while narrow pages use a 760px column, leaving
-   the title floating left of the content. */
-.shell--settings .content.content--settings-page .content-header,
-.content.content--settings-page .content-header--settings {
+   the title floating left of the content. A header nested in that column
+   belongs to its panel and is already inset. */
+.shell--settings .content.content--settings-page .content-header:where(:not(.settings-page *)),
+.content.content--settings-page .content-header--settings:where(:not(.settings-page *)) {
   max-width: 760px;
   margin-inline: auto;
   padding-inline: var(--space-4);
 }
 
-.shell--settings .content.content--settings-wide .content-header,
-.content.content--settings-wide .content-header--settings {
+.shell--settings .content.content--settings-wide .content-header:where(:not(.settings-page *)),
+.content.content--settings-wide .content-header--settings:where(:not(.settings-page *)) {
   max-width: 1120px;
 }
 
@@ -327,9 +449,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .settings-typography-preview {
   width: 100%;
-  padding: var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
 }
 
 .settings-typography-preview__caption {
@@ -338,9 +457,17 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 .settings-typography-preview__prose {
-  margin: var(--space-3) 0;
+  /* Room for the widest face, so changing a font never moves the page. */
+  min-height: calc(2 * 1.65em);
+  margin: var(--space-2) 0;
   /* Chat transcript line-height, so the sample reads like real messages. */
   font: 400 var(--chat-text-size) / 1.65 var(--font-chat);
+}
+
+@media (max-width: 768px) {
+  .settings-typography-preview__prose {
+    min-height: calc(4 * 1.65em);
+  }
 }
 
 .settings-typography-preview__code {
@@ -384,7 +511,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
    full-size controls that require top alignment. */
 @media not all and (max-width: 640px) {
   .settings-section__header:not(:has(.settings-section__desc)):has(
-      .settings-section__actions .btn--xs.btn--icon
+      .settings-section__actions :is(.btn--xs.btn--icon, .refresh-button)
     ) {
     align-items: center;
   }
@@ -392,6 +519,15 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .settings-section__header:has(.settings-section__copy):has(.settings-section__actions) {
   column-gap: var(--space-5);
+}
+
+.settings-section__header[hidden] {
+  display: none;
+}
+
+/* With no heading or description to sit beside, the help keeps the heading's place at the end. */
+.settings-section__header:not(:has(.settings-section__heading, .settings-section__copy)) {
+  justify-content: flex-end;
 }
 
 .settings-section__heading {
@@ -448,12 +584,12 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-section__help-button > span,
 .settings-section__help-button svg {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
 }
 
 .settings-section__help-button svg {
-  stroke-width: 1.75;
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-section__help-button:hover,
@@ -478,56 +614,141 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--muted-strong);
 }
 
+.settings-section__help-panel strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
 .settings-section__help-panel a {
   width: fit-content;
   font-weight: 600;
 }
 
+/* Schema help runs to several sentences; it reads as a note, not a caption. */
+.config-field-help__popover {
+  --oc-overlay-max-width: 360px;
+
+  overflow-wrap: anywhere;
+}
+
+/* A phone gives the help the screen's width, whatever the row's "?" offset. Like everywhere,
+   it opens above the row so the setting's own text and control stay in view. */
+@media (max-width: 640px) {
+  .oc-overlay[data-placement].config-field-help__popover {
+    --oc-overlay-max-width: calc(100dvw - 32px);
+
+    width: var(--oc-overlay-max-width);
+    justify-self: center;
+    position-area: top span-all;
+    position-try-fallbacks: flip-block;
+  }
+}
+
+/* The row's own font and color stop at the help surface. */
+.config-field__raw-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.config-field__raw-link:hover {
+  color: var(--muted-strong);
+}
+
+.config-field-help {
+  display: inline-flex;
+  margin-inline-start: 6px;
+  vertical-align: -2px;
+  font-weight: 400;
+}
+
+/* The "?" stays beside the label's text when the text wraps, never alone on a line of its own. */
+.settings-row__title:has(> .config-field-help) {
+  display: flex;
+  align-items: baseline;
+
+  > .config-field-help {
+    flex: none;
+    position: relative;
+    top: 2px;
+  }
+
+  > .settings-row__desc {
+    flex: none;
+    white-space: pre;
+  }
+}
+
+.config-field-help .settings-section__help-button {
+  width: 14px;
+  height: 14px;
+}
+
+.config-field__summary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+@media (max-width: 640px) {
+  .config-field__summary {
+    -webkit-line-clamp: 2;
+  }
+}
+
 .settings-group {
+  --btn-bg: var(--surface-hover);
+  --btn-bg-hover: var(--surface-selected);
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
-  border-radius: var(--radius-lg);
+  border-radius: var(--composer-radius);
   overflow: hidden;
   min-width: 0;
 }
 
-.settings-group--danger {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
+.settings-group:empty {
+  display: none;
 }
 
-/* Lives here rather than config.css because every schema-driven surface
- * (config pages and the channel detail forms) renders the same split. */
-
-.config-advanced-disclosure {
-  margin-top: var(--space-5);
+.settings-disclosure__sections {
+  margin-top: var(--space-8);
 }
 
-.config-tier-groups > .config-advanced-disclosure:first-child {
-  margin-top: 0;
+/* A row's own details chevron: the quiet disclosure's glyph, as a button after the row's action. */
+.settings-details-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
 }
 
-.config-advanced-disclosure__summary {
-  cursor: var(--cursor-action);
+/* At the row's end, the glyph lines up with the other rows' chevrons, also when the control
+   wraps under the title on phones. The tooltip host is display: contents. */
+.settings-row__control > openclaw-tooltip:last-child > .settings-details-toggle {
+  margin-inline: auto -6px;
 }
 
-.config-advanced-disclosure > .settings-group {
-  margin-top: var(--space-3);
+.settings-disclosure__summary {
+  list-style: none;
+}
+
+.settings-disclosure__summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-disclosure[open] > .settings-disclosure__summary .settings-disclosure__chevron {
+  transform: rotate(90deg);
 }
 
 .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  min-height: 48px;
-}
-
-.settings-row-mount + .settings-row-mount > .settings-row,
-.settings-row + .settings-row,
-.settings-row + .settings-subrows,
-.settings-subrows + .settings-row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  gap: var(--space-3);
+  padding: var(--list-row-padding);
+  min-height: var(--list-row-min-height);
 }
 
 .settings-row--nested {
@@ -545,7 +766,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .settings-row__title {
   font-size: var(--control-ui-text-md);
-  font-weight: 500;
+  font-weight: var(--list-row-title-weight);
   color: var(--text-strong);
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -556,6 +777,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--muted);
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.settings-row__control > .settings-row__desc[aria-hidden="true"] {
+  overflow-wrap: normal;
 }
 
 .settings-row__control {
@@ -603,7 +828,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
   justify-content: flex-start;
 }
 
-@media (min-width: 769px) {
+@media not all and (max-width: 640px) {
   .settings-row--stacked-on-narrow,
   .settings-row--stacked-on-narrow .settings-row__control {
     width: auto;
@@ -621,19 +846,21 @@ openclaw-appearance-background .settings-background-preview .session-background_
   }
 }
 
-.settings-tab-icon .settings-segmented > .settings-segmented__btn {
-  padding-inline: var(--space-2);
-}
-
-.settings-tab-icon__option,
 .settings-permission-control .settings-status > span {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
 }
 
-.settings-tab-icon__lobsters,
-.settings-tab-icon__shapes {
+/* The selection name and its note wrap to two lines on a phone: keep the room
+   so picking a longer name never moves the sections below. */
+@media (max-width: 768px) {
+  .settings-tab-icon .settings-row__desc {
+    min-height: calc(2 * 1.45em);
+  }
+}
+
+.settings-tab-icon__picks {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
@@ -642,23 +869,31 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-tab-icon__pick {
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
-  padding: 4px;
-  border: 1px solid var(--border);
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
   border-radius: var(--radius-md);
   background: var(--bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
+  transition: box-shadow var(--duration-fast) ease;
 }
 
-.settings-tab-icon__pick:hover,
+.settings-tab-icon__pick:hover {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 40%, transparent);
+}
+
 .settings-tab-icon__pick[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--text-strong);
 }
 
 .settings-tab-icon__pick:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--ring);
 }
 
 .settings-tab-icon .settings-tab-icon__lobster {
@@ -666,8 +901,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
   position: relative;
   left: auto;
   bottom: auto;
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
   transform: none;
   pointer-events: none;
 }
@@ -676,11 +911,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-tab-icon__lobster * {
   animation: none !important;
   transition: none !important;
-}
-
-.settings-tab-icon__preview .settings-tab-icon__lobster {
-  width: 16px;
-  height: 16px;
 }
 
 .settings-tab-icon__preview,
@@ -709,9 +939,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 .settings-tab-icon__pick .settings-tab-icon__preview,
-.settings-tab-icon__pick .settings-tab-icon__preview img {
-  width: 30px;
-  height: 30px;
+.settings-tab-icon__pick .settings-tab-icon__preview img,
+.settings-tab-icon__pick > img {
+  width: 24px;
+  height: 24px;
 }
 
 /* Trailing action rows hold only a button cluster: give it the full row
@@ -739,14 +970,42 @@ openclaw-appearance-background .settings-background-preview .session-background_
   transition: background var(--duration-fast) var(--ease-out);
 }
 
+/* A disclosure that opens whole sections is its own one-row group. */
+.settings-row--nav.settings-group {
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  background: var(--card);
+}
+
 .settings-row--nav:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 /* Fully-inset ring: the group clips overflow, so an outer ring would vanish. */
 .settings-row--nav:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ring) 80%, transparent);
+}
+
+/* The group clips row fills, but a focus ring is a line: flush rows round it to
+   the group's inner corner so it doesn't break at the curve. */
+.settings-group > .settings-row--nav:first-child:focus-visible,
+.settings-group
+  > .provider-list
+  > .provider-row:first-child
+  > .provider-row__summary:focus-visible {
+  border-start-start-radius: calc(var(--composer-radius) - 1px);
+  border-start-end-radius: calc(var(--composer-radius) - 1px);
+  corner-shape: superellipse(1.5);
+}
+
+.settings-group > .settings-row--nav:last-child:focus-visible,
+.settings-group
+  > .provider-list
+  > .provider-row:last-child:not(.provider-row--open)
+  > .provider-row__summary:focus-visible {
+  border-end-start-radius: calc(var(--composer-radius) - 1px);
+  border-end-end-radius: calc(var(--composer-radius) - 1px);
+  corner-shape: superellipse(1.5);
 }
 
 .settings-row__chevron {
@@ -757,14 +1016,15 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex: 0 0 auto;
 }
 
-.settings-row__chevron svg {
-  width: 14px;
-  height: 14px;
+.settings-row__chevron svg,
+.settings-row__chevron .session-css-icon {
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
   /* Icons rely on currentColor; without this the SVG falls back to black fill
      and disappears in dark mode. */
   stroke: currentColor;
   fill: none;
-  stroke-width: 2px;
+  stroke-width: var(--list-row-icon-stroke);
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -773,19 +1033,46 @@ openclaw-appearance-background .settings-background-preview .session-background_
   transform: rotate(90deg);
 }
 
-.settings-subrows .settings-row {
+/* Status and a short note read together under a row's title. */
+.settings-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-3);
+}
+
+/* These rows keep their control at the row's end on phones. */
+@media (max-width: 640px) {
+  :is(.shell--settings, .shell--embed-settings)
+    .settings-row:has(> .settings-row__text .settings-row__meta) {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      width: auto;
+      max-width: 50%;
+      justify-content: flex-end;
+    }
+  }
+}
+
+.settings-subrows:where(:not(.cfg-subrows)) .settings-row {
   padding-left: var(--space-7);
 }
 
-.settings-subrows .settings-row + .settings-row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+/* Generated nesting indents per level, and only from the start edge, so controls keep
+   their column at every depth. */
+.cfg-subrows {
+  padding-inline-start: var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .cfg-subrows {
+    padding-inline-start: var(--space-3);
+  }
 }
 
 .settings-toggle {
-  display: inline-flex;
-  align-items: center;
   gap: var(--space-2);
-  cursor: var(--cursor-action);
 }
 
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
@@ -796,11 +1083,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 /* Permission can replace System default with long hardware labels; keep the
    paired media pickers aligned instead of letting native intrinsic width win. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select--media-device {
-  width: 340px;
-}
-
-.settings-row__control input.settings-input:not(.picker-select__search) {
-  text-align: right;
+  width: 220px;
 }
 
 /* Lone value inputs share one width so stacked rows in a group read as a
@@ -812,6 +1095,68 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input-with-hint {
   width: 340px;
+}
+
+/* Generated settings line up down a group: every field control fills one column at
+   the row's end, so text, selects and segmented options share both edges. */
+@media not all and (max-width: 640px) {
+  .settings-row--field:not(.settings-row--stacked) {
+    --settings-field-width: 280px;
+
+    > .settings-row__control {
+      flex: 0 0 var(--settings-field-width);
+      max-width: none;
+
+      > :is(.settings-input, .settings-select, .settings-secret, .settings-phone-presentation) {
+        width: 100%;
+        min-width: 0;
+      }
+
+      > .settings-segmented {
+        display: flex;
+        flex: 1 1 auto;
+        flex-wrap: nowrap;
+        min-width: 0;
+      }
+
+      > .settings-segmented > .settings-segmented__btn {
+        flex: 1 1 0;
+        min-width: 0;
+        padding-inline: var(--space-2);
+      }
+    }
+  }
+}
+
+/* A stepper is short at any width, so it stays beside its label on phones too. */
+/* Short values line up with the selects in the same column. */
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > [data-settings-chat-message-width],
+.settings-row:not(.settings-row--stacked) .settings-row__control > [data-settings-terminal-font] {
+  width: 220px;
+  text-align: start;
+}
+
+/* Reset belongs to the status it clears; it never pushes the select aside. */
+.settings-follow-up-status {
+  display: block;
+  min-height: calc(2 * 1.45em);
+}
+
+.settings-row__desc-action {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: var(--cursor-action);
+}
+
+.settings-row__desc-action:hover {
+  color: var(--text-strong);
 }
 
 .settings-phone-presentation,
@@ -862,6 +1207,98 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex: 1 1 auto;
 }
 
+/* A secret that holds its edit: the field, then Save and Cancel beside it. Together they keep the
+   lone-input width, so a held edit narrows the field instead of moving the row or its neighbours. */
+.cfg-secret {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cfg-secret > .settings-secret {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.settings-row:not(.settings-row--stacked) .settings-row__control > .cfg-secret {
+  width: 340px;
+}
+
+.settings-row--stacked .settings-row__control > .cfg-secret {
+  flex: 1 1 auto;
+}
+
+.cfg-secret--multiline {
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+}
+
+.cfg-secret--multiline > .settings-secret {
+  flex: none;
+  width: 100%;
+}
+
+.cfg-secret--multiline > .cfg-secret-actions {
+  align-self: flex-end;
+}
+
+/* Saving and Saved keep the buttons' footprint, so the field changes width only when the edit
+   starts and when it ends. */
+.cfg-secret-actions {
+  display: grid;
+  flex: none;
+}
+
+.cfg-secret-actions > * {
+  grid-area: 1 / 1;
+}
+
+.cfg-secret-actions__buttons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.cfg-secret-actions[data-saved] > .cfg-secret-actions__buttons {
+  visibility: hidden;
+}
+
+.cfg-secret-actions .btn {
+  display: inline-grid;
+  place-items: center;
+}
+
+.cfg-secret-actions__label {
+  grid-area: 1 / 1;
+}
+
+.cfg-secret-actions__label:not([data-shown]) {
+  visibility: hidden;
+}
+
+.cfg-secret-actions__saved {
+  align-self: center;
+  padding-inline: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+/* A refusal wraps under the field and its actions instead of squeezing them. */
+.settings-row:not(.settings-row--stacked) > .settings-row__control:has(> .cfg-secret) {
+  flex-wrap: wrap;
+  width: 340px;
+}
+
+.settings-row__control:has(> .cfg-secret) > .cfg-field__error {
+  flex-basis: 100%;
+}
+
+/* Without an eye there's nothing to clear, so the text keeps the field's own inset. */
+.settings-secret:not(:has(> openclaw-tooltip, > .settings-secret__toggle)) > :is(input, textarea) {
+  padding-right: var(--field-padding-inline);
+}
+
 /* Multiline secrets (JSON textareas) anchor the eye to the first line. */
 .settings-secret:has(> textarea) {
   align-items: flex-start;
@@ -876,13 +1313,6 @@ textarea.settings-input {
   resize: vertical;
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
-}
-
-/* Keep >=16px on touch so focusing an editor does not trigger mobile zoom. */
-@media (hover: none) and (pointer: coarse) {
-  textarea.settings-input {
-    font-size: 16px;
-  }
 }
 
 .settings-status {
@@ -920,6 +1350,10 @@ textarea.settings-input {
 
 .settings-status--accent .settings-status__dot {
   background: var(--accent);
+}
+
+.settings-status--running .settings-status__dot {
+  background: var(--status-running);
 }
 
 .settings-permission-control {
@@ -965,6 +1399,27 @@ textarea.settings-input {
   .settings-status {
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+}
+
+/* Narrow screens stack the Recovery row, so its actions get the full width.
+   Whole buttons wrap and grow to fill each line; the primary retry leads on
+   its own line. Wide screens keep the single right-aligned row. */
+@media (max-width: 640px) {
+  .updates-recovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+
+    > .btn {
+      flex: 1 1 auto;
+      min-height: 40px;
+    }
+
+    > .btn.primary {
+      flex-basis: 100%;
+      order: -1;
+    }
   }
 }
 
@@ -1034,6 +1489,10 @@ textarea.settings-input {
   width: 100%;
 }
 
+.settings-loading-skeleton {
+  --skeleton-base: var(--skeleton-base-raised);
+}
+
 .settings-loading-skeleton__title,
 .settings-loading-skeleton__description,
 .settings-loading-skeleton__control {
@@ -1094,8 +1553,7 @@ textarea.settings-input {
 /* Identity composes existing row controls; these wrappers only keep the
    avatar/file action and name/save action aligned as one control cluster. */
 .identity-avatar-control,
-.identity-name-control,
-.settings-account {
+.identity-name-control {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -1110,13 +1568,6 @@ textarea.settings-input {
   color: var(--danger);
 }
 
-.settings-account__avatar {
-  width: 20px;
-  height: 20px;
-  border-radius: var(--radius-full);
-  flex: none;
-}
-
 .github-device-code {
   color: var(--text-strong);
   font-size: var(--control-ui-text-lg);
@@ -1125,12 +1576,21 @@ textarea.settings-input {
   user-select: all;
 }
 
+/* Who a connection acts as is what the row is read for; the rest of the line explains it. */
+.github-connection__login {
+  color: var(--text-strong);
+}
+
 .shell--embed-settings {
   --settings-control-height: 44px;
 
-  :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn):where(:not([role="tab"])) {
+  :is(button, .btn, summary, .settings-toggle):where(:not([role="tab"], .settings-segmented__btn)) {
     min-width: 44px;
     min-height: 44px;
+  }
+
+  .settings-segmented > .settings-segmented__btn {
+    min-width: 44px;
   }
 
   :is(input, select, textarea),
@@ -1147,22 +1607,26 @@ textarea.settings-input {
   }
 
   .settings-section__help-button > span {
-    width: 16px;
-    height: 16px;
+    width: var(--chrome-icon-size);
+    height: var(--chrome-icon-size);
   }
 }
 
 @media (pointer: coarse), (max-width: 640px) {
   :is(.shell--settings, openclaw-skills-page, openclaw-cron-page) {
-    --settings-control-height: 44px;
+    --settings-control-height: var(--settings-touch-control-height);
 
     /* The shell topbar keeps one size on every route; resizing it here shifts
        the page when navigation enters or leaves Settings. */
-    :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn):where(
-      :not([role="tab"], .topbar *)
+    :is(button, .btn, summary, .settings-toggle):where(
+      :not([role="tab"], .topbar *, .settings-segmented__btn, .oc-menu-item)
     ) {
-      min-width: 44px;
-      min-height: 44px;
+      min-width: var(--settings-touch-control-height);
+      min-height: var(--settings-touch-control-height);
+    }
+
+    .settings-segmented > .settings-segmented__btn {
+      min-width: var(--settings-touch-control-height);
     }
 
     :is(input, select, textarea),
@@ -1175,12 +1639,38 @@ textarea.settings-input {
     }
 
     .settings-secret > :is(input, textarea) {
-      padding-right: calc(44px + var(--space-2));
+      padding-right: calc(var(--settings-touch-control-height) + var(--space-2));
     }
 
     .settings-section__help-button > span {
-      width: 16px;
-      height: 16px;
+      width: var(--chrome-icon-size);
+      height: var(--chrome-icon-size);
+    }
+  }
+}
+
+/* Between the phone layout and the docked sidebar, every settings page shares one gutter and
+   one column, so the title stays put from page to page. */
+@media not all and (max-width: 640px) {
+  .shell--settings.shell--mobile-nav:not(.shell--floating-header) {
+    .content:not(.content--custodian) {
+      --content-inline-padding: var(--space-6);
+      --settings-header-inline-padding: 0;
+      padding: var(--space-6) var(--space-6) var(--space-7);
+    }
+
+    .content .content-header,
+    .settings-page,
+    .settings-workspace,
+    .config-content,
+    .config-lead,
+    .config-content-callout {
+      max-width: none;
+      padding-inline: 0;
+    }
+
+    .content .content-header .page-title {
+      font-size: calc(26px * var(--control-ui-text-scale));
     }
   }
 }
@@ -1190,16 +1680,7 @@ textarea.settings-input {
     padding-inline: var(--space-3);
   }
 
-  .shell--settings .content:not(.content--custodian) {
-    --content-inline-padding: var(--space-3);
-    --settings-header-inline-padding: 0;
-    padding: var(--space-3) var(--space-3) var(--space-4);
-  }
-
   .shell--settings .content.content--settings-workspace .content-header,
-  .shell--settings .settings-page,
-  .content.content--hub-header .settings-page,
-  .shell--settings .config-content,
   .shell--settings .config-lead,
   .shell--settings .config-content-callout {
     padding-inline: 0;
@@ -1213,6 +1694,29 @@ textarea.settings-input {
 
   .settings-section__header:has(.settings-section__copy) .settings-section__actions {
     align-self: flex-end;
+  }
+
+  /* A section with "?" keeps its small actions beside the copy instead of a line of their own. */
+  .settings-section__header:has(.settings-section__copy):has(.settings-section__docs) {
+    align-items: flex-start;
+    flex-direction: row;
+
+    .settings-section__actions {
+      align-self: flex-start;
+    }
+  }
+
+  /* A lone icon fits beside the heading; stacking is for full-size controls. */
+  .settings-section__header:has(.settings-section__copy):has(
+      > .settings-section__actions > openclaw-tooltip:only-child > .refresh-button
+    ) {
+    align-items: flex-start;
+    flex-direction: row;
+
+    .settings-section__actions {
+      align-self: flex-start;
+      margin-block-start: -12px;
+    }
   }
 
   .settings-row {
@@ -1261,20 +1765,70 @@ textarea.settings-input {
       max-width: 100%;
     }
 
-    .settings-row:is(.settings-row--nav, .settings-row--toggle) {
+    .settings-row:is(.settings-row--nav, .settings-row--toggle, .cfg-object__summary) {
       flex-wrap: nowrap;
     }
 
-    .settings-row:is(.settings-row--nav, .settings-row--toggle) > .settings-row__control {
+    .settings-row:is(.settings-row--nav, .settings-row--toggle, .cfg-object__summary)
+      > .settings-row__control {
       width: auto;
       max-width: 50%;
       justify-content: flex-end;
     }
 
-    .settings-segmented__btn {
+    /* Read-only rows keep label and value on one line when both fit; a longer
+       value wraps beneath its label. Rows with a description stay stacked, since
+       whether they fit would vary row by row. Plugin rows nest the value in two
+       spans. */
+    .settings-row:not(
+        .settings-row--stacked,
+        .settings-row--stacked-on-narrow,
+        :has(> .settings-row__text > .settings-row__desc)
+      ):has(
+        > .settings-row__control > :is(.settings-row__value, .settings-status):only-child,
+        > .settings-row__control
+          > span:only-child
+          > span:only-child
+          > :is(.settings-row__value, .settings-status):only-child
+      ) {
+      > .settings-row__text {
+        flex: 1 1 auto;
+      }
+
+      > .settings-row__control {
+        width: auto;
+        flex: 0 1 auto;
+        justify-content: flex-end;
+      }
+
+      .settings-row__value {
+        text-align: start;
+      }
+    }
+
+    /* The help icon sits beside its label and keeps its touch target without
+       growing the header. */
+    .settings-section__header:has(
+      > .settings-section__actions > .settings-section__docs:only-child
+    ) {
+      justify-content: flex-start;
+      gap: var(--space-2);
+
+      + .settings-section__desc {
+        margin-top: calc(-1 * var(--space-2));
+      }
+    }
+
+    .settings-section__help-button {
+      /* Reserve the touch target inline so it cannot overflow or cover adjacent actions. */
+      min-width: 44px;
+      min-height: 44px;
+      margin-block: -14px;
+    }
+
+    .settings-segmented > .settings-segmented__btn {
       max-width: 100%;
       white-space: normal;
-      overflow-wrap: anywhere;
     }
 
     .identity-name-control {
@@ -1326,8 +1880,9 @@ textarea.settings-input {
     padding: var(--space-3) var(--space-4);
   }
 
+  /* Space alone separates records: well above the gap between a record's own fields. */
   .settings-table--stacked tbody tr + tr {
-    border-top: 1px solid var(--border);
+    margin-top: var(--space-4);
   }
 
   .settings-table--stacked tbody td {
@@ -1363,14 +1918,827 @@ textarea.settings-input {
     min-height: 44px;
     white-space: normal;
   }
+
+  /* Stacked records flow with the page instead of scrolling inside a bounded box. */
+  .data-table-container:has(> .settings-table--stacked) {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+/* The footnote starts where the log rows' text does, at every width. */
+openclaw-approvals-page .data-table-pagination {
+  border-top: 0;
+  padding-inline: calc(var(--space-1) + var(--space-2));
+}
+
+/* Phone widths stack this bar and center its items. */
+openclaw-approvals-page .data-table-pagination__info {
+  margin-inline-end: auto;
+  text-align: start;
+}
+
+/* Approval history is a log: scan the request, its outcome and when; open one
+   entry to investigate it. Collapsed rows all share one height. */
+.approval-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  container: approval-log / inline-size;
+}
+
+.approval-log__summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-3);
+  align-items: baseline;
+  width: 100%;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.approval-log__summary:hover {
+  background: color-mix(in srgb, var(--text) var(--surface-hover-amount), transparent);
+}
+
+.approval-log__request {
+  grid-column: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The open row wraps the request in place instead of repeating it below. */
+[aria-expanded="true"] > .approval-log__request {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.approval-log__meta {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: var(--space-3);
+  align-items: center;
+  min-width: 0;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.approval-log__meta .settings-status {
+  min-width: 0;
+}
+
+.approval-log__meta .settings-status > :last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.approval-log__meta time {
+  flex: none;
+}
+
+.approval-log__chevron {
+  display: inline-flex;
+  grid-area: 1 / 2;
+  align-self: start;
+  align-items: center;
+  height: 1.45em;
+  color: var(--muted);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.approval-log__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+[aria-expanded="true"] > .approval-log__chevron {
+  transform: rotate(90deg);
+}
+
+.approval-log__details {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-3);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.approval-log__details dl {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+}
+
+.approval-log__details dl > div {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.approval-log__details dt {
+  color: var(--muted);
+}
+
+.approval-log__details dd {
+  margin: 0;
+}
+
+/* The green dot and "Always allow" already say it was allowed. */
+@container approval-log (max-width: 320px) {
+  .approval-log__allowed {
+    display: none;
+  }
+}
+
+@container approval-log (min-width: 640px) {
+  .approval-log__summary {
+    grid-template-columns: minmax(0, 1fr) 11rem 8rem auto;
+  }
+
+  .approval-log__meta {
+    display: contents;
+  }
+
+  .approval-log__meta .settings-status {
+    grid-column: 2;
+  }
+
+  .approval-log__meta time {
+    grid-column: 3;
+    text-align: end;
+    color: var(--muted);
+  }
+
+  .approval-log__chevron {
+    grid-area: 1 / 4;
+  }
+}
+
+.standing-grants-empty {
+  display: grid;
+
+  &::before,
+  & > span {
+    grid-area: 1 / 1;
+  }
+
+  /* Reserve the translated empty copy while the read still says Unknown. */
+  &::before {
+    content: attr(data-empty-message);
+    visibility: hidden;
+  }
+}
+
+/* Each grant is one exact command with one action, so the whole command stays
+   visible and nothing hides behind a disclosure. */
+.standing-grants {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+}
+
+.standing-grants__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-4);
+  padding: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.standing-grants__automation,
+.standing-grants__command,
+.standing-grants__meta {
+  grid-column: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.standing-grants__command {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: inherit;
+}
+
+.standing-grants__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+  color: var(--muted);
+}
+
+.standing-grants__revoke {
+  grid-area: 1 / 2 / span 3;
+  align-self: start;
 }
 
 /* Quiet-hours details stay connected to their toggle without changing row controls. */
-.settings-row + .quiet-hours-window,
-.quiet-hours-window .settings-row + .settings-row {
-  border-top: 0;
-}
-
 .quiet-hours-window .settings-row {
   padding-top: 0;
+}
+
+/* Full Settings navigation loads with the sidebar; fallback geometry stays in layout.css. */
+.settings-sidebar__esc {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: calc(10px * var(--control-ui-text-scale));
+  font-weight: 550;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Inside the drawer there is no Escape key to hint at. */
+.shell--mobile-nav .settings-sidebar__esc {
+  display: none;
+}
+
+.settings-sidebar__agent openclaw-agent-select {
+  display: block;
+  min-width: 0;
+}
+
+/* Height comes from the shared trigger (--settings-control-height); 9px plus the
+   1px border puts the avatar on the sidebar's 22px content edge. */
+.settings-sidebar__agent .agent-select__trigger {
+  min-width: 0;
+  padding: 0 9px;
+  border-color: transparent;
+  background: transparent;
+  font-size: var(--control-ui-text-md);
+}
+
+:root[data-theme-mode="light"] .settings-sidebar__agent .agent-select__trigger {
+  background: transparent;
+}
+
+.settings-sidebar__agent .agent-select__trigger:focus-visible {
+  border-color: var(--field-focus-border);
+}
+
+.settings-sidebar__agent .agent-select__trigger:hover:not(:disabled),
+.settings-sidebar__agent .agent-select__trigger[aria-expanded="true"],
+:root[data-theme-mode="light"] .settings-sidebar__agent .agent-select__trigger:hover:not(:disabled),
+:root[data-theme-mode="light"]
+  .settings-sidebar__agent
+  .agent-select__trigger[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+
+.settings-sidebar__search::after {
+  content: "";
+  position: absolute;
+  inset-inline: -12px;
+  bottom: 0;
+  height: 1px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--border) 62%, transparent);
+  box-shadow: 0 6px 12px color-mix(in srgb, var(--text) 14%, transparent);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.settings-sidebar__search--scrolled::after {
+  opacity: 1;
+}
+
+.settings-sidebar__search-icon {
+  position: absolute;
+  inset-inline-start: 10px;
+  z-index: 1;
+  display: inline-flex;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  pointer-events: none;
+}
+
+.settings-sidebar__search-icon svg,
+.settings-sidebar__search-clear svg {
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
+}
+
+.settings-sidebar__search-input {
+  --control-ui-touch-input-size: calc(12.5px * var(--control-ui-text-scale));
+
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding-block: 0;
+  /* Query text starts on the nav labels' edge (10px glyph inset + 15px glyph + 9px gap),
+     minus this field's 1px border; the end keeps room for the clear button. */
+  padding-inline: 33px 34px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--field-radius);
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
+  outline: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.settings-sidebar__search-input::placeholder {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.settings-sidebar__search-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  box-shadow: var(--focus-ring);
+}
+
+/* Forced colors suppress the normal shadow-only focus indicator. */
+@media (forced-colors: active) {
+  .settings-sidebar__search-input:focus-visible {
+    outline: 2px solid Highlight;
+  }
+}
+
+.settings-sidebar__search-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.settings-sidebar__search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  position: absolute;
+  inset-inline-end: 5px;
+  border-radius: var(--radius-sm);
+}
+
+.settings-sidebar__group-label {
+  padding: 0 10px;
+  margin: 0 0 4px;
+  font-size: calc(10.5px * var(--control-ui-text-scale));
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.settings-sidebar__item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+  flex-shrink: 0;
+}
+
+.settings-sidebar__item--active .settings-sidebar__item-icon {
+  color: var(--navigation-selected-icon, var(--accent));
+}
+
+/* The mascot keeps its quiet resting state; line icons take their weight from the stroke. */
+.settings-sidebar__item:not(:hover, .settings-sidebar__item--active)
+  .settings-sidebar__item-icon:has(openclaw-theme-brand-icon) {
+  opacity: 0.72;
+}
+
+.settings-sidebar__item-label {
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-sidebar__subitem {
+  padding-block: 4px;
+}
+
+.settings-sidebar__subitem-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-sidebar__subitem:hover {
+  background: var(--surface-hover);
+}
+
+.settings-sidebar__subitem--active {
+  color: var(--text-strong);
+  background: var(--surface-selected);
+}
+
+.settings-sidebar__subitem--active:hover {
+  background: var(--surface-selected-hover);
+}
+
+/* One selected row: the section you jumped to, not it and its page. */
+.settings-sidebar__item--active:not(:hover):has(~ .settings-sidebar__subitem--active) {
+  background: transparent;
+}
+
+.settings-sidebar__subitem-label,
+.settings-sidebar__subitem-page {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-sidebar__subitem-label {
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+}
+
+.settings-sidebar__subitem-page {
+  color: var(--muted);
+  font-size: calc(11.5px * var(--control-ui-text-scale));
+  opacity: 0.8;
+}
+
+.settings-sidebar__footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-height: var(--shell-sidebar-footer-height);
+  padding: 12px 21px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  font-size: calc(11.5px * var(--control-ui-text-scale));
+  color: var(--muted);
+}
+
+.settings-sidebar__footer > openclaw-sidebar-build-chip {
+  display: contents;
+}
+
+openclaw-settings-save-indicator {
+  min-width: 0;
+}
+
+openclaw-settings-save-indicator:empty {
+  display: none;
+}
+
+.settings-save-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-save-indicator__failure {
+  color: var(--danger);
+}
+
+/* A failed save reads top to bottom: what failed, why, then the way out. Only the
+   title carries danger; the reason stays plain text and is never behind a toggle. */
+.settings-save-indicator--failure {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+}
+
+.settings-save-indicator__title {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.settings-save-indicator__reason {
+  max-height: min(7lh, 30dvh);
+  margin: 0;
+  overflow-y: auto;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A retry keeps the card's shape; only its title and emphasis change. */
+.settings-save-indicator--retrying .settings-save-indicator__title {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.settings-save-indicator--retrying .settings-save-indicator__reason {
+  color: var(--muted);
+}
+
+.settings-save-indicator svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-save-indicator__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-save-indicator--failure .settings-save-indicator__actions {
+  margin-block-start: 8px;
+}
+
+/* Grid-item z-index stacks feedback without a positioned wrapper. Compact
+   feedback shares the content cell and lets clicks through. */
+.settings-save-status {
+  z-index: 1;
+  grid-area: content;
+  align-self: end;
+  justify-self: center;
+  max-width: calc(100% - 32px);
+  margin-block-end: calc(16px + var(--shell-safe-area-bottom, 0px));
+  pointer-events: none;
+}
+
+/* Only failures occupy the shell’s intrinsic status row; the reason stays interactive. */
+.settings-save-status:has(.settings-save-indicator--failure) {
+  grid-area: save-status;
+  margin-block-start: 16px;
+}
+
+.settings-save-status .settings-save-indicator {
+  position: relative;
+  width: fit-content;
+  max-width: min(420px, 100%);
+  margin-inline: auto;
+  padding: 6px 12px;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  transition: opacity 120ms ease-out;
+
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+.settings-save-status .settings-save-indicator :is(button, a) {
+  pointer-events: auto;
+}
+
+/* A retry or longer reason keeps the card width. Its reason remains scrollable. */
+.settings-save-status .settings-save-indicator--failure {
+  width: 360px;
+  max-width: 100%;
+  padding: 10px 12px 12px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  pointer-events: auto;
+}
+
+/* Saving and Saved swap in place without changing the pill's width. */
+.settings-save-indicator--transient {
+  justify-content: center;
+  min-width: calc(8ch + 24px);
+}
+
+/* Runs for CONFIG_SAVED_NOTICE_MS: the notice is already gone when it unmounts. */
+.settings-save-indicator--saved {
+  animation: settings-save-saved 2s linear forwards;
+}
+
+@keyframes settings-save-saved {
+  85% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-save-indicator--saved {
+    animation: none;
+  }
+}
+
+.settings-sidebar__footer .sidebar-footer-build {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* Schema forms share the workspace stylesheet on every route, including cold Channels
+   and plugin settings; a separate CSS asset only duplicates compression overhead. */
+.cfg-collection-draft__controls {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.cfg-field__error {
+  font-size: var(--control-ui-text-sm);
+  color: var(--danger);
+}
+
+.cfg-structured-draft {
+  display: contents;
+}
+
+.cfg-structured-draft__error .settings-row__control,
+.cfg-json-editor > .settings-input,
+.cfg-json-editor > .settings-secret,
+.cfg-array .settings-row--stacked .settings-row__control {
+  width: 100%;
+}
+
+.cfg-json-editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+/* A list of plain values is one row per value: the field, then its remove button. */
+.cfg-array__item--row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--list-row-padding);
+  padding-inline-start: var(--space-7);
+
+  > .cfg-array__value {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  > .cfg-array__value > .settings-row {
+    min-height: 0;
+    padding: 0;
+  }
+
+  /* A list value is required by being in the list. */
+  .settings-row__control > .settings-row__desc[aria-hidden="true"] {
+    display: none;
+  }
+}
+
+/* A collection's head and entry rows hold one small action, which stays beside its text. */
+@media (max-width: 640px) {
+  .cfg-collection-row {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      flex: 0 0 auto;
+      flex-wrap: nowrap;
+      width: auto;
+      max-width: none;
+    }
+  }
+}
+
+/* A number and its step buttons are one control, on the input's own surface. */
+.cfg-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  height: var(--settings-control-height);
+  background: var(--field-bg);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+}
+
+.cfg-stepper:focus-within {
+  border-color: var(--ring);
+}
+
+.settings-row .cfg-stepper > .settings-input,
+.settings-row .cfg-stepper > input[type="number"].settings-input {
+  flex: 0 1 72px;
+  width: 72px;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  padding-inline: var(--space-1);
+  text-align: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: textfield;
+}
+
+.cfg-stepper > .settings-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.cfg-stepper > .settings-input::-webkit-inner-spin-button,
+.cfg-stepper > .settings-input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+/* On a phone a number sits under its label like every other field, at the same width. */
+@media (max-width: 640px) {
+  .cfg-stepper {
+    width: 100%;
+  }
+
+  .settings-row .cfg-stepper > .settings-input,
+  .settings-row .cfg-stepper > input[type="number"].settings-input {
+    flex: 1 1 auto;
+    width: auto;
+  }
+}
+
+.cfg-stepper__button {
+  flex: 0 0 auto;
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--field-radius);
+  cursor: var(--cursor-action);
+}
+
+.cfg-stepper__button:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.cfg-stepper__button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.cfg-stepper__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.cfg-collection-draft__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cfg-redacted {
+  opacity: 0.7;
+}
+
+/* Collapsible nested-object summary behaves like a nav row. */
+.cfg-object__summary {
+  cursor: var(--cursor-action);
+  list-style: none;
+  transition: background var(--duration-fast) ease;
+}
+
+.cfg-object__summary::-webkit-details-marker {
+  display: none;
+}
+
+.cfg-object__summary:hover {
+  background: var(--bg-hover);
+}
+
+/* A closed group on a curated page is one line; its help arrives with its settings. */
+.cfg-object--quiet:not([open]) > .cfg-object__summary .settings-row__desc {
+  display: none;
 }

@@ -20,11 +20,14 @@ import type {
 } from "./agent-runner-execution.types.js";
 import { accountAgentTurn, accountFollowupTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-import { createReplyParams } from "./agent-runner-steer-adoption.test-support.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
-import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
+import {
+  createMockFollowupRun,
+  createMockTypingController,
+  createReplyParams,
+} from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 const diagnostic = {
@@ -65,6 +68,7 @@ export function createTestFinalizationContext(
 ): FinalizeReplyAgentRunInput {
   const { config: cfg, model, provider, sessionKey } = followupRun.run;
   const reply = createReplyParams(followupRun, {
+    sessionKey,
     transcriptCommandBody: undefined,
     queueKey: sessionKey ?? "test",
     resolvedQueue: { mode: "followup" },

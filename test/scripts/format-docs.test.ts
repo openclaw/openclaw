@@ -80,25 +80,11 @@ describe("format-docs", () => {
       /git ls-files failed:[\s\S]*exit status: 128[\s\S]*fatal: not a git repository/u,
     );
 
-    mockFormatter(["README.md"], () => commandResult("formatter stdout", "formatter stderr", 1));
-    expect(() => formatDocs({ root })).toThrow(
-      /oxfmt failed:[\s\S]*command:[\s\S]*exit status: 1[\s\S]*formatter stderr[\s\S]*formatter stdout/u,
-    );
-  });
-
-  it("keeps real formatter failure tails UTF-8 safe", async () => {
-    const { spawnSync: realSpawnSync } =
-      await vi.importActual<typeof import("node:child_process")>("node:child_process");
     mockFormatter(["README.md"], () =>
-      realSpawnSync(
-        process.execPath,
-        ["-e", 'process.stderr.write("你好" + "x".repeat(16_380)); process.exitCode = 1'],
-        { encoding: "utf8", maxBuffer: 1024 * 1024, shell: false, timeout: 5_000 },
-      ),
+      commandResult("formatter stdout", `你好${"x".repeat(16_380)}`, 1),
     );
-
     expect(() => formatDocs({ root })).toThrow(
-      /oxfmt failed:[\s\S]*exit status: 1[\s\S]*stderr tail:\n好x/u,
+      /oxfmt failed:[\s\S]*command:[\s\S]*exit status: 1[\s\S]*stderr tail:\n好x[\s\S]*formatter stdout/u,
     );
   });
 

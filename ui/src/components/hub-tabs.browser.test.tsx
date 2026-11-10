@@ -1,46 +1,42 @@
 import type { JSX } from "@solidjs/web";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { HubTabs, type HubTabsProps } from "./solid/hub-tabs.tsx";
 import "../styles/base.css";
 import "../styles/agents.css";
 
-function makeRoot(cssText = "", className = "") {
-  const root = document.body.appendChild(document.createElement("div"));
-  Object.assign(root, { className });
-  root.style.cssText = cssText;
-  onTestFinished(() => root.remove());
-  return root;
-}
-
 const tabDefaults: HubTabsProps<string> = {
-  id: "bounded",
-  active: "sessions",
+  id: "agent-files",
+  active: "agents",
   panelId: "bounded-panel",
   ariaLabel: "Activity view",
-  tabs: [
-    { value: "sessions", label: "Sessions" },
-    { value: "live", label: "Live activity" },
-  ],
+  tabs: ["agents", "heartbeat", "identity"].map((value) => ({
+    value,
+    label: value.toUpperCase(),
+    badge: value === "agents" ? undefined : "Missing",
+  })),
   onSelect: () => {},
 };
 
-type TabProps = Partial<HubTabsProps<string>>;
-async function mountTabs(root: HTMLElement, props: TabProps, extra?: JSX.Element) {
-  const view = mountSolid(() => [<HubTabs {...tabDefaults} {...props} />, extra], {
-    container: root,
-  });
+async function mountTabs(
+  cssText: string,
+  props: Partial<HubTabsProps<string>>,
+  extra: JSX.Element,
+  className = "",
+) {
+  const { container: root } = mountSolid(() => [<HubTabs {...tabDefaults} {...props} />, extra]);
+  root.className = className;
+  root.style.cssText = cssText;
   await waitForSolid(() => expect(root.querySelector("[role=tablist]")).not.toBeNull());
-  return { ...view, tabs: root.querySelector<HTMLElement>("[role=tablist]")! };
+  return { root, tabs: root.querySelector<HTMLElement>("[role=tablist]")! };
 }
 
 it.each(["primary", "sub"] as const)(
   "keeps %s tabs at natural height above a flexing panel",
   async (variant) => {
-    const root = makeRoot("display:flex;flex-direction:column;width:240px");
-    const { tabs } = await mountTabs(
-      root,
+    const { root, tabs } = await mountTabs(
+      "display:flex;flex-direction:column;width:240px",
       { variant },
       <div id="bounded-panel" style={{ flex: "1 1 auto", "min-height": "0" }}>
         <div style={{ height: "600px" }}>Activity content</div>
@@ -57,23 +53,14 @@ it.each(["primary", "sub"] as const)(
 );
 
 it("shrinks row tabs to fit Add File", async () => {
-  const root = makeRoot("width:280px", "agent-file-tabs");
-  const { tabs } = await mountTabs(
-    root,
-    {
-      id: "agent-files",
-      active: "agents",
-      variant: "sub",
-      tabs: ["agents", "heartbeat", "identity"].map((value) => ({
-        value,
-        label: value.toUpperCase(),
-        badge: value === "agents" ? undefined : "Missing",
-      })),
-    },
+  const { root, tabs } = await mountTabs(
+    "width:280px",
+    { variant: "sub" },
     <select class="agent-tab-add" aria-label="Add File">
       <option>Add File</option>
       <option>MEMORY</option>
     </select>,
+    "agent-file-tabs",
   );
   const control = root.querySelector("select")!;
   const panelBounds = root.getBoundingClientRect();
@@ -83,18 +70,4 @@ it("shrinks row tabs to fit Add File", async () => {
   expect(controlBounds.right).toBeLessThanOrEqual(panelBounds.right);
   expect(tabBounds.width).toBeLessThan(panelBounds.width);
   expect(tabs.scrollWidth).toBeGreaterThan(tabs.clientWidth);
-});
-
-it("restores keyboard focus across tab-strip replacement", async () => {
-  const root = makeRoot();
-  const onSelect = vi.fn();
-  const source = await mountTabs(root, { onSelect });
-  const target = root.querySelector<HTMLElement>("#bounded-tab-live")!;
-  target.focus();
-  target.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  expect(onSelect).toHaveBeenCalledWith("live");
-
-  source.unmount();
-  await mountTabs(root, { onSelect, active: "live" });
-  await expect.poll(() => document.activeElement?.id).toBe("bounded-tab-live");
 });

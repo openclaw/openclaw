@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
-import { constants, type BigIntStats } from "node:fs";
+import { constants, lstatSync, realpathSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
+import { isMainThread } from "node:worker_threads";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { sha256File } from "../../infra/directory-durability.js";
 import {
@@ -13,7 +15,11 @@ import {
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { activeWorkspaceHashContext, workspaceStatIdentity } from "./workspace-hash-memo.js";
+import {
+  activeWorkspaceHashContext,
+  workspaceCtimeIsReusable,
+  workspaceStatIdentity,
+} from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
   MAX_WORKSPACE_INVENTORY_PATH_BYTES,
@@ -25,7 +31,11 @@ import {
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
+import {
+  isDerivedWorkspacePath,
+  isIgnoredWorkspaceBuildOutput,
+  buildCacheInputPaths,
+} from "./workspace-path-exclusions.js";
 
 type WorkspaceFileSnapshot =
   | { type: "file"; mode: number; size: number; sha256: string }
@@ -43,10 +53,6 @@ type WorkspaceFileRead = {
   onIdentity?: (identity: string) => void;
 };
 
-function localPath(root: string, relative: string): string {
-  return path.join(root, ...relative.split("/"));
-}
-
 export function isPortableRootContainedSymlink(
   root: string,
   entryPath: string,
@@ -60,7 +66,7 @@ export function isPortableRootContainedSymlink(
   ) {
     return false;
   }
-  const resolved = path.resolve(path.dirname(localPath(root, entryPath)), target);
+  const resolved = path.resolve(path.dirname(path.join(root, entryPath)), target);
   return resolved === root || resolved.startsWith(`${root}${path.sep}`);
 }
 
@@ -98,6 +104,7 @@ async function readWorkspaceFile(
   params: WorkspaceFileRead & { contents: boolean },
 ): Promise<WorkspaceFileSnapshot | WorkspaceFileContents> {
   const { expectedPath, maxBytes, root, signal } = params;
+  const startedAtMs = Date.now();
   signal?.throwIfAborted();
   const handle = await fs.open(
     expectedPath,
@@ -119,7 +126,8 @@ async function readWorkspaceFile(
       return { type: "unsupported" };
     }
     const identity = workspaceStatIdentity(owner, before);
-    let sha256 = params.contents ? undefined : hashMemo?.get(identity);
+    const reusable = workspaceCtimeIsReusable(before.ctimeNs, startedAtMs);
+    let sha256 = params.contents || !reusable ? undefined : hashMemo?.get(identity);
     let size = Number(before.size);
     if (sha256) {
       if (metrics) {
@@ -161,7 +169,9 @@ async function readWorkspaceFile(
     if (after.size !== BigInt(size) || workspaceStatIdentity(owner, after) !== identity) {
       throw new Error("Gateway workspace file changed while it was being read");
     }
-    hashMemo?.set(identity, sha256);
+    if (reusable) {
+      hashMemo?.set(identity, sha256);
+    }
     params.onIdentity?.(identity);
     const snapshot = {
       type: "file" as const,
@@ -183,6 +193,7 @@ type ActualWorkspaceManifestOptions = {
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
   buildCacheInputs?: ReadonlySet<string>;
+  gitIgnore?: { paths: ReadonlySet<string>; retainedPaths: ReadonlySet<string> };
   signal?: AbortSignal;
 };
 
@@ -191,12 +202,19 @@ type ActualWorkspaceNode = WorkerWorkspaceManifestEntry | { path: string; type: 
 export async function scanActualWorkspaceManifest(
   params: ActualWorkspaceManifestOptions & {
     onEntry: (entry: ActualWorkspaceNode, identity?: string) => void;
+    // Only repair candidates authenticated against a saved root may retain this former input.
+    includeLegacyPnpmStore?: boolean;
+    unchangedProbe?: boolean;
+    btrfsSnapshot?: boolean;
+    // The caller proves content reuse through file identity or immutable template custody.
     reuseFile?: (
       entryPath: string,
       identity: string,
+      stats: Pick<BigIntStats, "dev" | "ino" | "size" | "ctimeNs" | "mode">,
     ) => Extract<WorkerWorkspaceManifestEntry, { type: "file" }> | undefined;
   },
 ): Promise<void> {
+  const startedAtMs = Date.now();
   params.signal?.throwIfAborted();
   let root: string;
   let isStagedInput: ReturnType<typeof createStagedInputPathMatcher>;
@@ -208,6 +226,24 @@ export async function scanActualWorkspaceManifest(
     throw error;
   }
   const retained = buildCacheInputPaths(params.buildCacheInputs);
+  const ignored = params.gitIgnore?.paths;
+  const isExcluded = async (relative: string): Promise<boolean> => {
+    const retainedInput = retained.has(relative) || (await isStagedInput(relative));
+    if (
+      isDerivedWorkspacePath(
+        relative,
+        retainedInput,
+        params.buildCacheInputs !== undefined,
+        params.includeLegacyPnpmStore,
+      )
+    ) {
+      return true;
+    }
+    if (!ignored?.size || retainedInput || params.gitIgnore?.retainedPaths.has(relative)) {
+      return false;
+    }
+    return isIgnoredWorkspaceBuildOutput(relative, ignored);
+  };
   let entryCount = 0;
   let totalBytes = 0;
   let manifestPathBytes = 0;
@@ -248,22 +284,45 @@ export async function scanActualWorkspaceManifest(
   };
   const filePaths: string[] = [];
   const hashContext = activeWorkspaceHashContext();
+  const scanConcurrency = 4;
+  const discoveryBatchSize = 32;
+  let metadataReads = 0;
+  let metadataYield: Promise<void> | undefined;
+  const readMetadata =
+    params.btrfsSnapshot && !isMainThread
+      ? async (absolute: string): Promise<BigIntStats> => {
+          if (metadataYield) {
+            await metadataYield;
+          }
+          scanSignal.throwIfAborted();
+          const stats = lstatSync(absolute, { bigint: true });
+          // All discovery workers share the yield: even an included-path depth must
+          // service cancellation messages after at most one batch of synchronous reads.
+          if (++metadataReads % discoveryBatchSize === 0) {
+            metadataYield = setImmediate().then(() => {
+              metadataYield = undefined;
+            });
+          }
+          return stats;
+        }
+      : (absolute: string) => fs.lstat(absolute, { bigint: true });
+  // Nested discovery batches must not replace their first failure with a later caller abort.
+  let taskFailureWasFirst = false;
   const runScans = async (
     start: number,
     end: number,
     scan: (index: number) => Promise<void>,
   ): Promise<void> => {
     let next = start;
-    let taskFailureWasFirst = false;
     const result = await runTasksWithConcurrency({
       // Keep the queued graph bounded too: each worker claims an index before
       // awaiting I/O, rather than retaining one task per inventory entry.
-      tasks: Array.from({ length: Math.min(4, end - start) }, () => async () => {
+      tasks: Array.from({ length: Math.min(scanConcurrency, end - start) }, () => async () => {
         while (next < end && !scanSignal.aborted) {
           await scan(next++);
         }
       }),
-      limit: 4,
+      limit: scanConcurrency,
       errorMode: "stop",
       onTaskError: (error) => {
         // Composite signals can resolve reasons lazily; record ordering at the owner.
@@ -284,7 +343,7 @@ export async function scanActualWorkspaceManifest(
   const addFile = async (relative: string): Promise<void> => {
     let identity: string | undefined;
     const snapshot = await readWorkspaceFileSnapshotWithLimit(
-      localPath(root, relative),
+      path.join(root, relative),
       (size) => {
         addBytes(size);
         return size;
@@ -314,12 +373,16 @@ export async function scanActualWorkspaceManifest(
       addEntry({ path: relative, type: "symlink", mode: 0o777, target }, Buffer.byteLength(target));
     } else if (stats.isFile()) {
       const identity = workspaceStatIdentity(hashContext?.owner ?? "gateway", stats);
-      const reusable = params.reuseFile?.(relative, identity);
-      const sha256 = reusable?.sha256 ?? hashContext?.memo.get(identity);
+      const reusable = params.reuseFile?.(relative, identity, stats);
+      const sha256 =
+        reusable?.sha256 ??
+        (workspaceCtimeIsReusable(stats.ctimeNs, startedAtMs)
+          ? hashContext?.memo.get(identity)
+          : undefined);
       if (sha256) {
-        // Included paths can cross a replaced parent directory even when the
-        // leaf inode still matches a prior content hash.
-        if ((await fs.realpath(absolute)) !== absolute) {
+        // Accepted nodes add no changed bytes. Generic memo hits still need to
+        // reject paths crossing a replaced parent before admitting their hash.
+        if (!reusable && realpathSync.native(absolute) !== absolute) {
           throw new Error("Gateway workspace file changed while it was being read");
         }
         addEntry(
@@ -336,6 +399,9 @@ export async function scanActualWorkspaceManifest(
         if (hashContext?.metrics) {
           hashContext.metrics.memoHitCount += 1;
         }
+      } else if (params.unchangedProbe) {
+        // Stop at the first changed file instead of finishing the metadata walk.
+        await addFile(relative);
       } else {
         filePaths.push(relative);
       }
@@ -349,18 +415,12 @@ export async function scanActualWorkspaceManifest(
     includedParents: ReadonlySet<string>,
     derivedOnlyDirectories: ReadonlySet<string>,
   ): Promise<"included" | "derived-only" | "absent"> => {
-    if (
-      isDerivedWorkspacePath(
-        relative,
-        retained.has(relative) || (await isStagedInput(relative)),
-        params.buildCacheInputs !== undefined,
-      )
-    ) {
+    if (await isExcluded(relative)) {
       return "derived-only";
     }
     checkTraversal(relative);
-    const absolute = localPath(root, relative);
-    const stats = await fs.lstat(absolute, { bigint: true }).catch((error: unknown) => {
+    const absolute = path.join(root, relative);
+    const stats = await readMetadata(absolute).catch((error: unknown) => {
       if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
         return undefined;
       }
@@ -370,6 +430,11 @@ export async function scanActualWorkspaceManifest(
       return "absent";
     }
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
+      if (params.btrfsSnapshot && stats.ino === 2n) {
+        throw Object.assign(new Error("Btrfs snapshot omitted a nested subvolume"), {
+          code: "WORKSPACE_SNAPSHOT_INCOMPLETE",
+        });
+      }
       if (params.preserveDirectories?.has(relative) || includedParents.has(relative)) {
         addEntry({ path: relative, type: "directory" });
         return "included";
@@ -377,14 +442,7 @@ export async function scanActualWorkspaceManifest(
       for await (const entry of await fs.opendir(absolute)) {
         scanSignal.throwIfAborted();
         const child = `${relative}/${entry.name}`;
-        if (
-          isDerivedWorkspacePath(
-            child,
-            retained.has(child) || (await isStagedInput(child)),
-            params.buildCacheInputs !== undefined,
-          ) ||
-          derivedOnlyDirectories.has(child)
-        ) {
+        if ((await isExcluded(child)) || derivedOnlyDirectories.has(child)) {
           return "derived-only";
         }
       }
@@ -396,29 +454,39 @@ export async function scanActualWorkspaceManifest(
   const walk = async (
     relativeDirectory: string,
   ): Promise<{ hasDerivedEntry: boolean; included: boolean }> => {
-    const absoluteDirectory = relativeDirectory ? localPath(root, relativeDirectory) : root;
+    const absoluteDirectory = relativeDirectory ? path.join(root, relativeDirectory) : root;
     let hasDerivedEntry = false;
     let hasNonDerivedEntry = false;
-    for await (const directoryEntry of await fs.opendir(absoluteDirectory)) {
-      const name = directoryEntry.name;
-      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
-      checkTraversal(relative);
-      if (!relativeDirectory && name === ".git") {
-        continue;
-      }
-      if (
-        isDerivedWorkspacePath(
-          relative,
-          retained.has(relative) || (await isStagedInput(relative)),
-          params.buildCacheInputs !== undefined,
-        )
-      ) {
-        hasDerivedEntry = true;
-        continue;
-      }
-      const absolute = localPath(root, relative);
-      const stats = await fs.lstat(absolute, { bigint: true });
-      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+    const batch: string[] = [];
+    const scanBatch = async () => {
+      const directories: Array<string | undefined> = [];
+      await runScans(0, batch.length, async (index) => {
+        const relative = batch[index]!;
+        if (await isExcluded(relative)) {
+          hasDerivedEntry = true;
+          return;
+        }
+        const absolute = path.join(root, relative);
+        const stats = await readMetadata(absolute);
+        if (stats.isDirectory() && !stats.isSymbolicLink()) {
+          if (params.btrfsSnapshot && stats.ino === 2n) {
+            throw Object.assign(new Error("Btrfs snapshot omitted a nested subvolume"), {
+              code: "WORKSPACE_SNAPSHOT_INCOMPLETE",
+            });
+          }
+          directories[index] = relative;
+        } else {
+          // Unsupported nodes and escaping links still make their directory nonempty;
+          // they stay local and become conflicts if a worker changes the same path.
+          hasNonDerivedEntry = true;
+          await addLeaf(relative, absolute, stats);
+        }
+      });
+      // Join sibling I/O before descending, so nested directories share the same bound.
+      for (const relative of directories) {
+        if (relative === undefined) {
+          continue;
+        }
         const child = await walk(relative);
         if (child.included || params.preserveDirectories?.has(relative)) {
           addEntry({ path: relative, type: "directory" });
@@ -426,12 +494,23 @@ export async function scanActualWorkspaceManifest(
         } else {
           hasDerivedEntry ||= child.hasDerivedEntry;
         }
-      } else {
-        // Unsupported nodes and escaping links still make their directory nonempty;
-        // they stay local and become conflicts if a worker changes the same path.
-        hasNonDerivedEntry = true;
-        await addLeaf(relative, absolute, stats);
       }
+      batch.length = 0;
+    };
+    for await (const directoryEntry of await fs.opendir(absoluteDirectory)) {
+      const name = directoryEntry.name;
+      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
+      checkTraversal(relative);
+      if (!relativeDirectory && name === ".git") {
+        continue;
+      }
+      batch.push(relative);
+      if (batch.length === discoveryBatchSize) {
+        await scanBatch();
+      }
+    }
+    if (batch.length) {
+      await scanBatch();
     }
     return {
       hasDerivedEntry,
@@ -443,11 +522,12 @@ export async function scanActualWorkspaceManifest(
   if (params.includePaths) {
     const includedParents = new Set<string>();
     const derivedOnlyDirectories = new Set<string>();
-    const paths = [...params.includePaths]
-      .map((relative) => ({ relative, depth: relative.split("/").length }))
-      .toSorted(
-        (left, right) => right.depth - left.depth || left.relative.localeCompare(right.relative),
-      );
+    const paths = Array.from(params.includePaths, (relative) => ({
+      relative,
+      depth: relative.split("/").length,
+    })).toSorted(
+      (left, right) => right.depth - left.depth || left.relative.localeCompare(right.relative),
+    );
     // Siblings are independent, but parent classification needs every deeper
     // membership result. Join each depth before admitting the next one.
     for (let start = 0; start < paths.length;) {
@@ -471,19 +551,21 @@ export async function scanActualWorkspaceManifest(
       await walk("");
     });
   }
-  // No file readers overlap metadata selection; failures stop new admission
-  // and join all opened handles before any manifest can be returned.
+  // Captures defer file reads; probes hash misses during discovery. Both paths
+  // stop admission and join opened handles before returning or failing.
   await runScans(0, filePaths.length, (index) => addFile(filePaths[index]!));
   scanSignal.throwIfAborted();
 }
 
 export async function readActualWorkspaceManifestImpl(
   params: ActualWorkspaceManifestOptions,
+  reuseFile?: Parameters<typeof scanActualWorkspaceManifest>[0]["reuseFile"],
 ): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string; rawManifest: string }> {
   const entries: WorkerWorkspaceManifestEntry[] = [];
   const directories: string[] = [];
   await scanActualWorkspaceManifest({
     ...params,
+    reuseFile,
     onEntry(entry) {
       if (entry.type === "directory") {
         directories.push(entry.path);

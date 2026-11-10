@@ -48,7 +48,6 @@ export {
   isSessionsCleanupPartialResult,
   serializeSessionCleanupResult,
   SessionsCleanupFailureError,
-  type SessionCleanupSummary,
   type SessionsCleanupResult,
 } from "./cleanup-result.js";
 export { resolveSessionCleanupAction } from "./cleanup-action.js";
@@ -193,7 +192,7 @@ async function previewStoreCleanup(params: {
           },
         })
       : 0;
-  const preserveSessionKeys = await collectSessionMaintenancePreserveKeysForStore({
+  const protection = await collectSessionMaintenancePreserveKeysForStore({
     storePath: params.target.storePath,
     store: previewStore,
     baseKeys: [params.activeKey],
@@ -209,7 +208,8 @@ async function previewStoreCleanup(params: {
     initialUnarchivedCount: countUnarchivedSessionEntries(previewStore),
     // Cleanup previews apply the same immediate cap as the apply path.
     forceMaintenance: true,
-    readPreserveKeys: () => preserveSessionKeys,
+    readPreserveKeys: () => protection.keys,
+    deferArchiving: protection.deferArchiving,
     log: false,
     readAgeCandidates: () => previewStore,
     readCapCandidates: () => ({ store: previewStore, maxEntries: params.maintenance.maxEntries }),

@@ -318,7 +318,7 @@ const jsRuntimeEntrypoints = new Set([
 ]);
 const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
 const awsMacosBunEntrypoints = new Set(["bun", "bunx"]);
-const awsMacosBunVersion = "1.4.3";
+const awsMacosBunVersion = "1.4.4";
 const awsMacosSwiftEntrypoints = new Set(["swift", "xcodebuild"]);
 const awsMacosSwiftScriptTargets = new Set([
   "mac:package",
@@ -1303,6 +1303,18 @@ function restoreTemporaryLeaseClaimPath(claimPath: string) {
   if (!claim || typeof claim !== "object" || claim.repoRoot !== childCwd) {
     return;
   }
+  if (
+    claim.provider === "ascii-box" &&
+    [
+      "ascii_box_deletion_completed",
+      "ascii_box_deletion_operation",
+      "ascii_box_deletion_operation_binding",
+    ].some((key) => Object.hasOwn(claim.labels ?? {}, key))
+  ) {
+    throw new Error(
+      "Boat deletion receipts bind the temporary checkout; stop the lease there before removing it",
+    );
+  }
   claim.repoRoot = repoRoot;
   const temporaryPath = `${claimPath}.tmp-${process.pid}-${Date.now()}`;
   try {
@@ -1325,9 +1337,10 @@ function restoreTemporaryLeaseClaim(commandArgs: string[], capturedLeaseId: stri
     commandArgs[0] === "run"
       ? optionValue(commandArgs, "--id") || optionValue(commandArgs, "--lease-id")
       : "";
-  // Brokered AWS also accepts lease slugs; those are not claim filenames.
+  // AWS and Boat also accept lease slugs; those are not claim filenames.
   const explicitLeaseId =
-    canonicalProvider === "aws" && !/^cbx_[a-f0-9]{12}$/u.test(requestedLeaseId)
+    (canonicalProvider === "aws" || canonicalProvider === "ascii-box") &&
+    !/^cbx_[a-f0-9]{12}$/u.test(requestedLeaseId)
       ? ""
       : requestedLeaseId;
   const exactLeaseId = explicitLeaseId || capturedLeaseId;
@@ -1335,6 +1348,7 @@ function restoreTemporaryLeaseClaim(commandArgs: string[], capturedLeaseId: stri
     commandArgs[0] === "warmup" ||
     (commandArgs[0] === "run" &&
       (canonicalProvider === "aws" ||
+        canonicalProvider === "ascii-box" ||
         requestedLeaseId ||
         hasOption(commandArgs, "--keep") ||
         hasOption(commandArgs, "--keep-on-failure")));
@@ -1349,7 +1363,8 @@ function restoreTemporaryLeaseClaim(commandArgs: string[], capturedLeaseId: stri
           .filter(
             (entry) =>
               entry.endsWith(".json") &&
-              (canonicalProvider !== "aws" || /^cbx_[a-f0-9]{12}\.json$/u.test(entry)),
+              (!["aws", "ascii-box"].includes(canonicalProvider) ||
+                /^cbx_[a-f0-9]{12}\.json$/u.test(entry)),
           )
           .map((entry) => resolve(claimsDir, entry));
       }
@@ -1390,7 +1405,7 @@ function observeLeaseTimingJSONLine(line: string) {
     if (
       canonicalProviderName(report?.provider) === canonicalProvider &&
       typeof report.leaseId === "string" &&
-      (canonicalProvider === "aws"
+      (canonicalProvider === "aws" || canonicalProvider === "ascii-box"
         ? /^cbx_[a-f0-9]{12}$/u.test(report.leaseId)
         : /^tbx_[a-zA-Z0-9_-]+$/u.test(report.leaseId))
     ) {
@@ -3382,7 +3397,7 @@ function needsSourceCapsule(commandArgs: string[], providerName: string) {
     (provider === "blacksmith-testbox" ||
       // Ordinary Linux sync can omit Git. Explicit raw bootstrap commands must keep
       // native ownership because the source receiver itself requires Node.
-      (provider === "aws" &&
+      ((provider === "aws" || provider === "ascii-box") &&
         ["", "linux", "ubuntu"].includes(effectiveTargetContext(commandArgs).target) &&
         !hydrationDisabled &&
         !hasOption(commandArgs, "--sync-only")) ||
@@ -3682,6 +3697,8 @@ async function applyRunTransforms(
   },
 ) {
   const testboxWorkspace = canonicalProviderName(options.provider) === "blacksmith-testbox";
+  const boatSource =
+    canonicalProviderName(options.provider) === "ascii-box" ? options.capsule : null;
   const sourceBootstrap = options.capsule
     ? remoteSourceBootstrap(options.capsule, options.changedGateAlias, testboxWorkspace)
     : "";
@@ -3715,7 +3732,12 @@ async function applyRunTransforms(
         sourceScriptCleanup = () => rmSync(scriptRoot, { recursive: true, force: true });
         writeFileSync(
           scriptPath,
-          wrapRemoteScript(script, `${sourceBootstrap} || exit $?\nexport CI=true`),
+          boatSource
+            ? remoteSourceBootstrap(boatSource, options.changedGateAlias, false, {
+                script,
+                delimiter: uniqueHereDocDelimiter(script),
+              })
+            : wrapRemoteScript(script, `${sourceBootstrap} || exit $?\nexport CI=true`),
         );
         chmodSync(scriptPath, 0o700);
         transformedArgs = replaceRunScript(invocation, scriptPath);
@@ -3726,7 +3748,11 @@ async function applyRunTransforms(
       ) {
         transformedArgs = replaceRunCommandWithShell(
           invocation,
-          `${sourceBootstrap} || exit $?; ${renderRunShellCommand(invocation)}`,
+          boatSource
+            ? remoteSourceBootstrap(boatSource, options.changedGateAlias, false, {
+                command: renderRunShellCommand(invocation),
+              })
+            : `${sourceBootstrap} || exit $?; ${renderRunShellCommand(invocation)}`,
         );
       }
     }
@@ -3926,17 +3952,19 @@ if (canonicalProvider === "blacksmith-testbox") {
 let testboxLeaseFreshness: ReturnType<typeof prepareTestboxLeaseFreshness>;
 try {
   testboxLeaseFreshness = prepareTestboxLeaseFreshness({
-    // Reuse the native-help parser's boundary; payload flags are never lease
-    // options. Equals form preserves option-looking values and Go's last value.
-    args: [
-      normalizedArgs[0] ?? "",
-      ...parseCommandInvocation(help.text, normalizedArgs).optionEntries.map(
-        ({ name, value, index }) =>
+    operation: normalizedArgs[0] ?? "",
+    // Preserve the native-help parser's payload boundary and Go's last value.
+    // The invocation's lookup map is first-wins; fold its ordered entries here.
+    options: new Map(
+      parseCommandInvocation(help.text, normalizedArgs).optionEntries.map(
+        ({ name, value, index }) => [
+          name,
           normalizedArgs[index]?.includes("=") || commandValueOptionsFromHelp.has(name)
-            ? `--${name}=${value}`
-            : `--${name}`,
+            ? value
+            : "true",
+        ],
       ),
-    ],
+    ),
     command: normalizedArgs,
     env: { ...process.env, CI: process.env.CI || "true" },
     provider: canonicalProvider,
@@ -4126,7 +4154,7 @@ function cleanupOnce() {
       );
     }
   }
-  if (canonicalProvider === "blacksmith-testbox" || canonicalProvider === "aws") {
+  if (["blacksmith-testbox", "aws", "ascii-box"].includes(canonicalProvider)) {
     // Crabbox stamps claims with its cwd; retained leases belong to the caller.
     claimsRestored = restoreTemporaryLeaseClaim(normalizedArgs, capturedLeaseId);
     succeeded = claimsRestored && succeeded;
@@ -4264,7 +4292,7 @@ if (fullCheckout) {
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
 const captureLeaseTimingJSON =
-  (canonicalProvider === "blacksmith-testbox" || canonicalProvider === "aws") &&
+  ["blacksmith-testbox", "aws", "ascii-box"].includes(canonicalProvider) &&
   hasOption(normalizedArgs, "--timing-json");
 // Fast-fail hint context: run --id reuse dies in under a second when the
 // lease hit its idle timeout, with only a bare nonzero exit from the binary.

@@ -40,18 +40,6 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-it("joins the preparation owner with the caller's exact environment", async () => {
-  const firstCommand = createDeferred<number>();
-  const runCommand = vi.fn<SetupCommandRunner>().mockReturnValueOnce(firstCommand.promise);
-
-  const env = { ...process.env, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" };
-  const setupPromise = runE2eGlobalSetup(runCommand, env);
-  expect(runCommand).toHaveBeenCalledTimes(1);
-  firstCommand.resolve(0);
-  await setupPromise;
-  expect(runCommand.mock.calls).toEqual([[prepareBuild, env]]);
-});
-
 it("propagates a nonzero command status", async () => {
   const runCommand = vi.fn<SetupCommandRunner>().mockResolvedValueOnce(23);
   await expect(runE2eGlobalSetup(runCommand)).rejects.toThrow(

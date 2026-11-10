@@ -1,8 +1,37 @@
+/* The standalone page hands the shell's bounded content height down to the
+   rail + preview, so a tall window is used instead of stopping at the layout
+   minimum. Embedded presentation keeps its own full-height rules below. */
+main.content:where(.content--portals-page) {
+  display: flex;
+  flex-direction: column;
+}
+
+main.content:where(.content--portals-page) > openclaw-router-outlet,
+openclaw-portals-page:not([embedded]) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+main.content:where(.content--portals-page) > openclaw-router-outlet {
+  margin-top: 0;
+}
+
+main.content:where(.content--portals-page) .content-header {
+  flex: 0 0 auto;
+}
+
+main.content:where(.content--portals-page) .portals-empty {
+  flex: 1 1 auto;
+}
+
+/* The preview's own 480px frame floor keeps the layout tall enough to scroll in
+   short windows; there is no viewport-offset cap. */
 .portals-layout {
   display: grid;
   grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
   gap: var(--space-4);
-  min-height: min(720px, calc(100vh - 190px));
+  flex: 1 1 auto;
 }
 
 .portals-rail {
@@ -10,7 +39,7 @@
   padding: 4px;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--panel) 76%, transparent);
 }
 
@@ -18,9 +47,9 @@
   width: 100%;
   display: grid;
   gap: 4px;
-  padding: 12px;
+  padding: var(--list-row-padding);
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -30,11 +59,11 @@
 
 .portals-rail__item:hover,
 .portals-rail__item:focus-visible {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .portals-rail__item.active {
-  background: var(--accent-subtle);
+  background: var(--surface-selected-hover);
 }
 
 .portals-rail__title,
@@ -46,14 +75,14 @@
 
 .portals-rail__title {
   color: var(--text-strong);
-  font-size: 0.86rem;
-  font-weight: 650;
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
 }
 
 .portals-rail__port,
 .portals-rail__description {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--control-ui-text-sm);
   line-height: 1.35;
 }
 
@@ -71,7 +100,7 @@
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
 }
 
@@ -144,7 +173,7 @@
 .portals-preview__notice-title,
 .portals-empty__title {
   color: var(--text);
-  font-size: 0.95rem;
+  font-size: calc(0.95rem * var(--control-ui-text-scale));
   font-weight: 650;
 }
 
@@ -225,7 +254,7 @@ openclaw-portals-page[embedded],
   height: var(--session-rail-icon, var(--rail-header-action-glyph-size));
 }
 
-.portals-page--embedded .portals-embedded__identity {
+.portals-page--embedded .portals-embedded__identity.session-panel-rail__identity {
   display: grid;
   gap: 3px;
 }
@@ -305,7 +334,7 @@ openclaw-portals-page[embedded],
 
 .portals-page--embedded[data-mobile] .portals-embedded__name {
   display: block;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 500;
 }
 
@@ -313,13 +342,12 @@ openclaw-portals-page[embedded],
   width: calc(100% - 24px);
   margin: 0 12px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 @media (max-width: 768px) {
   .portals-layout {
     grid-template-columns: minmax(0, 1fr);
-    min-height: auto;
   }
 
   .portals-rail {

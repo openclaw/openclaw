@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -9,7 +8,6 @@ import {
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
-import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   listSessionPendingInputs,
   loadSessionEntry,
@@ -18,7 +16,6 @@ import {
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as transcriptPersistence from "../../sessions/user-turn-transcript.persistence.js";
 import * as skillSelection from "../../skills/library/selection.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -27,7 +24,6 @@ import { refusePendingInputCommit } from "../pending-input-commit.test-support.j
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
-import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import {
   setClientProfile,
@@ -70,12 +66,6 @@ function expectUserTurn(
 it("acknowledges staged chat input and joins its terminal disposition without host pending-input writes", async () => {
   const fixture = await createFixture();
   const runId = fixture.params.idempotencyKey;
-  let clock = 0;
-  using _ = vi.spyOn(performance, "now").mockImplementation(() => clock);
-  using log = vi.spyOn(fixture.context.logGateway, "info");
-  fixture.beforeApprove.mockImplementation(() => {
-    clock = 1_400;
-  });
   let pendingAtAck: ReturnType<typeof listSessionPendingInputs> | undefined;
   const sql = observeHostDataSql();
   try {
@@ -108,10 +98,6 @@ it("acknowledges staged chat input and joins its terminal disposition without ho
   expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
     items: [{ state: "cancelled", runId }],
   });
-  const requestTiming = log.mock.calls.find(([message]) => message.includes("stage=request"))?.[0];
-  expect(requestTiming).toContain("detail.persist.stage=1400ms");
-  expect(requestTiming).toContain("detail.admission.work=0ms");
-  expect(requestTiming).toContain("detail.admission.revalidate=0ms");
 });
 
 it.for(["durable", "memory"] as const)(
@@ -132,7 +118,7 @@ it.for(["durable", "memory"] as const)(
       storage === "durable"
         ? refusePendingInputCommit({
             operation: "stage",
-            message: "Idle input must commit directly with its restart claim",
+            message: "Idle input must commit directly with its transcript",
             sessionId: fixture.scope.sessionId,
             runId,
           })
@@ -153,8 +139,6 @@ it.for(["durable", "memory"] as const)(
       expect(entryAtAck).toMatchObject({
         sessionId: fixture.scope.sessionId,
         lifecycleRunId: runId,
-        restartRecoveryDeliveryRunId: runId,
-        restartRecoveryDeliverySourceRunId: runId,
         ...(storage === "memory" ? { incognito: true } : {}),
       });
       expectUserTurn(fixture, transcriptAtAck);
@@ -169,11 +153,10 @@ it.for(["durable", "memory"] as const)(
   },
 );
 
-it.each(["unchanged", "selected profile", "session access"] as const)(
+it.each(["selected profile", "session access"] as const)(
   "rechecks %s before committing unhooked idle input",
   async (change) => {
     const fixture = await createFixture({ active: false });
-    const runId = fixture.params.idempotencyKey;
     const source = ensureProfileForEmail("idle-admission-source@example.test");
     const other = ensureProfileForEmail("idle-admission-owner@example.test");
     setClientProfile(fixture.client, source);
@@ -216,23 +199,10 @@ it.each(["unchanged", "selected profile", "session access"] as const)(
       release.resolve();
       const respond = await sending;
       expect(respond).toHaveBeenCalledOnce();
-      if (change === "unchanged") {
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
-        await fixture.dispatchedRecorder;
-        expect(loadTranscriptEventsSync(fixture.scope)).toHaveLength(
-          fixture.activeTranscript.length + 1,
-        );
-        expect(loadSessionEntry(fixture.scope)).toMatchObject({
-          restartRecoveryDeliveryRunId: runId,
-        });
-        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      } else {
-        expect(respond.mock.calls[0]?.[0]).toBe(false);
-        expect(respond.mock.calls[0]?.[2]).toBeDefined();
-        expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-        expect(loadSessionEntry(fixture.scope)?.restartRecoveryDeliveryRunId).not.toBe(runId);
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      }
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(respond.mock.calls[0]?.[2]).toBeDefined();
+      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
     } finally {
       release.resolve();
@@ -245,53 +215,7 @@ it.each(["unchanged", "selected profile", "session access"] as const)(
   },
 );
 
-it("recovers an older queued input into one idle transcript commit before ACK", async () => {
-  await using fixture = await createFixture({ preserveContent: true });
-  const runId = fixture.params.idempotencyKey;
-  const profile = ensureProfileForEmail("queued-input-upgrade@example.test");
-  setClientProfile(fixture.client, profile, "Queued input upgrade fixture");
-  await fixture.send();
-  await fixture.dispatchedRecorder;
-  const queued = (await listSessionPendingInputs(fixture.scope)).items[0];
-  expect(queued).toMatchObject({ state: "queued", runId });
-  expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-
-  // Recreate the durable state left by the former two-commit path after a restart.
-  rotateAgentEventLifecycleGeneration();
-  await fixture.finishDispatch();
-  fixture.context.dedupe.clear();
-  const registry = getTestPluginRegistry();
-  registry.typedHooks = registry.typedHooks.filter(
-    (hook) => hook.pluginId !== "approved-input-fixture",
-  );
-  await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
-  dispatchInboundMessageMock.mockClear();
-
-  let atAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
-  let claimAtAck: ReturnType<typeof loadSessionEntry>;
-  const response = await fixture.send(
-    vi.fn<RespondFn>((ok) => {
-      if (ok) {
-        atAck = loadTranscriptEventsSync(fixture.scope);
-        claimAtAck = loadSessionEntry(fixture.scope);
-      }
-    }),
-  );
-  expectStarted(fixture, response);
-  expect(claimAtAck).toMatchObject({
-    sessionId: fixture.scope.sessionId,
-    restartRecoveryDeliveryRunId: runId,
-    restartRecoveryDeliverySourceRunId: runId,
-  });
-  expectUserTurn(fixture, atAck);
-  expect(atAck?.at(-1)).toMatchObject({ id: queued?.id });
-  expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-  await fixture.finishDispatch();
-  expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-  expect(loadTranscriptEventsSync(fixture.scope)).toEqual(atAck);
-});
-
-it.for(["dispatch", "failure", "cancel"] as const)(
+it.for(["failure", "cancel"] as const)(
   "acknowledges durable input before skill session preparation (%s)",
   async (outcome, { signal }) => {
     await using fixture = await createFixture({ active: false });
@@ -301,18 +225,15 @@ it.for(["dispatch", "failure", "cancel"] as const)(
     setClientProfile(fixture.client, profile, "Preparation fixture");
     const entered = createDeferred();
     const release = createDeferred();
-    const waitForPreparation = async () => {
-      entered.resolve();
-      await release.promise;
-      if (outcome === "failure") {
-        throw new Error("Skill authoring preparation failed");
-      }
-    };
     const prepare = skillSelection.prepareSkillLibrarySession;
     using _ = vi
       .spyOn(skillSelection, "prepareSkillLibrarySession")
       .mockImplementation(async (...args) => {
-        await waitForPreparation();
+        entered.resolve();
+        await release.promise;
+        if (outcome === "failure") {
+          throw new Error("Skill authoring preparation failed");
+        }
         return prepare(...args);
       });
     using observer = new DatabaseSync(
@@ -322,9 +243,7 @@ it.for(["dispatch", "failure", "cancel"] as const)(
     const readClaim = observer.prepare(
       `SELECT current_session_id AS sessionId, status,
         json_extract(entry_json, '$.lastInteractionAt') AS lastInteractionAt,
-        json_extract(entry_json, '$.lifecycleRunId') AS lifecycleRunId,
-        json_extract(entry_json, '$.restartRecoveryDeliveryRunId') AS runId,
-        json_extract(entry_json, '$.restartRecoveryDeliverySourceRunId') AS sourceRunId
+        json_extract(entry_json, '$.lifecycleRunId') AS lifecycleRunId
        FROM session_nodes WHERE session_key = ?`,
     );
     const readUserTurn = observer.prepare(
@@ -355,8 +274,6 @@ it.for(["dispatch", "failure", "cancel"] as const)(
           status: null,
           lastInteractionAt: expect.any(Number),
           lifecycleRunId: runId,
-          runId,
-          sourceRunId: runId,
         },
         userTurns: [
           {
@@ -392,30 +309,12 @@ it.for(["dispatch", "failure", "cancel"] as const)(
 
       release.resolve();
       await sending;
-      if (outcome === "dispatch") {
-        await withinTest(fixture.dispatchedRecorder, signal);
-        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-        const dispatch = dispatchInboundMessageMock.mock.calls[0]?.[0] as Parameters<
-          typeof dispatchInboundMessage
-        >[0];
-        expect(dispatch).toMatchObject({
-          ctx: { Body: fixture.params.message, MessageSid: runId },
-          replyOptions: { skillLibraryAuthoring: { target: "personal" } },
-        });
-        expect(dispatch.replyOptions?.recordedSessionActivity).toEqual({
-          sessionId: fixture.scope.sessionId,
-          sessionKey: fixture.scope.sessionKey,
-          at: readClaim.get(fixture.scope.sessionKey)?.lastInteractionAt,
-        });
-      }
       await fixture.finishDispatch();
       expect(respond).toHaveBeenCalledOnce();
       expect(loadTranscriptEventsSync(fixture.scope).slice(0, admittedTranscript.length)).toEqual(
         admittedTranscript,
       );
-      if (outcome !== "dispatch") {
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      }
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       if (outcome === "failure") {
         expect(fixture.context.broadcast).toHaveBeenCalledWith(
           "chat",

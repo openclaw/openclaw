@@ -82,11 +82,6 @@ export type MeetingBridgeProcess = {
   ): unknown;
 };
 
-type TerminateMeetingBridgeProcessOptions = {
-  graceMs: number;
-  initialSignal?: NodeJS.Signals;
-};
-
 function hasExited(proc: MeetingBridgeProcess): boolean {
   return proc.exitCode !== null || proc.signalCode !== null;
 }
@@ -119,7 +114,10 @@ function waitForExit(proc: MeetingBridgeProcess, timeoutMs: number): Promise<boo
 /** Settles after the bridge exits or the bounded force-kill sequence finishes. */
 export async function terminateMeetingBridgeProcess(
   proc: MeetingBridgeProcess | undefined,
-  options: TerminateMeetingBridgeProcessOptions,
+  options: {
+    graceMs: number;
+    initialSignal?: NodeJS.Signals;
+  },
 ): Promise<void> {
   if (!proc || hasExited(proc)) {
     return;

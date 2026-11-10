@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { racePromiseWithAbortSignal, raceWithTimeout } from "@openclaw/retry";
 import type {
   PluginControlUiActivation,
@@ -19,8 +20,10 @@ import type {
   ControlUiSurface,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { readOfflineStorageScope } from "../app/boot-record.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
+import { i18n } from "../i18n/lib/translate.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
@@ -81,6 +84,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private readonly stops: ControlUiDisposer[] = [];
   private client: GatewayBrowserClient | null = null;
   private connectionId: string | null = null;
+  private recoveryScope: string | undefined;
   private refreshGeneration = 0;
   private disposed = false;
   private readonly settingsLifetimes = new Set<AbortController>();
@@ -217,7 +221,13 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     // Plugin generations can change while the server connection and UI owners survive.
     const connectionId =
       snapshot.phase === "connected" ? (snapshot.hello?.server?.connId ?? "") : null;
-    if (this.client === client && this.connectionId === connectionId) {
+    const recoveryScope = readOfflineStorageScope({
+      client,
+      connected: snapshot.phase === "connected",
+    });
+    const recoveryChanged = this.recoveryScope !== recoveryScope;
+    this.recoveryScope = recoveryScope;
+    if (this.client === client && this.connectionId === connectionId && !recoveryChanged) {
       return;
     }
     this.retireOwners();
@@ -299,7 +309,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           const grantError = !sameOrigin
             ? `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`
             : !bootstrap
-              ? "Could not authenticate native plugin assets. Reconnect and retry."
+              ? "Couldn’t authenticate native plugin assets. Reconnect and try again."
               : controlUiPluginAssetGrantError(descriptor, bootstrap, context.resourceBasePath);
           if (grantError) {
             installed.delete(descriptor.pluginId);
@@ -309,7 +319,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
               pluginId: descriptor.pluginId,
               revision: descriptor.revision,
               status: "failed",
-              error: grantError.slice(0, 512),
+              error: truncateUtf16Safe(grantError, 512),
             });
           }
         }
@@ -417,15 +427,15 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         );
       };
       const complete = await raceWithTimeout(
-        racePromiseWithAbortSignal(
-          initialize(),
-          abort.signal,
-          () => new Error("Plugin UI activation ended."),
-        ),
+        racePromiseWithAbortSignal(initialize(), abort.signal),
         ACTIVATION_TIMEOUT_MS,
         () => {
+          const message = i18n.t("pluginUi.activationTimedOut");
+          // A stalled loader has not registered its lazy copy; keep the deadline synchronous.
           throw new Error(
-            "Plugin UI initialization timed out. Check the plugin and reload its UI.",
+            message === "pluginUi.activationTimedOut"
+              ? i18n.t("pluginUi.inlineUnavailable")
+              : message,
           );
         },
       );
@@ -497,7 +507,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           pluginId: descriptor.pluginId,
           revision: descriptor.revision,
           status: "failed",
-          error: formatUiError(error, "Plugin UI activation failed.").slice(0, 512),
+          error: truncateUtf16Safe(formatUiError(error, "Plugin UI activation failed."), 512),
         };
       }
     } finally {
@@ -568,6 +578,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           key: `${owner.descriptor.pluginId}/${id}`,
           pluginId: owner.descriptor.pluginId,
           value: entry.value,
+          ...(kind === "panels" && owner.descriptor.panelIcon
+            ? { panelIcon: owner.descriptor.panelIcon }
+            : {}),
           host: owner.host,
           signal: entry.signal,
         });

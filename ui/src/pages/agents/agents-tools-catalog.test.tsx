@@ -17,25 +17,10 @@ import {
   ownedAgentsContext,
   snapshot,
 } from "./agents-page.test-support.ts";
-import { createBaseParams } from "./panels-tools-skills.test-support.ts";
+import { createBaseParams, createReadToolCatalog } from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 afterEach(cleanupSolid);
-
-function catalog(agentId: string, label: string): ToolsCatalogResult {
-  return {
-    agentId,
-    profiles: [],
-    groups: [
-      {
-        id: "test",
-        label: "Test tools",
-        source: "core",
-        tools: [{ id: label, label, description: label, source: "core", defaultProfiles: [] }],
-      },
-    ],
-  };
-}
 
 async function mountCatalog(
   readCatalog: () => Promise<ToolsCatalogResult>,
@@ -55,28 +40,17 @@ async function mountCatalog(
       return readCatalog();
     }
     if (method === "tools.effective") {
-      return {
-        profile: "full",
-        groups: [
-          {
-            id: "core",
-            label: "Built-in tools",
-            source: "core",
-            tools: [{ id: "read", label: "read", description: "Read", source: "core" }],
-          },
-        ],
-      };
+      return { profile: "full", groups: createReadToolCatalog().groups };
     }
     throw new Error(`Unexpected gateway method: ${method}`);
   });
   const client = createTestGatewayClient(request);
   const currentGateway = gateway(snapshot(client));
   const context = await ownedAgentsContext(currentGateway);
-  const agents = context.agents;
   const route = (nextPanel: AgentsPanel) => ({
     ...agentsRouteData(
       currentGateway,
-      agents.state.agentsList,
+      context.agents.state.agentsList,
       context.settingsAgentSelection.state.selectedId,
       context.settingsAgentSelection,
     ),
@@ -100,6 +74,8 @@ async function mountCatalog(
     client,
     currentGateway,
     request,
+    preview: () =>
+      mounted.container.querySelector(".agent-tools-group__preview .mono")?.textContent?.trim(),
     setPanel(nextPanel: AgentsPanel) {
       page.setRouteData(route(nextPanel));
     },
@@ -116,6 +92,8 @@ describe("Agents tools catalog read", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
     const view = await mountCatalog(read, "files");
+    const profileButton = () =>
+      view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button");
     expect(view.catalogCalls()).toHaveLength(0);
 
     view.setPanel("tools");
@@ -130,28 +108,24 @@ describe("Agents tools catalog read", () => {
     expect(
       view.container.querySelector('.settings-loading-skeleton[aria-busy="true"]'),
     ).not.toBeNull();
-    expect(
-      view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")?.disabled,
-    ).toBe(true);
+    expect(profileButton()?.disabled).toBe(true);
     const identityHost = view.container.querySelector("openclaw-github-identity");
     expect(identityHost).not.toBeNull();
 
     first.reject(new Error("gateway unavailable"));
     await waitForSolid(() =>
       expect(view.container.textContent).toContain(
-        "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+        "Couldn’t load the tool catalog. Showing built-in tools instead.",
       ),
     );
-    expect(
-      view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")?.disabled,
-    ).toBe(false);
-    expect(view.container.querySelector(".agent-tool-card")).not.toBeNull();
+    expect(profileButton()?.disabled).toBe(false);
+    expect(view.container.querySelector(".agent-tools-group")).not.toBeNull();
     expect(view.container.querySelector("openclaw-github-identity")).toBe(identityHost);
 
     view.page.read().agentSkills.onFilterChange("unrelated filter");
     await waitForSolid(() => expect(view.page.read().agentSkills.filter).toBe("unrelated filter"));
     await waitForSolid(() => {
-      expect(view.container.textContent).toContain("Showing built-in fallback list instead.");
+      expect(view.container.textContent).toContain("Showing built-in tools instead.");
       expect(
         Array.from(view.container.querySelectorAll("button")).some(
           (button) => button.textContent?.trim() === "Retry",
@@ -167,19 +141,17 @@ describe("Agents tools catalog read", () => {
     retry!.click();
     await waitForSolid(() => {
       expect(view.catalogCalls()).toHaveLength(2);
-      expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
+      expect(view.container.textContent).not.toContain("Showing built-in tools instead.");
       expect(
         view.container.querySelector('.settings-loading-skeleton[aria-busy="true"]'),
       ).not.toBeNull();
-      expect(
-        view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")?.disabled,
-      ).toBe(true);
+      expect(profileButton()?.disabled).toBe(true);
     });
     expect(view.container.querySelector("openclaw-github-identity")).toBe(identityHost);
-    second.resolve(catalog("main", "read"));
+    second.resolve(createReadToolCatalog("main", "read"));
     await waitForSolid(() => {
-      expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
-      expect(view.container.querySelector(".agent-tool-title")?.textContent?.trim()).toBe("read");
+      expect(view.container.textContent).not.toContain("Showing built-in tools instead.");
+      expect(view.preview()).toBe("read");
     });
     expect(view.container.querySelector("openclaw-github-identity")).toBe(identityHost);
     const previewLink = view.container.querySelector<HTMLAnchorElement>(
@@ -187,7 +159,9 @@ describe("Agents tools catalog read", () => {
     );
     expect(previewLink).not.toBeNull();
     previewLink!.click();
-    expect(view.container.querySelector<HTMLDetailsElement>("#agent-tool-read")?.open).toBe(true);
+    await waitForSolid(() =>
+      expect(view.container.querySelector<HTMLDetailsElement>("#agent-tool-read")?.open).toBe(true),
+    );
 
     view.setPanel("files");
     view.setPanel("tools");
@@ -195,22 +169,16 @@ describe("Agents tools catalog read", () => {
   });
 
   it("retains a successful catalog across a same-client reconnect", async () => {
-    const read = vi.fn(async () => catalog("main", "cached-tool"));
+    const read = vi.fn(async () => createReadToolCatalog("main", "cached-tool"));
     const view = await mountCatalog(read);
-    await waitForSolid(() =>
-      expect(view.container.querySelector(".agent-tool-title")?.textContent?.trim()).toBe(
-        "cached-tool",
-      ),
-    );
+    await waitForSolid(() => expect(view.preview()).toBe("cached-tool"));
 
     emitGatewaySnapshot(view.currentGateway, snapshot(view.client, false));
     emitGatewaySnapshot(view.currentGateway, snapshot(view.client));
     view.context.settingsAgentSelection.set("main");
     await waitForSolid(() => {
       expect(view.catalogCalls()).toHaveLength(1);
-      expect(view.container.querySelector(".agent-tool-title")?.textContent?.trim()).toBe(
-        "cached-tool",
-      );
+      expect(view.preview()).toBe("cached-tool");
     });
   });
 
@@ -225,17 +193,15 @@ describe("Agents tools catalog read", () => {
     await waitForSolid(() => expect(view.catalogCalls()).toHaveLength(1));
     first.reject(new Error("temporarily unavailable"));
     await waitForSolid(() =>
-      expect(view.container.textContent).toContain("Showing built-in fallback list instead."),
+      expect(view.container.textContent).toContain("Showing built-in tools instead."),
     );
 
     view.context.settingsAgentSelection.set("main");
     await waitForSolid(() => expect(view.catalogCalls()).toHaveLength(2));
-    second.resolve(catalog("main", "recovered-tool"));
+    second.resolve(createReadToolCatalog("main", "recovered-tool"));
     await waitForSolid(() => {
-      expect(view.container.querySelector(".agent-tool-title")?.textContent?.trim()).toBe(
-        "recovered-tool",
-      );
-      expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
+      expect(view.preview()).toBe("recovered-tool");
+      expect(view.container.textContent).not.toContain("Showing built-in tools instead.");
     });
   });
 
@@ -261,24 +227,43 @@ describe("Agents tools catalog read", () => {
       emitGatewaySnapshot(view.currentGateway, snapshot(view.client));
     }
     await waitForSolid(() => expect(view.catalogCalls()).toHaveLength(2));
-    current.resolve(catalog("main", "current-tool"));
-    await waitForSolid(() =>
-      expect(view.container.querySelector(".agent-tool-title")?.textContent?.trim()).toBe(
-        "current-tool",
-      ),
-    );
+    current.resolve(createReadToolCatalog("main", "current-tool"));
+    await waitForSolid(() => expect(view.preview()).toBe("current-tool"));
     if (outcome === "success") {
-      old.resolve(catalog("main", "stale-tool"));
+      old.resolve(createReadToolCatalog("main", "stale-tool"));
     } else {
       old.reject(new Error("retired request failed"));
     }
     await old.promise.catch(() => {});
     await waitForSolid(() => {
-      expect(view.container.querySelector(".agent-tool-title")?.textContent?.trim()).toBe(
-        "current-tool",
-      );
+      expect(view.preview()).toBe("current-tool");
       expect(view.container.textContent).not.toContain("stale-tool");
-      expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
+      expect(view.container.textContent).not.toContain("Showing built-in tools instead.");
     });
   });
 });
+
+it.each(["main", "Main"])(
+  "renders the authored %s allowlist path as code",
+  async (authoredAgentId) => {
+    const params = createBaseParams({
+      configForm: {
+        agents: { entries: { [authoredAgentId]: { tools: { profile: "full", allow: ["read"] } } } },
+        tools: { allow: ["read"] },
+      },
+      catalog: createReadToolCatalog(),
+    });
+    const view = mountSolid(() => <AgentTools {...params} />);
+    await waitForSolid(() => {
+      expect(
+        Array.from(view.container.querySelectorAll(".callout code"), (node) => node.textContent),
+      ).toEqual([`agents.entries.${authoredAgentId}.tools.allow`, "tools.allow"]);
+    });
+    expect(view.container.textContent).toContain(
+      "This agent uses a tool allowlist. Manage it in Config:",
+    );
+    expect(view.container.textContent).toContain(
+      "Agent overrides can’t enable tools blocked by the global allowlist:",
+    );
+  },
+);

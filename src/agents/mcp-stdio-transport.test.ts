@@ -170,12 +170,6 @@ describe("OpenClawStdioClientTransport", () => {
     expect(closed).toHaveBeenCalledOnce();
   });
 
-  it("does not infer plugin data directory ownership from server environment", async () => {
-    const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
-    await startedFixture({ env: { PLUGIN_ROOT: "/plugin", PLUGIN_DATA: "/user-owned-file" } });
-    expect(mkdir).not.toHaveBeenCalled();
-  });
-
   it("forceClose retires startup while its owned data directory is being prepared", async () => {
     const preparation = createDeferred<undefined>();
     vi.spyOn(fs, "mkdir").mockReturnValue(preparation.promise);

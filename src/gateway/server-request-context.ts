@@ -26,6 +26,7 @@ import {
 } from "./server/client-presence.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { getHealthCache } from "./server/health-state.js";
+import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-policy.js";
 import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
 import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -64,6 +65,7 @@ type GatewayRequestContextRuntime = Pick<
   | "nodeRegistry"
   | "workerEnvironmentService"
   | "hostDesktopService"
+  | "openclawIdService"
   | "gatewayComputerService"
   | "githubPublicationService"
   | "validateAgentRuntimeApprovalAuthority"
@@ -87,7 +89,6 @@ type GatewayRequestContextRuntime = Pick<
   | "broadcastVoiceWakeChanged"
   | "broadcastVoiceWakeRoutingChanged"
   | "unavailableGatewayMethods"
-  | "inputRecovery"
 > &
   Pick<
     GatewayCoreRuntime,
@@ -192,7 +193,7 @@ function canDeliverApprovals(
   if (gatewayClient.invalidated) {
     return false;
   }
-  const scopes = Array.isArray(gatewayClient.connect.scopes) ? gatewayClient.connect.scopes : [];
+  const scopes = gatewayClient.connect.scopes ?? [];
   const hasApprovalScope =
     scopes.includes("operator.admin") || scopes.includes("operator.approvals");
   if (!hasApprovalScope) {
@@ -281,13 +282,7 @@ export function createGatewayRequestContext(
     getRuntimeConfig,
     ...(agentDatabaseStartup
       ? {
-          agentDatabaseStartup: {
-            get hasPendingAgents() {
-              return agentDatabaseStartup.hasPendingAgents;
-            },
-            waitForAgentPreparation:
-              agentDatabaseStartup.waitForAgentPreparation.bind(agentDatabaseStartup),
-          },
+          agentDatabaseStartup: agentDatabaseStartup.observation,
         }
       : {}),
     resolveSessionRequestTargets: (request) =>
@@ -451,6 +446,10 @@ export function createGatewayRequestContext(
       if (presenceChanged) {
         runtime.publishPresence();
       }
+      disconnectDisallowedGatewayPolicyClients(
+        clients.authorityClients,
+        context.getCommittedRuntimeConfig?.() ?? getRuntimeConfig(),
+      );
     },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";
@@ -515,6 +514,7 @@ export function createGatewayRequestContext(
       ? { workerEnvironmentService: runtime.workerEnvironmentService }
       : {}),
     ...(runtime.hostDesktopService ? { hostDesktopService: runtime.hostDesktopService } : {}),
+    ...(runtime.openclawIdService ? { openclawIdService: runtime.openclawIdService } : {}),
     ...(runtime.gatewayComputerService
       ? { gatewayComputerService: runtime.gatewayComputerService }
       : {}),
@@ -571,7 +571,6 @@ export function createGatewayRequestContext(
     broadcastVoiceWakeChanged: runtime.broadcastVoiceWakeChanged,
     broadcastVoiceWakeRoutingChanged: runtime.broadcastVoiceWakeRoutingChanged,
     unavailableGatewayMethods: runtime.unavailableGatewayMethods,
-    inputRecovery: runtime.inputRecovery,
   };
   return bindSessionRowProjection(context, runtime.getSessionRowProjection);
 }

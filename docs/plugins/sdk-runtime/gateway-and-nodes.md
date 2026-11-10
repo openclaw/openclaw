@@ -64,7 +64,9 @@ and finish admitted writes before returning. Scheduling creates no durable jobs
 and changes no stored config or state; an update requires no state migration.
 
 Config-only service restarts share plugin replacement's five-second startup
-observation budget. If startup exceeds it, the host reports a service health
+observation budget. Service startup and cleanup observation budgets measure elapsed
+time, so system-clock changes cannot shorten or extend them. If startup exceeds its
+budget, the host reports a service health
 failure and closes scheduling and managed capability admission. Raw startup
 remains owned until it settles, then the service's final stop runs exactly once.
 This does not forcibly terminate native plugin work: shutdown still waits for

@@ -182,13 +182,19 @@ function directoryState(directory: string): DirectoryState {
     presence: new Map(),
     dirty: false,
     publishChange: gatewayFileChangePublisher ?? captureFileChangePublisher(),
-    observation: observeOwnedDirectory(directory, (filename) => {
-      if (
-        filename === undefined ||
-        legacyNames.has(filename) ||
-        [...identities.keys()].some((databasePath) => filename === path.basename(databasePath))
-      ) {
+    observation: observeOwnedDirectory(directory, (filename, event) => {
+      if (event === "change" && filename !== undefined) {
+        return;
+      }
+      if (filename === undefined || legacyNames.has(filename)) {
         void refreshDirectory(directory, state);
+        return;
+      }
+      for (const databasePath of identities.keys()) {
+        if (filename === path.basename(databasePath)) {
+          void refreshDirectory(directory, state);
+          return;
+        }
       }
     }),
   };

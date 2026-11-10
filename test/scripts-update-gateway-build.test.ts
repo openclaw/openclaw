@@ -89,6 +89,27 @@ describe("source update build output transaction", () => {
     fs.mkdirSync(path.join(workdir, ".git"));
   });
 
+  it("keeps standalone checkout ownership separate from an enclosing checkout", async () => {
+    fs.mkdirSync(path.join(scratch, ".git"));
+    const enclosingLock = path.join(scratch, ".artifacts/dist-artifacts.lock");
+    fs.mkdirSync(enclosingLock, { recursive: true });
+    const retainedOwner = JSON.stringify({ pid: 0 });
+    fs.writeFileSync(path.join(enclosingLock, "owner.json"), retainedOwner);
+    const checkoutLock = path.join(workdir, ".artifacts/dist-artifacts.lock");
+
+    await expect(
+      runTransaction({
+        build: async () => {
+          expect(fs.existsSync(path.join(checkoutLock, "owner.json"))).toBe(true);
+          return { exitCode: 0 };
+        },
+        lifecycle: async () => 0,
+      }),
+    ).resolves.toBe(0);
+    expect(fs.existsSync(path.join(checkoutLock, "owner.json"))).toBe(false);
+    expect(fs.readFileSync(path.join(enclosingLock, "owner.json"), "utf8")).toBe(retainedOwner);
+  });
+
   it.each(["shared consumer", "migration refusal", "admission unavailable"])(
     "preserves the incumbent on %s",
     async (failure) => {
@@ -204,38 +225,25 @@ describe("source update build output transaction", () => {
         }
         return 0;
       });
-      const [outcome] = await Promise.allSettled([
-        runUpdateGatewayBuild("stop-selected", "restart-selected", shimDir, target),
-      ]);
       const reachedPublication = failure === "shared consumer";
+      await expect(
+        runUpdateGatewayBuild("stop-selected", "restart-selected", shimDir, target),
+      ).rejects.toThrow(
+        reachedPublication
+          ? "another managed Gateway"
+          : failure === "migration refusal"
+            ? "Conflicting automation scratch"
+            : "Candidate admission unavailable (exit-2)",
+      );
       expect(imported).toBe(reachedPublication);
       expect(consumerLive).toBe(reachedPublication);
       expect(lifecycle).toEqual(reachedPublication ? ["stop-selected", "restart-selected"] : []);
-      expect({
-        outcome: outcome.status,
-        rejection: outcome.status === "rejected" ? String(outcome.reason) : undefined,
-        lastObservedConsumerLive: observed.at(-1),
-        head: await git(workdir, "rev-parse", "HEAD"),
-        targetSourceExists: exists("target.txt"),
-        runtime: readOutput("dist"),
-        dependency: read("node_modules/marker"),
-        inodes: inodes(),
-      }).toEqual({
-        outcome: "rejected",
-        rejection: expect.stringContaining(
-          reachedPublication
-            ? "another managed Gateway"
-            : failure === "migration refusal"
-              ? "Conflicting automation scratch"
-              : "Candidate admission unavailable (exit-2)",
-        ),
-        lastObservedConsumerLive: reachedPublication ? true : undefined,
-        head: before,
-        targetSourceExists: false,
-        runtime: "original",
-        dependency: "original dependency",
-        inodes: originalInodes,
-      });
+      expect(observed.at(-1)).toBe(reachedPublication ? true : undefined);
+      expect(await git(workdir, "rev-parse", "HEAD")).toBe(before);
+      expect(exists("target.txt")).toBe(false);
+      expect(readOutput("dist")).toBe("original");
+      expect(read("node_modules/marker")).toBe("original dependency");
+      expect(inodes()).toEqual(originalInodes);
       expect(
         fs
           .readdirSync(path.join(workdir, ".git/objects/pack"))

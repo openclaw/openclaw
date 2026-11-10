@@ -4,6 +4,7 @@ import { assert, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
 
 function placementSession(
@@ -29,10 +30,10 @@ function presentation(
 ) {
   return resolvePlacementComposer({
     gatewaySnapshot: {
-      hello: {
-        features: { methods: ["sessions.dispatch", "sessions.reclaim"] },
-        auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-      },
+      hello: gatewayHelloForMethods(
+        ["sessions.dispatch", "sessions.reclaim"],
+        ["operator.read", "operator.write"],
+      ),
     } as ApplicationGatewaySnapshot,
     movingKey: null,
     reclaimingKey: null,
@@ -88,13 +89,12 @@ it.each([
     ...(operation && operation !== "placementMove" ? { [operation]: row.key } : {}),
   });
 
-  expect(result.blocksSend).toBe(true);
-  expect(result.busyMessage).toBe(message);
+  expect(result).toMatchObject({ blocksSend: true, busyMessage: message });
 });
 
 it.each([
-  ["local", "Repository worker required", "Choose worker…"],
-  ["failed", "Runner failed", "Stop cloud worker…"],
+  ["local", "This repository needs a device", "Choose device…"],
+  ["failed", "Couldn’t continue this session", "Stop cloud device…"],
 ] as const)("offers the matching composer action for %s placement", (state, title, actionLabel) => {
   const onRecover = vi.fn();
   const onReclaim = vi.fn();
@@ -167,20 +167,20 @@ it.each(["retry", "missing-receipt", "reconciling", "read-only"] as const)(
       gatewaySnapshot: {
         phase: "connected",
         client: createTestGatewayClient(async () => ({})),
-        hello: {
-          features: { methods: ["sessions.move"] },
-          auth: {
-            role: "operator",
-            scopes: scenario === "read-only" ? ["operator.read"] : ["operator.write"],
-          },
-        },
+        hello: gatewayHelloForMethods(
+          ["sessions.move"],
+          [scenario === "read-only" ? "operator.read" : "operator.write"],
+        ),
       } as ApplicationGatewaySnapshot,
     });
     expect(result).toMatchObject({
       state: { kind: "move-failed" },
       blocksSend: true,
       busyMessage: null,
-      disabledBanner: { title: "Move failed", text: "Workspace reconciliation failed." },
+      disabledBanner: {
+        title: "Couldn’t move this session. Try again.",
+        text: "Workspace reconciliation failed.",
+      },
     });
     if (scenario === "missing-receipt" || scenario === "reconciling") {
       expect(result.disabledBanner?.onAction).toBeUndefined();

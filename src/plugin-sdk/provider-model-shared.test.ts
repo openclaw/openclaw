@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { expectObjectFields as expectFields } from "../test-utils/mock-call-assertions.js";
 import {
+  isReleasedAdaptiveClaudeGeneration,
   buildProviderReplayFamilyHooks,
   modelCostsEqual,
   NATIVE_ANTHROPIC_REPLAY_HOOKS,
@@ -78,10 +79,12 @@ describe("Claude model contracts", () => {
   });
 
   it("does not classify later numeric model versions as supported aliases", () => {
-    expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-4-60" })).toBe(false);
-    expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-50" })).toBe(false);
-    expect(supportsClaudeAdaptiveThinking({ id: "claude-mythos-50" })).toBe(false);
-    expect(supportsClaudeAdaptiveThinking({ id: "claude-opus-50" })).toBe(false);
+    // Unknown Claude ids take the strict contract instead of matching a released alias.
+    for (const id of ["claude-sonnet-50", "claude-mythos-50", "claude-opus-50"]) {
+      expect(isReleasedAdaptiveClaudeGeneration({ id })).toBe(false);
+      expect(supportsClaudeAdaptiveThinking({ id })).toBe(true);
+    }
+    expect(isReleasedAdaptiveClaudeGeneration({ id: "claude-sonnet-4-60" })).toBe(false);
     expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-80" })).toBe(false);
     expect(requiresClaudeDefaultSampling({ id: "claude-opus-4-8" })).toBe(true);
     expect(requiresClaudeDefaultSampling({ id: "claude-mythos-preview" })).toBe(true);
@@ -126,6 +129,13 @@ describe("selectPreferredLocalModelId", () => {
 describe("buildProviderReplayFamilyHooks", () => {
   it("covers the replay family matrix", () => {
     const cases = [
+      {
+        family: "mistral" as const,
+        ctx: { provider: "clawrouter", modelApi: "openai-completions", modelId: "mistral/large" },
+        match: { sanitizeToolCallIds: true, toolCallIdMode: "strict9" },
+        hasSanitizeReplayHistory: false,
+        reasoningMode: undefined,
+      },
       {
         family: "openai-compatible" as const,
         ctx: {

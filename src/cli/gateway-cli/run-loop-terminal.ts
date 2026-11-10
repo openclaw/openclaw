@@ -29,6 +29,7 @@ export function createGatewayRunTerminal(params: {
   setTerminalHostedStop: (owner: HostLifecycle | undefined) => void;
   setPendingRestartCompletion: (completion: GatewayBootLifecycleCompletion) => void;
   drainProcessResources: () => Promise<void>;
+  settleResource: (name: string, run: () => void | Promise<void>) => Promise<boolean>;
   finishLoop: (code: number) => void;
   completeBoot: (completion: GatewayBootLifecycleCompletion) => void;
   releaseLockIfHeld: () => Promise<void>;
@@ -57,11 +58,16 @@ export function createGatewayRunTerminal(params: {
       if (params.isForcedExitStarted() || !params.getSignals().pending) {
         break;
       }
-      await measureGatewayCloseStep(
-        "restart.close.terminal-signals",
-        () => params.getSignals().pending,
-      );
+      if (
+        !(await params.settleResource(
+          "restart.close.terminal-signals",
+          () => params.getSignals().pending,
+        ))
+      ) {
+        return false;
+      }
     }
+    return true;
   };
   const finishLoopAfterSignals = async (code: number) => {
     await waitForTerminalSignals();
@@ -77,15 +83,23 @@ export function createGatewayRunTerminal(params: {
       return;
     }
     if (!params.isForcedExitStarted()) {
-      await measureGatewayCloseStep("restart.close.terminal-signals", () =>
-        params.getSignals().drain(),
-      );
+      if (
+        !(await params.settleResource("restart.close.terminal-signals", () =>
+          params.getSignals().drain(),
+        ))
+      ) {
+        finishLoop(code);
+        return;
+      }
     }
     let ownerToCommit = initialOwner;
     let commitOutcome = initialOutcome;
     await params.drainProcessResources();
     for (;;) {
-      await waitForTerminalSignals();
+      if (!(await waitForTerminalSignals())) {
+        finishLoop(code);
+        return;
+      }
       if (hostStopOwner && params.getHost() !== hostStopOwner) {
         return;
       }
@@ -108,7 +122,10 @@ export function createGatewayRunTerminal(params: {
         sameManagedUpdateOwner(owner, ownerToCommit) &&
         eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner) &&
         (await eagerLifecycleRuntime.commitManagedServiceUpdateHandoff(owner, commitOutcome));
-      await waitForTerminalSignals();
+      if (!(await waitForTerminalSignals())) {
+        finishLoop(code);
+        return;
+      }
       if (
         committed &&
         sameManagedUpdateOwner(getManagedUpdateOwner(), owner) &&

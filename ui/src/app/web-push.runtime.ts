@@ -4,13 +4,14 @@ import type {
   WebPushNotificationPreferences,
 } from "../../../packages/gateway-protocol/src/schema/push.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { t } from "../lib/local-error-catalog.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { openClawIdDocumentConfig } from "./openclaw-id-document.ts";
 import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
 
 const SW_READY_TIMEOUT = 10_000;
-const VAPID_MISMATCH_MESSAGE =
-  "This browser push subscription belongs to another Gateway. Open this Gateway's own Control UI, or configure every mutually trusted Gateway behind this PWA with the same VAPID keypair.";
+
 const WEB_PUSH_USER_PREFERENCES_KEY = "notifications.web.v1";
 
 type WebPushReconcileResult =
@@ -64,13 +65,13 @@ function webPushClient(gateway: ApplicationGateway, client: GatewayBrowserClient
       gateway.snapshot.client !== client ||
       gateway.snapshot.selfUser?.id !== profileId
     ) {
-      throw new Error("Gateway changed before the notification change could be saved.");
+      throw new Error(t("notificationErrors.gatewayChanged"));
     }
     return readWebPushAccess(gateway.snapshot);
   };
   const assertCanManage = () => {
     if (!access().canManage) {
-      throw new Error("Your Gateway access does not allow managing browser notifications.");
+      throw new Error(t("notificationErrors.manageDenied"));
     }
   };
   return {
@@ -80,7 +81,7 @@ function webPushClient(gateway: ApplicationGateway, client: GatewayBrowserClient
       const [method] = args;
       if (method === "push.web.preferences.get") {
         if (!access().canReadPreferences) {
-          throw new Error("Your Gateway access does not allow reading notification preferences.");
+          throw new Error(t("notificationErrors.readDenied"));
         }
       } else {
         assertCanManage();
@@ -104,7 +105,7 @@ async function resolveGatewayVapidPublicKey(
     {},
   );
   if (!vapidPublicKey) {
-    throw new Error("Failed to retrieve VAPID public key");
+    throw new Error(t("notificationErrors.vapidKey"));
   }
   const padding = "=".repeat((4 - (vapidPublicKey.length % 4)) % 4);
   const base64 = (vapidPublicKey + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -128,7 +129,7 @@ async function registerPushSubscription(
     await client
       .request("push.web.unsubscribe", { endpoint: subscription.endpoint })
       .catch(() => undefined);
-    return { state: "vapid-mismatch", error: VAPID_MISMATCH_MESSAGE };
+    return { state: "vapid-mismatch", error: t("notificationErrors.vapidMismatch") };
   }
   const json = subscription.toJSON();
   if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) {
@@ -160,7 +161,11 @@ async function reconcileWebPushCapability(
   canManage: boolean,
   publish: (patch: WebPushCapabilityPatch) => void,
 ): Promise<WebPushCapabilityPatch> {
-  const subscription = await getExistingSubscription();
+  // WebKit can suspend enabled ID pages on a passive PushManager read before permission.
+  const subscription =
+    openClawIdDocumentConfig() && Notification.permission !== "granted"
+      ? null
+      : await getExistingSubscription();
   if (subscription && !canManage) {
     publish({ subscription: "local" });
     return {
@@ -338,21 +343,19 @@ export async function subscribeToWebPush(
   assertCanManage();
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {
-    throw new Error(`Notification permission ${permission}`);
+    throw new Error(t("notificationErrors.permission", { permission }));
   }
 
   const registration = await raceWithTimeout(
     () => navigator.serviceWorker.ready,
     SW_READY_TIMEOUT,
     () => {
-      throw new Error("Service worker not ready (timed out)");
+      throw new Error(t("notificationErrors.serviceWorkerTimeout"));
     },
   );
   const pushManager = registration.pushManager;
   if (!pushManager) {
-    throw new Error(
-      "Web Push is unavailable in this browser. On iPhone or iPad, add OpenClaw to the Home Screen and open the installed app.",
-    );
+    throw new Error(t("notificationErrors.unavailable"));
   }
   const vapidPublicKey = await resolveGatewayVapidPublicKey(client);
   const existingSubscription = await pushManager.getSubscription();
@@ -424,7 +427,7 @@ async function runWebPushCapabilityAction(
       client.assertCanManage();
       const subscription = await getExistingSubscription();
       if (!subscription) {
-        throw new Error("Enable notifications before changing notification preferences.");
+        throw new Error(t("notificationErrors.enableFirst"));
       }
       await client.request("push.web.preferences.set", {
         endpoint: subscription.endpoint,

@@ -7,7 +7,9 @@ import {
   captureGatewayToolCallerAssertion,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import { InvocationFrame } from "./plugin-instance-invocation.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -114,8 +116,8 @@ it("enters the registered owner's scopes and retains the execution cancellation 
     expect(tool.prepareArguments?.(args)).toBe(args);
     await tool.execute("probe", args);
     expect(observed).toEqual(["probe", "probe", "probe"]);
-    // Each of the four async resources installs both invocation and recovery stores.
-    expect(frames).toHaveBeenCalledTimes(8);
+    // Count invocation/recovery frames independently of the source-authority store.
+    expect(frames.mock.calls.filter(([frame]) => frame instanceof InvocationFrame)).toHaveLength(4);
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   } finally {
     frames.mockRestore();
@@ -214,6 +216,69 @@ it.each([false, true])(
     entry.factory(context);
     expect(create).toHaveBeenCalledWith(expect.objectContaining(direct));
     expect([context.messageChannel, context.agentAccountId]).toEqual([undefined, undefined]);
+  },
+);
+
+it.each([false, true])(
+  "prepares invocation source facts and keeps revocation live (%s)",
+  async (revoke) => {
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const effect = vi.fn();
+    const release = vi.fn();
+    let active = true;
+    const assertCurrent = () => {
+      if (!active) {
+        throw new Error("source revoked");
+      }
+    };
+    const receiptAuthority = composeSessionSourceAssertion([
+      Object.assign(
+        () => {
+          throw new Error("source facts require preparation");
+        },
+        {
+          prepareSessionSourceScope: async () => ({
+            checks: [],
+            assertCurrent,
+            release,
+          }),
+        },
+      ),
+    ]);
+    const registration = register(
+      {
+        contextVersion: 2,
+        create: (context) => ({
+          ...probe(effect),
+          async execute() {
+            context.assertInvocationCurrent();
+            entered.resolve();
+            await resume.promise;
+            context.assertInvocationCurrent();
+            effect();
+            return { content: [], details: {} };
+          },
+        }),
+      },
+      { assertInvocationCurrent: () => {} },
+    );
+    const tool = registration.tool();
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:probe", receiptAuthority },
+      async () => {
+        const pending = tool.execute("prepared-source", {});
+        const result = revoke
+          ? expect(pending).rejects.toThrow("source revoked")
+          : expect(pending).resolves.toMatchObject({ details: {} });
+        await Promise.race([entered.promise, result]);
+        active = !revoke;
+        resume.resolve();
+        await result;
+      },
+    );
+    expect(effect).toHaveBeenCalledTimes(revoke ? 0 : 1);
+    expect(release).toHaveBeenCalledOnce();
   },
 );
 

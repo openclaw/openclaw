@@ -42,6 +42,14 @@ already running elsewhere:
 }
 ```
 
+To keep agent workspace files on the remote host too, follow the
+[split-storage setup](/nodes/file-transfers#split-storage-setup). Pair a file node
+that can access the app-server's workspace, then set `appServer.remoteWorkspaceRoot`
+to that same root. The storage mapping supplies Gateway workspace access; it does
+not start the app-server. This differs from
+[paired-device execution](/plugins/codex-harness/placement), which keeps the
+app-server and model connection on the Gateway.
+
 Ask OpenClaw can verify an already configured model through an explicitly
 configured WebSocket or Unix socket app-server. The initial Codex setup and
 sign-in flow still requires local stdio; finish sign-in on the remote host and

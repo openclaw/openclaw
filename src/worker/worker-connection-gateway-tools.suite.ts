@@ -84,9 +84,9 @@ function createGatewayToolConnectionFixture(
 
 export function registerWorkerGatewayToolTransportTests(connectParams: WorkerConnectParams) {
   describe("WorkerConnection exec approval transport", () => {
-    it.each([false, true])(
-      "uses its admitted socket and fails closed on a missing decision: %s",
-      async (missingDecision) => {
+    it.each(["valid", "missing-decision", "invalid-risk"] as const)(
+      "uses its admitted socket and validates the review decision: %s",
+      async (decisionCase) => {
         vi.useFakeTimers();
         const { connection, sent, respond, sockets } =
           createGatewayToolConnectionFixture(connectParams);
@@ -123,19 +123,26 @@ export function registerWorkerGatewayToolTransportTests(connectParams: WorkerCon
             throw new Error("Invalid exec approval request");
           }
           const params = wire.params;
-          const outcome = missingDecision
-            ? expect(reviewing).rejects.toThrow("no valid decision. Retry from a new worker turn")
-            : expect(reviewing).resolves.toMatchObject({ decision: "allow-once" });
+          const outcome =
+            decisionCase !== "valid"
+              ? expect(reviewing).rejects.toThrow("no valid decision. Retry from a new worker turn")
+              : expect(reviewing).resolves.toMatchObject({ decision: "allow-once" });
           respond(wire.id, {
             operation: "review",
             binding: workerExecApprovalDigest(params.binding),
-            ...(missingDecision
+            ...(decisionCase === "missing-decision"
               ? {}
-              : { decision: { decision: "allow-once", risk: "low", rationale: "fixture" } }),
+              : {
+                  decision: {
+                    decision: "allow-once",
+                    risk: decisionCase === "invalid-risk" ? "high" : "low",
+                    rationale: "fixture",
+                  },
+                }),
           });
           await outcome;
           expect(sent.filter((frame) => frame.method === "worker.exec.approval")).toHaveLength(1);
-          if (!missingDecision) {
+          if (decisionCase === "valid") {
             expect(sockets).toHaveLength(1);
           }
         } finally {

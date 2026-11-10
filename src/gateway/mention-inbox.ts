@@ -203,7 +203,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
           {
             expectedHead,
             nextSequence: draft.head.nextSequence,
-            changes: [...draft.dirtySources].map((key) => {
+            changes: Array.from(draft.dirtySources, (key) => {
               const source = draft.processed.get(key);
               return [key, source ? serializeMentionSource(source) : undefined];
             }),
@@ -610,25 +610,33 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   }
 
   return {
-    async mentionable(client, input, publish) {
-      let preparationFailure: Result<never, ErrorShape> | undefined;
+    async mentionable(client, input, publish, displayIds) {
       try {
         // A committed profile change can invalidate preparation before this continuation runs.
         while (policy.needsDirectoryPreparation()) {
           await policy.prepareDirectory();
         }
       } catch {
-        preparationFailure = mentionInboxUnavailable(log);
+        publish(mentionInboxUnavailable(log));
+        return;
       }
+      let prepared: Awaited<ReturnType<typeof policy.prepareContext>>;
       try {
+        // Legacy synchronous recipient validation consumes the lookup’s prepared target cache.
         if ("sessionKey" in input) {
           await prepareTarget(input.sessionKey, input.agentId);
         }
+        prepared = await policy.prepareContext(input, true);
       } catch {
-        preparationFailure = mentionInboxUnavailable(log);
+        publish(mentionInboxUnavailable(log));
+        return;
       }
-      // Current policy selection and response publication must not cross another await.
-      publish(preparationFailure ?? readOperation(() => policy.mentionable(client, input)));
+      try {
+        // Current policy selection and response publication must not cross another await.
+        publish(readOperation(() => policy.mentionable(client, input, prepared, displayIds)));
+      } finally {
+        prepared.release();
+      }
     },
     validateRecipients(client, input, profileIds) {
       warnMentionInboxDeprecation("validateRecipients");

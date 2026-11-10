@@ -1,6 +1,7 @@
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -16,6 +17,10 @@ import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.j
 
 export const sessionId = "authority-session";
 export const sessionKey = "agent:main:main";
+export function createDirectReplyOperation() {
+  return createReplyOperation({ sessionId, sessionKey, resetTriggered: false, turnKind: "direct" });
+}
+
 type EmbeddedRunHandle = ReturnType<typeof createEmbeddedRunHandle>;
 type QueueMessage = EmbeddedRunHandle["queueMessage"];
 type QueueMock = ReturnType<typeof vi.fn<QueueMessage>>;

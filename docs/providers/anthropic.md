@@ -107,6 +107,20 @@ OpenClaw release:
         ```bash
         openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
         ```
+
+        API-key setup asks for an optional **Anthropic workspace ID**. If your key
+        is not scoped to a workspace, enter its `wrkspc_...` ID from the Claude
+        Console. Leave it blank for a workspace-scoped key. Existing workspace
+        headers are preserved.
+
+        This is a provider account setting, separate from an agent's local
+        workspace directory. It applies to all requests through the configured
+        Anthropic provider. Use workspace-scoped keys or separate provider
+        configurations when accounts need different workspaces.
+
+        For non-interactive setup, configure
+        `models.providers.anthropic.headers["anthropic-workspace-id"]` beforehand.
+        See [Anthropic authentication](https://platform.claude.com/docs/en/manage-claude/authentication#select-a-workspace).
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -165,8 +179,9 @@ OpenClaw release:
         native login tokens. Claude owns the login and token refresh lifecycle.
         Gateway startup shares the native login check across agent workspaces using
         the same config and environment. Checks use `claude auth status --json`;
-        an explicit logged-out response blocks the native route, while a timeout
-        or unreadable response allows Claude to try the request. Captures expire
+        an explicit logged-out response or a `claude` executable missing from
+        `PATH` blocks the native route, while a timeout or unreadable response
+        allows Claude to try the request. Captures expire
         after one minute. If a selected native login is unavailable, spawn admission
         rechecks it immediately, so signing in does not require a Gateway restart.
 
@@ -250,12 +265,18 @@ OpenClaw release:
     openclaw models auth login --provider anthropic --method setup-token
     ```
 
-    Direct Messages API requests using a setup token advertise a maintained
-    Claude Code client version, or the installed CLI version when newer.
-    Anthropic uses that identity to gate newer models. A missing, older, or
-    failed CLI check uses OpenClaw's maintained version floor. Discovery is
-    shared with the CLI backend and cached until process restart; API-key
-    requests do not run the check.
+    Direct Messages API requests using a setup token advertise a Claude Code
+    client version, or the installed CLI version when newer. Anthropic uses that
+    identity to gate newer models. When Anthropic rejects a request because the
+    version is too old, OpenClaw adopts the version named in the rejection,
+    resends the request once, and keeps that version for later requests until
+    the process restarts. A new model therefore needs no OpenClaw update; each
+    new process pays for at most one rejected request. Discovery is
+    shared with the CLI backend and cached for the resolved executable file.
+    After an in-place update or symlink change, the next request checks the new
+    file without a Gateway restart. Failed checks keep the floor until the
+    executable changes. Native-install fallback locations outside `PATH` keep
+    their existing process-scoped lookup. API-key requests do not run the check.
 
     ### Config example
 
@@ -482,12 +503,18 @@ Tool results and queued extension context also clear turn-scoped messages, so
 OpenClaw renews the current user turn's runtime context after those continuations.
 
 OAuth, proxies, Bedrock, Vertex, and Foundry keep their existing behavior.
-Prefix-binding models such as Fable 5.1, Opus 5.5, and Sonnet 5.5 retain hidden
+Every Claude model binds its thinking to the request prefix except a closed list
+of older generations: Claude 3, Claude 4.x, Opus 5, Sonnet 5, Fable 5, Mythos 5,
+and Mythos Preview. That list never grows, so a Claude model released after this
+OpenClaw version (such as Fable 5.2) is treated as prefix-binding without an update.
+Prefix-binding models such as Fable 5.2, Fable 5.1, Opus 5.5, and Sonnet 5.5 retain hidden
 user-role runtime-context carriers and inline inbound metadata, preserving
 consecutive user turns on the Messages API; Bedrock Converse still merges
 consecutive user turns. Those carriers contain the delimited context body,
 with interpretation guidance once in the stable system prompt. Routes without
 either capability keep transient carriers and normal user-turn merging.
+Fallback attempts keep the same route-specific context format without repeating
+the original user message or attachments.
 Transient carriers remain the cheaper shape on routes without in-history
 system updates when thinking does not bind the prefix: old carriers consume no
 later context or repeated cache-read charges.
@@ -516,26 +543,20 @@ original bytes and invalidate newly created thinking. Earlier thinking affected
 by a client-side edit is handled by `drop_block` where the binding controls above
 apply, or by the existing rejection-and-repair path elsewhere.
 
-Fable 5.1 thinking is also bound to the model that produced it. Switching a
-session from Fable 5.1 to any other model (Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5,
-Fable 5, or older) continues the visible conversation without Fable's earlier reasoning;
-Anthropic drops those blocks unbilled, and OpenClaw's embedded runtime omits
-them from the replay for the same result. The reverse move keeps compatible
-reasoning: Fable 5.1 reads thinking produced by Opus 5, Sonnet 5, Opus 4.8, and
-Fable 5, so a session that moves onto Fable 5.1 replays that history intact. It
-cannot read Sonnet 5.5 reasoning. Switching away and back does not restore the
-pre-switch Fable reasoning: the switch
-changes the system prompt, which invalidates every earlier Fable block. On
-direct API-key routes Anthropic drops those blocks server-side and OpenClaw
-logs the drop; elsewhere, organizations that enforce the prefix check reject
-the request once and the embedded runtime retries without prior thinking.
-Changing the thinking level with `/think` has the same effect. Pick the model
-and thinking level when you start the session when reasoning continuity
-matters.
-
-Sonnet 5.5 preserves prior Sonnet 5 and Claude 4.x reasoning when a session
-moves onto it, but drops reasoning from Opus 5, Opus 5.5, Fable, and Mythos.
-Switching away from Sonnet 5.5 drops its reasoning on every other model.
+Prefix-bound thinking is also bound to the model that produced it: the
+system prompt and tools change with the model, so those blocks cannot follow a
+model switch. When a session moves to another Claude model, OpenClaw omits
+earlier prefix-bound thinking (for example Fable 5.2, Fable 5.1, Opus 5.5, and
+Sonnet 5.5 blocks) and keeps thinking from older, unbound generations. Anthropic
+drops any kept block the new model cannot read, unbilled, so OpenClaw keeps no
+table of which model reads which. Switching away and back does not restore the
+pre-switch reasoning of a prefix-binding model when the switch changed the
+system prompt. On direct API-key routes Anthropic drops such blocks server-side
+and OpenClaw logs the drop; elsewhere, organizations that enforce the prefix
+check reject the request once and the embedded runtime retries without prior
+thinking. Changing the thinking level with `/think` has the same effect. Pick
+the model and thinking level when you start the session when reasoning
+continuity matters.
 
 ## Claude sessions across computers
 
@@ -927,7 +948,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     - For other direct Anthropic models, `/fast` retains the existing Priority Tier mapping: on uses `service_tier: "auto"` and off uses `service_tier: "standard_only"`.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
     - Claude Sonnet 5.5 and Sonnet 5 support neither native fast mode nor Priority Tier, so OpenClaw omits both fields.
-    - The Control UI disables confirmed no-op Fast choices, including Sonnet 5.5, Sonnet 5, and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
+    - The Control UI disables confirmed no-op Fast choices, including Claude CLI, Sonnet 5.5, Sonnet 5, and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
 
     </Note>
 
@@ -1076,6 +1097,31 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   <Accordion title="Claude Opus 5 1M context">
     `anthropic/claude-opus-5` and its `claude-cli` variant have a 1M context
     window by default; no `params.context1m: true` needed.
+  </Accordion>
+
+  <Accordion title="Claude Code native subagents on managed turns">
+    `plugins.entries.anthropic.config.managedNativeTools` keeps selected Claude
+    Code orchestration tools on `claude-cli` turns that OpenClaw manages. It is
+    off by default. `default` applies to every agent; `agents.<id>` replaces it
+    for one agent, and `[]` opts that agent out. Accepted values: `Agent`,
+    `Workflow`.
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          anthropic: {
+            config: {
+              managedNativeTools: { default: ["Agent", "Workflow"], agents: { ops: [] } },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Scope and limitations: [CLI backends](/gateway/cli-backends#keeping-claude-code-orchestration-tools-on-managed-turns).
+
   </Accordion>
 </AccordionGroup>
 

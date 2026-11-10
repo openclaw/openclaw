@@ -54,13 +54,6 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       spawnWorkspaceDir: bootstrap.workspaceDir,
       requireWorkspaceOnly: true,
       runtimeToolAllowlist: [...allowed, "tool_search", "tool_describe", "dispatch_action"],
-      toolConstructionPlan: {
-        includeBaseCodingTools: true,
-        includeShellTools: true,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
     });
     expect(
       hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0]?.customTools?.map((tool) => tool.name),
@@ -147,9 +140,13 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       workspaceAccess: "ro",
       workspaceDir: "/tmp/openclaw-sandbox-copy",
     });
-    await expect(run({ cwd: "/tmp/task-repo", disableTools: true })).rejects.toThrow(
-      "cwd override is not supported",
-    );
+    await expect(
+      run({
+        cwd: "/tmp/task-repo",
+        disableTools: true,
+        config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
+      }),
+    ).rejects.toThrow("cwd override is not supported");
     expect(hoisted.createOpenClawCodingToolsMock).not.toHaveBeenCalled();
   });
 
@@ -160,13 +157,13 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       workspaceAccess: "rw",
       workspaceDir: worktree,
     });
-    await run({ workspaceDir: worktree, cwd: worktree });
-    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: worktree, workspaceDir: worktree }),
-      undefined,
-      undefined,
-      undefined,
-      expect.objectContaining({ assertCurrent: expect.any(Function) }),
-    );
+    await run({
+      workspaceDir: worktree,
+      cwd: worktree,
+      config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } } },
+    });
+    const call = hoisted.createOpenClawCodingToolsMock.mock.calls[0];
+    expect(call?.[0]).toMatchObject({ cwd: worktree, workspaceDir: worktree });
+    expect(call?.[4]).toHaveProperty("assertCurrent", expect.any(Function));
   });
 });

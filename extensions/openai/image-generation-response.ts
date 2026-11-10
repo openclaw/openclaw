@@ -2,7 +2,6 @@ import {
   inlineOpenAiCompatibleImageUrls,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
-  type GeneratedImageAsset,
 } from "openclaw/plugin-sdk/image-generation";
 import {
   assertOkOrThrowHttpError,
@@ -59,10 +58,7 @@ type ResponseParams = Pick<
 export async function readOpenAIImageGenerationResponse(
   response: Response,
   params: ResponseParams,
-): Promise<{
-  images: GeneratedImageAsset[];
-  usage?: Record<string, number | Record<string, number>>;
-}> {
+) {
   const timeoutMs = () =>
     resolveProviderOperationTimeoutMs({
       deadline: params.deadline,
@@ -96,5 +92,13 @@ export async function readOpenAIImageGenerationResponse(
   if (images.length === 0) {
     throw new Error(`${params.operation} response missing image data`);
   }
-  return { images, usage: resolveOpenAIImageUsage(payload) };
+  // The Images API echoes the applied quality once per response; image_generate reports it per image.
+  const quality = asOptionalRecord(payload)?.quality;
+  return {
+    images:
+      typeof quality === "string"
+        ? images.map((image) => ({ ...image, metadata: { ...image.metadata, quality } }))
+        : images,
+    usage: resolveOpenAIImageUsage(payload),
+  };
 }

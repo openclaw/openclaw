@@ -151,6 +151,16 @@ exceptions with immediate enforcement and no compatibility aliases or window.
 The category does not enable channel docking or restore retired docking commands.
 New definitions should use `"tools"`.
 
+Bundled conversation-binding adapters can use `resolveThreadBindingTargetKind` from
+`openclaw/plugin-sdk/thread-bindings-session-runtime` to select their stored
+`"subagent"`, `"session"`, or `"acp"` kind. The helper preserves explicit subagents
+and recognizes ACP session keys without loading storage. Other session targets,
+including main/global aliases, use the canonical asynchronous ACP metadata reader;
+unreadable stores reject classification rather than defaulting to ordinary sessions.
+Pass the current config, optional agent owner, channel display name, and a required
+`assertCurrent` callback covering both manager and caller authority. Adapters must
+still recheck authority at their native-create and binding-commit boundaries.
+
 Bundled ACP integrations should await `readAcpSessionEntryAsync` from the local
 `openclaw/plugin-sdk/acp-runtime` facade for session metadata reads. This facade
 remains a JavaScript compatibility export; its declarations are excluded from
@@ -316,6 +326,35 @@ deprecation warning, and are scheduled for removal in the first January 2027 sta
 runtime callers use the awaited reads. The execution owner still checks current
 approval policy immediately before command execution using committed in-process
 policy publications; that final check does not query SQLite.
+
+The SDK's `readExecApprovalsSnapshotAsync` returns a private mutable snapshot for
+edit-then-save callers. The deprecated synchronous readers likewise retain private
+mutable results through their compatibility window. `loadExecApprovalsReadOnlyAsync`
+shares frozen policy on cached reads: treat its file and nested grants as read-only,
+and use `structuredClone(file)` before preparing an edit. Internal execution reads
+still reuse frozen owner snapshots. Retaining any snapshot does not retain execution
+authority: pending updates and revocations still fail closed at the final execution check.
+
+### Durable-send destination history
+
+Remove `mirror` from calls to `sendDurableMessageBatch` and
+`withDurableMessageSendContext` in `openclaw/plugin-sdk/channel-outbound`.
+Confirmed sends now record their delivered content automatically in the resolved
+destination conversation. The caller's own conversation is not recorded twice.
+
+`session.key` now names the conversation whose turn produced the send. A send to
+that same conversation is skipped because the producing turn already recorded
+it. For proactive or scheduled sends that have no producing turn, pass the
+destination as `session.policyKey` (for example with
+`buildOutboundSessionContext({ policySessionKey })`) instead of `session.key`;
+otherwise the send is treated as the producer's own reply and adds no history row.
+
+The `mirror` parameter and `DeliveryMirror` type remain source-compatible with
+the 2026.10.1 SDK until the next Plugin SDK major, when removal requires explicit
+breaking-release approval. Legacy calls emit one deprecation warning per plugin
+and process. The old field does not select a different history destination or
+override delivered text or media; a mismatched `mirror.sessionKey` creates no
+extra conversation row.
 
 ### Session reset freshness
 

@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
+  isReleasedAdaptiveClaudeGeneration,
   buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,
   modelCostsEqual,
@@ -29,11 +30,11 @@ import {
   resolveClaudeSonnet55ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaude1MContext,
-  supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createClaudeCodeVersionRequirement } from "./claude-code-version-requirement.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -310,16 +311,6 @@ function buildAnthropicForwardCompatModel(
   };
 }
 
-function resolveAnthropicForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  return (
-    resolveAnthropicSnapshotModel(ctx) ??
-    resolveAnthropic4xForwardCompatModel(ctx) ??
-    buildAnthropicForwardCompatModel(ctx)
-  );
-}
-
 function isAnthropicMandatoryClaude5Model(modelId: string): boolean {
   return (
     resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined ||
@@ -386,7 +377,9 @@ function hasConfiguredModelOverride(
 }
 
 function matchesAnthropicModernModel(modelId: string): boolean {
-  return supportsClaudeAdaptiveThinking({ id: modelId }) || isAnthropicMythosPreviewModel(modelId);
+  return (
+    isReleasedAdaptiveClaudeGeneration({ id: modelId }) || isAnthropicMythosPreviewModel(modelId)
+  );
 }
 
 function normalizeAnthropicResolvedModel(
@@ -488,6 +481,19 @@ export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
   const defaultAnthropicModel = CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
   const { cli, setupToken, apiKey: apiKeyMethod } = createAnthropicAuthMethods();
+  const apiKeyAuth = createProviderApiKeyAuthMethod({
+    providerId,
+    methodId: apiKeyMethod.id,
+    label: apiKeyMethod.label,
+    hint: apiKeyMethod.hint,
+    optionKey: "anthropicApiKey",
+    flagName: "--anthropic-api-key",
+    envVar: "ANTHROPIC_API_KEY",
+    promptMessage: "Enter Anthropic API key",
+    defaultModel: defaultAnthropicModel,
+    expectedProviders: ["anthropic"],
+    wizard: apiKeyMethod.wizard,
+  });
   return {
     ...createAnthropicProvider(),
     deprecatedProfileIds: [CLAUDE_CLI_PROFILE_ID],
@@ -531,19 +537,10 @@ export function buildAnthropicProvider(): ProviderPlugin {
             defaultAnthropicModel,
           ),
       },
-      createProviderApiKeyAuthMethod({
-        providerId,
-        methodId: apiKeyMethod.id,
-        label: apiKeyMethod.label,
-        hint: apiKeyMethod.hint,
-        optionKey: "anthropicApiKey",
-        flagName: "--anthropic-api-key",
-        envVar: "ANTHROPIC_API_KEY",
-        promptMessage: "Enter Anthropic API key",
-        defaultModel: defaultAnthropicModel,
-        expectedProviders: ["anthropic"],
-        wizard: apiKeyMethod.wizard,
-      }),
+      {
+        ...apiKeyAuth,
+        run: async (ctx) => (await loadAuthRuntime()).runAnthropicApiKeyAuth(ctx, apiKeyAuth.run),
+      },
     ],
     // A single-provider result is republished under every hook alias, which would
     // list these API rows as `claude-cli/*` too. Claude CLI membership comes
@@ -596,7 +593,10 @@ export function buildAnthropicProvider(): ProviderPlugin {
       normalizeAnthropicProviderConfigForProvider({ provider, providerConfig }),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => {
-      const model = resolveAnthropicForwardCompatModel(ctx);
+      const model =
+        resolveAnthropicSnapshotModel(ctx) ??
+        resolveAnthropic4xForwardCompatModel(ctx) ??
+        buildAnthropicForwardCompatModel(ctx);
       if (!model) {
         return undefined;
       }
@@ -641,6 +641,12 @@ export function buildAnthropicProvider(): ProviderPlugin {
 
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   const version = createClaudeCodeVersionProbe(api);
+  const identity = createClaudeCodeVersionRequirement({
+    openStore: () =>
+      api.runtime.state.openKeyedStoreV2({ namespace: "claude-code-version", maxEntries: 1 }),
+    resolveInstalledVersion: version.resolveVersion,
+    warn: (message) => api.logger.warn?.(message),
+  });
   api.registerCliBackend(buildAnthropicCliBackend(version));
   api.registerProvider({
     ...buildAnthropicProvider(),
@@ -648,18 +654,14 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
       const loadStream = createLazyRuntimeSurface(loadStreamRuntime, (runtime) =>
         runtime.createAnthropicClaudeCodeIdentityWrapper(
           runtime.wrapAnthropicProviderStream(ctx),
-          version.resolveVersion,
+          identity,
         ),
       );
       return async (...args) => (await loadStream())(...args);
     },
     wrapSimpleCompletionStreamFn: (ctx) => {
       const loadStream = createLazyRuntimeSurface(loadStreamRuntime, (runtime) =>
-        runtime.createAnthropicClaudeCodeIdentityWrapper(
-          ctx.streamFn,
-          version.resolveVersion,
-          ctx.sourceApi,
-        ),
+        runtime.createAnthropicClaudeCodeIdentityWrapper(ctx.streamFn, identity, ctx.sourceApi),
       );
       return async (...args) => (await loadStream())(...args);
     },

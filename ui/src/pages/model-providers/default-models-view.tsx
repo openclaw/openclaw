@@ -15,6 +15,7 @@ import {
   SettingsSection,
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
+import { isChatFastModeProviderSupported } from "../../lib/chat/model-select-state.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -68,6 +69,7 @@ export type DefaultModelsViewProps = {
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
 const UTILITY_MODEL_PICKER_ID = "model-providers-utility-model";
 const UTILITY_MODEL_HELP_ID = "model-providers-utility-help";
+const DECISION_MODEL_HELP_ID = "model-providers-decision-help";
 const THINKING_HELP_ID = "model-providers-thinking-help";
 const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
 const TRANSLATED_THINKING_LEVELS = new Set(["off", "low", "medium", "high"]);
@@ -87,7 +89,7 @@ function modelOption(
   return {
     value: ref,
     label: model.name || ref,
-    ...(auth ? { detail: [auth.label, auth.detail].filter(Boolean).join(" · ") } : {}),
+    ...(auth ? { description: [auth.label, auth.detail].filter(Boolean).join(" · ") } : {}),
     ...(model.available === false ? { disabled: true } : {}),
     ...(model.provider ? { provider: model.provider } : {}),
   };
@@ -115,7 +117,7 @@ function HelpTitle(params: {
               }
             }}
           >
-            <Icon name="info" />
+            <Icon name="circleQuestionMark" />
           </button>
           <div slot="content" class="settings-section__help-panel">
             <For each={params.paragraphs}>{(text) => <p>{text}</p>}</For>
@@ -270,6 +272,22 @@ function FallbackModel(props: {
   title: string;
   onChange: (model: string | null) => void;
 }) {
+  const primary = createMemo(() => props.primary);
+  const modelOptions = createMemo(() => props.options);
+  const count = createMemo(() => props.fallbacks.length);
+  const options = createMemo(() => {
+    const excluded = primary();
+    return [
+      {
+        value: "",
+        label:
+          count() > 1
+            ? t("modelProviders.defaults.clearFallbacks", { count: String(count()) })
+            : t("modelProviders.defaults.noFallback"),
+      },
+      ...modelOptions().filter((option) => option.value !== excluded),
+    ];
+  });
   return (
     <SettingsRow
       title={props.label}
@@ -285,20 +303,10 @@ function FallbackModel(props: {
       }
       control={
         <ModelPicker
+          windowed
           label={props.label}
           value={props.fallbacks[0] ?? ""}
-          options={[
-            {
-              value: "",
-              label:
-                props.fallbacks.length > 1
-                  ? t("modelProviders.defaults.clearFallbacks", {
-                      count: String(props.fallbacks.length),
-                    })
-                  : t("modelProviders.defaults.noFallback"),
-            },
-            ...props.options.filter((option) => option.value !== props.primary),
-          ]}
+          options={options()}
           disabled={props.disabled}
           title={props.title}
           onChange={(value) => props.onChange(value || null)}
@@ -309,13 +317,18 @@ function FallbackModel(props: {
 }
 
 export function DefaultModels(props: DefaultModelsViewProps) {
-  const modelControlsDisabled = () => !props.canMutate || props.models.length === 0;
+  const models = createMemo(() => props.models);
+  const primary = createMemo(() => props.selection.primary);
+  const canMutate = createMemo(() => props.canMutate);
+  const thinkingLevel = createMemo(() => props.thinkingLevel);
+  const modelControlsDisabled = () => !canMutate() || models().length === 0;
   const saving = () => props.defaultsSaving || Boolean(props.busy.defaults);
   const title = () => props.mutationBlockedReason ?? "";
-  const primaryModel = createMemo(() =>
-    props.models.find((model) => modelCatalogRef(model) === props.selection.primary),
-  );
-  const thinkingOptions = () => {
+  const primaryModel = createMemo(() => {
+    const selected = primary();
+    return models().find((model) => modelCatalogRef(model) === selected);
+  });
+  const thinkingOptions = createMemo(() => {
     const options: { value: string; label: string; disabled?: boolean }[] = dedupeByKey(
       primaryModel()?.thinkingLevels ?? [],
       (level) => level.id,
@@ -324,32 +337,34 @@ export function DefaultModels(props: DefaultModelsViewProps) {
       label: thinkingLevelLabel(level.id, level.label),
     }));
     // Catalog refreshes and model switches must not rewrite a saved global preference.
-    if (props.thinkingLevel && !options.some((option) => option.value === props.thinkingLevel)) {
+    const selected = thinkingLevel();
+    if (selected && !options.some((option) => option.value === selected)) {
       options.push({
-        value: props.thinkingLevel,
-        label: thinkingLevelLabel(props.thinkingLevel),
+        value: selected,
+        label: thinkingLevelLabel(selected),
         disabled: true,
       });
     }
     return options;
-  };
-  const fastMode = () => (props.fastMode === undefined ? "" : formatFastModeValue(props.fastMode));
-  const fastModeOptions = () => {
+  });
+  const fastMode = createMemo(() =>
+    props.fastMode === undefined ? "" : formatFastModeValue(props.fastMode),
+  );
+  const fastModeOptions = createMemo(() => {
     const model = primaryModel();
-    const priority =
-      model?.supportsFastMode === true &&
-      (model.serviceTiers === undefined || model.serviceTiers.includes("priority"));
+    // Request support can be omitted by native catalogs; tier advertisements only gate Ultrafast.
+    const fast =
+      model?.supportsFastMode ??
+      (model?.available === true && isChatFastModeProviderSupported(model.provider));
     const ultrafast =
-      model?.supportsFastMode === true &&
-      model.available === true &&
-      model.serviceTiers?.includes("ultrafast") === true;
+      fast && model?.available === true && model.serviceTiers?.includes("ultrafast") === true;
     const options = [
       {
         value: "auto" as const,
         label: t("quickSettings.model.fastModes.auto"),
-        supported: priority,
+        supported: fast,
       },
-      { value: "on" as const, label: t("quickSettings.model.fastModes.on"), supported: priority },
+      { value: "on" as const, label: t("chat.modelControls.fast"), supported: fast },
       {
         value: "ultrafast" as const,
         label: t("chat.modelControls.ultrafast"),
@@ -360,26 +375,41 @@ export function DefaultModels(props: DefaultModelsViewProps) {
     return options
       .filter((option) => option.supported || option.value === fastMode())
       .map((option) => ({ value: option.value, label: option.label, disabled: !option.supported }));
-  };
+  });
+  const authStatusProviders = createMemo(() => props.authStatus?.providers);
   const authProviders = createMemo(
     () =>
       new Map(
-        listEffectiveModelAuthProviders(props.authStatus?.providers ?? []).map((provider) => [
+        listEffectiveModelAuthProviders(authStatusProviders() ?? []).map((provider) => [
           provider.provider,
           provider,
         ]),
       ),
   );
-  const options = createMemo(() =>
-    dedupeByKey(props.models, modelCatalogRef).map((model) => modelOption(model, authProviders())),
+  const options = createMemo(() => {
+    const providers = authProviders();
+    return dedupeByKey(models(), modelCatalogRef).map((model) => modelOption(model, providers));
+  });
+  const primaryOptions = createMemo(() => [
+    {
+      value: "",
+      label: t("modelProviders.defaults.selectModel"),
+      disabled: !canMutate() || Boolean(primary()),
+    },
+    ...(canMutate()
+      ? options()
+      : options().map((option) => Object.assign({}, option, { disabled: true }))),
+  ]);
+  const utilityValue = createMemo(
+    () => modelSettingPrimary(props.selection.utilityModel) ?? AUTOMATIC_UTILITY_VALUE,
   );
-  const utilityValue = () =>
-    modelSettingPrimary(props.selection.utilityModel) ?? AUTOMATIC_UTILITY_VALUE;
-  const utilityRoute = () => formatCompletionRoute(props.utilityRuntime);
+  const utilityRuntime = createMemo(() => props.utilityRuntime);
+  const utilityRoute = createMemo(() => formatCompletionRoute(utilityRuntime()));
+  const automaticUtilityModel = createMemo(() => props.automaticUtilityModel);
   const utilityOptions = createMemo(() => {
-    const ref = props.automaticUtilityModel;
+    const ref = automaticUtilityModel();
     const base = ref ? splitTrailingAuthProfile(ref).model : "";
-    const entry = props.models.find((model) => modelCatalogRef(model) === base);
+    const entry = models().find((model) => modelCatalogRef(model) === base);
     const automatic = ref
       ? modelOption(
           {
@@ -390,107 +420,56 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         )
       : undefined;
     // The effective model's route belongs beside its account detail.
-    const withRoute = (value: string, detail: string | undefined) =>
-      value === utilityValue() && utilityRoute()
-        ? [detail, utilityRoute()?.label].filter(Boolean).join(" · ")
-        : detail;
-    return [
+    const selected = utilityValue();
+    const route = utilityRoute();
+    const choices: ModelPickerOption[] = [
       {
         value: AUTOMATIC_UTILITY_VALUE,
         label: ref
           ? `${t("quickSettings.model.fastModes.auto")} · ${automatic?.label ?? ref}`
           : t("quickSettings.model.fastModes.auto"),
         provider: automatic?.provider,
-        detail:
+        description:
           ref === null
             ? t("modelProviders.defaults.automaticUnavailable")
-            : withRoute(AUTOMATIC_UTILITY_VALUE, automatic?.detail),
+            : selected === AUTOMATIC_UTILITY_VALUE && route
+              ? [automatic?.description, route.label].filter(Boolean).join(" · ")
+              : automatic?.description,
       },
       { value: "", label: t("modelProviders.defaults.disabled") },
-      ...options().map((option) => {
-        const detail = withRoute(option.value, option.detail);
-        return detail === option.detail ? option : Object.assign({}, option, { detail });
-      }),
     ];
+    for (const option of options()) {
+      const description =
+        option.value === selected && route
+          ? [option.description, route.label].filter(Boolean).join(" · ")
+          : option.description;
+      choices.push(
+        description === option.description ? option : Object.assign({}, option, { description }),
+      );
+    }
+    return choices;
   });
 
+  // Discovery reports on the heading line, so the rows below it never move.
+  const catalogProgress = <CatalogProgress {...props} />;
   return (
     <SettingsSection
       title={t("modelProviders.defaults.title")}
       description={t("modelProviders.defaults.subtitle")}
+      actions={catalogProgress}
     >
       <div class="model-providers__defaults">
-        {!props.loading && props.models.length === 0 ? (
-          <div class="callout warning">{t("modelProviders.defaults.noModels")}</div>
-        ) : undefined}
         <SettingsRow
           title={t("modelProviders.defaults.primary")}
           control={
             <ModelPicker
+              windowed
               label={t("modelProviders.defaults.primary")}
-              value={props.selection.primary}
-              options={[
-                {
-                  value: "",
-                  label: t("modelProviders.defaults.selectModel"),
-                  disabled: !props.canMutate || Boolean(props.selection.primary),
-                },
-                ...(props.canMutate
-                  ? options()
-                  : options().map((option) => Object.assign({}, option, { disabled: true }))),
-              ]}
+              value={primary()}
+              options={primaryOptions()}
               disabled={props.models.length === 0 || saving()}
               title={title()}
               onChange={props.onPrimaryChange}
-            />
-          }
-        />
-        <SettingsRow
-          title={
-            <HelpTitle
-              title={t("modelProviders.defaults.utility")}
-              label={t("modelProviders.defaults.utilityHelpLabel")}
-              triggerId={UTILITY_MODEL_HELP_ID}
-              paragraphs={[
-                t("modelProviders.defaults.utilityHelpPurpose"),
-                t("modelProviders.defaults.utilityHelpAutomatic"),
-              ]}
-            />
-          }
-          control={
-            <ModelPicker
-              id={UTILITY_MODEL_PICKER_ID}
-              label={t("modelProviders.defaults.utility")}
-              value={utilityValue()}
-              options={utilityOptions()}
-              disabled={modelControlsDisabled() || saving()}
-              title={title() || utilityRoute()?.detail || ""}
-              onChange={(value) =>
-                props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
-              }
-            />
-          }
-        />
-        <FallbackModel
-          label={t("modelProviders.defaults.utilityFallback")}
-          fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
-          primary={modelSettingPrimary(props.selection.utilityModel)}
-          options={options()}
-          disabled={modelControlsDisabled() || saving() || utilityValue() === ""}
-          title={title()}
-          onChange={props.onUtilityFallbackChange}
-        />
-        <SettingsRow
-          title={t("chat.modelControls.decisionLabel")}
-          description={t("chat.modelControls.decisionHelp")}
-          control={
-            <DecisionModelPicker
-              id={"model-providers-decision-model"}
-              models={props.decisionModels}
-              value={props.selection.decisionModel}
-              disabled={!props.canMutate || saving()}
-              title={title()}
-              onChange={props.onDecisionChange}
             />
           }
         />
@@ -525,7 +504,62 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           }}
           onReset={props.onFastModeReset}
         />
-        <CatalogProgress {...props} />
+        <SettingsRow
+          title={
+            <HelpTitle
+              title={t("modelProviders.defaults.utility")}
+              label={t("modelProviders.defaults.utilityHelpLabel")}
+              triggerId={UTILITY_MODEL_HELP_ID}
+              paragraphs={[
+                t("modelProviders.defaults.utilityHelpPurpose"),
+                t("modelProviders.defaults.utilityHelpAutomatic"),
+              ]}
+            />
+          }
+          control={
+            <ModelPicker
+              windowed
+              id={UTILITY_MODEL_PICKER_ID}
+              label={t("modelProviders.defaults.utility")}
+              value={utilityValue()}
+              options={utilityOptions()}
+              disabled={modelControlsDisabled() || saving()}
+              title={title() || utilityRoute()?.detail || ""}
+              onChange={(value) =>
+                props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
+              }
+            />
+          }
+        />
+        <FallbackModel
+          label={t("modelProviders.defaults.utilityFallback")}
+          fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
+          primary={modelSettingPrimary(props.selection.utilityModel)}
+          options={options()}
+          disabled={modelControlsDisabled() || saving() || utilityValue() === ""}
+          title={title()}
+          onChange={props.onUtilityFallbackChange}
+        />
+        <SettingsRow
+          title={
+            <HelpTitle
+              title={t("chat.modelControls.decisionLabel")}
+              label={t("modelProviders.defaults.decisionHelpLabel")}
+              triggerId={DECISION_MODEL_HELP_ID}
+              paragraphs={[t("chat.modelControls.decisionHelp")]}
+            />
+          }
+          control={
+            <DecisionModelPicker
+              id={"model-providers-decision-model"}
+              models={props.decisionModels}
+              value={props.selection.decisionModel}
+              disabled={!props.canMutate || saving()}
+              title={title()}
+              onChange={props.onDecisionChange}
+            />
+          }
+        />
         {props.canMutate ? renderMutationMessage(props.message) : undefined}
       </div>
     </SettingsSection>

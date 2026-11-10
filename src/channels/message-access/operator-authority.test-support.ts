@@ -46,11 +46,8 @@ export async function withAdminIngress(
   await withTestChannelRegistry(plugin, () =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = await createAdminIngressFixture(state, authority, channelId);
-      try {
-        await run(fixture);
-      } finally {
-        fixture.unregister();
-      }
+      using _ = { [Symbol.dispose]: () => fixture.unregister() };
+      await run(fixture);
     }),
   );
 }
@@ -123,6 +120,7 @@ export async function createAdminIngressFixture(
     state,
     admins,
     gateway: host.gateway,
+    resolveGatewayContext: host.owner.resolveGatewayContext,
     context,
     replaceGatewayContext: (replacement?: GatewayRequestContext) => {
       host.replaceGatewayContext(

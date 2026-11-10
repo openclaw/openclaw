@@ -1,4 +1,5 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { recordBackupOutcomeBestEffort } from "./backup-shared.js";
 
@@ -26,8 +27,8 @@ export async function backupRecordCommand(
   if (bytes === undefined && opts.bytes !== undefined) {
     throw new Error("--bytes must be a nonnegative integer.");
   }
-  const outcome = {
-    kind: "external" as const,
+  const outcome: Parameters<typeof recordBackupOutcomeBestEffort>[1] = {
+    kind: "external",
     archivePath: target,
     target,
     status: opts.status,
@@ -38,6 +39,6 @@ export async function backupRecordCommand(
   if (opts.json) {
     writeRuntimeJson(runtime, outcome);
   } else {
-    runtime.log(`External backup: ${target} (${opts.status})`);
+    runtime.log(terminalText`External backup: ${target} (${opts.status})`);
   }
 }

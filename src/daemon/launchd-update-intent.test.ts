@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
+import { createConnection } from "node:net";
 import { hostname } from "node:os";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
@@ -31,6 +32,7 @@ import { stopLaunchAgent } from "./launchd-stop.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import * as serviceMembership from "./service-process-membership.js";
 import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const stdout = new Writable({ write: (_chunk, _encoding, done) => done() });
@@ -47,6 +49,7 @@ let prints: number;
 let atBootout: unknown;
 let mutations: string[];
 let revoked: boolean;
+let cleanupServingChild: (() => Promise<void>) | undefined;
 const label = "ai.openclaw.private-update-intent-test";
 const runId = "native-intent-test-run";
 const ownerError = "Cannot verify a live serving Gateway owner";
@@ -59,6 +62,25 @@ const run = (sql: string, ...params: SQLInputValue[]) =>
     .prepare(sql)
     .run(...params);
 const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
+async function startChild(source: string) {
+  child = spawn(process.execPath, ["-e", source], {
+    env: { HOME: root, OPENCLAW_STATE_DIR: effectiveEnv.OPENCLAW_STATE_DIR },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  closed = once(child, "close");
+  const [ready] = await once(child.stdout!, "data");
+  pid = child.pid!;
+  return String(ready).trim();
+}
+async function closeChild() {
+  await stopChildProcess(child, 5000);
+  await closed;
+}
+const replaceServing = (ownerPid: number) =>
+  run(
+    "UPDATE state_leases SET payload_json=? WHERE scope='gateway-owner'",
+    JSON.stringify(servingPayload(ownerPid)),
+  );
 function servingPayload(ownerPid = pid) {
   return {
     owner: {
@@ -98,12 +120,7 @@ function interceptIntent(after: (recorded: boolean) => void, fail = false) {
     },
   );
 }
-const nativeResult = (code: number, output = "", stderr = "") => ({
-  code,
-  stdout: output,
-  stderr,
-  termination: "exit" as const,
-});
+const nativeResult = (code: number, output = "", stderr = "") => nativeExit(output, stderr, code);
 const notLoaded = () => nativeResult(113, "", "Could not find service");
 async function stop(updateOwned = true, disable = false, output = stdout) {
   const invoke = () =>
@@ -147,7 +164,6 @@ async function transferred() {
 }
 
 beforeEach(async () => {
-  // Keep the real plist/environment reader; only native plutil transport is host-specific.
   vi.spyOn(exec, "runExec").mockImplementation(async (command, args, options) => {
     if (command !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
       throw new Error(`Unexpected fixture subprocess: ${command}`);
@@ -177,17 +193,7 @@ beforeEach(async () => {
   };
   fs.writeFileSync(effectiveEnv.OPENCLAW_CONFIG_PATH!, "{}");
   // This fixture child never imports OpenClaw or opens a handoff store; only the test parent does.
-  child = spawn(
-    process.execPath,
-    ["-e", "process.stdout.write('ready\\n'); setInterval(()=>{}, 60000)"],
-    {
-      env: { HOME: root, OPENCLAW_STATE_DIR: effectiveEnv.OPENCLAW_STATE_DIR },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  closed = once(child, "close");
-  await once(child.stdout!, "data");
-  pid = child.pid!;
+  await startChild("process.stdout.write('ready\\n'); setInterval(()=>{}, 60000)");
   // The synthetic LaunchAgent has a live PID but no native job separate from this runner.
   vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockImplementation((target) =>
     target === pid ? "outside" : "unknown",
@@ -238,8 +244,7 @@ beforeEach(async () => {
         if (bootoutFailure) {
           return nativeResult(5, "", "fixture bootout failure");
         }
-        await stopChildProcess(child, 5000);
-        await closed;
+        await closeChild();
       }
       return nativeResult(0);
     }
@@ -248,9 +253,7 @@ beforeEach(async () => {
 });
 
 it("joins the serving child's database cleanup after its launchd wrapper exits", async () => {
-  await stopChildProcess(child, 5000);
-  await closed;
-  const releasePath = path.join(root, "release-serving-child");
+  await closeChild();
   const retiredPath = path.join(root, "serving-child-retired");
   const databasePath = path.join(root, "held-agent.sqlite");
   const servingSource = `
@@ -258,40 +261,26 @@ it("joins the serving child's database cleanup after its launchd wrapper exits",
     const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync(${JSON.stringify(databasePath)});
     db.exec("CREATE TABLE proof (value TEXT); BEGIN IMMEDIATE; INSERT INTO proof VALUES ('preserved')");
-    const watcher = fs.watch(${JSON.stringify(root)}, () => {
-      if (!fs.existsSync(${JSON.stringify(releasePath)})) return;
-      db.exec('COMMIT'); db.close(); watcher.close();
+    const server = require('node:net').createServer((socket) => {
+      db.exec('COMMIT'); db.close(); socket.end(); server.close();
       fs.writeFileSync(${JSON.stringify(retiredPath)}, 'closed');
     });
-    process.send('ready'); process.disconnect();
+    server.listen(0, '127.0.0.1', () => { process.send(server.address().port); process.disconnect(); });
   `;
-  child = spawn(
-    process.execPath,
-    [
-      "-e",
-      `
+  const serving = (
+    await startChild(`
     const { spawn } = require('node:child_process');
     const serving = spawn(process.execPath, ['-e', ${JSON.stringify(servingSource)}], {
       env: process.env, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     });
-    serving.once('message', () => process.stdout.write(String(serving.pid) + '\\n'));
+    serving.once('message', (port) => process.stdout.write(serving.pid + ' ' + port + '\\n'));
     serving.once('exit', () => process.exit(1));
     setInterval(() => {}, 60000);
-  `,
-    ],
-    {
-      env: { HOME: root, OPENCLAW_STATE_DIR: effectiveEnv.OPENCLAW_STATE_DIR },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  closed = once(child, "close");
-  const [ready] = await once(child.stdout!, "data");
-  const servingPid = Number(String(ready).trim());
-  pid = child.pid!;
-  run(
-    "UPDATE state_leases SET payload_json=? WHERE scope='gateway-owner'",
-    JSON.stringify(servingPayload(servingPid)),
-  );
+  `)
+  ).split(" ");
+  const servingPid = Number(serving[0]);
+  const releasePort = Number(serving[1]);
+  replaceServing(servingPid);
   const waiting = createDeferredCore();
   const output = new Writable({
     write(chunk, _encoding, done) {
@@ -301,33 +290,35 @@ it("joins the serving child's database cleanup after its launchd wrapper exits",
       done();
     },
   });
-  let stopping: Promise<void> | undefined;
-  try {
-    stopping = stop(true, false, output);
-    const outcome = await Promise.race([
-      waiting.promise.then(() => "waiting"),
-      stopping.then(() => "stopped-before-database-close"),
-    ]);
-    expect(outcome).toBe("waiting");
-    expect(isPidAlive(servingPid)).toBe(true);
-    expect(fs.existsSync(retiredPath)).toBe(false);
-    fs.writeFileSync(releasePath, "release");
-    await stopping;
-    expect(isPidAlive(servingPid)).toBe(false);
-    using persisted = new DatabaseSync(databasePath);
-    expect(persisted.prepare("SELECT value FROM proof").get()).toEqual({ value: "preserved" });
-  } finally {
-    fs.writeFileSync(releasePath, "release");
-    await stopping?.catch(() => {});
+  const stopping = stop(true, false, output);
+  cleanupServingChild = async () => {
     if (isPidAlive(servingPid)) {
       process.kill(servingPid, "SIGTERM");
     }
-  }
+    await stopping.catch(() => {});
+  };
+  const outcome = await Promise.race([
+    waiting.promise.then(() => "waiting"),
+    stopping.then(() => "stopped-before-database-close"),
+  ]);
+  expect(outcome).toBe("waiting");
+  expect(isPidAlive(servingPid)).toBe(true);
+  expect(fs.existsSync(retiredPath)).toBe(false);
+  const release = createConnection(releasePort, "127.0.0.1");
+  release.resume();
+  await once(release, "close");
+  await stopping;
+  expect(isPidAlive(servingPid)).toBe(false);
+  using persisted = new DatabaseSync(databasePath);
+  expect(persisted.prepare("SELECT value FROM proof").get()).toEqual({ value: "preserved" });
 });
 
 afterEach(async () => {
-  await stopChildProcess(child, 5000);
-  await closed;
+  // A timed-out case must retire its child before joining the native shutdown wait.
+  const cleanup = cleanupServingChild;
+  cleanupServingChild = undefined;
+  await cleanup?.();
+  await closeChild();
   stateDb.closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
@@ -339,8 +330,7 @@ it.each(["direct-original", "transferred", "already-stopped", "explicit-stop"])(
     if (mode === "transferred") {
       await transferred();
     } else if (mode === "already-stopped") {
-      await stopChildProcess(child, 5000);
-      await closed;
+      await closeChild();
       run("DELETE FROM state_leases WHERE scope='gateway-owner'");
     } else if (mode === "explicit-stop") {
       env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
@@ -434,10 +424,7 @@ it.each([
   ["storage-failure", "Cannot record restart intent"],
 ])("preserves runtime and intent when preparation fails: %s", async (fault, error) => {
   if (fault === "foreign-pid") {
-    run(
-      "UPDATE state_leases SET payload_json=? WHERE scope='gateway-owner'",
-      JSON.stringify(servingPayload(process.pid)),
-    );
+    replaceServing(process.pid);
   } else if (fault === "missing-command") {
     fs.rmSync(resolveLaunchAgentPlistPath(env));
   } else if (fault === "replaced-during-probe" || fault === "revoked") {

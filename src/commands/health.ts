@@ -26,7 +26,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { formatExactDuration } from "../infra/format-time/format-duration-exact.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
+import { buildChannelAccountBindings } from "../routing/bindings.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { waitForGatewayDiagnostic } from "./gateway-diagnostic-readiness.js";
 import {
@@ -63,6 +63,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   ignoreEnvUrlOverride?: boolean;
   localPortOverride?: number;
   json?: boolean;
+  signal?: AbortSignal;
 }): Promise<boolean> {
   const directRateLimit = gatewayConnectErrorWasRateLimited(params.error);
   if (!directRateLimit && !isGatewayHealthAuthUnavailableError(params.error)) {
@@ -70,21 +71,30 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   }
   let rateLimited = directRateLimit;
   if (!directRateLimit) {
-    const details = await buildGatewayProbeConnectionDetails(params);
-    const probe = await probeGatewayStatus({
-      url: details.url,
-      token: params.token,
-      password: params.password,
-      tlsFingerprint: details.tlsFingerprint,
-      preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
-      timeoutMs: params.timeoutMs ?? DEFAULT_RESTART_HEALTH_TIMEOUT_MS,
-      config: params.config,
-      json: params.json,
-    });
-    if (!gatewayProbeResultSawGateway(probe)) {
-      return false;
+    try {
+      const details = await buildGatewayProbeConnectionDetails(params);
+      const probe = await probeGatewayStatus({
+        url: details.url,
+        token: params.token,
+        password: params.password,
+        tlsFingerprint: details.tlsFingerprint,
+        preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
+        timeoutMs: params.timeoutMs ?? DEFAULT_RESTART_HEALTH_TIMEOUT_MS,
+        config: params.config,
+        json: params.json,
+        signal: params.signal,
+      });
+      if (!gatewayProbeResultSawGateway(probe)) {
+        return false;
+      }
+      rateLimited = gatewayProbeResultWasRateLimited(probe);
+    } catch (error) {
+      // Interrupted: the caller has nothing left to report.
+      if (params.signal?.aborted) {
+        return true;
+      }
+      throw error;
     }
-    rateLimited = gatewayProbeResultWasRateLimited(probe);
   }
   const diagnostic = rateLimited
     ? buildRateLimitedHealthDiagnostic(directRateLimit ? params.error : undefined)
@@ -140,6 +150,7 @@ export async function healthCommand(
     password?: string;
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+    signal?: AbortSignal;
   },
   runtime: RuntimeEnv,
 ) {
@@ -168,9 +179,13 @@ export async function healthCommand(
           sharedStateMode: "read-only",
           ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
           localPortOverride: opts.localPortOverride,
+          signal: opts.signal,
         }),
     );
   } catch (error) {
+    if (opts.signal?.aborted) {
+      return;
+    }
     if (
       await emitReachableGatewayAuthDiagnostic({
         ...opts,
@@ -185,6 +200,9 @@ export async function healthCommand(
       return;
     }
     throw error;
+  }
+  if (opts.signal?.aborted) {
+    return;
   }
   if (opts.json) {
     writeRuntimeJson(runtime, summary);
@@ -277,10 +295,7 @@ export async function healthCommand(
         cfg,
         accountIds,
       });
-      const accountId = resolvePreferredAccountId({
-        defaultAccountId,
-        boundAccounts,
-      });
+      const accountId = boundAccounts[0] ?? defaultAccountId;
       const accountContext = await resolveHealthAccountContext({
         plugin,
         cfg,

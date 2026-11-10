@@ -24,12 +24,34 @@ Managed inference proxy restarts do not replace an otherwise reusable native
 thread. Thread identity uses the proxy's upstream provider and routing policy, not
 its temporary loopback address. Upstream, authentication-profile, and creation-time
 policy changes still invalidate thread reuse; live requests continue through the
-current owned proxy.
+current owned proxy. Context-only projection refreshes use that same logical
+inference identity when background work retains its predecessor, rather than
+comparing the private relay URL with the logical route fingerprint.
+
+If Codex discards an unused native thread, the next turn starts a replacement
+through the existing thread lifecycle and logs a warning. A binding with recorded
+conversation history is preserved when its native thread cannot be found;
+OpenClaw reports the error instead of silently starting over.
 
 If active work still claims a native thread, OpenClaw rejects configuration
 changes that would release it without trying fallback models. Wait for that work
 to finish or stop it before retrying. The original thread and its configuration
 remain available.
+
+To diagnose a blocked reply after context refresh, set the existing
+[log file level](/gateway/logging) to `debug`. The
+`codex app-server context-engine binding changed; starting a new thread` record
+includes `backgroundRetentionReason`: `retained`, `client-mismatch`,
+`engine-policy-mismatch`, `tool-mismatch`, `not-background-only`,
+`plugin-policy-mismatch`, or `immutable-config-mismatch`. It reports the first
+failed check; later checks have not run. `retained` means preparation qualified,
+not that a successor has committed. A subsequent
+`codex app-server retained thread release blocked` record reports whether the
+physical owner still has a claim, protection, or background-only custody, and
+whether it differs from the requesting client. These diagnostic fields contain
+only fixed reason codes and booleans, not instructions or configuration contents.
+The same-client and complete-policy checks remain enforced; diagnostics do not
+make a previously refused continuation eligible.
 
 Provider-review acknowledgments must continue the reviewed native thread. If
 changed tools or runtime configuration would require a replacement thread, or
@@ -47,10 +69,21 @@ The shared settlement owner preserves callback order and joins pending
 presentation work before terminal delivery. Projection draining stays under the
 attempt cancellation and settlement deadline.
 
+After a transient provider retry, final-answer recovery uses the original
+persisted user prompt and the completed tool results. It can produce a summary
+when the native turn finishes without text, without running those tools again.
+
 The Codex adapter retains native item identities, protocol parsing, approvals,
 hook handling, and transcript provenance. Constructed messages are persisted
 through the existing scoped transcript APIs; the shared projection helpers do
 not own storage.
+
+The adapter validates native responses with checks and diagnostic schemas generated
+from the pinned app-server schemas. This removes runtime schema compilation and
+normalization while preserving invalid-response diagnostics. Protocol sync regenerates both outputs.
+For validator-only changes, run
+`pnpm codex-app-server:validators:gen` and verify with
+`pnpm codex-app-server:validators:check` without running Codex.
 
 Run tool summaries retain explicit native-tool failures recorded before execution,
 including malformed patches and workspace refusals. A successful retry leaves the
@@ -69,6 +102,12 @@ MCP progress, streamed patch updates, reasoning section markers, and model metad
 keep native work from appearing stalled. Terminal interaction also informs process
 cleanup. These notifications remain enabled. Older app-servers that do not recognize
 the optional capability ignore it; the normal minimum-version check still applies.
+
+Local app-server process creation and stdio forwarding run in a dedicated worker
+thread. A slow executable launch therefore leaves the Gateway event loop available
+for other requests. The worker preserves the Gateway's parent-process identity,
+so existing orphan registration and descendant cleanup still apply. Each retained
+app-server has one transport worker; shared-client idle retirement closes both.
 
 The native session catalog keeps one resident index per Codex home, shared across
 agents, working-directory filters, searches, and pages. Lists normally filter and page
@@ -109,6 +148,8 @@ matching the paired-node response budget. Healthy siblings still return; backgro
 native hydration can continue warming the next request. Complete catalog `thread/list` pages and metadata-only `thread/read` responses
 up to 64 KiB are parsed and projected inline, avoiding worker startup for small
 catalog refreshes. Larger responses use a worker owned by their app-server client.
+The shared worker pool retires an idle decoder after one minute, extending recurring
+reuse to five minutes; memory pressure and client shutdown can retire it sooner.
 Both paths apply the same projection. The stdout reader waits for the compact result
 before delivering later responses or notifications. It transfers larger responses
 as bytes, admits one worker task at a time, and pauses the transport while that task runs.
@@ -402,6 +443,33 @@ legacy Codex GPT refs. Put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
 
+### Parent-local inference connection recovery
+
+When an ordinary managed turn ends with the exact `Codex parent-local inference
+transport failed` error, OpenClaw settles its recorded output before retiring
+that connection from future acquisitions. Retirement is skipped while sibling
+work or idle Incognito history still owns the process: Incognito history cannot
+be resumed from disk. Existing sibling turns
+continue normally; preserving their ownership takes priority over this optional
+connection refresh.
+The next eligible attempt can resume the saved thread on a fresh connection.
+The relay does not replay tools or add a retry loop; existing retry limits and
+side-effect checks still apply. Unrelated upstream 502s, supervised sessions,
+and client-bound native tool catalogs do not trigger this retirement.
+
+The logs include `codex inference HTTP relay failed` with a bounded stage and
+cause classification, plus `codex inference transport retired after settled failure`
+when retirement occurs. These diagnostics omit private routes, credentials,
+request bodies, and arbitrary exception text.
+
+After installing a repair, verify its live activation receipt before calling it
+active. If activation is pending, an authorized operator can run
+`openclaw plugins reload codex --json`. Then verify a reply and a read-only tool
+call in the affected session. For background-worker incidents, also follow up
+with the same worker through its parent and verify the worker's completed result;
+a successful parent reply alone does not establish worker recovery. Reconcile
+previous tool results and delivery receipts before retrying external work.
+
 With provider/model runtime policy unset or `auto`, the `openai/*` prefix alone
 never selects this harness. OpenAI may select Codex implicitly only for an
 exact official HTTPS Platform Responses or ChatGPT Responses route with no
@@ -413,6 +481,14 @@ runtime by themselves. See
 If Codex owns auth before Platform versus ChatGPT routing is known, OpenClaw
 still requires every candidate route to declare Codex compatibility. Native
 auth ownership alone never bypasses that route check.
+
+For managed local stdio, automatic selection uses the built-in OpenClaw harness
+when no native Codex binary is available. This includes platforms without a
+published binary, such as Linux RISC-V64. An explicitly selected or pinned Codex
+runtime reports an error instead. Install a native Codex build and set
+`plugins.entries.codex.config.appServer.command` or `OPENCLAW_CODEX_APP_SERVER_BIN`
+to use it. Configured commands, WebSocket connections, Unix sockets, and
+worker-hosted app-servers retain their own startup validation.
 
 When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled (code-mode-only stays off by default), so
@@ -540,6 +616,9 @@ session generation. After Stop settles, you can send another message in the same
 chat without reconnecting.
 Stop also retires an already-interrupted child without interrupting its finished
 turn again, so that child cannot keep its parent session blocked.
+Before retiring a canceled native child, Stop also waits for its owned process
+cleanup. An interrupted turn alone does not prove its commands stopped. This
+includes children whose parent has yielded and children interrupted before Stop.
 If its previous native process is already closing, Stop cancels the waiting run
 without waiting for physical exit. A replacement writer still waits for that exit.
 Session-wide Stop preserves the caller's request ownership, protected-run, and
@@ -692,7 +771,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.162.1` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.164.0` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.SharedAttachment
 import ai.openclaw.app.SharedAttachmentKind
+import ai.openclaw.app.chat.CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES
 import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import ai.openclaw.app.node.JpegSizeLimiter
 import ai.openclaw.app.normalizeSharedAttachmentMimeType

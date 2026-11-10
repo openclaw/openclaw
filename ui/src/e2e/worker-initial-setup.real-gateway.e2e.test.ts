@@ -36,7 +36,7 @@ import { getFreePort } from "../../../src/test-utils/ports.js";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Initial setup custody with a real Gateway",
@@ -236,7 +236,7 @@ suite.define(() => {
             await expect.poll(pendingCount, { timeout: 15000 }).toBe(1);
             expect(launched).toEqual([]);
             await expect.poll(() => setupWaiters.length, { timeout: 30000 }).toBe(1);
-            await page.getByText("Received · waiting for worker setup", { exact: true }).waitFor();
+            await page.getByText("Received · setting up device", { exact: true }).waitFor();
             const sent = await createSessionsSendTool({
               agentSessionKey: "agent:main:main",
               expectedTargetSessionId: sessionId,

@@ -11,6 +11,7 @@ import { resetContextWindowCacheForTest } from "../agents/context.test-support.j
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../plugins/session-catalog.js";
@@ -26,6 +27,7 @@ import {
 } from "./server.sessions.create.test-support.js";
 import type { GatewaySessionCommitResult } from "./session-create-service.types.js";
 import { agentDiscoveryMock, testState, writeSessionStore } from "./test-helpers.js";
+import { createClaudeCliRegistrationFixture } from "./test-helpers.plugin-registry.js";
 import {
   createCompactedSessionFixture,
   sessionStoreEntry,
@@ -153,13 +155,14 @@ test("sessions.create forks the parent transcript into the new session", async (
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
+        visibility: "draft",
         sessionFile: parent.sessionFile,
         projectId: "qa-writer",
         spawnedCwd: projectRoot,
         sessionRoot: projectRoot,
         totalTokens: 123,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         cliSessionBindings: {
           "claude-cli": { sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" },
         },
@@ -239,6 +242,7 @@ test("sessions.create forks the parent transcript into the new session", async (
 
   const key = requireNonEmptyString(created.payload?.key, "forked session key");
   expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+    visibility: "draft",
     projectId: "qa-writer",
     spawnedCwd: projectRoot,
     sessionRoot: projectRoot,
@@ -273,7 +277,7 @@ async function seedSizedForkParent(dir: string, entry: Parameters<typeof session
       main: sessionStoreEntry(parent.sessionId, {
         sessionFile: parent.sessionFile,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         ...entry,
       }),
     },
@@ -447,11 +451,12 @@ test.each([undefined, "last-completed"] as const)(
     await writeSessionStore({
       entries: {
         main: sessionStoreEntry(parentSessionId, {
+          visibility: "draft",
           // The in-flight tail can make the whole parent exceed the cap; only the
           // selected completed prefix should govern this fork.
           totalTokens: 200_000,
           totalTokensFresh: true,
-          totalTokensVersion: 1,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         }),
       },
     });
@@ -508,6 +513,9 @@ test.each([undefined, "last-completed"] as const)(
         return;
       }
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(
+        loadSessionEntry({ sessionKey: created.payload?.key ?? "", storePath })?.visibility,
+      ).toBe("draft");
       const messages = await loadTranscriptEvents({
         sessionId: created.payload?.sessionId ?? "",
         sessionKey: created.payload?.key ?? "",
@@ -545,16 +553,7 @@ function installSessionCatalog(
 ) {
   const registry = createEmptyPluginRegistry();
   if (cli) {
-    registry.cliBackends.push({
-      pluginId: "anthropic",
-      source: "test",
-      backend: {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        config: { command: "claude" },
-        bundleMcp: false,
-      },
-    });
+    registry.cliBackends.push(createClaudeCliRegistrationFixture());
   }
   registry.sessionCatalogs.push({
     pluginId: "anthropic",

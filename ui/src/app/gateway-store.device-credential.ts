@@ -1,5 +1,5 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { CONTROL_UI_OPERATOR_ROLE } from "../api/gateway.ts";
+import { CONTROL_UI_OPERATOR_ROLE } from "../api/gateway-connect-plan.ts";
 import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
 import {
   clearDeviceAuthToken,
@@ -8,6 +8,7 @@ import {
 } from "../lib/nodes/index.ts";
 import { clearBootRecords } from "./boot-record.ts";
 import type { ApplicationGateway, ApplicationGatewayConnectOptions } from "./gateway.ts";
+import { retirePluginRecoveryStorage } from "./plugin-recovery-storage.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { persistSessionToken } from "./settings.ts";
 
@@ -56,6 +57,7 @@ export function createDeviceCredentialMethods(host: {
       // restore the old sign-in the operator just confirmed forgetting.
       persistSessionToken(gatewayUrl, "");
       retireStoredGoalOperations(gatewayUrl);
+      retirePluginRecoveryStorage(gatewayUrl);
       // A stopped gateway stays on the login gate; the cleared credential
       // simply won't be offered on the next explicit connect.
       if (!host.isStopped()) {

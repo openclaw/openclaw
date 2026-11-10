@@ -26,37 +26,6 @@ import type { CronEvent, CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-provisioning-" });
 
-it("reuses the loaded store across startup and adopts a committed publication on restart", async () => {
-  const { cron, state, clock, scheduler, job, runCommandJob, commitJob } = await createFixture();
-  const loads = vi.spyOn(cronStore, "loadCronJobsStoreWithConfigJobs");
-  try {
-    await cron.start();
-    expect(loads).toHaveBeenCalledTimes(1);
-    await cron.start();
-    expect(loads).toHaveBeenCalledTimes(1);
-
-    cron.stop();
-    await cron.waitForIdle();
-    await cron.start();
-    expect(loads).toHaveBeenCalledTimes(1);
-
-    cron.stop();
-    await cron.waitForIdle();
-    commitJob(true);
-    await cron.start();
-    expect(loads).toHaveBeenCalledTimes(2);
-    expect(cron.getJob(job.id)).toMatchObject(job);
-    clock.setTime(clock.clock.now() + 30_000);
-    await onTimer(state);
-    expect(runCommandJob).toHaveBeenCalledOnce();
-  } finally {
-    cron.stop();
-    await cron.waitForIdle();
-    await scheduler.stop();
-    loads.mockRestore();
-  }
-});
-
 async function createFixture(runSchedulerOwned?: CronServiceDeps["runSchedulerOwned"]) {
   const { storePath } = await makeStorePath();
   const clock = createGatewaySchedulerClock(Date.now());
@@ -104,27 +73,45 @@ async function createFixture(runSchedulerOwned?: CronServiceDeps["runSchedulerOw
   return { cron, state, clock, scheduler, job, events, runCommandJob, commitJob, storePath };
 }
 
-it.each(["local publication", "foreign commit readback"] as const)(
-  "arms an empty scheduler after %s without restarting",
+it.each(["restart", "local publication", "foreign commit readback"] as const)(
+  "adopts committed provisioning after %s",
   async (mode) => {
     const fixture = await createFixture();
     const { cron, state, clock, scheduler, job, events, runCommandJob, commitJob } = fixture;
+    using loads = vi.spyOn(cronStore, "loadCronJobsStoreWithConfigJobsByKey");
     try {
       await cron.start();
       expect((await cron.status()).nextWakeAtMs).toBeNull();
-      commitJob(mode === "local publication");
-      if (mode === "local publication") {
+      if (mode === "restart") {
+        expect(loads).toHaveBeenCalledTimes(1);
+        await cron.start();
+        expect(loads).toHaveBeenCalledTimes(1);
+        cron.stop();
+        await cron.waitForIdle();
+        await cron.start();
+        expect(loads).toHaveBeenCalledTimes(1);
+        cron.stop();
+        await cron.waitForIdle();
+      }
+      commitJob(mode !== "foreign commit readback");
+      if (mode === "restart") {
+        await cron.start();
+        expect(loads).toHaveBeenCalledTimes(2);
+        expect(cron.getJob(job.id)).toMatchObject(job);
+      } else if (mode === "local publication") {
         // A status read joins the queued publication; the worker owns the timer.
         await cron.status();
       } else {
         await expect(cron.readJob(job.id)).resolves.toMatchObject({ id: job.id });
       }
       expect((await cron.status()).nextWakeAtMs).toBe(job.state.nextRunAtMs);
-      expect(events.filter((event) => event.action === "added")).toEqual([
-        expect.objectContaining({ jobId: job.id, nextRunAtMs: job.state.nextRunAtMs }),
-      ]);
-      await cron.readJob(job.id);
-      expect(events.filter((event) => event.action === "added")).toHaveLength(1);
+      if (mode !== "restart") {
+        expect(events.filter((event) => event.action === "added")).toEqual([
+          expect.objectContaining({ jobId: job.id, nextRunAtMs: job.state.nextRunAtMs }),
+        ]);
+        await cron.readJob(job.id);
+        expect(events.filter((event) => event.action === "added")).toHaveLength(1);
+      }
       clock.setTime(clock.clock.now() + 30_000);
       await onTimer(state);
       expect(runCommandJob).toHaveBeenCalledTimes(1);
@@ -133,6 +120,7 @@ it.each(["local publication", "foreign commit readback"] as const)(
       );
     } finally {
       cron.stop();
+      await cron.waitForIdle();
       await scheduler.stop();
     }
   },

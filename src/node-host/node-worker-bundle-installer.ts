@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -18,7 +19,8 @@ import { extractErrorCode, hasErrnoCode, isMissingPathError } from "../infra/err
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeDeployEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerEnv } from "../infra/runtime-worker-url.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
@@ -371,60 +373,6 @@ export class NodeWorkerBundleInstaller {
     this.#currentGenerationByNamespace.set(gatewayNamespace, generation);
   }
 
-  async #prewarmBundle(bundleDir: string, signal?: AbortSignal): Promise<void> {
-    if (this.#prewarmedBundles.has(bundleDir)) {
-      return;
-    }
-    try {
-      await execFileAsync(
-        process.execPath,
-        [
-          ...resolveRuntimeArgs(),
-          path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH),
-          "--internal-worker-prewarm",
-        ],
-        {
-          cwd: bundleDir,
-          env: this.#workerEnv,
-          timeout: WORKER_PREWARM_TIMEOUT_MS,
-          windowsHide: true,
-          ...(signal ? { signal } : {}),
-        },
-      );
-    } catch (error) {
-      if (signal?.aborted) {
-        throw signal.reason ?? error;
-      }
-      throw error;
-    }
-    this.#prewarmedBundles.add(bundleDir);
-  }
-
-  async #validatePrewarmedBundle(
-    gatewayNamespace: string,
-    destination: string,
-    build: WorkerAdmissionHandshake,
-  ): Promise<boolean> {
-    let pending = this.#pendingValidations.get(gatewayNamespace);
-    if (!pending || !sameWorkerBuild(pending.build, build)) {
-      pending = {
-        build,
-        result: this.#operations.enqueue(gatewayNamespace, () =>
-          validateInstalledBundle(destination, build),
-        ),
-      };
-      this.#pendingValidations.set(gatewayNamespace, pending);
-    }
-    try {
-      return await pending.result;
-    } finally {
-      // Installed files remain mutable: only overlapping readers share this scan.
-      if (this.#pendingValidations.get(gatewayNamespace) === pending) {
-        this.#pendingValidations.delete(gatewayNamespace);
-      }
-    }
-  }
-
   async ensure(request: {
     input: NodeWorkerBundleInstallInput;
     gatewayUrl: string;
@@ -456,14 +404,34 @@ export class NodeWorkerBundleInstaller {
     try {
       params.signal?.throwIfAborted();
       // Share read-only checks after prewarm; downloads and child execution keep caller custody.
-      if (
-        !input.prefetch &&
-        this.#prewarmedBundles.has(destination) &&
-        (await this.#validatePrewarmedBundle(key, destination, input.build))
-      ) {
-        params.signal?.throwIfAborted();
-        this.#recordInstall(key);
-        return input.build;
+      if (!input.prefetch && this.#prewarmedBundles.has(destination)) {
+        const validationBuild = input.build;
+        const validationDestination = destination;
+        let pending = this.#pendingValidations.get(key);
+        if (!pending || !sameWorkerBuild(pending.build, validationBuild)) {
+          pending = {
+            build: validationBuild,
+            result: this.#operations.enqueue(key, () =>
+              validateInstalledBundle(validationDestination, validationBuild),
+            ),
+          };
+          this.#pendingValidations.set(key, pending);
+        }
+        let valid: boolean;
+        try {
+          valid = await pending.result;
+        } finally {
+          // Installed files remain mutable: only overlapping readers share this scan.
+          if (this.#pendingValidations.get(key) === pending) {
+            this.#pendingValidations.delete(key);
+          }
+        }
+
+        if (valid) {
+          params.signal?.throwIfAborted();
+          this.#recordInstall(key);
+          return input.build;
+        }
       }
       // New callers must queue behind this possible replacement, not join an earlier read.
       this.#pendingValidations.delete(key);
@@ -554,7 +522,29 @@ export class NodeWorkerBundleInstaller {
         }
         params.signal?.throwIfAborted();
         if (input.bundlePrewarm) {
-          await this.#prewarmBundle(destination, params.signal);
+          const prewarmSignal = params.signal;
+          if (!this.#prewarmedBundles.has(destination)) {
+            const entry = resolveRuntimeDeployEntrypointUrl("worker", destination);
+            try {
+              await execFileAsync(
+                process.execPath,
+                [...resolveRuntimeArgs(), fileURLToPath(entry), "--internal-worker-prewarm"],
+                {
+                  cwd: destination,
+                  env: resolveRuntimeWorkerEnv(entry, this.#workerEnv),
+                  timeout: WORKER_PREWARM_TIMEOUT_MS,
+                  windowsHide: true,
+                  ...(prewarmSignal ? { signal: prewarmSignal } : {}),
+                },
+              );
+            } catch (error) {
+              if (prewarmSignal?.aborted) {
+                throw prewarmSignal.reason ?? error;
+              }
+              throw error;
+            }
+            this.#prewarmedBundles.add(destination);
+          }
         }
         params.signal?.throwIfAborted();
         this.#recordInstall(input.gatewayNamespace);

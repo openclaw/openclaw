@@ -93,6 +93,14 @@ type GatewayToolCallerIdentity = {
   workspaceBaseRefreshSandbox?: import("../sandbox/types.js").SandboxContext;
   /** Host handoff selects the exact settled conversation; never accepted from RPC input. */
   workspacePrAdoptionSessionId?: string;
+  /** Reporting attribution only; never restores the yielding turn's execution authority. */
+  workspacePublicationRunId?: string;
+  /** Effective requesting surface captured by local publication before yielding. */
+  workspacePublicationPolicy?: {
+    allow: string[];
+    deny: string[];
+    permissionMode?: SessionEntry["permissionMode"];
+  };
   /** Current tool's filesystem owner for inspected PR evidence; never serialized in RPC data. */
   workspaceEvidenceSandbox?: import("../sandbox/types.js").SandboxContext;
   /** Closure-bound Gateway capability; revalidates both owners at child admission. */
@@ -177,6 +185,7 @@ function composeReceiptAuthority(
     (predicate, index): predicate is ReceiptAuthority =>
       predicate !== undefined && predicates.indexOf(predicate) === index,
   );
+  const sources = checks.map((check) => captureGatewayToolReceiptAssertion(check));
   return checks.length === 0
     ? undefined
     : Object.assign(
@@ -191,9 +200,14 @@ function composeReceiptAuthority(
           }
           return active;
         },
-        composeSessionSourceAssertion(
-          checks.map((check) => captureGatewayToolReceiptAssertion(check)),
-        ),
+        composeSessionSourceAssertion(sources),
+        {
+          assertScopeCurrent: () => {
+            for (const source of sources) {
+              (source.assertScopeCurrent ?? source)();
+            }
+          },
+        },
       );
 }
 
@@ -208,11 +222,24 @@ export function captureGatewayToolReceiptAssertion(
     }
   };
   const prepare = receipt.prepareSessionSource?.bind(receipt);
+  const prepareEffect = receipt.prepareSessionSourceEffect?.bind(receipt);
   return Object.assign(() => assertAllowed(receipt()), {
     nativeSource: receipt.nativeSource,
     opaqueCommitGuard: receipt.opaqueCommitGuard,
     assertScopeCurrent: receipt.assertScopeCurrent?.bind(receipt),
     prepareSessionSourceScope: receipt.prepareSessionSourceScope?.bind(receipt),
+    ...(prepareEffect
+      ? {
+          async prepareSessionSourceEffect() {
+            const prepared = await prepareEffect();
+            return {
+              ...prepared,
+              assertCurrent: () => assertAllowed(prepared.assertCurrent()),
+              release: prepared.release?.bind(prepared),
+            };
+          },
+        }
+      : {}),
     ...(prepare
       ? {
           async prepareSessionSource() {
@@ -601,6 +628,8 @@ export async function withGatewayToolCallerIdentity<T>(
           : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
       workspaceBaseRefreshSandbox: inheritedValue("workspaceBaseRefreshSandbox"),
       workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
+      workspacePublicationRunId: inheritedValue("workspacePublicationRunId"),
+      workspacePublicationPolicy: inheritedValue("workspacePublicationPolicy"),
       workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),
       personalToolParticipants: inheritedValue("personalToolParticipants"),
       personalToolUser: inheritedValue("personalToolUser"),

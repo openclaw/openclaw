@@ -1,5 +1,5 @@
 import { createSignal, onSettled, Show } from "solid-js";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { formatTimeMs } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import {
@@ -8,16 +8,14 @@ import {
   parseCustomSnooze,
   readCustomSnooze,
 } from "../lib/sessions/custom-snooze.ts";
-import {
-  formatSessionSnoozeWakeTime,
-  resolveSessionSnoozePresets,
-} from "../lib/sessions/session-snooze.ts";
+import { resolveSessionSnoozePresets } from "../lib/sessions/session-snooze-presets.ts";
+import { formatSessionSnoozeWakeTime } from "../lib/sessions/session-snooze.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import type { SessionMenuActions, SessionMenuActionsState } from "./session-menu-actions.ts";
 import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 
-registerSessionOrganizationEnglish();
+registerSessionMenuEnglish();
 
 export function useSessionSnoozeEntries(
   actions: SessionMenuActions,

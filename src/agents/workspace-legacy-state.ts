@@ -34,19 +34,12 @@ type LegacyWorkspaceSourcePaths = {
   siblingAttestationPaths: string[];
 };
 
-type LegacyWorkspaceResetCleanup = {
-  removedPaths: string[];
-  warnings: string[];
-};
-
-type LegacyWorkspaceResetCandidate = {
-  rootDir: string;
-  sourcePath: string;
-  requireAttestationHeader: boolean;
-};
-
 type LegacyWorkspaceResetPlan = {
-  candidates: LegacyWorkspaceResetCandidate[];
+  candidates: {
+    rootDir: string;
+    sourcePath: string;
+    requireAttestationHeader: boolean;
+  }[];
 };
 
 function uniqueSiblingPaths(paths: readonly string[]): string[] {
@@ -149,14 +142,17 @@ function workspaceMigrationError(
   blockedPaths: string[],
   env?: NodeJS.ProcessEnv,
   operation?: "doctor",
+  blockedByStepId?: string,
 ): Error {
   return new StartupMaintenanceRequiredError(
     "legacy-workspace",
     operation === "doctor"
-      ? formatDoctorStateRepairFailure(
-          `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
-          "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
-        )
+      ? blockedByStepId
+        ? `Legacy workspace setup at ${blockedPaths.join(", ")} was not imported because migration step "${blockedByStepId}" refused; resolve that refusal, then rerun ${formatCliCommand("openclaw doctor --fix", env)}.`
+        : formatDoctorStateRepairFailure(
+            `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
+            "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
+          )
       : `Run ${formatCliCommand("openclaw doctor --fix", env)}. Legacy workspace setup state requires migration for ${blockedPaths.join(", ")}.`,
   );
 }
@@ -167,6 +163,8 @@ export function assertWorkspaceStateMigrationReady(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   operation?: "doctor";
+  /** An earlier migration refusal prevented the workspace importer from running. */
+  blockedByStepId?: string;
 }): void {
   const blocked = params.workspaceDirs.flatMap((workspaceDir) => {
     const sourcePath = findUnmigratedWorkspaceSource(
@@ -175,7 +173,7 @@ export function assertWorkspaceStateMigrationReady(params: {
     return sourcePath ? [params.operation === "doctor" ? sourcePath : workspaceDir] : [];
   });
   if (blocked.length > 0) {
-    throw workspaceMigrationError(blocked, params.env, params.operation);
+    throw workspaceMigrationError(blocked, params.env, params.operation, params.blockedByStepId);
   }
 }
 
@@ -254,7 +252,10 @@ export async function removeLegacyWorkspaceStateForReset(
     assertCurrent?: () => void;
     assertCurrentAsync?: () => Promise<void>;
   },
-): Promise<LegacyWorkspaceResetCleanup> {
+): Promise<{
+  removedPaths: string[];
+  warnings: string[];
+}> {
   const removedPaths: string[] = [];
   const warnings: string[] = [];
   for (const candidate of plan.candidates) {

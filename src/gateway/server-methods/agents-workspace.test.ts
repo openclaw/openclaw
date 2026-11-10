@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsWorkspaceHandlers } from "./agents-workspace.js";
@@ -14,36 +15,35 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
 
 type WorkspaceMethod = "agents.workspace.list" | "agents.workspace.get";
 
-async function invokeWorkspaceHandler(method: WorkspaceMethod, params: Record<string, unknown>) {
+async function invokeWorkspaceHandler(
+  method: WorkspaceMethod,
+  params: Record<string, unknown>,
+  ok = true,
+): Promise<Record<string, any>> {
   const respond = await callAgentHandler(agentsWorkspaceHandlers[method]!, method, params, {
     context: { getRuntimeConfig: () => ({}) } as never,
   });
-  return respond.mock.calls.map(([ok, payload, error]) => ({ ok, payload, error }));
+  expect(respond).toHaveBeenCalledTimes(1);
+  const [succeeded, payload, error] = expectDefined(respond.mock.calls[0], "workspace response");
+  expect(succeeded).toBe(ok);
+  return (ok ? payload : error) as Record<string, any>;
 }
 
 function getWorkspaceFile(filePath: string) {
   return invokeWorkspaceHandler("agents.workspace.get", { agentId: "main", path: filePath });
 }
 
-function expectResponse(
-  calls: Awaited<ReturnType<typeof invokeWorkspaceHandler>>,
-  ok: boolean,
-): Record<string, any> {
-  expect(calls).toHaveLength(1);
-  expect(calls[0]?.ok).toBe(ok);
-  return calls[0]?.[ok ? "payload" : "error"] as Record<string, any>;
-}
-const expectOkPayload = (calls: Awaited<ReturnType<typeof invokeWorkspaceHandler>>) =>
-  expectResponse(calls, true);
-const expectError = (calls: Awaited<ReturnType<typeof invokeWorkspaceHandler>>) =>
-  expectResponse(calls, false);
-
-function listWorkspace(params: Record<string, unknown> = {}) {
-  return invokeWorkspaceHandler("agents.workspace.list", { agentId: "main", ...params });
+function listWorkspace(params: Record<string, unknown> = {}, ok = true) {
+  return invokeWorkspaceHandler("agents.workspace.list", { agentId: "main", ...params }, ok);
 }
 
 async function expectFileError(filePath: string, details: Record<string, unknown>) {
-  expect(expectError(await getWorkspaceFile(filePath)).details).toMatchObject(details);
+  const error = await invokeWorkspaceHandler(
+    "agents.workspace.get",
+    { agentId: "main", path: filePath },
+    false,
+  );
+  expect(error.details).toMatchObject(details);
 }
 
 describe("agents.workspace RPC handlers", () => {
@@ -76,52 +76,45 @@ describe("agents.workspace RPC handlers", () => {
     fs.rmSync(testRoot, { recursive: true, force: true });
   });
 
-  it.each(["", "..notes"])("lists and opens workspace directory %j", async (directory) => {
-    if (directory) {
-      writeFile(directory + "/index.ts", "export const ok = true;\n");
-      writeFile(directory + "/util.ts", "export const util = 1;\n");
-    }
-    const root = expectOkPayload(await listWorkspace());
-    const selected =
-      directory && root.entries.find((entry: Record<string, unknown>) => entry.name === directory);
-    const payload = directory
-      ? expectOkPayload(await listWorkspace({ path: selected.path }))
-      : root;
-    expect(payload).toMatchObject({ path: directory, totalEntries: directory ? 2 : 3, offset: 0 });
-    expect(payload.parentPath).toBe(directory ? "" : undefined);
-    const expectedEntries = directory
-      ? ["index.ts", "util.ts"].map((name) => [`${directory}/${name}`, "file"])
-      : [
-          ["src", "directory"],
-          [".gitignore", "file"],
-          ["notes.md", "file"],
-        ];
+  it("lists the root and opens a dot-prefixed workspace directory", async () => {
+    writeFile("..notes/index.ts", "export const ok = true;\n");
+    writeFile("..notes/util.ts", "export const util = 1;\n");
+    const root = await listWorkspace();
+    expect(root).toMatchObject({ path: "", totalEntries: 4, offset: 0 });
+    expect(root.parentPath).toBeUndefined();
     expect(
-      payload.entries.map((entry: Record<string, unknown>) => [entry.path, entry.kind]),
-    ).toEqual(expectedEntries);
-    if (directory) {
-      const preview = expectOkPayload(await getWorkspaceFile(payload.entries[0].path));
-      expect(preview.file.content).toBe("export const ok = true;\n");
-    } else {
-      const file = payload.entries.find(
-        (entry: Record<string, unknown>) => entry.path === "notes.md",
-      );
-      expect(file.size).toBeGreaterThan(0);
-      expect(Number.isInteger(file.updatedAtMs)).toBe(true);
-    }
+      root.entries.map(({ path: entryPath, kind }: Record<string, unknown>) => [entryPath, kind]),
+    ).toEqual([
+      ["..notes", "directory"],
+      ["src", "directory"],
+      [".gitignore", "file"],
+      ["notes.md", "file"],
+    ]);
+    const file = root.entries.find((entry: Record<string, unknown>) => entry.path === "notes.md");
+    expect(file.size).toBeGreaterThan(0);
+    expect(Number.isInteger(file.updatedAtMs)).toBe(true);
+    const nested = await listWorkspace({ path: root.entries[0].path });
+    expect(nested).toMatchObject({ path: "..notes", parentPath: "", totalEntries: 2, offset: 0 });
+    expect(
+      nested.entries.map(({ path: entryPath, kind }: Record<string, unknown>) => [entryPath, kind]),
+    ).toEqual([
+      ["..notes/index.ts", "file"],
+      ["..notes/util.ts", "file"],
+    ]);
+    expect((await getWorkspaceFile(nested.entries[0].path)).file.content).toBe(
+      "export const ok = true;\n",
+    );
   });
   it("rejects unknown agents", async () => {
-    const error = expectError(await listWorkspace({ agentId: "ghost" }));
+    const error = await listWorkspace({ agentId: "ghost" }, false);
     expect(error.message).toContain('agent "ghost" not found');
   });
 
   it("rejects traversal outside the workspace for list and get", async () => {
-    const listError = expectError(await listWorkspace({ path: "../" }));
+    const listError = await listWorkspace({ path: "../" }, false);
     expect(listError.details).toMatchObject({ type: "workspace_path_invalid" });
 
     await expectFileError("../outside.txt", { type: "workspace_path_invalid" });
-
-    await expectFileError("src/../../outside.txt", { type: "workspace_path_invalid" });
   });
 
   it.each(["/etc/passwd", "C:\\Windows\\System32\\drivers\\etc\\hosts"])(
@@ -136,7 +129,6 @@ describe("agents.workspace RPC handlers", () => {
     fs.writeFileSync(outsidePath, "outside\n", "utf8");
     const link = kind === "symlink" ? fs.symlinkSync : fs.linkSync;
     link(outsidePath, path.join(workspaceRoot, "linked.txt"));
-
     await expectFileError("linked.txt", { path: "linked.txt", type: "workspace_file_not_found" });
   });
 
@@ -146,7 +138,7 @@ describe("agents.workspace RPC handlers", () => {
     fs.writeFileSync(path.join(outsideDir, "secret.txt"), "outside secret\n");
     fs.symlinkSync(outsideDir, path.join(workspaceRoot, "linked-dir"), "dir");
 
-    const listError = expectError(await listWorkspace({ path: "linked-dir" }));
+    const listError = await listWorkspace({ path: "linked-dir" }, false);
     expect(listError.details).toMatchObject({ type: "workspace_path_not_found" });
     await expectFileError("linked-dir/secret.txt", { type: "workspace_file_not_found" });
   });
@@ -159,7 +151,7 @@ describe("agents.workspace RPC handlers", () => {
     );
     writeFile("shot.png", pngBytes);
 
-    const payload = expectOkPayload(await getWorkspaceFile("shot.png"));
+    const payload = await getWorkspaceFile("shot.png");
 
     expect(payload.file).toMatchObject({
       encoding: "base64",

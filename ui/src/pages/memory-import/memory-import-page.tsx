@@ -16,6 +16,7 @@ import { createPageRequest } from "../../lib/page-request.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { MemoryImportClient, MemoryImportState } from "./memory-import-state.ts";
@@ -107,7 +108,7 @@ export function MemoryImportPage() {
       );
     },
     onError: (error) => {
-      planError = formatUiError(error, "request failed");
+      planError = formatUiError(error, t("memoryImport.errorDetailsUnavailable"));
     },
   });
   async function loadPlan() {
@@ -182,7 +183,9 @@ export function MemoryImportPage() {
   }
   onSettled(() => {
     // Target/access receipts retire import and backfill epochs before replanning.
-    const stops = [gateway, agents, selection].map((projection) => projection.subscribe(syncPlan));
+    const stops = [context.gateway, context.agents, context.agentSelection].map((owner) =>
+      owner.subscribe(syncPlan),
+    );
     stops.push(
       context.router.subscribe(() => {
         retirePresentation();
@@ -191,9 +194,7 @@ export function MemoryImportPage() {
     );
     syncPlan();
     return () => {
-      for (const stop of stops) {
-        stop();
-      }
+      stops.forEach((stop) => stop());
       presentationLifetime.resolve();
       applyEpoch += 1;
       backfillEpoch += 1;
@@ -267,15 +268,11 @@ export function MemoryImportPage() {
     publish();
   }
 
-  function refresh(): Promise<void> {
+  async function refresh(): Promise<void> {
     const agentId = currentAgentId();
     if (context.agents.state.agentsError) {
-      return context.agents.refreshList().then(() => {
-        if (currentAgentId() === agentId) {
-          return loadPlan();
-        }
-        return undefined;
-      });
+      await context.agents.refreshList();
+      return currentAgentId() === agentId ? loadPlan() : undefined;
     }
     return agentId ? loadPlan() : context.agents.ensureList().then(() => undefined);
   }
@@ -379,7 +376,7 @@ export function MemoryImportPage() {
       await refresh();
     } catch (error) {
       if (epoch === applyEpoch) {
-        state.applyError = formatUiError(error, "request failed");
+        state.applyError = formatUiError(error, t("memoryImport.errorDetailsUnavailable"));
       }
     } finally {
       if (epoch === applyEpoch) {
@@ -485,11 +482,13 @@ export function MemoryImportPage() {
             return;
           }
           if (chunk.candidates > 0 && chunk.cursor?.advanced !== true) {
-            throw new Error("Session backfill stopped because the server cursor did not advance.");
+            throw new Error(
+              `${t("memoryImport.backfillNotAdvancing")}\nServer cursor did not advance.`,
+            );
           }
           if (chunk.candidates === 0 && chunk.cursor?.exhausted !== true) {
             throw new Error(
-              "Session backfill stopped because the server cursor was not exhausted.",
+              `${t("memoryImport.backfillIncomplete")}\nServer cursor was not exhausted.`,
             );
           }
           for (const day of chunk.perDay) {
@@ -512,7 +511,7 @@ export function MemoryImportPage() {
       }
     } catch (error) {
       if (isCurrent()) {
-        state.backfillError = formatUiError(error, "request failed");
+        state.backfillError = formatUiError(error, t("memoryImport.errorDetailsUnavailable"));
       }
     } finally {
       if (isCurrent()) {
@@ -640,6 +639,7 @@ export function MemoryImportPage() {
         <MemoryImport
           connected={gateway.read().snapshot.phase === "connected"}
           canAdmin={canAdmin()}
+          actorAuth={gateway.read().snapshot.hello?.auth ?? null}
           agents={listSelectableAgents(agents.read().agentsList?.agents ?? [])}
           selectedAgentId={currentAgentId()}
           plan={plan()}

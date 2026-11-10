@@ -7,6 +7,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -27,18 +28,10 @@ function treeList(parentKey: string, roots: unknown[], children: unknown[]) {
 }
 
 function withPage(run: (page: Page) => Promise<void>, options: BrowserContextOptions = {}) {
-  return suite.withPage(
-    {
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      ...options,
-    },
-    async ({ page }) => {
-      await page.clock.install();
-      await run(page);
-    },
-  );
+  return suite.withPage({ ...createControlUiE2eContextOptions(), ...options }, async ({ page }) => {
+    await page.clock.install();
+    await run(page);
+  });
 }
 
 async function invalidateSessions(page: Page, gateway: MockGatewayControls, payload: unknown) {
@@ -89,9 +82,13 @@ suite.define(() => {
       });
       const childRow = sessionRow(childKey, "Background research", baseTime - 1, {
         spawnedBy: parentKey,
+        hasActiveRun: true,
+        status: "running",
+        startedAt: baseTime,
       });
       await withPage(
         async (page) => {
+          await page.clock.setFixedTime(baseTime + 9_000);
           if (textScale !== 100) {
             await seedStorage(page, {
               [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
@@ -123,8 +120,8 @@ suite.define(() => {
             const menu = parent.locator("[data-sidebar-session-menu]");
             const toggleBox = (await childToggle.boundingBox())!;
             const menuBox = (await menu.boundingBox())!;
-            expect(menuBox).toMatchObject({ width: 44, height: 44 });
-            expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(toggleBox.x);
+            expect(menuBox).toMatchObject({ width: 36, height: 44 });
+            expect(toggleBox.x + toggleBox.width).toBeLessThanOrEqual(menuBox.x);
             for (const control of [childToggle, menu]) {
               expect(
                 await control.evaluate((element) => {
@@ -158,7 +155,7 @@ suite.define(() => {
             rowHeight: element.parentElement!.getBoundingClientRect().height,
           }));
           if (textScale === 100) {
-            expect(loadingGeometry.rowHeight).toBe(width === 390 ? 44 : 30);
+            expect(loadingGeometry.rowHeight).toBe(width === 390 ? 44 : 32);
           } else {
             expect(loadingGeometry.rowHeight).toBeGreaterThan(30);
           }
@@ -175,6 +172,24 @@ suite.define(() => {
           expect(childGeometry.left).toBe(loadingGeometry.left);
           // Chromium can quantize empty and text line boxes 1/64 CSS px apart.
           expect(childGeometry.rowHeight).toBeCloseTo(loadingGeometry.rowHeight, 1);
+
+          const clock = child.locator("openclaw-elapsed-time");
+          await expectText(clock, "9s");
+          const clockGeometry = () =>
+            child.evaluate((element) => {
+              const range = document.createRange();
+              range.selectNodeContents(element.querySelector("openclaw-elapsed-time")!);
+              return {
+                x: range.getBoundingClientRect().x,
+                titleWidth: element
+                  .querySelector(".sidebar-recent-session__name")!
+                  .getBoundingClientRect().width,
+              };
+            });
+          const beforeTick = await clockGeometry();
+          await page.clock.setFixedTime(baseTime + 10_000);
+          await expectText(clock, "10s");
+          expect(await clockGeometry()).toEqual(beforeTick);
 
           await deferChildRefresh(page, gateway, parentKey, baseTime + 2);
           expect(await page.locator(".sidebar-session-tree__loading").count()).toBe(0);

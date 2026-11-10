@@ -1,19 +1,21 @@
+import {
+  buildMediaGenerationNormalizationMetadata,
+  resolveMediaGeometryOverrides,
+} from "../../packages/media-generation-core/src/normalization.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveMediaGeometryOverrides } from "../media-generation/geometry-normalization.js";
-import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getImageGenerationProvider,
   listImageGenerationProviders,
   withImageGenerationProviders,
 } from "../media-generation/registry.js";
 import {
-  buildMediaGenerationNormalizationMetadata,
   resolveMediaProviderRequestTimeoutMs,
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
+import { createCapabilityProviderLookup } from "../plugins/provider-registry-shared.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 import type { ImageGenerationIgnoredOverride, ImageGenerationResult } from "./types.js";
@@ -46,7 +48,7 @@ export async function generateImage(
     return runImageGeneration(params, deps);
   }
   return withImageGenerationProviders(params.cfg, (providers) => {
-    const lookup = createMediaProviderLookup(providers);
+    const lookup = createCapabilityProviderLookup(providers);
     return runImageGeneration(params, {
       ...deps,
       getProvider: deps.getProvider ?? lookup.getProvider,

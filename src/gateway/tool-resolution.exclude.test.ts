@@ -43,7 +43,7 @@ vi.mock("../agents/openclaw-tools.js", () => ({
 }));
 
 // mock-isolation: Filter synthetic mediated tools without filesystem or exec initialization.
-vi.mock("../agents/agent-tools.js", () => ({
+vi.mock("../agents/agent-tools.async.js", () => ({
   createOpenClawCodingToolsInternalAsync: async (...args: Parameters<typeof codingTools>) =>
     codingTools(...args),
 }));
@@ -250,7 +250,9 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     ["event", "internal_system", "cron", true],
     // The agent RPC can assert provenance but never the host-derived trigger.
     ["user", "internal_system", "cron", false],
-    ["event", "internal_system", "exec", false],
+    // Every host event turn takes the same rule, whatever its source label.
+    ["event", "internal_system", "exec", true],
+    ["event", "internal_system", "cron_failure_repair", true],
     ["event", "inter_session", "cron", false],
     [undefined, undefined, undefined, false],
   ] as const)(

@@ -18,37 +18,28 @@ export function notify(
   return projector.handleNotification(forCurrentTurn(method, params));
 }
 
-export function result(projector: CodexAppServerEventProjector) {
-  return projector.buildResult(buildEmptyToolTelemetry());
-}
+export const result = (projector: CodexAppServerEventProjector) =>
+  projector.buildResult(buildEmptyToolTelemetry());
 
 export function message(id: string, value = "", phase?: string) {
   return { type: "agentMessage", id, text: value, ...(phase === undefined ? {} : { phase }) };
 }
 
-export function finalMessage(id: string, value = "") {
-  return message(id, value, "final_answer");
-}
+export const finalMessage = (id: string, value = "") => message(id, value, "final_answer");
 
-export function text(value: string) {
-  return [{ type: "text" as const, text: value }];
-}
+export const text = (value: string) => [{ type: "text" as const, text: value }];
 
-export function start(projector: CodexAppServerEventProjector, item: unknown) {
-  return notify(projector, "item/started", { item });
-}
+export const start = (projector: CodexAppServerEventProjector, item: unknown) =>
+  notify(projector, "item/started", { item });
 
-export function complete(projector: CodexAppServerEventProjector, item: unknown) {
-  return notify(projector, "item/completed", { item });
-}
+export const complete = (projector: CodexAppServerEventProjector, item: unknown) =>
+  notify(projector, "item/completed", { item });
 
-export function delta(projector: CodexAppServerEventProjector, value: string, itemId = "msg-1") {
-  return notify(projector, "item/agentMessage/delta", { itemId, delta: value });
-}
+export const delta = (projector: CodexAppServerEventProjector, value: string, itemId = "msg-1") =>
+  notify(projector, "item/agentMessage/delta", { itemId, delta: value });
 
-export function finish(projector: CodexAppServerEventProjector, items: unknown[] = []) {
-  return projector.handleNotification(turnCompleted(items));
-}
+export const finish = (projector: CodexAppServerEventProjector, items: unknown[] = []) =>
+  projector.handleNotification(turnCompleted(items));
 
 export function rawAssistant(
   projector: CodexAppServerEventProjector,
@@ -97,12 +88,7 @@ export async function observe(
 }
 
 export async function observePartial() {
-  const onAgentEvent = vi.fn();
   const onPartialReply = vi.fn();
-  const projector = await createProjector({
-    ...(await createParams()),
-    onAgentEvent,
-    onPartialReply,
-  });
+  const { projector, onAgentEvent } = await observe({ onPartialReply });
   return { projector, onAgentEvent, onPartialReply };
 }

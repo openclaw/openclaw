@@ -144,24 +144,6 @@ describe("cold command palette input custody", () => {
     },
   );
 
-  it("retains its live field and selection while the shell refreshes and locks a queued submit", async () => {
-    const { state, input } = await mountLoader();
-    type(input, "Keep this selection");
-    input.setSelectionRange(5, 9, "backward");
-    flush();
-    expect(container.querySelector("textarea")).toBe(input);
-    expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([
-      5,
-      9,
-      "backward",
-    ]);
-    keydown(input, { metaKey: true });
-    flush();
-    expect(state.submitRequested()).toBe(true);
-    expect(input.readOnly).toBe(true);
-    expect(container.querySelector("textarea")).toBe(input);
-  });
-
   it.each(["typed", "pasted", "replaced", "dropped", "composing"])(
     "preserves only a typed mention trigger: %s",
     async (mode) => {
@@ -249,6 +231,7 @@ describe("cold command palette input custody", () => {
       type(input, value);
       const event = keydown(input, modifier);
       keydown(input, { ...modifier, repeat: true });
+      flush();
       expect(event.defaultPrevented).toBe(true);
       if (!submit) {
         expect(close).not.toHaveBeenCalled();
@@ -258,6 +241,8 @@ describe("cold command palette input custody", () => {
         expect(state.submitRequested()).toBe(false);
         return;
       }
+      expect(input.readOnly).toBe(true);
+      expect(container.querySelector("textarea")).toBe(input);
       const take = state.captureHandoff();
       expect(take()).toMatchObject({ value, submitRequested: true });
       expect(take()).toBeUndefined();
@@ -332,41 +317,33 @@ describe("cold command palette input custody", () => {
     );
   });
 
-  it("retires a composition handoff when its shell owner is disposed", async () => {
-    const { state, input, disposeOwner } = await mountLoader();
-    compose(input);
-    type(input, "retired prompt");
-    const take = state.captureHandoff();
-    const accepted = vi.fn();
-    state.handoff(accepted);
-    compose(input, true);
-    disposeOwner();
-    expect(take()).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(20);
-    expect(accepted).not.toHaveBeenCalled();
-  });
-
-  it.each(["composing", "commit-pending"] as const)(
-    "retires a %s handoff without reviving its prompt on reopen",
+  it.each(["composing", "commit-pending", "disposed"] as const)(
+    "retires a composition handoff after %s",
     async (phase) => {
-      const { state, input } = await mountLoader();
+      const { state, input, disposeOwner } = await mountLoader();
       compose(input);
       type(input, "retired text");
       const accepted = vi.fn();
       state.handoff(accepted);
       const take = state.captureHandoff();
-      if (phase === "commit-pending") {
+      if (phase !== "composing") {
         compose(input, true);
       }
-      state.clear();
-      // A late ref/input from the old render cannot resurrect custody.
-      state.inputRef(undefined);
-      state.captureInput();
-      state.begin();
+      if (phase === "disposed") {
+        disposeOwner();
+      } else {
+        state.clear();
+        // A late ref/input from the old render cannot resurrect custody.
+        state.inputRef(undefined);
+        state.captureInput();
+        state.begin();
+      }
       expect(take()).toBeUndefined();
       await vi.advanceTimersByTimeAsync(20);
       expect(accepted).not.toHaveBeenCalled();
-      expect(state.value()).toBe("");
+      if (phase !== "disposed") {
+        expect(state.value()).toBe("");
+      }
     },
   );
 });

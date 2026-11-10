@@ -1,12 +1,10 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { writeHeapSnapshot } from "node:v8";
-import { resolveStateDir } from "../config/state-dir.js";
 import { observeRuntimeProfileCapability } from "../infra/runtime-capabilities.js";
+import { reserveDiagnosticProfileFile } from "./diagnostic-profile-file.js";
 import {
   captureDiagnosticProfile,
   createInspectorProfileCapture,
-  type DiagnosticProfileOutcome,
   ProfileFailure,
 } from "./diagnostic-profile.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -16,20 +14,12 @@ const COOLDOWN_MS = 60_000;
 const log = createSubsystemLogger("gateway").child("diagnostics/heap-snapshot");
 let nextCaptureAt = 0;
 
-type HeapSnapshotResult = {
-  path: string;
-  sizeBytes: number;
-  heapUsedBefore: number;
-  heapUsedAfter: number;
-  elapsedMs: number;
-};
-
 /** Owns opt-in main-isolate snapshots; native capture cannot be interrupted. */
 export async function captureDiagnosticHeapSnapshot(options: {
   reason?: string;
   signal: AbortSignal;
   hasAuthority: () => boolean;
-}): Promise<DiagnosticProfileOutcome<HeapSnapshotResult>> {
+}) {
   let ownedPath: string | undefined;
   let elapsedMs = 0;
   let heapUsedAfter = 0;
@@ -47,19 +37,13 @@ export async function captureDiagnosticHeapSnapshot(options: {
             if (process.memoryUsage().heapUsed > MAX_HEAP_BYTES) {
               throw new ProfileFailure("heap-too-large");
             }
-            const directory = path.join(resolveStateDir(), "diagnostics");
-            await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-            if (options.signal.aborted || !options.hasAuthority()) {
-              throw new ProfileFailure("cancelled");
-            }
-            const filename = path.join(
-              directory,
-              `heap-${new Date().toISOString().replaceAll(":", "-")}.heapsnapshot`,
-            );
-            // Reserve privately before native capture opens the file, including with a permissive umask.
-            const file = await fs.open(filename, "wx", 0o600);
-            ownedPath = filename;
-            await file.close();
+            const file = await reserveDiagnosticProfileFile("heap", () => {
+              if (options.signal.aborted || !options.hasAuthority()) {
+                throw new ProfileFailure("cancelled");
+              }
+            });
+            ownedPath = file.path;
+            await file.handle.close();
           },
           start: async () => {
             const heapUsedBefore = process.memoryUsage().heapUsed;

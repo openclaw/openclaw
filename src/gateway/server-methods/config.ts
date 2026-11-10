@@ -62,6 +62,7 @@ import {
   resolveControlPlaneActor,
   summarizeChangedPaths,
 } from "../control-plane-audit.js";
+import { SerializedJsonPayload } from "../serialized-json.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   diffConfigLeafPaths,
@@ -76,6 +77,8 @@ import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
   didSharedGatewayAuthChange,
+  finishGatewayConfigWrite,
+  respondConfigWriteApplicationOutcome,
   resolveGatewayConfigPath,
   resolveGatewayConfigRestartWriteResult,
   shouldAwaitGatewayConfigApplication,
@@ -97,6 +100,22 @@ const configWriteRecovery = new WeakMap<
   GatewayConfigRevisionProjector,
   { configPath: string; error: ReturnType<typeof errorShape> }
 >();
+
+const serializedConfigReads = new WeakMap<object, SerializedJsonPayload>();
+
+function configReadPayload(snapshot: object, acceptsSerializedJson: boolean | undefined) {
+  if (!acceptsSerializedJson) {
+    return snapshot;
+  }
+  // Config/schema owners replace their snapshots on invalidation. Keep encoded
+  // bytes with that exact snapshot, independently of each request's envelope.
+  let payload = serializedConfigReads.get(snapshot);
+  if (!payload) {
+    payload = new SerializedJsonPayload(snapshot);
+    serializedConfigReads.set(snapshot, payload);
+  }
+  return payload;
+}
 
 type ConfigRedactionHints = Parameters<typeof redactConfigObject>[1];
 type ConfigRestartWriteMode = Parameters<typeof resolveGatewayConfigRestartWriteResult>[0]["mode"];
@@ -510,7 +529,7 @@ async function commitConfigRestartWrite(params: {
   writeSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
   writeConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
-  actor: ReturnType<typeof resolveControlPlaneActor>;
+  client: Parameters<typeof resolveControlPlaneActor>[0];
   context: GatewayRequestContext;
   respond: RespondFn;
   uiHints: ConfigRedactionHints;
@@ -524,7 +543,7 @@ async function commitConfigRestartWrite(params: {
     listConfigReloadRefinementPrefixes(),
   );
   params.context?.logGateway?.info(
-    `${params.mode} write ${formatControlPlaneActor(params.actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=${params.mode}`,
+    `${params.mode} write ${formatControlPlaneActor(resolveControlPlaneActor(params.client))} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=${params.mode}`,
   );
   // Compare before the write so successful publication invalidates the previous shared secret.
   const disconnectSharedAuthClients =
@@ -556,25 +575,19 @@ async function commitConfigRestartWrite(params: {
       : {}),
     ...(!params.summary ? { config: redactConfigObject(writeResult.config, params.uiHints) } : {}),
   };
-  if (writeResult.application) {
-    const outcome = await writeResult.application;
-    if (outcome !== "applied") {
-      const message =
-        outcome === "applied-restart-required"
-          ? `${params.mode} persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision`
-          : outcome === "restart-pending"
-            ? `${params.mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
-            : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, message, {
-          details: { persistedConfig },
-        }),
-      );
-      writeResult.queueFollowUp();
-      return;
-    }
+  if (
+    writeResult.application &&
+    respondConfigWriteApplicationOutcome({
+      outcome: await writeResult.application,
+      mode: params.mode,
+      client: params.client,
+      respond: writeResult.reply,
+      success: { ok: true, path: writeResult.path, ...persistedConfig, changedPaths },
+      persistedConfig,
+    })
+  ) {
+    writeResult.queueFollowUp();
+    return;
   }
   const noopReload = isNoopGatewayReloadPlan(
     buildGatewayReloadPlan(changedPaths, {
@@ -586,7 +599,7 @@ async function commitConfigRestartWrite(params: {
     invalidateGatewayRuntimeConfigSchema();
   }
   if (params.summary && noopReload) {
-    params.respond(true, { ok: true, path: writeResult.path, ...persistedConfig, changedPaths });
+    writeResult.reply(true, { ok: true, path: writeResult.path, ...persistedConfig, changedPaths });
     writeResult.queueFollowUp();
     return;
   }
@@ -598,10 +611,10 @@ async function commitConfigRestartWrite(params: {
     changedPaths,
     previousConfig: snapshot.config,
     nextConfig: params.nextConfig,
-    actor: params.actor,
+    client: params.client,
     context: params.context,
   });
-  params.respond(
+  writeResult.reply(
     true,
     {
       ok: true,
@@ -681,7 +694,7 @@ async function commitGatewayConfigWriteOrRespond(
 }
 
 export const configHandlers: GatewayRequestHandlers = {
-  "config.get": async ({ params, respond, context }) => {
+  "config.get": async ({ params, respond, context, acceptsSerializedJson }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
       return;
     }
@@ -701,13 +714,17 @@ export const configHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    respond(true, snapshot, undefined);
+    respond(true, configReadPayload(snapshot, acceptsSerializedJson), undefined);
   },
-  "config.schema": ({ params, respond }) => {
+  "config.schema": ({ params, respond, acceptsSerializedJson }) => {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {
       return;
     }
-    respond(true, loadGatewayRuntimeConfigSchema(), undefined);
+    respond(
+      true,
+      configReadPayload(loadGatewayRuntimeConfigSchema(), acceptsSerializedJson),
+      undefined,
+    );
   },
   "config.schema.lookup": defineValidatedGatewayHandler(
     "config.schema.lookup",
@@ -723,7 +740,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(true, result, undefined);
     },
   ),
-  "config.set": async ({ params, respond, context }) => {
+  "config.set": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
@@ -758,26 +775,21 @@ export const configHandlers: GatewayRequestHandlers = {
       nextConfig: parsed.writeConfig,
       context,
       respond,
+      awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
+        previousConfig: snapshot.config,
+        nextConfig: parsed.config,
+      }),
     });
     if (!writeResult) {
       return;
     }
-    invalidateGatewayRuntimeConfigSchema();
-    respond(
-      true,
-      {
-        ok: true,
-        path: writeResult.path,
-        // Writers adopt the committed revision without a reload.
-        ...(writeResult.hash
-          ? { hash: context.configRevisionProjector.projectRawHash(writeResult.hash) }
-          : {}),
-        config: redactConfigObject(writeResult.config, parsed.uiHints),
-        ...preparedSecretDegradationPayload(preparedSecretsSnapshot),
-      },
-      undefined,
-    );
-    writeResult.queueFollowUp();
+    await finishGatewayConfigWrite({
+      write: writeResult,
+      context,
+      client,
+      uiHints: parsed.uiHints,
+      successDetails: preparedSecretDegradationPayload(preparedSecretsSnapshot),
+    });
   },
   "config.patch": async (options) => {
     const { params, respond, client, context } = options;
@@ -954,7 +966,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       writeConfig,
       nextConfig: validatedConfig,
-      actor,
+      client,
       context,
       respond,
       uiHints,
@@ -981,14 +993,13 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
-    const actor = resolveControlPlaneActor(client);
     await commitConfigRestartWrite({
       requestParams: params,
       mode: "config.apply",
       writeSnapshot: parsed.writeSnapshot,
       writeConfig: parsed.writeConfig,
       nextConfig: parsed.config,
-      actor,
+      client,
       context,
       respond,
       uiHints: parsed.uiHints,

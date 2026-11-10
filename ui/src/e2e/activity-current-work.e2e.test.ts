@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   installMockGateway,
@@ -101,9 +102,7 @@ suite.define(() => {
       expect(await current.getByText("Check documentation links", { exact: true }).count()).toBe(1);
       expect(await rows.count()).toBe(1);
       expect(
-        await current
-          .getByText("Connect to the Gateway to load active sessions.", { exact: true })
-          .count(),
+        await current.getByText("Reconnect to load active sessions.", { exact: true }).count(),
       ).toBe(0);
       await gateway.setMethodResponse("sessions.list", listing([]));
       const previousReads = await gateway.deferNext("sessions.list", { activeOnly: true });
@@ -124,7 +123,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("sessions.changed", { reason: "update" });
       // Cross the full refresh window and deliver its nested mock response timer.
       await page.clock.runFor(5_001);
-      await showText(current, "Could not load active sessions.");
+      await showText(current, "Couldn’t load active sessions. Try again.");
       await page.clock.resume();
       await gateway.setMethodResponse("sessions.list", listing([]));
       await current.getByRole("button", { name: "Retry", exact: true }).click();
@@ -155,12 +154,10 @@ suite.define(() => {
         heldMethods: ["sessions.list"],
         sessions: activeRows,
         methodResponses: {
-          "agents.list": {
-            defaultId: "main",
-            mainKey: "main",
+          "agents.list": makeBootRoster({
             scope: "global",
             agents: [{ id: "main" }, { id: "work" }],
-          },
+          }),
           "sessions.list": {
             cases: [
               // Only the held first snapshot predates the completion event.
@@ -200,8 +197,8 @@ suite.define(() => {
       expect(await page.locator(".activity-entry").count()).toBe(0);
       await work.click();
       await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/work" });
-      await gateway.waitForRequest("chat.startup", {
-        match: { sessionKey: "agent:work:main", agentId: "work" },
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { key: "agent:work:main", agentId: "work" },
       });
     });
   });

@@ -22,16 +22,23 @@ export default definePluginEntry({
       isRecord(api.pluginConfig) && typeof api.pluginConfig.binaryPath === "string"
         ? api.pluginConfig.binaryPath
         : undefined;
-    api.registerAgentHarness(
-      createMuseAgentHarness({
-        binaryPath,
-        sessionStore: {
-          register: (key, value, options) => getStore().register(key, value, options),
-          lookup: (key) => getStore().lookup(key),
-          delete: (key) => getStore().delete(key),
-        },
-        logger: api.logger,
-      }),
-    );
+    const harness = createMuseAgentHarness({
+      binaryPath,
+      sessionStore: {
+        register: (key, value, options) => getStore().register(key, value, options),
+        lookup: (key) => getStore().lookup(key),
+        delete: (key) => getStore().delete(key),
+      },
+      logger: api.logger,
+    });
+    let disposal: Promise<void> | undefined;
+    const dispose = () => (disposal ??= Promise.resolve().then(() => harness.dispose?.()));
+    api.lifecycle.registerRuntimeLifecycle({
+      id: "muse-runtime",
+      cleanup: ({ reason }) =>
+        reason === "restart" || reason === "disable" ? dispose() : undefined,
+      dispose,
+    });
+    api.registerAgentHarness(harness);
   },
 });

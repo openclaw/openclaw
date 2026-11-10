@@ -26,8 +26,7 @@ export async function stopCronStreamRun(run: ManagedRun, timeoutMs: number): Pro
             () => true,
           ),
       new Promise<false>((resolve) => {
-        timeout = setTimeout(() => resolve(false), timeoutMs);
-        timeout.unref?.();
+        timeout = setTimeout(() => resolve(false), timeoutMs).unref();
       }),
     ]);
     if (!exited) {

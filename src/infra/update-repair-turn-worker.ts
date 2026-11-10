@@ -4,6 +4,7 @@ import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
 } from "../cli/update-cli/update-command-executor.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import type { UpdateRepairTurnMessage, UpdateRepairTurnResult } from "./update-repair-protocol.js";
 import { repairSummary, runLocalUpdateRepairTurn } from "./update-repair-turn.js";
@@ -22,7 +23,7 @@ export async function runDelegatedUpdateRepairTurn(
 ): Promise<UpdateRepairTurnResult> {
   const controller = new AbortController();
   const signal = AbortSignal.any([parentSignal, controller.signal]);
-  const deadline = Date.now() + message.wallClockMs;
+  const deadline = monotonicDeadlineAfter(message.wallClockMs);
   const wallTimer = setTimeout(
     () => controller.abort(new Error("wall-clock-budget")),
     message.wallClockMs,
@@ -91,7 +92,7 @@ export async function runDelegatedUpdateRepairTurn(
         };
         assertCurrent();
         const selected = await runtime.withUpdateRepairEnvironment(message.target, () =>
-          runtime.prepareUpdateRepairInference(signal, Math.max(1, deadline - Date.now())),
+          runtime.prepareUpdateRepairInference(signal, Math.max(1, remainingMonotonicMs(deadline))),
         );
         assertCurrent();
         if (!selected.ok) {
@@ -100,7 +101,8 @@ export async function runDelegatedUpdateRepairTurn(
         const { route, modelFallbacks } = selected;
         onRoute({ model: route.model, provider: route.provider });
         // Route preparation uses the total budget; inference gets its own turn budget afterward.
-        const timeoutMs = Math.min(message.timeoutMs, deadline - Date.now());
+        // Preserve whole-millisecond expiration at the turn boundary.
+        const timeoutMs = Math.min(message.timeoutMs, Math.floor(remainingMonotonicMs(deadline)));
         if (timeoutMs <= 0) {
           throw new Error("wall-clock-budget");
         }

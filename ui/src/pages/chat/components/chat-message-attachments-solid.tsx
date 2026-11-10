@@ -2,10 +2,10 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo, onCleanup, refresh } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import "./chat-audio-player.tsx";
 import "./chat-svg-attachment.tsx";
 import "./chat-video-player.tsx";
-import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import {
   isCrossOriginHttpSource,
@@ -13,6 +13,7 @@ import {
   safePlainTextAttachmentHref,
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
+import { openResolvedImage } from "./chat-image-presentation.ts";
 import {
   shouldDeferAttachmentCard,
   type AttachmentAdmission,
@@ -26,16 +27,15 @@ import {
 } from "./chat-message-attachment-source.ts";
 import { AssistantAttachmentStatusCard } from "./chat-message-attachment-status-solid.tsx";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
-import { openResolvedImage } from "./chat-message-image-open.ts";
 import { isLocalAssistantAttachmentSource } from "./chat-message-local-media.ts";
+import type { MessageMediaAction } from "./chat-message-media-actions.ts";
+import { resolveAttachmentImageKind } from "./chat-message-media-projection.ts";
 import {
-  resolveAttachmentImageKind,
   observeChatMediaResourceSubscriber,
   releaseChatMediaResourceOwner,
   type AttachmentItem,
   type AssistantAttachmentItem,
   type ImageRenderOptions,
-  type MessageMediaAction,
 } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
@@ -143,7 +143,7 @@ export function AssistantAttachments(
         <SentCommentAttachments
           comments={comments()}
           inline={props.inlineComments && files().length === 0}
-          options={props.options}
+          options={{ ...props.options, onMediaChange: refreshComments }}
           resolve={(item) => commentSources().get(item)!}
         />
         <For each={files()} keyed={false}>
@@ -173,6 +173,27 @@ export function AssistantAttachments(
   );
 }
 
+function attachmentFileSearch(
+  item: AssistantAttachmentItem,
+  options: ImageRenderOptions,
+): (() => void) | undefined {
+  if (
+    item.type !== "attachment_error" ||
+    item.attachment.code !== "file-too-large" ||
+    !item.attachment.label.trim() ||
+    !options.sessionKey ||
+    !options.onFindWorkspaceFile
+  ) {
+    return undefined;
+  }
+  return () =>
+    options.onFindWorkspaceFile?.({
+      name: item.attachment.label,
+      sessionKey: options.sessionKey,
+      agentId: options.agentId,
+    });
+}
+
 export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Element {
   return (
     <Show
@@ -182,6 +203,7 @@ export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Eleme
           label={props.item.attachment.label}
           mimeType={props.item.attachment.mimeType}
           badge={t("chat.attachments.notSent")}
+          onFindWorkspaceFile={attachmentFileSearch(props.item, props.options)}
           reason={
             props.item.type === "attachment_error"
               ? attachmentFailureReason(props.item.attachment.code)
@@ -532,6 +554,7 @@ export function MessageAttachmentAction(
       when={props.item.type === "attachment" && props.item}
       fallback={props.render(() => ({
         pending: false,
+        onFindWorkspaceFile: attachmentFileSearch(props.item, props.options),
         reason:
           props.item.type === "attachment_error"
             ? attachmentFailureReason(props.item.attachment.code)

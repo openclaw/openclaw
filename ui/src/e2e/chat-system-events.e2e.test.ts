@@ -1,5 +1,12 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  createControlUiMockBootstrapConfig,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -38,10 +45,7 @@ function fallback(id: string, restored = false) {
 const events = [
   recovery("recovery-1", "Gateway restarted. The conversation has been restored."),
   fallback("fallback-1"),
-  {
-    ...message("custom", warningText, "delivery-1"),
-    customType: "session-send-recovery-blocked",
-  },
+  recovery("delivery-1", warningText),
   recovery("recovery-2", connectedText),
   fallback("fallback-2", true),
   recovery("recovery-3", "Recovery checks finished. Your conversation is ready."),
@@ -53,6 +57,112 @@ const history = [
 ];
 
 suite.define(() => {
+  it.each([false, true])(
+    "keeps complete silent continuation activity without reply chrome (bubble=%s)",
+    async (bubbleMode) => {
+      await suite.withPage(pageOptions, async ({ page }) => {
+        if (bubbleMode) {
+          await page.addInitScript(
+            (key) =>
+              localStorage.setItem(
+                key,
+                JSON.stringify({ chatBubbleSessionKeys: ["agent:main:main"] }),
+              ),
+            controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+          );
+        }
+        const runId = "continuation";
+        await installMockGateway(page, {
+          historyMessages: [
+            history[0]!,
+            fallback("switch-before"),
+            message("assistant", answerText, "answer"),
+            {
+              role: "assistant",
+              content: [
+                { type: "toolCall", id: "inspect", name: "read", arguments: { path: "report.md" } },
+                {
+                  type: "toolCall",
+                  id: "check",
+                  name: "exec",
+                  arguments: { command: "git status -sb" },
+                },
+              ],
+              timestamp: timestamp + 1,
+              stopReason: "toolUse",
+              __openclaw: { id: "poll", runId, turnBoundary: true },
+            },
+            {
+              role: "toolResult",
+              toolName: "read",
+              toolCallId: "later",
+              content: "Later operation retained",
+              timestamp: timestamp + 2,
+              __openclaw: {
+                id: "later",
+                runId,
+                transport: { clients: [{ id: "cli", mode: "cli" }] },
+              },
+            },
+            {
+              role: "assistant",
+              content: [],
+              stopReason: "stop",
+              timestamp: timestamp + 3,
+              __openclaw: { id: "silent", runId },
+            },
+            fallback("switch-after"),
+          ],
+        });
+        if (bubbleMode) {
+          await page.route("**/control-ui-config.json", (route) =>
+            route.fulfill({
+              json: { ...createControlUiMockBootstrapConfig(), chatBubblesEnabled: true },
+            }),
+          );
+        }
+        await page.goto(suite.server.baseUrl + "chat");
+        await page.getByText(answerText, { exact: true }).waitFor();
+        expect(
+          await page
+            .locator("section.chat")
+            .evaluate((element) => element.classList.contains("chat--bubbles")),
+        ).toBe(bubbleMode);
+        const activity = page.locator(".chat-activity-group__summary");
+        await activity.waitFor();
+        await activity.click();
+        const laterOutput = page.locator(".chat-tool-msg-summary", { hasText: "Tool output" });
+        await laterOutput.click();
+        await page.getByText("Later operation retained", { exact: true }).waitFor();
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".chat-thread"),
+            [activity],
+            { animations: "disabled" },
+          );
+          await writeFile(
+            path.join(suite.artifactDir, `continuation-operations-${bubbleMode}.png`),
+            frame.png,
+          );
+        }
+        await expect
+          .poll(() => page.locator(".chat-thread").textContent())
+          .toContain("Later operation retained");
+        const disclosures = page.locator(".chat-system-events");
+        expect(await disclosures.count()).toBe(2);
+        expect(await disclosures.first().getAttribute("open")).toBeNull();
+        await disclosures.first().locator("summary").click();
+        await expect
+          .poll(() => disclosures.first().textContent())
+          .toContain("Model fallback: Primary → Backup");
+        const operations = page.locator(".chat-group", { has: activity });
+        expect(await operations.locator(".chat-avatar-slot").count()).toBe(0);
+        expect(await operations.locator(".chat-group-footer").count()).toBe(0);
+      });
+    },
+  );
+
   it.each([false, true])(
     "appends events without losing disclosure state (grouped=%s)",
     async (grouped) => {
@@ -106,7 +216,6 @@ suite.define(() => {
             expect(await disclosure.getAttribute("open")).not.toBeNull();
           } else {
             expect(await disclosure.getAttribute("open")).toBeNull();
-            expect(await disclosure.locator(".chat-system-events__warning").isVisible()).toBe(true);
             await summary.click();
             await warning.waitFor();
             expect(await warning.isVisible()).toBe(true);
@@ -120,7 +229,9 @@ suite.define(() => {
               .getByRole("textbox", { name: "Search messages", exact: true })
               .fill("workspace connection");
             await expect.poll(() => disclosure.count()).toBe(0);
-            expect(await page.getByText(connectedText, { exact: true }).isVisible()).toBe(true);
+            await expect
+              .poll(() => page.getByText(connectedText, { exact: true }).isVisible())
+              .toBe(true);
           }
         },
       );
@@ -135,7 +246,6 @@ suite.define(() => {
       const summary = disclosure.locator("summary");
       await summary.waitFor();
       expect(await summary.textContent()).toContain("6 system events");
-      expect(await summary.textContent()).toContain("Updates not delivered");
       expect(await disclosure.getAttribute("open")).toBeNull();
       expect(await disclosure.locator(".chat-notice").count()).toBe(0);
       const prompt = page.getByText(promptText, { exact: true });
@@ -167,19 +277,18 @@ suite.define(() => {
         .locator(".chat-system-events__body > [data-chat-row-key]")
         .allTextContents();
       expect(contents.map((text) => text.replace(/\s+/gu, " ").trim())).toEqual([
-        "System · gateway restartedGateway restarted. The conversation has been restored.",
+        "System · Gateway restartedGateway restarted. The conversation has been restored.",
         "Model fallback: Primary → BackupReason: capacity",
-        warningText,
-        "System · gateway restartedThe workspace connection is available again.",
+        "System · Gateway restarted" + warningText,
+        "System · Gateway restartedThe workspace connection is available again.",
         "Returned to selected model: Backup → Primary",
-        "System · gateway restartedRecovery checks finished. Your conversation is ready.",
+        "System · Gateway restartedRecovery checks finished. Your conversation is ready.",
       ]);
       await summary.focus();
       await page.keyboard.press("Space");
       await expect.poll(() => disclosure.getAttribute("open")).toBeNull();
       await page.setViewportSize({ width: 390, height: 844 });
       await summary.scrollIntoViewIfNeeded();
-      expect(await summary.locator(".chat-system-events__warning").isVisible()).toBe(true);
       expect(await summary.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
         true,
       );

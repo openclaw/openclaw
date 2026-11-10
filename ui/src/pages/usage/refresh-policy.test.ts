@@ -50,30 +50,24 @@ it.each([false, true])("defers hidden work until visible (interrupted: %s)", (in
   expect(reload).toHaveBeenCalledOnce();
 });
 
-it.each(["manual/focus", "connection"] as const)(
+it.each(["manual", "focus", "connection"] as const)(
   "restarts an exhausted retry budget: %s",
   async (reset) => {
     await exhaustRetries(reset === "connection" ? {} : undefined);
     expect(reload).toHaveBeenCalledTimes(3);
     expect(policy.incompleteUsageExhausted).toBe(true);
-    if (reset === "connection") {
-      policy.setLastLoadedAtMs(Date.now(), { incomplete: true, connection: {} });
-      expect(policy.incompleteUsageExhausted).toBe(false);
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(reload).toHaveBeenCalledTimes(4);
-      return;
-    }
-    policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
-    expect(onIncompleteUsageExhausted).toHaveBeenCalledOnce();
-    for (const [reason, count] of [
-      ["manual", 5],
-      ["focus", 7],
-    ] as const) {
-      void policy.request(reason);
+    if (reset !== "connection") {
       policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(reload).toHaveBeenCalledTimes(count);
+      expect(onIncompleteUsageExhausted).toHaveBeenCalledOnce();
+      await policy.request(reset);
     }
+    policy.setLastLoadedAtMs(Date.now(), {
+      incomplete: true,
+      ...(reset === "connection" ? { connection: {} } : {}),
+    });
+    expect(policy.incompleteUsageExhausted).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(reload).toHaveBeenCalledTimes(reset === "connection" ? 4 : 5);
   },
 );
 

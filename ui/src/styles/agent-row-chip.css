@@ -10,13 +10,10 @@ openclaw-agent-row-chip {
   gap: 5px;
   min-width: 0;
   color: var(--muted);
-  font: 400 11px/1.4 var(--font-body);
+  font: 400 var(--control-ui-text-xs)/1.4 var(--font-body);
 }
 
 .agent-row-chip__avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 18px;
   width: 18px;
   height: 18px;

@@ -1,0 +1,2 @@
+# Registered-hook regressions for skipped tools and destinations.
+36

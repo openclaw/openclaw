@@ -44,7 +44,7 @@ import { sanitizeIrcAssistantText } from "./outbound-base.js";
 import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { createIrcReconnectBackoff } from "./reconnect-backoff.js";
 import { getIrcRuntime } from "./runtime.js";
-import type { CoreConfig, IrcInboundMessage } from "./types.js";
+import type { CoreConfig } from "./types.js";
 
 const CHANNEL_ID = "irc" as const;
 type IrcGroupPolicy = "open" | "allowlist" | "disabled";
@@ -81,8 +81,6 @@ type IrcMonitorOptions = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
-  onMessage?: (message: IrcInboundMessage, client: IrcClient) => void | Promise<void>;
-  ingressQueue?: NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
 };
 
 export async function monitorIrcProvider(
@@ -125,7 +123,6 @@ export async function monitorIrcProvider(
   const ingress: IrcIngressMonitor = createIrcIngressMonitor({
     accountId: account.accountId,
     runtime,
-    ...(opts.ingressQueue ? { queue: opts.ingressQueue } : {}),
     dispatch: async (
       message,
       turnAdoptionLifecycle: IrcIngressLifecycle,
@@ -150,10 +147,6 @@ export async function monitorIrcProvider(
         logger.warn?.(
           `[${account.accountId}] dropping replayed IRC DM after the connection changed`,
         );
-        return { kind: "completed" };
-      }
-      if (opts.onMessage) {
-        await opts.onMessage(message, activeClient);
         return { kind: "completed" };
       }
       const deliverReply = async (target: string, payload: OutboundReplyPayload) => {
@@ -241,14 +234,11 @@ export async function monitorIrcProvider(
       const requireMention = message.isGroup
         ? resolveIrcGroupRequireMention({ groups: account.config.groups, target: message.target })
         : false;
-      const routeGroupAllowFrom = normalizeStringEntries(
-        groupMatch.groupConfig?.allowFrom?.length
-          ? groupMatch.groupConfig.allowFrom
-          : groupMatch.wildcardConfig?.allowFrom,
-      );
+      const routeGroupAllowFrom =
+        groupMatch.groupConfig?.allowFrom ?? groupMatch.wildcardConfig?.allowFrom;
       const accessGroupPolicy: IrcGroupPolicy =
         groupPolicy === "open" &&
-        (hasEntries(account.config.groupAllowFrom) || hasEntries(routeGroupAllowFrom))
+        (hasEntries(account.config.groupAllowFrom) || routeGroupAllowFrom !== undefined)
           ? "allowlist"
           : groupPolicy;
       const channelTarget =
@@ -301,7 +291,7 @@ export async function monitorIrcProvider(
                   precedence: 10,
                   blockReason: "channel_disabled",
                 },
-                hasEntries(routeGroupAllowFrom) && {
+                routeGroupAllowFrom !== undefined && {
                   id: "irc:channel-sender",
                   precedence: 20,
                   senderPolicy: "replace",

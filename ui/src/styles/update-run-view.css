@@ -6,9 +6,13 @@
   text-align: left;
 }
 
-.update-run-dialog {
-  max-height: calc(100dvh - 48px);
-  overflow-y: auto;
+.update-run-dialog__status {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.update-run-dialog__status:empty {
+  display: none;
 }
 
 .update-run-view__heading h3,
@@ -20,7 +24,7 @@
 
 .update-run-view__heading h3 {
   color: var(--text-strong);
-  font-size: 15px;
+  font-size: calc(15px * var(--control-ui-text-scale));
   line-height: 1.5;
 }
 
@@ -34,7 +38,7 @@
 .update-run-view__step-status,
 .update-run-view__diagnostics summary > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .update-run-view__phases,
@@ -59,7 +63,7 @@
   padding: 5px 8px;
   border-radius: var(--radius-sm);
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .update-run-view__mark {
@@ -70,7 +74,7 @@
 
 .update-run-view__step-status {
   margin-left: auto;
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .update-run-view__step--in_progress {
@@ -103,7 +107,7 @@
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .update-run-view__step-list > summary,
@@ -142,7 +146,7 @@
   background: var(--bg);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.5;
 }
 
@@ -154,13 +158,13 @@
   display: grid;
   grid-template-columns: 14px 1fr;
   gap: 3px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .update-run-view__oracle small {
   grid-column: 2;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .update-run-view__report {
@@ -168,17 +172,8 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--panel);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   overflow-wrap: anywhere;
-}
-
-.update-run-view__report--succeeded {
-  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
-}
-
-.update-run-view__report--failed,
-.update-run-view__report--rolled-back {
-  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
 }
 
 .update-run-view__report-body {

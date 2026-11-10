@@ -70,6 +70,23 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         events: readTranscriptStorageRows(database, scope.sessionId),
         identities: identities(),
       });
+      const expectedIdentities = (
+        events: readonly (typeof header | ReturnType<typeof message>)[],
+        keyOverrides: Record<string, string | null> = {},
+      ) =>
+        events.map((event, seq) => ({
+          event_id: event.id,
+          seq,
+          event_type: event.type,
+          parent_id: "parentId" in event ? event.parentId : null,
+          message_idempotency_key:
+            event.id in keyOverrides
+              ? keyOverrides[event.id]
+              : "message" in event
+                ? event.message.idempotencyKey
+                : null,
+          created_at: Date.parse(event.timestamp),
+        }));
       const expectState = (events: readonly (typeof header | ReturnType<typeof message>)[]) => {
         expect(state()).toEqual({
           events: events.map((event, seq) => ({
@@ -77,17 +94,20 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             eventJson: JSON.stringify(event),
             createdAt: Date.parse(event.timestamp),
           })),
-          identities: events.map((event, seq) => ({
-            event_id: event.id,
-            seq,
-            event_type: event.type,
-            parent_id: "parentId" in event ? event.parentId : null,
-            message_idempotency_key: "message" in event ? event.message.idempotencyKey : null,
-            created_at: Date.parse(event.timestamp),
-          })),
+          identities: expectedIdentities(events),
         });
       };
-      return { database, scope, header, append, write, state, identities, expectState };
+      return {
+        database,
+        scope,
+        header,
+        append,
+        write,
+        state,
+        identities,
+        expectState,
+        expectedIdentities,
+      };
     }
 
     it("rejects scalar event and key duplicates without changing accepted bytes or consuming a sequence", () =>
@@ -166,43 +186,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           message: answer,
         });
         expect(f.state()).toEqual(beforeRetry);
-        expect(f.state().events.map((row) => JSON.parse(row.eventJson))).toEqual([
+        const events = [
           f.header,
           user,
-          {
-            type: "message",
-            id: "answer",
-            parentId: "input",
-            timestamp: new Date(20).toISOString(),
-            message: answer,
-          },
-        ]);
-        expect(f.identities()).toEqual([
-          {
-            event_id: f.scope.sessionId,
-            seq: 0,
-            event_type: "session",
-            parent_id: null,
-            message_idempotency_key: null,
-            created_at: 0,
-          },
-          {
-            event_id: "input",
-            seq: 1,
-            event_type: "message",
-            parent_id: null,
-            message_idempotency_key: "shared-key",
-            created_at: 10,
-          },
-          {
-            event_id: "answer",
-            seq: 2,
-            event_type: "message",
-            parent_id: "input",
-            message_idempotency_key: null,
-            created_at: 20,
-          },
-        ]);
+          { ...message("answer", "input", "shared-key", 20), message: answer },
+        ];
+        expect(f.state().events.map((row) => JSON.parse(row.eventJson))).toEqual(events);
+        expect(f.identities()).toEqual(f.expectedIdentities(events, { answer: null }));
       }));
 
     it("relocates a caller-checked key only with its accepted event and rolls both back together", () =>
@@ -247,43 +237,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           messageId: "moved",
           message: original.message,
         });
-        expect(f.state().events.map((row) => JSON.parse(row.eventJson))).toEqual([
+        const events = [
           f.header,
           original,
-          {
-            type: "message",
-            id: "moved",
-            parentId: "original",
-            timestamp: new Date(20).toISOString(),
-            message: original.message,
-          },
-        ]);
-        expect(f.identities()).toEqual([
-          {
-            event_id: f.scope.sessionId,
-            seq: 0,
-            event_type: "session",
-            parent_id: null,
-            message_idempotency_key: null,
-            created_at: 0,
-          },
-          {
-            event_id: "original",
-            seq: 1,
-            event_type: "message",
-            parent_id: null,
-            message_idempotency_key: null,
-            created_at: 10,
-          },
-          {
-            event_id: "moved",
-            seq: 2,
-            event_type: "message",
-            parent_id: "original",
-            message_idempotency_key: "relocated-key",
-            created_at: 20,
-          },
-        ]);
+          { ...message("moved", "original", "relocated-key", 20), message: original.message },
+        ];
+        expect(f.state().events.map((row) => JSON.parse(row.eventJson))).toEqual(events);
+        expect(f.identities()).toEqual(f.expectedIdentities(events, { original: null }));
       }));
 
     it("commits a duplicate relocation rejection without clearing the other key owner", () =>

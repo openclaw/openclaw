@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sleepWithAbort } from "./backoff.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { isTruthyEnvValue } from "./env.js";
 import { isErrno } from "./errno.js";
@@ -16,6 +17,8 @@ import {
   readResponseTextSnippet,
   readResponseWithLimit,
 } from "./http-body.js";
+import { fetchWithSsrFGuard, withTrustedEnvProxyGuardedFetchMode } from "./net/fetch-guard.js";
+import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "./net/ssrf.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
@@ -28,6 +31,7 @@ export type ClawHubFetchOptions = {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 export type ClawHubRequestParams = ClawHubFetchOptions & {
@@ -186,17 +190,19 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
 type ClawHubResponse = Awaited<ReturnType<typeof requestClawHub>>;
 
 async function requestClawHub(params: ClawHubRequestParams) {
+  params.signal?.throwIfAborted();
   if (params.json !== undefined && params.form !== undefined) {
     throw new Error("ClawHub requests cannot contain both JSON and multipart bodies");
   }
+  const baseUrl = resolveClawHubBaseUrl(params.baseUrl);
   let url: URL;
   if (params.url) {
-    url = new URL(params.url, `${resolveClawHubBaseUrl(params.baseUrl)}/`);
+    url = new URL(params.url, `${baseUrl}/`);
   } else {
     if (!params.path) {
       throw new Error("ClawHub request path is required");
     }
-    url = new URL(`${resolveClawHubBaseUrl(params.baseUrl)}/`);
+    url = new URL(`${baseUrl}/`);
     const basePath = url.pathname.replace(/\/+$/, "");
     const requestPath = params.path.startsWith("/") ? params.path : `/${params.path}`;
     url.pathname = `${basePath}${requestPath}`;
@@ -229,6 +235,7 @@ async function requestClawHub(params: ClawHubRequestParams) {
     init.body = params.form;
   }
   const request = async () => {
+    params.signal?.throwIfAborted();
     const controller = new AbortController();
     // Fetch rejects with the abort reason; preserve timeout classification for read retries.
     const timeoutError = Object.assign(
@@ -241,17 +248,24 @@ async function requestClawHub(params: ClawHubRequestParams) {
     );
     // Successful archives keep only their chunk-idle timeout while streaming.
     const releaseDeadline = () => {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
-        timeout = undefined;
-      }
+      clearTimeout(timeout);
+      timeout = undefined;
     };
     try {
-      const response = await fetch(url, {
-        ...init,
-        signal: controller.signal,
-      });
-      return { response, url, hasToken: Boolean(token), releaseDeadline };
+      // Only the operator-configured base origin may be private (self-hosted registries).
+      // Resolver URLs and every redirect hop elsewhere must reach public addresses.
+      const { response, release } = await fetchWithSsrFGuard(
+        withTrustedEnvProxyGuardedFetchMode({
+          url: url.toString(),
+          init,
+          signal: params.signal
+            ? AbortSignal.any([controller.signal, params.signal])
+            : controller.signal,
+          policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
+          auditContext: "clawhub",
+        }),
+      );
+      return { response, url, hasToken: Boolean(token), releaseDeadline, release };
     } catch (error) {
       releaseDeadline();
       throw error;
@@ -264,9 +278,11 @@ async function requestClawHub(params: ClawHubRequestParams) {
     return await request();
   }
   return await retryClawHubRead(request, {
-    disposeRetry: async ({ response, releaseDeadline }) => {
+    sleep: params.signal ? (ms) => sleepWithAbort(ms, params.signal) : undefined,
+    disposeRetry: async ({ response, releaseDeadline, release }) => {
       releaseDeadline();
       await cancelUnreadResponseBody(response);
+      await release();
     },
   });
 }
@@ -281,7 +297,9 @@ export async function withClawHubResponse<T>(
     return await consume(result);
   } finally {
     result.releaseDeadline();
+    // Cancel before release: the guard's release aborts, which would error the unread body.
     await cancelUnreadResponseBody(result.response);
+    await result.release();
   }
 }
 

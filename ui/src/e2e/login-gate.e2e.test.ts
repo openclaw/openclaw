@@ -47,7 +47,7 @@ async function expectReconnecting(page: Page) {
 }
 
 suite.define(() => {
-  it("counts down and automatically enters a reachable Gateway after refused upgrades", async () => {
+  it("keeps recovery visible and automatically enters a reachable Gateway after refused upgrades", async () => {
     const page = await newPage();
     await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
     await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
@@ -85,12 +85,15 @@ suite.define(() => {
     });
 
     await page.goto(suite.server.baseUrl);
-    await page.clock.runFor(1);
-    const failure = page.locator('.login-gate__failure[data-kind="busy"]');
-    await failure.waitFor();
-    expect((await failure.locator(".login-gate__failure-title").textContent())?.trim()).toBe(
-      "Gateway busy, retrying…",
-    );
+    const recovery = page.locator('.gateway-connection-view[data-connection-state="reconnecting"]');
+    await expect
+      .poll(async () => {
+        await page.clock.runFor(1);
+        return recovery.isVisible();
+      })
+      .toBe(true);
+    expect((await recovery.getByRole("heading").textContent())?.trim()).toBe("Still connecting");
+    expect(await page.locator("openclaw-login-gate").count()).toBe(0);
     expect(await gateway.getRequests("connect")).toHaveLength(0);
 
     const retryHealthResponse = page.waitForResponse("**/healthz");
@@ -98,11 +101,12 @@ suite.define(() => {
     // The first probe's busy state can survive while the retry probe is still in flight.
     // Finish its real response before advancing the virtual one-second abort deadline.
     expect(await (await retryHealthResponse).finished()).toBeNull();
-    const countdown = failure.locator(".login-gate__retry");
-    await countdown.filter({ hasText: "Retrying in 2s…" }).waitFor();
+    await recovery.waitFor();
+    expect(await gateway.getRequests("connect")).toHaveLength(0);
     await page.clock.runFor(1_000);
-    expect((await countdown.textContent())?.trim()).toBe("Retrying in 1s…");
-    expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+    expect(await recovery.isVisible()).toBe(true);
+    expect(await gateway.getRequests("connect")).toHaveLength(0);
+    expect(await page.locator("openclaw-app-shell").count()).toBe(1);
 
     await page.clock.runFor(1_000);
     await gateway.waitForRequest("connect");
@@ -144,7 +148,9 @@ suite.define(() => {
     await gateway.rejectDeferred("connect", mismatch);
     const failure = page.locator('.login-gate__failure[data-kind="protocol-mismatch"]');
     await failure.waitFor();
-    expect((await failure.textContent())?.toLowerCase()).toContain("supported connection protocol");
+    expect((await failure.textContent())?.toLowerCase()).toContain(
+      "this page and the gateway use different versions",
+    );
     const refresh = failure.locator(".login-gate__failure-refresh");
     expect(await refresh.isVisible()).toBe(true);
     await page.clock.runFor(120_000);
@@ -211,14 +217,21 @@ suite.define(() => {
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
   });
 
-  it("keeps the session header available while disabling Gateway actions on reconnect", async () => {
+  it("keeps offline session actions and layout controls available while reconnecting", async () => {
     const page = await newPage();
-    const sessionKey = "agent:main:main";
+    const mutations = await holdModuleResponse(
+      page,
+      controlUiE2eBuiltModuleRequest("ui/src/lib/sessions/session-mutation-operations.runtime.ts"),
+    );
+    const sessionKey = "agent:main:offline-actions";
     const gateway = await installMockGateway(page, { sessionKey });
 
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"), {
+      waitUntil: "commit",
+    });
     const header = page.locator(".chat-pane__header");
     await header.waitFor({ state: "visible" });
+    mutations.release();
     const actions = header.locator(".chat-header-session-menu__trigger");
     await actions.click();
     const split = page.getByRole("menuitem", { name: "Open split view", exact: true });
@@ -240,7 +253,20 @@ suite.define(() => {
     expect(await outlet.getAttribute("aria-disabled")).toBeNull();
     expect(await header.isVisible()).toBe(true);
 
-    expect(await actions.isVisible()).toBe(false);
+    expect(await actions.isVisible()).toBe(true);
+    await actions.click();
+    const archive = page.getByRole("menuitem", { name: "Archive session", exact: true });
+    await archive.waitFor({ state: "visible" });
+    expect(await archive.isEnabled()).toBe(true);
+    expect(
+      await page.getByRole("menuitem", { name: "Mark as unread", exact: true }).isDisabled(),
+    ).toBe(true);
+    await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
+    const deleteSession = page.getByRole("menuitem", { name: "Delete…", exact: true });
+    await deleteSession.waitFor({ state: "visible" });
+    expect(await deleteSession.isEnabled()).toBe(true);
+    await actions.click();
+    await deleteSession.waitFor({ state: "hidden" });
     expect(await header.getByRole("button", { name: "Details", exact: true }).isEnabled()).toBe(
       true,
     );
@@ -255,6 +281,9 @@ suite.define(() => {
     await panels.click();
     await sideHeader.waitFor({ state: "hidden" });
     await gateway.setOnline(true);
+    await expect
+      .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
+      .toBe("connected");
     await actions.waitFor();
     await actions.click();
     expect(await split.isEnabled()).toBe(true);
@@ -302,7 +331,7 @@ suite.define(() => {
     await failure.waitFor();
     await gateway.waitForRequest("connect", { after: 1 });
     expect(await failure.textContent()).toContain(
-      "Waiting for approval… this page connects on its own once the request is approved.",
+      "Waiting for approval… This page connects automatically once approved.",
     );
     expect(await failure.getByRole("button", { name: "Check now", exact: true }).isEnabled()).toBe(
       true,

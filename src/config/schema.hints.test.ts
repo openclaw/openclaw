@@ -1,10 +1,9 @@
 import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { expect, it } from "vitest";
 import { z } from "zod";
-import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
+import { mapSensitivePaths } from "./schema.hints.js";
 import { buildConfigSchemaCore } from "./schema.js";
 import { OpenClawSchema } from "./zod-schema.js";
-import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const secret = () => z.string().register(sensitive);
@@ -13,19 +12,34 @@ const branches = () =>
     z.object({ type: z.literal("none") }),
     z.object({ type: z.literal("token"), value: secret() }),
   ] as const;
+
+it("publishes localizable labels and help for nested security settings", () => {
+  const { uiHints } = buildConfigSchemaCore();
+  const paths = `audit audit.suppressions audit.suppressions.*.checkId
+    audit.suppressions.*.titleIncludes audit.suppressions.*.detailIncludes
+    audit.suppressions.*.reason installPolicy installPolicy.enabled installPolicy.targets
+    installPolicy.exec installPolicy.exec.source installPolicy.exec.command installPolicy.exec.args
+    installPolicy.exec.timeoutMs installPolicy.exec.noOutputTimeoutMs installPolicy.exec.maxOutputBytes
+    installPolicy.exec.env installPolicy.exec.passEnv installPolicy.exec.trustedDirs`;
+  for (const path of paths.split(/\s+/)) {
+    expect(uiHints[`security.${path}`]?.label, path).toEqual(expect.stringMatching(/\S/));
+  }
+  for (const path of [
+    "audit.suppressions",
+    "installPolicy.enabled",
+    "installPolicy.targets",
+    "installPolicy.exec",
+  ]) {
+    expect(uiHints[`security.${path}`]?.help, path).toEqual(expect.stringMatching(/\S/));
+  }
+});
+
 function expectSensitive(hints: ReturnType<typeof mapSensitivePaths>, paths: string) {
   const fields = paths.trim().split(/\s+/);
   expect(hints).toMatchObject(
     Object.fromEntries(fields.map((path) => [path, { sensitive: true }])),
   );
 }
-
-it("accounts for every root config section", () => {
-  // Sections without beginner-facing docs still require an explicit decision.
-  const docs = Object.entries(buildBaseHints()).filter(([, hint]) => hint.docsUrl !== undefined);
-  const known = new Set([...docs.map(([path]) => path), "$schema", "meta", "attachments"]);
-  expect(Object.keys(OpenClawSchemaShape).filter((key) => !known.has(key))).toEqual([]);
-});
 
 it("describes omitted settings without adding them to authored config", () => {
   const { uiHints } = buildConfigSchemaCore();
@@ -124,11 +138,9 @@ it("preserves authored metadata without deriving tags from field names or tiers"
   });
   expect(hints["gateway.auth.token"]?.tags).toBeUndefined();
   const plugin = (key: string) => hints[`plugins.entries.authored-metadata.config.${key}`];
-  expect(plugin("maxTokens")).toMatchObject({ sensitive: false });
-  expect(plugin("maxTokens")?.tags).toBeUndefined();
+  expect([plugin("maxTokens")?.sensitive, plugin("maxTokens")?.tags]).toEqual([false, undefined]);
   expect(plugin("storagePath")).toMatchObject({ tags: ["User-defined"], advanced: true });
-  expect(plugin("apiKey")?.sensitive).toBe(true);
-  expect(plugin("apiKey")?.tags).toBeUndefined();
+  expect([plugin("apiKey")?.sensitive, plugin("apiKey")?.tags]).toEqual([true, undefined]);
   expect(hints["channels.authored-metadata-channel.retryLimit"]?.tags).toEqual(["Tuning"]);
   expect(hints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
 });

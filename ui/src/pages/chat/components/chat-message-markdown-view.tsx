@@ -2,22 +2,22 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { onSettled, Show } from "solid-js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { copyMarkdownLabel } from "../../../components/copy-button-state.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatItem, NormalizedMessage } from "../../../lib/chat/chat-types.ts";
-import { readHumanMentions } from "../../../lib/chat/human-mentions.ts";
-import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import {
-  normalizeMessage,
-  normalizeRoleForGrouping,
-} from "../../../lib/chat/message-normalizer.ts";
+  prepareChatMessageRender,
+  type ChatMessageRenderPreparation,
+} from "../../../lib/chat/message-display.ts";
+import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import type { ChatDisplayFacts } from "../../../lib/chat/row-display-facts.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
+import { assistantMessageCanOwnTurnActions } from "../chat-assistant-reply.ts";
 import {
   type AssistantMessageExpansionState,
-  resolveCappedMessageId,
+  resolveFullMessageRecovery,
   resolveSourceMessageId,
 } from "../chat-message-recovery.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -26,7 +26,7 @@ import {
   type MessageActionElements,
 } from "./chat-message-action-elements.ts";
 import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
-import { extractMessageMediaText } from "./chat-message-media.ts";
+import { extractMessageMediaText } from "./chat-message-media-projection.ts";
 import {
   hasActionRowReactionPicker,
   type MessageReactionOptions,
@@ -38,36 +38,6 @@ registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 // Loading and completion each advance the revision: three automatic attempts.
 export const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
-
-// Options and action handlers outlive a render; keep this preparation separate from them.
-export function prepareChatMessageRender(message: unknown) {
-  const normalizedMessage = normalizeMessage(message);
-  const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
-  const record = asNullableRecord(message);
-  const metadata = asNullableRecord(record?.["__openclaw"]);
-  let humanMentions: ReturnType<typeof readHumanMentions>;
-  // Gateway-authored assistant rows may carry the same selections as human input.
-  if ((record?.role === "user" || record?.role === "assistant") && metadata?.humanMentions) {
-    const source =
-      typeof record.content === "string"
-        ? record.content
-        : Array.isArray(record.content)
-          ? record.content
-              .flatMap((block: unknown) => {
-                const item = asNullableRecord(block);
-                return item?.type === "text" && typeof item.text === "string" ? [item.text] : [];
-              })
-              .join("\n")
-          : null;
-    // Selections belong to submitted bytes, not a stripped envelope or display cap.
-    if (source === displayMarkdown) {
-      humanMentions = readHumanMentions(displayMarkdown, metadata.humanMentions);
-    }
-  }
-  return { message, normalizedMessage, displayMarkdown, humanMentions };
-}
-
-export type ChatMessageRenderPreparation = ReturnType<typeof prepareChatMessageRender>;
 
 const streamPreparations = new WeakMap<
   Extract<ChatItem, { kind: "stream" }>,
@@ -104,6 +74,7 @@ export function resolveMessageActionDetails(
   params: {
     messageId: string;
     canFetchFullMessage?: boolean;
+    displayFacts?: ChatDisplayFacts;
     getAssistantMessageExpansion?: (
       messageId: string,
     ) => AssistantMessageExpansionState | undefined;
@@ -111,14 +82,17 @@ export function resolveMessageActionDetails(
     senderLabel: string;
   },
 ): MessageActionDetails | null {
-  const { messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
-  const role = normalizeRoleForGrouping(normalizedMessage.role);
+  const { messageId: renderMessageId, onReply, senderLabel } = params;
+  const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
+  const role =
+    normalizedRole === "tool" &&
+    asNullableRecord(message)?.role === "assistant" &&
+    assistantMessageCanOwnTurnActions(message)
+      ? "assistant"
+      : normalizedRole;
   const pendingInput =
     resolveSourceMessageId(message)?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX) === true;
-  const cappedMessageId = canFetchFullMessage ? resolveCappedMessageId(message, role) : undefined;
-  const fullMessage = cappedMessageId
-    ? { messageId: cappedMessageId, state: params.getAssistantMessageExpansion?.(cappedMessageId) }
-    : undefined;
+  const fullMessage = resolveFullMessageRecovery(message, role, params);
   const expansion = fullMessage?.state;
   const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
   // Preparation already filtered the preview; loaded full text is a new display input.
@@ -194,7 +168,6 @@ export function MessageActions(props: {
       <Show when={props.details?.markdown}>
         <CopyButton
           text={props.details!.markdown!}
-          idleLabel={copyMarkdownLabel()}
           bare
           ref={(element) => {
             elements.copy = element;
@@ -228,7 +201,7 @@ export function ReplyButton(props: {
   onReply: (target: MessageReplyTarget) => void;
 }) {
   return (
-    <openclaw-tooltip prop:content={t("chat.messages.reply")}>
+    <openclaw-tooltip prop:content={t("chat.messages.reply")} prop:describe={false}>
       <button
         class="chat-reply-btn"
         type="button"

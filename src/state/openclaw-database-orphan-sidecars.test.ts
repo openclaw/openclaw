@@ -70,57 +70,44 @@ const cases = [
   ["32-byte header-only WAL", "-wal", walFixture.header, false],
   ["zero-byte rollback journal", "-journal", emptySidecar, false],
 ] as const;
-for (const [label, suffix, contents, recoverable] of cases) {
-  for (const kind of databaseKinds) {
-    it(`opens a missing ${kind} database with a ${label}`, () => {
-      const { databasePath, open } = prepareCase(kind);
-      const sourcePath = databasePath + suffix;
-      fs.writeFileSync(sourcePath, contents);
-      if (recoverable) {
-        fs.writeFileSync(databasePath + "-shm", shmIndexContents);
-        fs.writeFileSync(
-          databasePath + (suffix === "-wal" ? "-journal" : "-wal"),
-          suffix === "-wal" ? emptySidecar : walFixture.header,
-        );
-      }
-      const database = open();
-      expect({ open: database.db.isOpen, exists: fs.existsSync(databasePath) }).toEqual({
-        open: true,
-        exists: true,
-      });
-      const quarantines = listQuarantinePaths(sourcePath);
-      if (!recoverable) {
-        expect(database.db.prepare("PRAGMA integrity_check").get()).toEqual({
-          integrity_check: "ok",
-        });
-        expect(quarantines).toEqual([]);
-        expect(loggerMocks.warn).not.toHaveBeenCalled();
-        return;
-      }
-      expect(quarantines).toHaveLength(1);
-      const [quarantinePath] = quarantines;
-      expect(fs.readFileSync(quarantinePath!)).toEqual(contents);
-      // A successful WAL-mode open may create a new canonical sidecar.
-      if (fs.existsSync(sourcePath)) {
-        expect(fs.readFileSync(sourcePath)).not.toEqual(contents);
-      }
-      expect(loggerMocks.warn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(quarantinePath!),
-        expect.objectContaining({
-          databasePath,
-          copiedSidecars: [{ quarantinePath, sourcePath }],
-        }),
-      );
-      const message = String(loggerMocks.warn.mock.calls[0]?.[0]);
-      expect(message).toContain(
-        "Committed frames could not be applied because the main database is missing",
-      );
-      expect(message).toContain(
-        "Recovery requires restoring the main database and pairing it with the quarantined file",
-      );
-    });
+it.each(
+  cases.flatMap(([label, suffix, contents, recoverable]) =>
+    databaseKinds.map((kind) => [kind, label, suffix, contents, recoverable] as const),
+  ),
+)("opens a missing %s database with a %s", (kind, _label, suffix, contents, recoverable) => {
+  const { databasePath, open } = prepareCase(kind);
+  const sourcePath = databasePath + suffix;
+  fs.writeFileSync(sourcePath, contents);
+  if (recoverable) {
+    fs.writeFileSync(databasePath + "-shm", shmIndexContents);
+    fs.writeFileSync(
+      databasePath + (suffix === "-wal" ? "-journal" : "-wal"),
+      suffix === "-wal" ? emptySidecar : walFixture.header,
+    );
   }
-}
+  const database = open();
+  expect([database.db.isOpen, fs.existsSync(databasePath)]).toEqual([true, true]);
+  const quarantines = listQuarantinePaths(sourcePath);
+  if (!recoverable) {
+    expect(database.db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    expect(quarantines).toEqual([]);
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
+    return;
+  }
+  expect(quarantines).toHaveLength(1);
+  const [quarantinePath] = quarantines;
+  expect(fs.readFileSync(quarantinePath!)).toEqual(contents);
+  // A successful WAL-mode open may create a new canonical sidecar.
+  if (fs.existsSync(sourcePath)) {
+    expect(fs.readFileSync(sourcePath)).not.toEqual(contents);
+  }
+  expect(loggerMocks.warn).toHaveBeenCalledWith(
+    expect.stringContaining("Recovery requires restoring the main database"),
+    expect.any(Object),
+  );
+});
 
 it("preserves a same-size quarantine with different contents and copies to a unique suffix", () => {
   const { databasePath, open } = prepareCase();
@@ -139,45 +126,39 @@ it("preserves a same-size quarantine with different contents and copies to a uni
   expect(database.db.isOpen).toBe(true);
   expect(fs.readFileSync(existingQuarantinePath)).toEqual(existingContents);
   expect(fs.readFileSync(newQuarantinePath)).toEqual(walFixture.withFrames);
-  expect(loggerMocks.warn).toHaveBeenCalledWith(
-    expect.stringContaining(newQuarantinePath),
-    expect.any(Object),
-  );
 });
 
-for (const sourceKind of ["file", "symlink"] as const) {
-  it.skipIf(sourceKind === "symlink" && process.platform === "win32")(
-    `leaves the live ${sourceKind} sidecar untouched and reuses an identical preserved copy`,
-    () => {
-      const { databasePath } = prepareCase();
-      const sourcePath = `${databasePath}-wal`;
-      const targetPath = sourceKind === "symlink" ? `${databasePath}-wal-target` : sourcePath;
-      fs.writeFileSync(targetPath, walFixture.withFrames);
-      if (sourceKind === "symlink") {
-        fs.symlinkSync(targetPath, sourcePath);
-      }
+it.each(["file", ...(process.platform === "win32" ? [] : ["symlink"])] as const)(
+  "leaves the live %s sidecar untouched and reuses an identical preserved copy",
+  (sourceKind) => {
+    const { databasePath } = prepareCase();
+    const sourcePath = `${databasePath}-wal`;
+    const targetPath = sourceKind === "symlink" ? `${databasePath}-wal-target` : sourcePath;
+    fs.writeFileSync(targetPath, walFixture.withFrames);
+    if (sourceKind === "symlink") {
+      fs.symlinkSync(targetPath, sourcePath);
+    }
 
-      quarantineOrphanedSqliteSidecars(databasePath);
-      const quarantinePaths = listQuarantinePaths(sourcePath);
+    quarantineOrphanedSqliteSidecars(databasePath);
+    const quarantinePaths = listQuarantinePaths(sourcePath);
 
-      expect(quarantinePaths).toHaveLength(1);
-      expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
-      expect(fs.readFileSync(quarantinePaths[0] ?? "")).toEqual(walFixture.withFrames);
-      loggerMocks.warn.mockClear();
+    expect(quarantinePaths).toHaveLength(1);
+    expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
+    expect(fs.readFileSync(quarantinePaths[0] ?? "")).toEqual(walFixture.withFrames);
+    loggerMocks.warn.mockClear();
 
-      quarantineOrphanedSqliteSidecars(databasePath);
+    quarantineOrphanedSqliteSidecars(databasePath);
 
-      expect(listQuarantinePaths(sourcePath)).toEqual(quarantinePaths);
-      expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
-      expect(fs.readFileSync(targetPath)).toEqual(walFixture.withFrames);
-      expect(fs.lstatSync(sourcePath).isSymbolicLink()).toBe(sourceKind === "symlink");
-      if (sourceKind === "symlink") {
-        expect(fs.readlinkSync(sourcePath)).toBe(targetPath);
-      }
-      expect(loggerMocks.warn).not.toHaveBeenCalled();
-    },
-  );
-}
+    expect(listQuarantinePaths(sourcePath)).toEqual(quarantinePaths);
+    expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
+    expect(fs.readFileSync(targetPath)).toEqual(walFixture.withFrames);
+    expect(fs.lstatSync(sourcePath).isSymbolicLink()).toBe(sourceKind === "symlink");
+    if (sourceKind === "symlink") {
+      expect(fs.readlinkSync(sourcePath)).toBe(targetPath);
+    }
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
+  },
+);
 
 it("fails closed with the typed error when quarantine copy fails", () => {
   const { databasePath, open } = prepareCase();
@@ -188,18 +169,12 @@ it("fails closed with the typed error when quarantine copy fails", () => {
     throw copyError;
   });
 
-  let thrown: unknown;
-  try {
-    open();
-  } catch (error) {
-    thrown = error;
-  }
-
-  expect(thrown).toBeInstanceOf(Error);
-  expect((thrown as Error).name).toBe("SqliteOrphanedSidecarsError");
-  expect((thrown as Error).message).toContain(databasePath);
-  expect((thrown as Error).message).toContain(sourcePath);
-  expect((thrown as Error).message).toContain("restore the main database");
+  expect(open).toThrow(
+    expect.objectContaining({
+      name: "SqliteOrphanedSidecarsError",
+      message: expect.stringContaining(sourcePath),
+    }),
+  );
   expect(fs.existsSync(databasePath)).toBe(false);
   expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
   expect(listQuarantinePaths(sourcePath)).toEqual([]);

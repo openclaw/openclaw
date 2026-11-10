@@ -1,14 +1,19 @@
 // Control UI E2E proves per-agent config writes use the canonical keyed shape.
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createSkill } from "../pages/skills/view.test-support.ts";
-import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  reconnectMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent config save",
@@ -17,14 +22,9 @@ const suite = createControlUiE2eSuite({
 });
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
-const agentRoster = {
-  agents: [{ id: "main", name: "Main agent" }],
-  defaultId: "main",
-  mainKey: "main",
-  scope: "agent",
-};
+const agentRoster = createAgentRoster({ main: "Main agent" }, "main", "agent");
 function configResponse(config: Record<string, unknown>, hash = "agent-config-hash-1") {
-  return { ...configSnapshot(config, hash), runtimeConfig: config };
+  return { ...sourceConfigSnapshot(config, hash), runtimeConfig: config };
 }
 async function saveParams(gateway: Awaited<ReturnType<typeof installMockGateway>>, after = 0) {
   return requireRecord((await gateway.waitForRequest("config.set", { after })).params);
@@ -47,7 +47,7 @@ suite.define(() => {
           "config.get": {
             __mockError: {
               code: "INTERNAL_ERROR",
-              message: "Agent configuration unavailable; retry Reload Config",
+              message: "Agent configuration unavailable",
               retryable: true,
             },
           },
@@ -65,22 +65,20 @@ suite.define(() => {
       );
       const decision = agentsPage.locator("openclaw-select-picker:has(#agent-decision-model)");
       const trigger = primary.locator(".picker-select__trigger");
-      const reload = agentsPage.getByRole("button", { name: "Reload Config" });
-      await reload.waitFor();
-
       const error = agentsPage
         .getByRole("alert")
         .filter({ hasText: "Agent configuration unavailable" });
       await expect.poll(() => error.isVisible()).toBe(true);
       await expect.poll(() => trigger.getAttribute("disabled")).not.toBeNull();
 
-      const reloadConfig = async (hash: string) => {
-        await gateway.setMethodResponse("config.get", configResponse(config, hash));
-        const after = (await gateway.getRequests("config.get")).length;
-        await reload.click();
-        await gateway.waitForRequest("config.get", { after });
-      };
-      await reloadConfig("recovered-agent-config");
+      // A failed read offers its own Retry; the panel has no Reload to fall back on.
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(config, "recovered-agent-config"),
+      );
+      const readsBeforeRetry = (await gateway.getRequests("config.get")).length;
+      await error.getByRole("button", { name: "Retry" }).click();
+      await gateway.waitForRequest("config.get", { after: readsBeforeRetry });
       await expect.poll(() => error.count()).toBe(0);
       await expect.poll(() => trigger.getAttribute("disabled")).toBeNull();
 
@@ -105,8 +103,10 @@ suite.define(() => {
       await gateway.waitForRequest("config.get", { after: readsBeforeReconnect });
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       await expect.poll(() => pickerValue(primary)).toBe("openai/reconnect-draft");
-      await expect.poll(() => indicator.textContent()).toContain("Save failed");
-      expect(await indicator.getByRole("status").getAttribute("aria-label")).toContain(
+      await expect
+        .poll(() => indicator.textContent())
+        .toContain("Couldn’t save settings. Try again.");
+      expect(await indicator.getByRole("status").textContent()).toContain(
         "The last configuration change could not be confirmed",
       );
       expect(await indicator.getByRole("button", { name: "Retry", exact: true }).isEnabled()).toBe(
@@ -114,30 +114,41 @@ suite.define(() => {
       );
       expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeReconnect + 1);
 
-      await reloadConfig("reloaded-agent-config");
-      await expect.poll(() => pickerValue(primary)).toBe("");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
-      await expect.poll(() => indicator.textContent()).not.toContain("Save failed");
+      // The kept draft retries as is, then edits resume saving on their own.
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(config, "reloaded-agent-config"),
+      );
+      const writesBeforeRetry = (await gateway.getRequests("config.set")).length;
+      expect(writesBeforeRetry).toBe(writesBeforeReconnect + 1);
+      await gateway.deferNext("config.set");
+      await indicator.getByRole("button", { name: "Retry", exact: true }).click();
+      const retried = await saveParams(gateway, writesBeforeRetry);
+      // The initial read-error fixture has no stateful config store; supply its acknowledgement.
+      await gateway.resolveDeferred("config.set", {
+        config: JSON.parse(String(retried.raw)),
+        hash: "retried-agent-config",
+      });
+      await expect
+        .poll(() => indicator.textContent())
+        .not.toContain("Couldn’t save settings. Try again.");
 
       const writesBeforeFreshEdit = (await gateway.getRequests("config.set")).length;
-      expect(writesBeforeFreshEdit).toBe(writesBeforeReconnect + 1);
       await gateway.deferNext("config.set");
       await selectPickerValue(primary, "openai/after-reload");
       const params = await saveParams(gateway, writesBeforeFreshEdit);
       const savedConfig = {
         agents: { entries: { main: { model: "openai/after-reload" } } },
       };
-      expect(params.baseHash).toBe("reloaded-agent-config");
       expect(JSON.parse(String(params.raw))).toEqual(savedConfig);
       expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeFreshEdit + 1);
-      // The initial read-error fixture has no stateful config store; supply its acknowledgement.
       await gateway.resolveDeferred("config.set", {
         config: savedConfig,
         hash: "saved-agent-config",
       });
       await expect.poll(() => pickerValue(primary)).toBe("openai/after-reload");
       expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
-      await expect.poll(() => indicator.textContent()).toContain("Saved");
+      await expect.poll(() => indicator.textContent()).toContain("Apply changes");
     });
   });
 
@@ -149,6 +160,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           assistantName: "Main agent",
           defaultAgentId: "main",
+          featureMethods: [...defaultControlUiFeatureMethods, "tools.catalog", "tools.effective"],
           methodResponses: {
             "agents.list": agentRoster,
             "config.get": configResponse(config),
@@ -207,7 +219,9 @@ suite.define(() => {
           code: "INVALID_REQUEST",
           message: "mock validation failure",
         });
-        await page.getByRole("alert").filter({ hasText: "mock validation failure" }).waitFor();
+        await expect
+          .poll(() => page.locator(".settings-save-status").textContent())
+          .toContain("mock validation failure");
       });
     },
   );

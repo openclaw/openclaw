@@ -147,6 +147,33 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it("explains how to recover when a shallow checkout cannot resolve the beta merge base", () => {
+    const origin = tempDirs.make("openclaw-shallow-release-origin-");
+    git(origin, ["init", "-q", "-b", "main"]);
+    git(origin, ["config", "commit.gpgsign", "false"]);
+    commitAll(origin, "chore: baseline");
+    git(origin, ["tag", "--no-sign", "v2026.7.1"]);
+    commitAll(origin, "chore: candidate");
+
+    const cloneParent = tempDirs.make("openclaw-shallow-release-clone-");
+    const cwd = join(cloneParent, "repo");
+    git(cloneParent, ["clone", "-q", "--depth=1", "--no-tags", `file://${origin}`, cwd]);
+    git(cwd, ["fetch", "-q", "--depth=1", "origin", "tag", "v2026.7.1"]);
+
+    const result = runVerifier(cwd, {
+      base: "v2026.7.1",
+      target: "HEAD",
+      version: "2026.7.2-beta.1",
+      mainRef: null,
+      write: false,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "this checkout is shallow; fetch complete history (for example, git fetch --unshallow origin) and retry",
+    );
+  });
+
   it("rejects an off-branch generation target before release-note discovery", () => {
     const cwd = tempDirs.make("openclaw-off-branch-notes-");
     git(cwd, ["init", "-q", "-b", "main"]);
@@ -349,12 +376,21 @@ describe("release-note verification", () => {
     expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(index);
   });
 
-  it("excludes maintainer and automation identities from contributor credit", () => {
+  it("credits human maintainers but excludes automation identities", () => {
     expect(isEligibleHandle("human-contributor")).toBe(true);
-    expect(isEligibleHandle("steipete")).toBe(false);
-    expect(isEligibleHandle("steipete-oai")).toBe(false);
-    expect(isEligibleHandle("hugin-bot")).toBe(false);
-    expect(isEligibleHandle("roboclaw-bot")).toBe(false);
+    expect(isEligibleHandle("steipete")).toBe(true);
+    expect(isEligibleHandle("copilot-contributor")).toBe(true);
+    for (const handle of [
+      "steipete-oai",
+      "hugin-bot",
+      "roboclaw-bot",
+      "tideclaw-bot",
+      "Copilot",
+      "copilot",
+      "COPILOT",
+    ]) {
+      expect(isEligibleHandle(handle)).toBe(false);
+    }
   });
 
   it("accepts only canonical commit PR suffixes", () => {
@@ -518,7 +554,7 @@ process.exitCode = errors.length ? 1 : 0;
     (mode) => {
       const number = 102147;
       const commit = {
-        authorHandle: undefined,
+        authorHandle: "release-operator",
         closingReferences: [102146],
         coauthors: [],
         committedAt: "2026-07-01T12:00:00Z",
@@ -546,7 +582,6 @@ process.exitCode = errors.length ? 1 : 0;
               ]
             : []),
         ],
-        coauthorsByReference: new Map<number, Set<string>>(),
         pullRequests: new Set<number>(),
         target: "c".repeat(40),
       };
@@ -576,11 +611,11 @@ process.exitCode = errors.length ? 1 : 0;
         title: "Fix silent maintenance delivery status",
         mergedAt: commit.committedAt,
         mergeCommit: { oid: commit.hash },
-        author: { __typename: "User", login: "coolmanns" },
+        recordedThanks: ["coolmanns"],
       });
       expect(commit.pullRequests).toEqual([number]);
       expect(source.pullRequests).toEqual(new Set([number]));
-      expect(source.coauthorsByReference.get(number)).toEqual(new Set(["coolmanns"]));
+      expect(recovered.get(number)).not.toHaveProperty("author");
     },
   );
 
@@ -678,7 +713,7 @@ Release provenance for ${hash} -> #3`
     },
   );
 
-  it("requires release provenance PRs to be merged into current main", () => {
+  it("requires main provenance PRs to be merged into current main", () => {
     const releaseCommit = "a".repeat(40);
     const mainCommit = "b".repeat(40);
     const mergeCommit = "c".repeat(40);
@@ -703,11 +738,68 @@ Release provenance for ${hash} -> #3`
     expect(() => validate(validNode)).not.toThrow();
     for (const node of [
       { ...validNode, baseRefName: "release/2026.7.1" },
+      { ...validNode, baseRefName: "feature/unrelated" },
       { ...validNode, mergedAt: null },
     ]) {
-      expect(() => validate(node)).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references invalid source PR #104905");
     }
-    expect(() => validate(validNode, false)).toThrow("references non-main PR #104905");
+    expect(() => validate(validNode, false)).toThrow("references invalid source PR #104905");
+  });
+
+  it("checks canonical main origins through the production Git matcher", () => {
+    const { cwd, base } = seedRepository("openclaw-release-original-", "main");
+    writeFileSync(join(cwd, "shared.txt"), "main\n");
+    const main = commitAll(cwd, "fix: durable  writes (#7)");
+    const mainNode = {
+      baseRefName: "main",
+      mergedAt: "2026-07-12T00:00:00Z",
+      mergeCommit: { oid: main },
+    };
+    const cases = [
+      {
+        subject: "fix: renamed original",
+        body: "(cherry picked from commit " + main + ")",
+        shared: true,
+      },
+      {
+        subject: "fix: renamed original",
+        body: "Backport of #7 to release/2026.7.1.",
+        shared: true,
+      },
+      { subject: "fix: durable writes", body: "", shared: true },
+      {
+        subject: "fix: independent original",
+        body: "(cherry picked from commit " + main + ")",
+        shared: false,
+      },
+    ];
+    for (const [index, scenario] of cases.entries()) {
+      git(cwd, ["checkout", "-qb", "release/case-" + index, base]);
+      writeFileSync(join(cwd, scenario.shared ? "shared.txt" : "independent.txt"), "release\n");
+      const source = commitAll(cwd, scenario.subject + "\n\n" + scenario.body);
+      const node = {
+        __typename: "PullRequest",
+        baseRefName: "release/2026.7.1",
+        mergedAt: mainNode.mergedAt,
+        mergeCommit: { oid: source },
+      };
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `import { validateReleaseProvenanceOverrides as validate } from ${JSON.stringify(verifier)};
+const { source, node, main, mainNode } = ${JSON.stringify({ source, node, main, mainNode })};
+validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => new Map([[7, mainNode]]));`,
+        ],
+        { cwd, encoding: "utf8" },
+      );
+      if (scenario.shared) {
+        expect(result.stderr).toContain("references invalid source PR #9");
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+      }
+    }
   });
 
   it("validates release provenance PRs that shipped-ref subtraction left unresolved", () => {
@@ -737,7 +829,7 @@ Release provenance for ${hash} -> #3`
     expect(() => validate(mainNode)).not.toThrow();
     expect(requested).toEqual([[104905]]);
     for (const node of [{ ...mainNode, baseRefName: "release/2026.7.1" }, undefined]) {
-      expect(() => validate(node)).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references invalid source PR #104905");
     }
   });
 
@@ -1086,6 +1178,97 @@ Release provenance for ${hash} -> #3`
     ).toEqual(expected);
   });
 
+  it("credits the original PR, not its backport, and rejects stale generated thanks", () => {
+    const { cwd, base, changelog } = seedRepository("openclaw-release-credit-", "main");
+    const originalMessage =
+      "fix: preserve playback errors (#21)\n\nFixes #20\nCo-authored-by: Helper <helper@example.invalid>\nCo-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>";
+    writeFileSync(join(cwd, "playback.txt"), "fixed\n");
+    const original = commitAll(cwd, originalMessage);
+    git(cwd, ["checkout", "-qb", "release", base]);
+    commitAll(cwd, "chore: release preparation");
+    git(cwd, ["cherry-pick", "-x", original]);
+    git(cwd, [
+      "commit",
+      "--amend",
+      "-qm",
+      `${git(cwd, ["log", "-1", "--format=%B"])}\nCo-authored-by: RomneyDa <6581799+RomneyDa@users.noreply.github.com>`,
+    ]);
+    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const stale = `${changelog}- Preserve playback errors by @steipete and @original-helper. (#21) Thanks @RomneyDa.\n\n${contributionRecord(base, target, ["- **PR #21** Related #20. Thanks @RomneyDa."])}`;
+    writeFileSync(join(cwd, "CHANGELOG.md"), stale);
+    const seed = commitAll(cwd, "docs: old credit");
+    const gh = join(cwd, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}\n
+const original = ${JSON.stringify(original)};
+const target = ${JSON.stringify(target)};
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+const data = {};
+for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
+  data[alias] = { object: {
+    associatedPullRequests: { nodes: hash === original ? [{ number: 21, mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: original } }] : [], pageInfo: { hasNextPage: false } },
+    authors: { nodes: [{ email: "helper@example.invalid", user: { login: "original-helper" } }, { email: "223556219+Copilot@users.noreply.github.com", user: { login: "Copilot" } }, ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : [])] },
+    author: { user: { login: "release-operator" } }
+  } };
+}
+for (const [, alias, rawNumber] of query.matchAll(/(n\\d+): repository[\\s\\S]*?issueOrPullRequest\\(number: (\\d+)\\)/g)) {
+  const number = Number(rawNumber);
+  data[alias] = { issueOrPullRequest: number === 21 ? {
+    __typename: "PullRequest", number, title: "fix: preserve playback errors", baseRefName: "main",
+    mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: original, message: ${JSON.stringify(originalMessage)} },
+    author: { __typename: "User", login: "steipete" }, closingIssuesReferences: { nodes: [{ number: 20 }], pageInfo: { hasNextPage: false } }
+  } : { __typename: "Issue", number, title: "Playback failed", author: { __typename: "User", login: "reporter" }, closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } } } };
+}
+for (const [, alias, login] of query.matchAll(/(u\\d+): user\\(login: "([^"]+)"\\)/g)) data[alias] = { __typename: "User", login };
+console.log(JSON.stringify({ data }));
+`,
+    );
+    chmodSync(gh, 0o755);
+    splitChangelog({ rootDir: cwd });
+    const run = (write: boolean) =>
+      runVerifier(cwd, {
+        base,
+        target,
+        mainRef: original,
+        write,
+        extraArgs: ["--seed-ref", seed],
+        env: { PATH: `${cwd}:${process.env.PATH}` },
+      });
+    const generated = run(true);
+    expect(generated.stderr).toBe("");
+    expect(generated.status, generated.stdout).toBe(0);
+    const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
+    const section = readFileSync(entryPath, "utf8");
+    expect(section).toContain(
+      "- **PR #21** Related #20. Authored by @steipete. Thanks @original-helper and @reporter.",
+    );
+    expect(section).toContain(
+      "(#21) Authored by @steipete. Thanks @original-helper and @reporter.",
+    );
+    expect(section).not.toContain("@Copilot");
+    expect(section).not.toContain("@RomneyDa");
+    expect(section).not.toContain("@release-operator");
+    const checked = run(false);
+    expect(checked.status, checked.stderr + checked.stdout).toBe(0);
+    writeReleaseChangelog({
+      rootDir: cwd,
+      version: "2026.7.1",
+      section: section.replaceAll("Authored by @steipete", "Authored by @RomneyDa and @steipete"),
+    });
+    const rejected = run(false);
+    expect(rejected.status).toBe(1);
+    expect(JSON.parse(rejected.stdout).errors).toEqual(
+      expect.arrayContaining([
+        "unexpected Thanks @RomneyDa for #21",
+        "unexpected editorial Thanks @RomneyDa",
+      ]),
+    );
+    const repaired = run(true);
+    expect(repaired.status, repaired.stderr + repaired.stdout).toBe(0);
+    expect(readFileSync(entryPath, "utf8")).toBe(section);
+  });
+
   it.each([0, 1, 2])(
     "accounts for merged side ancestry with %i reversals without duplicating shipped PRs",
     (reversals) => {
@@ -1428,7 +1611,12 @@ console.log(JSON.stringify({ data }));
     mkdirSync(privateTmp);
     const index = join(cwd, git(cwd, ["rev-parse", "--git-path", "index"]));
     const originalIndex = readFileSync(index);
-    const originalObjects = git(cwd, ["count-objects", "-v"]);
+    // Packing or pruning duplicate loose copies must not affect object isolation.
+    const originalObjects = git(cwd, [
+      "cat-file",
+      "--batch-all-objects",
+      "--batch-check=%(objectname)",
+    ]);
     const hooks = join(cwd, "test-hooks");
     mkdirSync(hooks);
     const hook = join(hooks, "post-index-change");
@@ -1448,7 +1636,9 @@ console.log(JSON.stringify({ data }));
     });
     expect(readFileSync(index)).toEqual(originalIndex);
     expect(git(cwd, ["rev-parse", "HEAD"])).toBe(target);
-    expect(git(cwd, ["count-objects", "-v"])).toBe(originalObjects);
+    expect(git(cwd, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname)"])).toBe(
+      originalObjects,
+    );
     expect(readdirSync(privateTmp)).toEqual([]);
     expect(readdirSync(cwd)).not.toContain("hook-fired");
     if (

@@ -134,6 +134,66 @@ function publicationRequest(ready = readyRelease(), resumeRunId = "") {
 }
 
 describe("release readiness contract", () => {
+  it("transports the original FRV identity on prepared and direct npm adoption", () => {
+    const parent = parse(readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"));
+    expect(parent.jobs.resolve_release_target.outputs.plugin_npm_artifact).toContain(
+      "steps.full_manifest.outputs.plugin_npm_artifact",
+    );
+    const publishSteps = Object.values<{ steps?: Array<{ run?: string }> }>(parent.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .map((step) => step.run ?? "")
+      .join("\n");
+    expect(publishSteps).toContain('elif [[ -n "${QUALIFIED_PLUGIN_NPM}" ]]');
+    expect(publishSteps).toContain(
+      '-f full_release_validation_run_attempt="$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"',
+    );
+    const child = parse(readFileSync(".github/workflows/plugin-npm-release.yml", "utf8"));
+    expect(child.env.PREPARED_NPM_FRV_RUN_ID).toContain("inputs.full_release_validation_run_id");
+    expect(child.env.PREPARED_NPM_FRV_RUN_ATTEMPT).toContain(
+      "inputs.full_release_validation_run_attempt",
+    );
+    const writes = child.jobs.publish_plugins_npm.steps.filter((step: { run?: string }) =>
+      step.run?.includes('300s npm publish "$TARBALL_PATH"'),
+    );
+    expect(writes).toHaveLength(2);
+    for (const step of writes) {
+      expect(step.run).toContain("plugin-npm-prepared-release.mjs authorize");
+      expect(step.run.indexOf("plugin-npm-prepared-release.mjs authorize")).toBeLessThan(
+        step.run.indexOf('300s npm publish "$TARBALL_PATH"'),
+      );
+    }
+    const dispatch = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
+    expect(dispatch).toContain('../plugin-npm-prepared-release.mjs" authorize');
+    expect(dispatch.indexOf('../plugin-npm-prepared-release.mjs" authorize')).toBeLessThan(
+      dispatch.indexOf('dispatch_response="$(printf'),
+    );
+  });
+
+  it("keeps P tooling and ClawHub identities when the authenticated npm producer is Q", () => {
+    const value = readyRelease();
+    value.plugins.npm.workflowSha = SOURCE_SHA;
+    value.plugins.npm.workflowHeadBranch = `release-ci/${SOURCE_SHA.slice(0, 12)}-1`;
+    value.plugins.npm.artifactName = preparedNpmArtifactName(SOURCE_SHA, value.plugins.npm);
+    expect(() =>
+      validateReadyRelease(value, { sourceSha: SOURCE_SHA, tooling: TOOLING }),
+    ).toThrow();
+    expect(
+      validateReadyRelease(value, {
+        sourceSha: SOURCE_SHA,
+        tooling: TOOLING,
+        npmWorkflowSha: SOURCE_SHA,
+      }),
+    ).toBe(value);
+    value.plugins.clawhub.workflowSha = SOURCE_SHA;
+    expect(() =>
+      validateReadyRelease(value, {
+        sourceSha: SOURCE_SHA,
+        tooling: TOOLING,
+        npmWorkflowSha: SOURCE_SHA,
+      }),
+    ).toThrow("Prepared clawhub producer");
+  });
+
   it("binds core postpublish evidence to the exact failed publisher", () => {
     const expected = {
       releaseTag: "v2026.9.2-beta.1",
@@ -321,7 +381,20 @@ function bridgeFixture(releaseRunAttempt = 1, conclusion = "success") {
       `${moduleName}.mjs`,
       `
       import { trace, preparedPackage } from './fixture-trace.mjs';
-      export { prepared${prefix}ArtifactName${target === "npm" ? ", validatePreparedNpmArtifactDescriptor" : ""} } from ${JSON.stringify(pathToFileURL(resolve(`scripts/${moduleName}.mjs`)).href)};
+      export { prepared${prefix}ArtifactName${target === "npm" ? ", validatePreparedNpmArtifactDescriptor, createPreparedNpmCapacityObserver" : ""} } from ${JSON.stringify(pathToFileURL(resolve(`scripts/${moduleName}.mjs`)).href)};
+      ${
+        target === "npm"
+          ? `
+      import { authenticatePreparedNpmArtifact as authenticateFrv } from ${JSON.stringify(pathToFileURL(resolve("scripts/plugin-npm-prepared-release.mjs")).href)};
+      // This fixture isolates finalization/transfer ordering. Real FRV admission
+      // and byte consumption are exercised by plugin-npm-prepared-release.test.ts.
+      export async function authenticatePreparedNpmArtifact(options) {
+        if (process.env.FIXTURE_AUTHENTICATE_FRV === 'true') return authenticateFrv(options);
+        return { artifact: options.artifact ?? ${JSON.stringify(descriptor("npm"))}, workflowSha: options.workflowSha,
+          publisherPolicySha256: 'c'.repeat(64), revalidateAuthority: () => {} };
+      }`
+          : ""
+      }
       export async function downloadPrepared${prefix}Release(options) {
         trace('manifest', { target: '${target}', sourceSha: options.sourceSha ?? options.candidateSha,
           toolingSha: options.workflowSha ?? options.toolingSha, selectionMode: options.selectionMode });
@@ -530,6 +603,9 @@ describe("release readiness executable handoff", () => {
       const env = {
         ...fixture.env,
         PREPARED_PLUGINS: JSON.stringify(readyRelease().plugins),
+        QUALIFIED_PLUGIN_NPM: "",
+        FULL_RELEASE_VALIDATION_RUN_ID: "200",
+        FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
         TARGET_SHA: SOURCE_SHA,
         RELEASE_NPM_DIST_TAG: "beta",
         PLUGIN_PUBLISH_SCOPE: "all-publishable",
@@ -760,8 +836,8 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     fixture.root,
     "bin/gh",
     `#!${process.execPath}
-    const { appendFileSync, existsSync, readFileSync, writeFileSync } = require('node:fs');
-    const { join } = require('node:path');
+    import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
     const args = process.argv.slice(2);
     const state = JSON.parse(readFileSync(process.env.FIXTURE_GITHUB_STATE, 'utf8'));
     appendFileSync(process.env.FIXTURE_TRACE, JSON.stringify({ event: 'gh', args }) + '\\n');
@@ -906,7 +982,7 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     fixture.root,
     "bin/git",
     `#!${process.execPath}
-    const { readFileSync } = require('node:fs');
+    import { readFileSync } from 'node:fs';
     const args = process.argv.slice(2);
     if (JSON.stringify(args) !== JSON.stringify(['ls-remote', '--tags', 'origin',
       'refs/tags/' + process.env.FIXTURE_RELEASE_TAG,
@@ -1460,6 +1536,7 @@ async function preparationFixture(
         env: {
           ...fixture.env,
           PUBLISH_INPUTS: JSON.stringify({ ...selectedInputs, ...actualInputs }),
+          FIXTURE_AUTHENTICATE_FRV: "true",
           PREPARATION_REQUEST: request === undefined ? "" : JSON.stringify(request),
           GITHUB_RUN_ATTEMPT: String(attempt),
         },
@@ -2243,6 +2320,7 @@ describe("prepared Windows handoff", () => {
         windows_node_installer_digests: digests
           ? JSON.stringify({
               "OpenClawCompanion-Setup-x64.exe": `sha256:${"d".repeat(64)}`,
+              "OpenClawCompanion-Setup-arm64.exe": `sha256:${"e".repeat(64)}`,
             })
           : "",
       };
@@ -2306,6 +2384,8 @@ describe("prepared Windows handoff", () => {
         expect(dispatches[0]?.body).toEqual({
           ref: TOOLING.ref,
           inputs: {
+            release_publish_run_id: "700",
+            release_publish_run_attempt: "1",
             tag,
             windows_node_tag: "v1.2.3",
             expected_installer_digests: ready.inputs.windows_node_installer_digests,

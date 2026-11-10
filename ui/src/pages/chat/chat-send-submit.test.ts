@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -80,6 +80,7 @@ describe("attachment frame admission", () => {
       expect(host.chatQueue).toEqual([]);
       expect(listStoredChatOutboxes(host)).toEqual([]);
       expect(showToast).toHaveBeenCalledExactlyOnceWith({
+        severity: "error",
         message: "Too large to send: brief.pdf",
       });
     },
@@ -182,6 +183,8 @@ describe("structured Goal admission", () => {
     async (objective) => {
       const host = makeChatHost({
         chatMessage: objective,
+        chatGoalDraftMode:
+          objective === "/stop" ? { action: "start" } : { action: "start", fromCommand: true },
         chatAttachments: [createStagedAttachment("goal-document")],
         chatReplyTarget: {
           messageId: "message-a",
@@ -324,7 +327,8 @@ describe("composer recovery", () => {
       expect(host.chatReplyTarget).toBe(newerReply);
       expect(host.chatGoalDraftMode).toBe(newerGoal);
       expect(host.chatQueue[0]).toMatchObject({
-        sendError: "Chat settings update was interrupted. Review and retry when ready.",
+        sendError:
+          "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.",
         sendState: "failed",
         text: "keep this send separate",
       });
@@ -438,6 +442,70 @@ describe("Home work context admission", () => {
 });
 
 describe("handleSendChat immediate local commands", () => {
+  it.each(["completed", "failed"] as const)(
+    "runs /fork immediately and retains staged files when %s",
+    async (result) => {
+      const attachment = createStagedAttachment("fork-attachment");
+      const forkChatSession = vi.fn(async () => result);
+      const host = makeChatHost({
+        chatMessage: "/fork Release plan",
+        chatRunId: "active-source-run",
+        chatAttachments: [attachment],
+        forkChatSession,
+        requestHandlers: {},
+      });
+      await handleSendChat(host);
+      expect(forkChatSession).toHaveBeenCalledExactlyOnceWith("Release plan");
+      expect(host.chatMessage).toBe(result === "completed" ? "" : "/fork Release plan");
+      expect(host.chatAttachments).toHaveLength(1);
+      expect(host.chatAttachments[0]).toMatchObject(attachment);
+      expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(attachmentDataUrl);
+      expect(host.chatQueue).toEqual([]);
+      expect(host.request).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["draft", "session"])("preserves a newer %s while /fork settles", async (change) => {
+    const pending = createDeferred<"failed">();
+    const admitted = createDeferred();
+    const forkChatSession = vi.fn(() => {
+      admitted.resolve();
+      return pending.promise;
+    });
+    const host = makeChatHost({ chatMessage: "/fork", forkChatSession, requestHandlers: {} });
+    const sending = handleSendChat(host);
+    await admitted.promise;
+    expect(forkChatSession).toHaveBeenCalledExactlyOnceWith(undefined);
+    if (change === "session") {
+      host.sessionKey = "agent:main:new-selection";
+    }
+    const attachment = createStagedAttachment("new-fork-draft-attachment");
+    host.chatMessage = "A newer draft";
+    host.chatAttachments = [attachment];
+    pending.resolve("failed");
+    await sending;
+    expect(host.chatMessage).toBe("A newer draft");
+    expect(host.chatAttachments).toEqual([attachment]);
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
+  it("shows export read failures without clearing the draft or staged attachments", async () => {
+    const attachment = createStagedAttachment("failed-export-att");
+    const host = makeChatHost({
+      chatMessage: "/export",
+      chatAttachments: [attachment],
+      exportCurrentChat: async () => {
+        throw new Error("History unavailable; retry export.");
+      },
+      requestHandlers: {},
+    });
+    await handleSendChat(host);
+    expect(host.chatError).toContain("History unavailable; retry export.");
+    expect(host.chatMessage).toBe("/export");
+    expect(host.chatAttachments).toEqual([attachment]);
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
   it.each(["draft", "session"])("keeps a newer %s intact when export finishes", async (change) => {
     const exported = createDeferred<"downloaded">();
     const attachment = createStagedAttachment("pending-export-att");
@@ -503,7 +571,7 @@ describe("handleSendChat immediate local commands", () => {
           ? [
               expect.objectContaining({
                 role: "system",
-                content: "There are no messages to export yet.",
+                content: "No messages to export yet.",
               }),
             ]
           : [],

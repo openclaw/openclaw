@@ -1,0 +1,2 @@
+84
+# Immutable projection reuse with rebuilt images, frozen JSON edge cases, and failed-projection retry, and dynamic native serializers.

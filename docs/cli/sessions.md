@@ -36,6 +36,9 @@ names and flags wrap without being truncated, and Unicode keys stay aligned.
 Long keys show their beginning and end; use `openclaw sessions --json` for complete
 session keys.
 
+Relative ages round each displayed unit directly from elapsed milliseconds:
+89.5 seconds displays as `1m ago`, and 2.49 days displays as `2d ago`.
+
 Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
 or `m` labels. JSON output retains exact numeric counts.
 
@@ -63,6 +66,8 @@ and suffixless custom selectors. OpenClaw resolves that selector to its physical
 SQLite target, verifies the target exists and is usable, and reports the physical
 path it actually read. Combine it with `--agent <id>` when you must select the
 configured agent that owns the store.
+
+Human-readable store headers escape terminal controls in paths. JSON output keeps the original path.
 
 `--agent` and `--store` require non-blank values. Selection errors exit non-zero
 and use the standard [CLI JSON failure envelope](/cli#json-failures) when `--json`

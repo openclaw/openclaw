@@ -1,11 +1,19 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import * as displayText from "../../lib/strip-thinking-tags.ts";
+import * as chatThreadBuild from "./chat-thread-build.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import * as duplicatePreparation from "./chat-thread-duplicates.ts";
-import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import * as threadItems from "./chat-thread-items.ts";
+import { createPrependCorpus } from "./chat-thread-prepend-corpus.test-support.ts";
+import { createProps } from "./chat-thread.test-support.ts";
+import {
+  buildCachedChatItems,
+  getChatItemsGeneration,
+  resetChatThreadState,
+} from "./chat-thread.ts";
 
 function deepFreeze(value: unknown): void {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -25,6 +33,17 @@ function message(
 ) {
   return { role, timestamp, content, __openclaw: { id, seq: timestamp }, ...extra };
 }
+
+// Older-page reuse loads on the first prepend, which takes the full build.
+beforeAll(async () => {
+  resetChatThreadState();
+  const recent = message("warm-recent", "user", 2, "Recent");
+  const props = createProps({ paneId: "warm", sessionKey: "warm", messages: [recent] });
+  buildCachedChatItems(props);
+  buildCachedChatItems({ ...props, messages: [message("warm-older", "user", 1, "Older"), recent] });
+  await vi.dynamicImportSettled();
+  resetChatThreadState();
+});
 
 function fixture(): { props: BuildChatItemsProps; older: unknown[] } {
   const canvas = JSON.stringify({
@@ -144,7 +163,91 @@ function freezeProjectedMessages(items: ReturnType<typeof buildChatItems>): void
   }
 }
 
+it("does not rebuild settled history when background loading changes", () => {
+  resetChatThreadState();
+  try {
+    const props = createProps({
+      messages: [
+        message("request", "user", 1, "Request"),
+        message("reply", "assistant", 2, "Reply"),
+      ],
+      loading: true,
+    });
+    const initial = buildCachedChatItems(props);
+    const generation = getChatItemsGeneration(initial);
+    for (const loading of [false, true, false]) {
+      const items = buildCachedChatItems({ ...props, loading });
+      expect(items).toBe(initial);
+      expect(getChatItemsGeneration(items)).toBe(generation);
+    }
+  } finally {
+    resetChatThreadState();
+  }
+});
+
+it.each([{ runWorking: true }, { subagentWait: { runId: "child", startedAt: 1 } }])(
+  "preserves initial loading progress transitions for %j",
+  (progress) => {
+    resetChatThreadState();
+    try {
+      const props = createProps({ ...progress, messages: [], loading: true });
+      expect(buildCachedChatItems(props)).toEqual([]);
+      expect(buildCachedChatItems({ ...props, loading: false })).toContainEqual(
+        expect.objectContaining({ kind: "reading-indicator" }),
+      );
+      expect(buildCachedChatItems(props)).toEqual([]);
+    } finally {
+      resetChatThreadState();
+    }
+  },
+);
+
 describe("incremental history build equivalence", () => {
+  it("searches each source once per query across canvas lookahead and visible rows", () => {
+    const messages = [
+      message("request", "user", 1, "Request"),
+      message("match", "assistant", 2, "Needle answer"),
+      message("other-request", "user", 3, "Another request"),
+      message("other-answer", "assistant", 4, "Unrelated answer"),
+    ];
+    const createMatcher = threadItems.createChatSearchMatcher;
+    const matches = vi.fn<(message: unknown) => void>();
+    const factory = vi
+      .spyOn(threadItems, "createChatSearchMatcher")
+      .mockImplementation((...args) => {
+        const matcher = createMatcher(...args);
+        return (source) => {
+          matches(source);
+          return matcher(source);
+        };
+      });
+    try {
+      for (const query of ["Needle", "Unrelated"]) {
+        matches.mockClear();
+        const items = buildChatItems(
+          createProps({ messages, searchOpen: true, searchQuery: query }),
+        );
+        const visible = items.flatMap((item) =>
+          item.kind === "group"
+            ? item.messages.flatMap((entry) =>
+                normalizeMessage(entry.message).content.flatMap((block) =>
+                  block.type === "text" ? [block.text] : [],
+                ),
+              )
+            : [],
+        );
+        expect(visible).toEqual([`${query} answer`]);
+        for (const source of messages) {
+          expect(
+            matches.mock.calls.filter(([sourceMessage]) => sourceMessage === source),
+          ).toHaveLength(1);
+        }
+      }
+    } finally {
+      factory.mockRestore();
+    }
+  });
+
   it.each([
     { searchOpen: false, showToolCalls: true },
     { searchOpen: false, showToolCalls: false },
@@ -170,7 +273,13 @@ describe("incremental history build equivalence", () => {
 
     const groups = warmPrepended.filter((item) => item.kind === "group");
     const entries = groups.flatMap((group) => group.messages);
-    expect(entries.some((entry) => entry.duplicateCount === 2)).toBe(true);
+    expect(
+      entries.filter((entry) =>
+        normalizeMessage(entry.message).content.some(
+          (block) => block.type === "text" && block.text === "Needle repeated update",
+        ),
+      ),
+    ).toHaveLength(2);
     expect(
       entries.some((entry) =>
         normalizeMessage(entry.message).content.some((block) => block.type === "canvas"),
@@ -200,19 +309,14 @@ it("does not re-strip retained display payloads when older history is prepended"
   const strip = vi.spyOn(displayText, "stripThinkingTags");
   const preparation = vi.spyOn(duplicatePreparation, "prepareMessagesForGrouping");
   try {
-    const props: BuildChatItemsProps = {
+    const props = createProps({
       paneId: "prepend-work",
       sessionKey: "prepend-work",
       messages: [
         message("recent-user", "user", 10, "Recent request"),
         message("recent-answer", "assistant", 11, "Recent answer"),
       ],
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    };
+    });
     buildCachedChatItems(props);
     strip.mockClear();
     preparation.mockClear();
@@ -245,16 +349,11 @@ it("recomputes shared reply attribution without annotating retained grouping seg
     const alice = message("alice", "user", 10, "Alice request", {
       __openclaw: { id: "alice", seq: 10, senderId: "alice", senderName: "Alice" },
     });
-    const props: BuildChatItemsProps = {
+    const props = createProps({
       paneId: "prepend-people",
       sessionKey: "prepend-people",
       messages: [alice, message("answer", "assistant", 11, "Alice answer")],
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    };
+    });
     const answer = (items: ReturnType<typeof buildCachedChatItems>) =>
       items.findLast((item) => item.kind === "group" && item.role === "assistant");
     const initial = answer(buildCachedChatItems(props));
@@ -291,16 +390,9 @@ it("groups consecutive forwarded turns with linear source work", () => {
         provenance: { kind: "inter_session", sourceTool: "sessions_send" },
       }),
     );
-    const items = buildChatItems({
-      paneId: "forwarded-work",
-      sessionKey: "forwarded-work",
-      messages,
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    });
+    const items = buildChatItems(
+      createProps({ paneId: "forwarded-work", sessionKey: "forwarded-work", messages }),
+    );
     expect(items.filter((item) => item.kind === "group")).toHaveLength(messages.length);
     expect(preparation.mock.calls.reduce((count, [source]) => count + source.length, 0)).toBe(
       messages.length,
@@ -319,16 +411,13 @@ it("retires superseded grouping snapshots when prepends extend a forwarded segme
       }),
     );
     const build = (count: number) =>
-      buildChatItems({
-        paneId: "forwarded-retention",
-        sessionKey: "forwarded-retention",
-        messages: messages.slice(-count),
-        toolMessages: [],
-        streamSegments: [],
-        stream: null,
-        streamStartedAt: null,
-        showToolCalls: true,
-      });
+      buildChatItems(
+        createProps({
+          paneId: "forwarded-retention",
+          sessionKey: "forwarded-retention",
+          messages: messages.slice(-count),
+        }),
+      );
     for (const count of [6, 12, 18, 24]) {
       expect(build(count).filter((item) => item.kind === "group")).toHaveLength(count);
     }
@@ -342,4 +431,149 @@ it("retires superseded grouping snapshots when prepends extend a forwarded segme
   } finally {
     preparation.mockRestore();
   }
+});
+
+it("keeps one owned canvas while its answer shortcode streams", () => {
+  resetChatThreadState();
+  const runId = "widget-run";
+  const props = createProps({
+    runId,
+    streamStartedAt: 3,
+    stream: "Ready",
+    messages: [
+      message("request", "user", 1, "Show a widget"),
+      message(
+        "widget",
+        "assistant",
+        2,
+        [
+          { type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} },
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              viewId: "cv_owned",
+              url: "/__openclaw__/canvas/documents/cv_owned/index.html",
+            },
+          },
+        ],
+        { __openclaw: { id: "widget", seq: 2, runId } },
+      ),
+    ],
+  });
+  buildCachedChatItems(props);
+  for (const stream of [
+    'Ready [embed ref="cv_owned" /]',
+    'Ready [embed ref="cv_owned" /] and [embed ref="cv_other" /].',
+  ]) {
+    const cached = buildCachedChatItems({ ...props, stream });
+    const cold = buildChatItems({ ...props, stream });
+    for (const items of [cached, cold]) {
+      const text = items
+        .filter((item) => item.kind === "stream")
+        .map((item) => item.text)
+        .join("");
+      expect(text).not.toContain('ref="cv_owned"');
+      expect(text).toContain("Ready");
+      expect(text.includes('ref="cv_other"')).toBe(stream.includes('ref="cv_other"'));
+      expect(
+        items
+          .flatMap((item) => (item.kind === "group" ? item.messages : []))
+          .flatMap((item) => normalizeMessage(item.message).content)
+          .filter((block) => block.type === "canvas"),
+      ).toHaveLength(1);
+    }
+  }
+  const segment = buildChatItems({
+    ...props,
+    stream: null,
+    streamSegments: [{ text: 'Ready [embed ref="cv_owned" /]', runId, ts: 3 }],
+  });
+  expect(segment.filter((item) => item.kind === "stream").map((item) => item.text)).toEqual([
+    "Ready ",
+  ]);
+  const otherRun = buildCachedChatItems({
+    ...props,
+    runId: "other-run",
+    stream: '[embed ref="cv_owned" /]',
+  });
+  expect(
+    otherRun.some((item) => item.kind === "stream" && item.text.includes('ref="cv_owned"')),
+  ).toBe(true);
+  resetChatThreadState();
+});
+
+describe("older-page prepend reuse", () => {
+  // Fresh live arrays are a structural change: that pane always takes the full builder.
+  const fresh = () => ({ toolMessages: [], streamSegments: [] });
+  const shared = fresh();
+  const build = (paneId: string, messages: unknown[], options: object, live = shared) =>
+    buildCachedChatItems(
+      createProps({ paneId, sessionKey: paneId, messages, ...live, ...options }),
+    );
+  const seamBuilds = (run: () => unknown) => {
+    const builds = vi.spyOn(chatThreadBuild, "buildChatItems");
+    try {
+      run();
+      return builds.mock.calls.map(([props]) => props.messages.length);
+    } finally {
+      builds.mockRestore();
+    }
+  };
+
+  it("builds only an older page and its seam turns", () => {
+    resetChatThreadState();
+    const corpus = createPrependCorpus(3_000);
+    build("older-page", corpus.slice(1_000), {});
+    const sizes = seamBuilds(() => build("older-page", corpus, {}));
+    expect(sizes.reduce((total, size) => total + size, 0)).toBeLessThan(1_100);
+    resetChatThreadState();
+  });
+
+  it.each([
+    [{}, {}, 120],
+    [{ showToolCalls: false }, { seed: 3 }, 120],
+    [{ archiveNotice: { kind: "notice", key: "archive", text: "", timestamp: 1e13 } }, {}, 120],
+    [{ searchOpen: true, searchQuery: "needle" }, { edges: true, seed: 5 }, 10],
+    [{ replyLocalPerson: "local" }, { solo: true, edges: true }, 120],
+    [{ replyLocalPerson: "local" }, { solo: true, collision: "person" }, 10],
+    ...(["id", "prompt", "reply", "canvas", "model", "divider"] as const).map(
+      (collision) => [{}, { edges: true, collision, seed: 3 }, 30] as const,
+    ),
+  ] as const)("matches the full rebuild at every page seam: %o %o", (options, shape, minimum) => {
+    const corpus = createPrependCorpus(150, shape);
+    let reused = 0;
+    for (let split = 1; split < corpus.length; split++) {
+      resetChatThreadState();
+      build("reuse", corpus.slice(split), options);
+      let items: unknown;
+      const sizes = seamBuilds(() => (items = build("reuse", corpus, options)));
+      reused += sizes.every((size) => size < corpus.length) ? 1 : 0;
+      build("full", corpus.slice(split), options);
+      expect(items).toEqual(build("full", corpus, options, fresh()));
+    }
+    // Seams that cannot prove reuse fall back; the rest must not.
+    expect(reused).toBeGreaterThanOrEqual(minimum);
+    resetChatThreadState();
+  });
+
+  it.each([{}, { edges: true, collision: "canvas" }] as const)(
+    "keeps matching across successive older pages: %o",
+    (shape) => {
+      resetChatThreadState();
+      const corpus = createPrependCorpus(400, shape);
+      let reused = 0;
+      for (let loaded = 30; loaded <= corpus.length; loaded += 37) {
+        const messages = corpus.slice(-loaded);
+        let items: unknown;
+        const sizes = seamBuilds(() => (items = build("reuse", messages, {})));
+        reused += sizes.every((size) => size < messages.length) ? 1 : 0;
+        expect(items).toEqual(build("full", messages, {}, fresh()));
+      }
+      expect(reused).toBeGreaterThan(3);
+      resetChatThreadState();
+    },
+  );
 });

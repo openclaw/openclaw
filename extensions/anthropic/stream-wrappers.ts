@@ -46,10 +46,17 @@ const OPENCLAW_OAUTH_ANTHROPIC_BETAS = [
 
 type DynamicFastMode = boolean | (() => boolean | undefined);
 
-/** Publish installed-version evidence; the transport owns the floor and billing snapshot. */
+/**
+ * Publish the newest known Claude Code version (installed CLI or the version
+ * Anthropic last required) and collect new requirements; the transport owns
+ * the floor, the retry, and the billing snapshot.
+ */
 export function createAnthropicClaudeCodeIdentityWrapper(
   baseStreamFn: StreamFn | undefined,
-  resolveVersion: () => Promise<string | undefined>,
+  identity: {
+    resolveVersion: () => Promise<string | undefined>;
+    record: (version: string) => void;
+  },
   sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
@@ -61,15 +68,16 @@ export function createAnthropicClaudeCodeIdentityWrapper(
     ) {
       return underlying(model, context, options);
     }
-    return resolveVersion().then((version) =>
-      underlying(
-        model,
-        context,
-        version
-          ? { ...options, headers: { ...options?.headers, "user-agent": `claude-cli/${version}` } }
-          : options,
-      ),
-    );
+    return identity.resolveVersion().then((version) => {
+      const requestOptions = {
+        ...options,
+        ...(version
+          ? { headers: { ...options?.headers, "user-agent": `claude-cli/${version}` } }
+          : {}),
+        onClaudeCodeVersionRequired: identity.record,
+      };
+      return underlying(model, context, requestOptions);
+    });
   };
 }
 
@@ -160,7 +168,7 @@ export function createAnthropicBetaHeadersWrapper(
     const openClawBetas = isOauth
       ? OPENCLAW_OAUTH_ANTHROPIC_BETAS
       : OPENCLAW_DEFAULT_ANTHROPIC_BETAS;
-    const allBetas = [...new Set([...openClawBetas, ...effectiveBetas])];
+    const allBetas = [...openClawBetas, ...effectiveBetas];
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),

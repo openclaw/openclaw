@@ -15,37 +15,6 @@ openclaw-chat-details[mobile] {
   display: none;
 }
 
-/* Notices and suggestions share the gutter; Details lives in the pane header. */
-.chat-gutter-stack--details {
-  width: calc(100% - 28px);
-  max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.chat-gutter-stack--details .chat-gutter-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
-  width: 100%;
-  pointer-events: none;
-}
-
-.chat-gutter-header .chat-topbar-notices {
-  position: static;
-  justify-self: center;
-  max-width: min(34rem, 100%);
-  transform: none;
-}
-
-.chat-gutter-stack--details .task-suggestions {
-  width: min(450px, 100%);
-  min-height: 0;
-}
-
-.chat-gutter-stack--details .task-suggestion {
-  max-height: 100%;
-}
-
 .chat-pane__header-trailing > openclaw-chat-details {
   flex: none;
   /* Pane activation reveals actions without moving this click target. */
@@ -66,11 +35,11 @@ openclaw-chat-details[mobile] {
   min-height: 28px;
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--muted);
   background: var(--panel);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 .chat-details-toggle svg {
   width: 14px;
@@ -84,18 +53,17 @@ openclaw-chat-details[mobile] {
 .chat-details {
   position: fixed;
   inset: auto;
-  box-sizing: border-box;
   margin: 0;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   background: var(--card);
   color: var(--text);
   box-shadow: var(--shadow-lg);
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  font-size: 12px;
+  --scrollbar-size: var(--scrollbar-size-compact);
+  font-size: var(--control-ui-text-sm);
 }
 .chat-details--docked {
   position: absolute;
@@ -103,18 +71,18 @@ openclaw-chat-details[mobile] {
   inset-inline: auto 0;
   width: var(--chat-details-space);
   height: 100%;
-  border: 1px solid var(--border-strong);
-  border-radius: 16px;
+  border: 1px solid var(--overlay-border, var(--border-strong));
+  border-radius: var(--radius-xl);
   background: var(--panel-strong);
   box-shadow: var(--shadow-md);
   overflow-wrap: anywhere;
 }
 
-/* Overlay and docked Details share the same surface and entrance motion. */
+/* Overlay and docked Details share the popover surface and entrance motion. */
 .chat-details[data-desktop] {
-  --details-surface: var(--panel-strong);
+  --details-surface: var(--popover);
   inset: auto;
-  border-color: var(--border-strong);
+  border-color: var(--overlay-border, var(--border-strong));
   background: var(--details-surface);
   box-shadow: var(--shadow-md);
   max-width: 300px;
@@ -171,7 +139,7 @@ openclaw-chat-details[mobile] {
   justify-content: space-between;
   margin-bottom: 8px;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 .chat-details__toolbar button,
 .chat-details__row .chat-copy-btn,
@@ -211,7 +179,7 @@ openclaw-chat-details[mobile] {
   padding: 3px 0;
   list-style: none;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
 }
 .chat-details__caption svg {
@@ -223,7 +191,7 @@ openclaw-chat-details[mobile] {
 }
 .chat-details__caption > span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
 }
 .chat-details summary::-webkit-details-marker {
@@ -254,7 +222,7 @@ openclaw-chat-details[mobile] {
   gap: 9px;
   min-height: 36px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -275,7 +243,7 @@ openclaw-chat-details[mobile] {
   text-overflow: clip;
 }
 .chat-details button:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 .chat-details :is(button, summary):focus-visible,
 .chat-details-toggle:focus-visible {
@@ -298,8 +266,8 @@ openclaw-chat-details[mobile] {
   min-height: 28px;
   padding: 4px 7px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--control-ui-text-xs);
 }
 .chat-details__participants[open] {
   flex-basis: 100%;
@@ -312,7 +280,7 @@ openclaw-chat-details[mobile] {
   gap: 6px;
   align-items: center;
   min-height: 24px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .chat-details__creator > span:first-child {
   flex: none;
@@ -323,7 +291,7 @@ openclaw-chat-details[mobile] {
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   list-style: none;
   min-height: 26px;
 }
@@ -336,28 +304,25 @@ openclaw-chat-details[mobile] {
   align-items: center;
   gap: 7px;
   min-height: 27px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .chat-details__person .chat-author-avatar {
   width: 20px;
   height: 20px;
   flex: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .chat-details__muted {
   padding: 5px 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
-.chat-details__agent-avatar,
-.chat-details__process-icon {
+.chat-details__agent-avatar {
   display: grid;
   place-items: center;
   width: 22px;
   height: 22px;
-  border-radius: 7px;
-}
-.chat-details__agent-avatar {
+  border-radius: var(--radius-sm);
   flex: none;
   color: hsl(var(--chat-details-avatar-hue) 32% 65%);
   background: hsl(var(--chat-details-avatar-hue) 22% 30% / 0.35);
@@ -386,7 +351,7 @@ openclaw-chat-details[mobile] {
   grid-row: 1 / span 2;
 }
 .chat-details .chat-subagent-activity__name {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
   overflow: hidden;
   white-space: nowrap;
@@ -396,12 +361,12 @@ openclaw-chat-details[mobile] {
   grid-column: 2;
   grid-row: 2;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .chat-details .chat-subagent-activity__elapsed-compact,
 .chat-details__process-elapsed {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   justify-self: end;
@@ -413,7 +378,7 @@ openclaw-chat-details[mobile] {
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   justify-self: end;
 }
@@ -428,8 +393,7 @@ openclaw-chat-details[mobile] {
 .chat-details__agent-avatar[data-status] {
   position: relative;
 }
-.chat-details__agent-avatar[data-status]::after,
-.chat-details__process-icon::after {
+.chat-details__agent-avatar[data-status]::after {
   content: "";
   position: absolute;
   inset-block-end: -2px;
@@ -440,20 +404,17 @@ openclaw-chat-details[mobile] {
   border-radius: 50%;
   background: var(--muted);
 }
-.chat-details__agent-avatar[data-status="running"]::after,
-.chat-details__process-icon[data-status="running"]::after {
+.chat-details__agent-avatar[data-status="running"]::after {
   background: var(--info);
   animation: chat-details-pulse 1.6s ease-in-out infinite;
 }
 .chat-details__agent-avatar[data-status="waiting"]::after {
   background: var(--warn);
 }
-.chat-details__agent-avatar[data-status="done"]::after,
-.chat-details__process-icon[data-status="completed"]::after {
+.chat-details__agent-avatar[data-status="done"]::after {
   background: var(--ok);
 }
-.chat-details__agent-avatar[data-status="failed"]::after,
-.chat-details__process-icon[data-status="failed"]::after {
+.chat-details__agent-avatar[data-status="failed"]::after {
   background: var(--danger);
 }
 
@@ -519,46 +480,30 @@ openclaw-chat-details[mobile] {
   border-radius: var(--radius-sm);
   background: none;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-align: start;
 }
 .chat-details__process {
+  grid-template-rows: auto;
   color: var(--text);
 }
 button.chat-details__process:is(:hover, :focus-visible) {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
-.chat-details__process-icon {
-  grid-row: 1 / span 2;
-  position: relative;
-  color: var(--muted);
-  background: var(--bg-hover);
-}
-.chat-details__process-icon > svg {
-  width: 13px;
-  height: 13px;
-}
-.chat-details__process-name,
-.chat-details__process-tail {
+.chat-details__process-name {
   overflow: hidden;
   min-width: 0;
   text-overflow: clip;
   white-space: nowrap;
-}
-.chat-details__process-name {
   font-family: var(--mono);
-  font-size: 11px;
-}
-.chat-details__process-tail {
-  grid-column: 2 / -1;
-  color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .chat-details__more {
   display: block;
   color: var(--muted);
 }
-.chat-details__more:is(:hover, :focus-visible) {
+.chat-details .chat-details__more:is(:hover, :focus-visible) {
+  background: none;
   color: var(--text);
 }
 @keyframes chat-details-pulse {
@@ -573,7 +518,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 @media (prefers-reduced-motion: reduce) {
   .chat-details__agent-avatar[data-status="running"]::after,
-  .chat-details__process-icon[data-status="running"]::after,
   .chat-details__tally-segment[data-state="running"] {
     animation: none;
   }
@@ -608,13 +552,13 @@ button.chat-details__process:is(:hover, :focus-visible) {
   overflow: hidden;
   text-overflow: clip;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   flex: 1;
   min-width: 0;
 }
 .chat-details .chat-pr__number {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   color: var(--muted);
 }
 .chat-details .chat-pr__meta {
@@ -626,11 +570,11 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 .chat-details .chat-pr__diff {
   display: inline-flex;
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 .chat-details .chat-pr__state {
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 .chat-details__changes {
   position: relative;
@@ -641,23 +585,12 @@ button.chat-details__process:is(:hover, :focus-visible) {
   margin-top: 6px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--card);
 }
 .chat-details .chat-pr__actions {
   flex: none;
   margin-inline-start: auto;
-}
-.chat-details .chat-pr__actions-trigger {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
 }
 .chat-details .chat-pr__actions-trigger > .oc-menu-item__label {
   display: flex;
@@ -680,7 +613,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   display: block;
 }
 .chat-details .chat-pr__title {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
 }
 .chat-details .chat-pr--compact .chat-pr__link:hover {
@@ -703,7 +636,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   border: 0;
   border-radius: 5px;
   background: color-mix(in srgb, currentColor 8%, transparent);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 .chat-details .chat-pr__dismiss {
   width: 18px;
@@ -722,7 +655,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 
 .chat-details__badge {
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 400;
   flex: none;
   margin-inline-start: auto;
@@ -737,13 +670,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-details__navigation > svg:last-child {
   width: 12px;
   height: 12px;
-}
-.chat-details__caption > .chat-details__context-percent {
-  margin-inline-start: auto;
-  font-variant-numeric: tabular-nums;
-}
-.chat-details__context .chat-details__caption > svg {
-  margin-inline-start: 3px;
 }
 .chat-details__meter {
   width: 36px;
@@ -766,34 +692,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
   border-radius: 4px;
   background: currentColor;
 }
-.chat-details__context-budget {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 5px;
-  margin-top: 9px;
-  color: var(--muted);
-  font-size: 11px;
-}
-.chat-details__context-budget strong {
-  color: var(--text);
-  font-weight: 600;
-}
-.chat-details__stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 8px 0 2px;
-  font-size: 11px;
-}
-.chat-details__stats dt {
-  color: var(--muted);
-}
-.chat-details__stats dd {
-  margin: 3px 0 0;
-  font-variant-numeric: tabular-nums;
-}
-
 .chat-environment__action {
   display: flex;
   flex: 1;
@@ -802,7 +700,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   min-width: 0;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -834,7 +732,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
 }
 .chat-environment__counts {
@@ -849,12 +747,12 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-environment-mobile > h3 {
   margin: 0 12px 8px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 400;
 }
 .chat-environment-mobile__group {
   padding-inline: 12px;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--bg-hover);
 }
 .chat-environment-mobile__row {
@@ -864,7 +762,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   min-height: 44px;
   padding-block: 10px;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 .chat-environment-mobile__row + .chat-environment-mobile__row {
   border-top: 1px solid var(--border);
@@ -877,7 +775,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-environment-mobile__row > small {
   flex: none;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 .chat-environment-mobile .chat-environment__action > span:not(.chat-environment__counts) {
   overflow-wrap: anywhere;
@@ -916,4 +814,11 @@ button.chat-details__process:is(:hover, :focus-visible) {
   width: 15px;
   height: 15px;
   color: var(--muted);
+}
+
+/* Loading hints stay subordinate to the conversation, in both Details hosts. */
+.chat-details .skeleton::after,
+.chat-mobile-host__details .skeleton::after {
+  opacity: 0.25;
+  animation-duration: calc(var(--skeleton-duration) * 1.8);
 }

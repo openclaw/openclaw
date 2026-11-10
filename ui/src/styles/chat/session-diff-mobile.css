@@ -36,7 +36,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   min-width: 0;
   min-height: 32px;
   padding: 0;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 400;
   text-align: start;
 }
@@ -109,8 +109,8 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   gap: 7px;
   flex: 1;
   min-width: 0;
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--control-ui-text-sm);
+  line-height: var(--control-ui-text-lg);
 }
 
 .session-diff-mobile__branch > svg {
@@ -141,8 +141,8 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 
 .session-diff-mobile__summary small {
   color: var(--muted);
-  font-size: 11px;
-  line-height: 14px;
+  font-size: var(--control-ui-text-xs);
+  line-height: var(--control-ui-text-md);
 }
 
 .session-diff--mobile .session-diff__files {
@@ -153,7 +153,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 .session-diff--mobile .session-diff__file {
   padding: 0 12px 12px;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--popover) 95%, var(--text) 5%);
 }
 
@@ -188,7 +188,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   border-radius: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
 }
 
@@ -202,9 +202,9 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 
 .session-diff--mobile .session-diff__filename {
   max-width: none;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 500;
-  line-height: 20px;
+  line-height: calc(20px * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
 }
 
@@ -212,8 +212,8 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 .session-diff--mobile .session-diff__old-path {
   max-width: none;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--control-ui-text-sm);
+  line-height: var(--control-ui-text-lg);
   overflow-wrap: anywhere;
 }
 
@@ -228,7 +228,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 
 .session-diff--mobile .session-diff__file-body {
   overflow: hidden;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--bg);
 }
 
@@ -238,8 +238,8 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   border: 0;
   border-radius: 0;
   background: transparent;
-  font-size: 12px;
-  line-height: 20px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(20px * var(--control-ui-text-scale));
 }
 
 .session-diff--mobile :is(.chat-diff__gutter, .session-diff-split__gutter) {
@@ -285,7 +285,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 
 .session-diff--mobile .chat-diffstat {
   gap: 5px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -301,7 +301,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 
 .session-diff-mobile__rail .btn {
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   box-shadow: none;
 }

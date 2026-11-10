@@ -5,6 +5,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
+import { searchHit } from "./session-search-visibility.test-support.js";
 
 function seed(
   agentId: string,
@@ -38,14 +39,7 @@ it.each([false, true])(
       await seed("main", "agent:main:unrelated", "unrelated");
       await seed("other", "agent:other:unrelated", "other");
       await seed("retired", "agent:retired:parent", "parent");
-      const hit = {
-        path: "sessions/main/candidate.jsonl",
-        source: "sessions" as const,
-        snippet: "private context",
-        score: 1,
-        startLine: 1,
-        endLine: 2,
-      };
+      const hit = searchHit("sessions/main/candidate.jsonl", "sessions", "private context");
       const archiveHit = {
         ...hit,
         path: "sessions/main/telegram:direct:legacy.jsonl.reset.2026-08-11T08-00-00.000Z",

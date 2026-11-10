@@ -162,7 +162,7 @@ export function resolveExplicitProviderNoAuth(params: {
 
 /** Clears auth after the caller has merged all headers for a no-auth request. */
 export function applyLocalNoAuthHeaders(
-  api: string,
+  api: string | undefined,
   apiKey: string | undefined,
   headers: ModelRequestHeaders | undefined,
 ): ModelRequestHeaders | undefined {
@@ -170,15 +170,13 @@ export function applyLocalNoAuthHeaders(
     return headers;
   }
   // Null every spelling: SDK callers may merge these headers over the original model headers.
-  const next: ModelRequestHeaders = {
-    ...Object.fromEntries(
-      Object.entries(headers ?? {}).map(([name, value]) => [
-        name,
-        name.toLowerCase() === "authorization" ? null : value,
-      ]),
-    ),
-    Authorization: null,
-  };
+  const next: ModelRequestHeaders = Object.fromEntries(
+    Object.entries(headers ?? {}).map(([name, value]) => [
+      name,
+      name.toLowerCase() === "authorization" ? null : value,
+    ]),
+  );
+  next.Authorization = null;
   return next;
 }
 

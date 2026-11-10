@@ -83,11 +83,7 @@ function resolveFeishuBaseCredentials(
   cfg: FeishuConfig | undefined,
   mode: FeishuCredentialResolutionMode,
   rootConfig?: ClawdbotConfig,
-): {
-  appId: string;
-  appSecret: string;
-  domain: FeishuDomain;
-} | null {
+) {
   const appId = resolveFeishuSecretLike({
     cfg: rootConfig,
     value: cfg?.appId,
@@ -117,10 +113,7 @@ function resolveFeishuEventSecrets(
   cfg: FeishuConfig | undefined,
   mode: FeishuCredentialResolutionMode,
   rootConfig?: ClawdbotConfig,
-): {
-  encryptKey?: string;
-  verificationToken?: string;
-} {
+) {
   return {
     encryptKey:
       (cfg?.connectionMode ?? "websocket") === "webhook"
@@ -190,7 +183,7 @@ function buildResolvedFeishuAccount(params: {
   baseMode: FeishuCredentialResolutionMode;
   eventSecretMode: FeishuCredentialResolutionMode;
 }): ResolvedFeishuAccount {
-  const explicitAccountKey = params.accountId?.trim() ? params.accountId.trim() : undefined;
+  const explicitAccountKey = normalizeString(params.accountId);
   const accountId =
     explicitAccountKey !== undefined
       ? normalizeAccountId(explicitAccountKey)

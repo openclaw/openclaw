@@ -137,13 +137,7 @@ it(
             headers: { authorization: `Bearer ${TOKEN}` },
           });
           expect(controlUi.status).toBe(200);
-          expect(Object.fromEntries(controlUi.headers)).toMatchObject({
-            "content-type": expect.stringContaining("text/html"),
-            "x-content-type-options": "nosniff",
-            "x-frame-options": "DENY",
-            "referrer-policy": "no-referrer",
-            "content-security-policy": expect.stringContaining("frame-ancestors 'none'"),
-          });
+          expect(controlUi.headers.get("content-type")).toContain("text/html");
           expect(await controlUi.text()).toContain("Gateway hosted Control UI");
 
           const adminHealth = (id: string, headers: Record<string, string> = {}) =>

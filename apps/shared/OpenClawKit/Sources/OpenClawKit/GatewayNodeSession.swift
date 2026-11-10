@@ -110,6 +110,7 @@ public actor GatewayNodeSession {
     var reactionAccess: GatewayReactionAccessFacts?
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
+    private var controlUiBasePath: String?
     // `computer.act` is not safe to repeat after a response is lost. Keep recent
     // in-flight/results on the long-lived node session so a channel reconnect can
     // replay the receipt without posting input twice. App restart intentionally
@@ -622,8 +623,50 @@ public actor GatewayNodeSession {
         self.currentRouteValue(self.operatorScopes, ifCurrentRoute: route)
     }
 
+    /// The released Control UI accepts only shared startup credentials. Return
+    /// them only when this exact live operator route selected them.
+    public func controlUIDashboardLegacyCredentials(
+        ifCurrentRoute route: GatewayNodeSessionRoute) async -> [String: String]?
+    {
+        guard self.isCurrentRoute(route),
+              let channel = self.channel,
+              self.connectOptions?.role == "operator",
+              self.connectOptions?.clientMode == "ui"
+        else { return nil }
+        let credentials = await channel.controlUIDashboardLegacyCredentials(
+            ifCurrentConnectionGeneration: route.socketGeneration)
+        guard self.isCurrentRoute(route), self.channel === channel else { return nil }
+        return credentials
+    }
+
+    /// Builds a native Dashboard challenge response from the current operator
+    /// socket. Route and scope checks bracket the channel's signing operation.
+    public func controlUIDashboardAuthorization(
+        ifCurrentRoute route: GatewayNodeSessionRoute,
+        nonce: String,
+        signedAtMs: Int64) async throws -> Data
+    {
+        guard self.isCurrentRoute(route),
+              let channel = self.channel,
+              self.connectOptions?.role == "operator",
+              self.connectOptions?.clientMode == "ui",
+              let scopes = self.currentOperatorScopes(ifCurrentRoute: route)
+        else { throw CancellationError() }
+        let data = try await channel.controlUIDashboardAuthorization(
+            ifCurrentConnectionGeneration: route.socketGeneration,
+            scopes: scopes.sorted(),
+            nonce: nonce,
+            signedAtMs: signedAtMs)
+        guard self.isCurrentRoute(route), self.channel === channel else { throw CancellationError() }
+        return data
+    }
+
     public func currentAttachmentLimits(ifCurrentRoute route: GatewayNodeSessionRoute) -> GatewayAttachmentLimits? {
         self.currentRouteValue(self.attachmentLimits, ifCurrentRoute: route)
+    }
+
+    public func currentControlUiBasePath(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {
+        self.currentRouteValue(self.controlUiBasePath, ifCurrentRoute: route)
     }
 
     private func currentRouteValue<T>(
@@ -798,6 +841,7 @@ extension GatewayNodeSession {
         self.reactionAccess = GatewayReactionAccessFacts(hello: snapshot)
         self.attachmentLimits = snapshot.advertisedAttachmentLimits()
         self.mainSessionKey = snapshot.snapshot.sessiondefaults?["mainSessionKey"]?.stringValue?.trimmedNonEmpty
+        self.controlUiBasePath = snapshot.controluibasepath?.trimmedNonEmpty
     }
 
     private func handlePush(
@@ -838,6 +882,7 @@ extension GatewayNodeSession {
         self.reactionAccess = nil
         self.attachmentLimits = nil
         self.mainSessionKey = nil
+        self.controlUiBasePath = nil
     }
 
     private func handleChannelDisconnected(

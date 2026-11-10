@@ -17,12 +17,6 @@ import {
   type OwnedStdioProcess,
 } from "../process/owned-stdio.js";
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
-import {
-  collectWithheldLspEnvNames,
-  formatWithheldLspEnvHints,
-  LSP_ENV_PASSTHROUGH_DOCS_URL,
-  resolveLspServerEnv,
-} from "./agent-bundle-lsp-env.js";
 import { normalizeReservedToolNames } from "./agent-bundle-mcp-names.js";
 import {
   resolveStdioMcpServerLaunchConfig,
@@ -75,20 +69,6 @@ const activeBundleLspSessions = new Set<LspSession>();
 
 // Servers restart every turn; repeat a warning only when its server or names change.
 const warnedWithheldEnv = new Set<string>();
-
-function warnWithheldLspEnvOnce(serverName: string, childEnv: Record<string, string>): void {
-  const hints = formatWithheldLspEnvHints(
-    collectWithheldLspEnvNames({ parentEnv: process.env, childEnv }),
-  ).join(" ");
-  const key = `${serverName}\0${hints}`;
-  if (!hints || warnedWithheldEnv.has(key)) {
-    return;
-  }
-  warnedWithheldEnv.add(key);
-  logWarn(
-    `bundle-lsp: server "${serverName}" starts without these Gateway environment variables. ${hints} See ${LSP_ENV_PASSTHROUGH_DOCS_URL}`,
-  );
-}
 
 function failLspSession(session: LspSession, error: Error): void {
   session.failure ??= error;
@@ -541,6 +521,27 @@ export async function createBundleLspToolRuntime(params: {
   }
   if (Object.keys(loaded.config.lspServers).length === 0) {
     return { tools: [], sessions: [], dispose: async () => {} };
+  }
+
+  const {
+    collectWithheldLspEnvNames,
+    formatWithheldLspEnvHints,
+    LSP_ENV_PASSTHROUGH_DOCS_URL,
+    resolveLspServerEnv,
+  } = await import("./agent-bundle-lsp-env.js");
+
+  function warnWithheldLspEnvOnce(serverName: string, childEnv: Record<string, string>): void {
+    const hints = formatWithheldLspEnvHints(
+      collectWithheldLspEnvNames({ parentEnv: process.env, childEnv }),
+    ).join(" ");
+    const key = `${serverName}\0${hints}`;
+    if (!hints || warnedWithheldEnv.has(key)) {
+      return;
+    }
+    warnedWithheldEnv.add(key);
+    logWarn(
+      `bundle-lsp: server "${serverName}" starts without these Gateway environment variables. ${hints} See ${LSP_ENV_PASSTHROUGH_DOCS_URL}`,
+    );
   }
 
   const reservedNames = normalizeReservedToolNames(params.reservedToolNames);

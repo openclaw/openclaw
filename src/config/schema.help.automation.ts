@@ -106,6 +106,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
+  "cron.defaultTools":
+    'Tools added when the automations tool creates or explicitly revises a nonempty toolsAllow list, before creator-policy checks and approval. Unset adds nothing. Use toolsAllowMode: "exact" on that request to opt out; [] remains tool-less. Existing jobs and unrelated edits are unchanged.',
   "cron.skipMissedJobs":
     "Skips missed recurring cron/every slots at Gateway startup and schedules their next future occurrence instead of catching up. Default: false. Enable to avoid stale reminders after downtime; one-shot at jobs still catch up.",
   "cron.webhookToken":
@@ -122,6 +124,28 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Allows automation webhooks to RFC 2544 benchmark-range IPs (198.18.0.0/15). Use only with trusted fake-IP proxy environments.",
   "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":
     "Allows automation webhooks to IPv6 Unique Local Addresses (fc00::/7). Use only with trusted fake-IP proxy environments.",
+  "cron.delivery":
+    "Gateway-wide default announce destination for automations that name no route of their own (no channel other than `last`, `to`, `threadId`, `accountId`, or owner targeting). It replaces the remembered session route at run time and never applies to `none` or `webhook` delivery. A `cron.creators.<profileId>.delivery` or `cron.agents.<agentId>.delivery` default wins over this one.",
+  "cron.delivery.channel":
+    "Channel for the default destination, such as `telegram`. Omit to use `last` resolution against the default recipient.",
+  "cron.delivery.to":
+    "Recipient for the default destination, in the channel's target syntax (for example a Telegram chat id such as `-100123456789`).",
+  "cron.delivery.threadId":
+    "Optional thread or forum topic for the default destination, such as a Telegram topic id.",
+  "cron.delivery.accountId":
+    "Optional channel account for the default destination when the channel has several accounts.",
+  "cron.agents":
+    "Per-agent automation defaults keyed by agent id. Each automation uses the entry for its effective agent (its agentId, else the agent in its session key, else the default agent).",
+  "cron.agents.*.delivery":
+    "Default announce destination for this agent's automations that name no route. Replaces `cron.delivery` whole for this agent; fields are not merged. A creator default for the job's human creator wins over it.",
+  "cron.agents.*.failureAlert":
+    "Default failure-alert route (`mode`, `channel`, `to`, `threadId`, `accountId`) for this agent's automations. Replaces the `cron.failureAlert` route fields whole; `enabled`, `after`, `cooldownMs`, and `includeSkipped` stay Gateway-wide.",
+  "cron.creators":
+    "Per-creator automation defaults keyed by the Gateway profile id of the human who created the automation. Applies only when the automation records a human profile creator (directly, or as the profile that delegated creation to an agent); legacy automations and channel-only, unknown, agent, or system creators use no creator entry. Keys match exactly.",
+  "cron.creators.*.delivery":
+    "Default announce destination for this person's automations that name no route. Wins over `cron.agents.<agentId>.delivery` and `cron.delivery`; replaces them whole.",
+  "cron.creators.*.failureAlert":
+    "Default failure-alert route (`mode`, `channel`, `to`, `threadId`, `accountId`) for this person's automations. Wins over the owner agent's route and replaces the `cron.failureAlert` route fields whole; `enabled`, `after`, `cooldownMs`, and `includeSkipped` stay Gateway-wide.",
   "cron.sessionRetention":
     "Controls how long completed automation run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; a zero duration such as `0h` also disables; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
   transcripts:
@@ -289,7 +313,9 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.queue.mode":
     'Queue mode for active runs. Use "steer" to inject prompts into the active run, "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
   "messages.queue.allowCollaborativeSteering":
-    "Allow admitted human input in the same conversation to steer under the active turn's unchanged identity and prepared permissions, even when its author has fewer permissions (default: false). When false, another person's steering attempt is refused without queueing it; they can explicitly submit /followup <message> for a new turn under their own identity. Same-requester compatibility checks, queue modes, and cross-session steering authorization still apply.",
+    "Allow admitted human input in the same conversation to steer under the active turn's unchanged identity and prepared permissions, even when its author has fewer permissions (default: true). Shared-credential WebUI and channel input can also continue the exact same active session. When false, that exception requires current WebUI admin and channel-owner authority; verified personal continuity also remains available. Otherwise collaborativeSteeringFallback selects a quiet requester-owned queued turn (queue) or strict refusal (reject). Current access, live execution authority, execution-setting checks, queue modes, and cross-session steering authorization still apply.",
+  "messages.queue.collaborativeSteeringFallback":
+    'What happens when another person cannot steer because collaborative steering is disabled: "queue" (default) runs their input as a separate turn without a status notice; "reject" preserves strict refusal and requires a fresh /followup request. Does not enable collaborative steering or bypass access checks.',
   "messages.queue.byChannel":
     "Per-channel queue mode overrides keyed by channel ID, including plugin channels (for example discord, telegram, x). Use this when one channel's traffic pattern needs different behavior than global defaults.",
   "messages.queue.debounceMsByChannel":

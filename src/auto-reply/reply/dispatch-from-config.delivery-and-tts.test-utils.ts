@@ -50,6 +50,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   automaticGroupReplyConfig,
+  mockPluginBoundDiscordBinding,
   dispatchReplyFromConfig,
   installCaptionedVoiceTestPlugin,
   installThreadingTestPlugin,
@@ -65,13 +66,67 @@ import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.j
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { buildTestCtx } from "./test-ctx.js";
+import { buildTestCtx, createDiscordPluginBindingCtx, createRoutedTestCtx } from "./test-ctx.js";
 
 const NO_VISIBLE_REPLY_FALLBACK_TEXT = MISSING_REPLY_NOTICE_TEXT;
+
+function createHistoryContext(body: string, messageSid: string) {
+  return buildTestCtx({
+    Provider: "openclaw",
+    Surface: "openclaw",
+    OriginatingChannel: "slack",
+    OriginatingTo: "user:U123",
+    To: "user:U123",
+    AccountId: "default",
+    CommandAuthorized: true,
+    BodyForAgent: body,
+    RawBody: body,
+    Body: body,
+    MessageSid: messageSid,
+    SessionKey: "agent:main:main",
+  });
+}
+
+function createPreparedRuntimeSnapshot(config: OpenClawConfig) {
+  return Object.freeze({
+    agentId: "main",
+    agentDir: "/tmp/prepared-agent",
+    workspaceDir: "/tmp/prepared-workspace",
+    config,
+    modelCatalog: { entries: [], routeVariants: [] },
+    inboundPluginRegistry: createTestRegistry([]),
+    pluginGeneration: {} as never,
+  });
+}
+
+function queuedBlockError() {
+  return Object.assign(
+    new OutboundDeliveryError("queued block", {
+      cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+    }),
+    { queueCustody: "held" as const },
+  );
+}
+
+function createHeldDeliveryDispatcher() {
+  const delivered: ReplyPayload[] = [];
+  const deliveryStarted = createDeferred();
+  const deliveryGate = createDeferred();
+  const dispatcher = createReplyDispatcher({
+    deliver: async (payload) => {
+      delivered.push(payload);
+      deliveryStarted.resolve();
+      await deliveryGate.promise;
+    },
+  });
+  return { delivered, deliveryStarted, deliveryGate, dispatcher };
+}
 
 beforeAll(globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
+  const captionedTtsConfig = { tts: { auto: "always" } } satisfies OpenClawConfig;
+
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
     describe0BeforeEach0();
@@ -270,37 +325,22 @@ describe("dispatchReplyFromConfig", () => {
       status: "handled",
       result: { handled: true, reply: { text: "do not leak slash reply" } },
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-command-escape-denied",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       detachHint: "/codex detach",
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
+    const ctx = createDiscordPluginBindingCtx({
       ChatType: "channel",
       CommandSource: "text",
       CommandAuthorized: false,
-      WasMentioned: false,
       CommandBody: "/codex detach",
       RawBody: "/codex detach",
       Body: "/codex detach",
       MessageSid: "msg-claim-plugin-command-denied",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -337,35 +377,16 @@ describe("dispatchReplyFromConfig", () => {
       },
       { pluginId: "codex" },
     );
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-reply-1",
       targetSessionKey: "plugin-binding:codex:reply123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginId: "codex",
       pluginRoot: "/plugins/codex",
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "who are you",
-      RawBody: "who are you",
-      Body: "who are you",
+    const ctx = createDiscordPluginBindingCtx({
       MessageSid: "msg-claim-plugin-reply",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -397,25 +418,14 @@ describe("dispatchReplyFromConfig", () => {
       },
       { pluginId: "codex" },
     );
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-reply-abort-1",
       targetSessionKey: "plugin-binding:codex:reply-abort-123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginId: "codex",
       pluginRoot: "/plugins/codex",
     });
-    let markDeliveryStarted: (() => void) | undefined;
-    let releaseDelivery: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryRelease = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
+    const { promise: deliveryStarted, resolve: markDeliveryStarted } = createDeferred();
+    const { promise: deliveryRelease, resolve: releaseDelivery } = createDeferred();
     const dispatcher = createReplyDispatcher({
       deliver: async () => {
         markDeliveryStarted?.();
@@ -428,22 +438,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const dispatch = withDispatchProcessedOutcomeSink(() =>
       dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: "discord",
-          Surface: "discord",
-          OriginatingChannel: "discord",
-          OriginatingTo: "discord:channel:1481858418548412579",
-          To: "discord:channel:1481858418548412579",
-          AccountId: "default",
-          SenderId: "user-9",
-          SenderUsername: "ada",
-          CommandAuthorized: true,
-          WasMentioned: false,
-          CommandBody: "who are you",
-          RawBody: "who are you",
-          Body: "who are you",
+        ctx: createDiscordPluginBindingCtx({
           MessageSid: "msg-claim-plugin-reply-abort",
-          SessionKey: "agent:main:discord:channel:1481858418548412579",
         }),
         cfg: emptyConfig,
         dispatcher,
@@ -516,20 +512,7 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "openclaw",
-        Surface: "openclaw",
-        OriginatingChannel: "slack",
-        OriginatingTo: "user:U123",
-        To: "user:U123",
-        AccountId: "default",
-        CommandAuthorized: true,
-        BodyForAgent: "continue",
-        RawBody: "continue",
-        Body: "continue",
-        MessageSid: "msg-plugin-history",
-        SessionKey: "agent:main:main",
-      }),
+      ctx: createHistoryContext("continue", "msg-plugin-history"),
       cfg: emptyConfig,
       dispatcher,
       replyOptions: {
@@ -585,20 +568,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     const rotatedDispatcher = createDispatcher();
     const rotatedResult = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "openclaw",
-        Surface: "openclaw",
-        OriginatingChannel: "slack",
-        OriginatingTo: "user:U123",
-        To: "user:U123",
-        AccountId: "default",
-        CommandAuthorized: true,
-        BodyForAgent: "continue after reset",
-        RawBody: "continue after reset",
-        Body: "continue after reset",
-        MessageSid: "msg-plugin-history-rotated",
-        SessionKey: "agent:main:main",
-      }),
+      ctx: createHistoryContext("continue after reset", "msg-plugin-history-rotated"),
       cfg: emptyConfig,
       dispatcher: rotatedDispatcher,
       replyOptions: {
@@ -635,20 +605,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     const blockedDispatcher = createDispatcher();
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "openclaw",
-        Surface: "openclaw",
-        OriginatingChannel: "slack",
-        OriginatingTo: "user:U123",
-        To: "user:U123",
-        AccountId: "default",
-        CommandAuthorized: true,
-        BodyForAgent: "continue during second reset",
-        RawBody: "continue during second reset",
-        Body: "continue during second reset",
-        MessageSid: "msg-plugin-history-blocked",
-        SessionKey: "agent:main:main",
-      }),
+      ctx: createHistoryContext("continue during second reset", "msg-plugin-history-blocked"),
       cfg: emptyConfig,
       dispatcher: blockedDispatcher,
       replyOptions: {
@@ -862,26 +819,16 @@ describe("dispatchReplyFromConfig", () => {
   it("routes plugin-owned Discord DM bindings to the owning plugin before generic inbound claim broadcast", async () => {
     setNoAbort();
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-dm-1",
       targetSessionKey: "plugin-binding:codex:dm123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "user:1177378744822943744",
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
+    const ctx = createRoutedTestCtx("discord", "channel:1480574946919846079", {
       From: "discord:1177378744822943744",
-      OriginatingTo: "channel:1480574946919846079",
-      To: "channel:1480574946919846079",
-      AccountId: "default",
       SenderId: "user-9",
       SenderUsername: "ada",
       CommandAuthorized: true,
@@ -995,28 +942,18 @@ describe("dispatchReplyFromConfig", () => {
       status: "no_handler",
     });
     hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-no-handler-1",
       targetSessionKey: "plugin-binding:codex:nohandler123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:no-handler",
-      },
       pluginName: "Codex App Server",
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "channel:no-handler",
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload);
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:no-handler",
-        To: "discord:channel:no-handler",
-        AccountId: "default",
+      ctx: createRoutedTestCtx("discord", "discord:channel:no-handler", {
         MessageSid: "msg-no-handler-1",
         SessionKey: "agent:main:discord:channel:no-handler",
         CommandBody: "hello",
@@ -1042,29 +979,19 @@ describe("dispatchReplyFromConfig", () => {
     mockPluginBindingClaim({
       status: "declined",
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-declined-1",
       targetSessionKey: "plugin-binding:codex:declined123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:declined",
-      },
       pluginName: "Codex App Server",
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       detachHint: "/codex_detach",
+      conversationId: "channel:declined",
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:declined",
-        To: "discord:channel:declined",
-        AccountId: "default",
+      ctx: createRoutedTestCtx("discord", "discord:channel:declined", {
         MessageSid: "msg-declined-1",
         SessionKey: "agent:main:discord:channel:declined",
         CommandBody: "hello",
@@ -1089,28 +1016,18 @@ describe("dispatchReplyFromConfig", () => {
       status: "error",
       error: "boom",
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-error-1",
       targetSessionKey: "plugin-binding:codex:error123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:error",
-      },
       pluginName: "Codex App Server",
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "channel:error",
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:error",
-        To: "discord:channel:error",
-        AccountId: "default",
+      ctx: createRoutedTestCtx("discord", "discord:channel:error", {
         MessageSid: "msg-error-1",
         SessionKey: "agent:main:discord:channel:error",
         CommandBody: "hello",
@@ -1371,17 +1288,7 @@ describe("dispatchReplyFromConfig", () => {
     const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
     const preparedLookup = vi
       .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
-      .mockResolvedValue(
-        Object.freeze({
-          agentId: "main",
-          agentDir: "/tmp/prepared-agent",
-          workspaceDir: "/tmp/prepared-workspace",
-          config: runtimeCfg,
-          modelCatalog: { entries: [], routeVariants: [] },
-          inboundPluginRegistry: createTestRegistry([]),
-          pluginGeneration: {} as never,
-        }),
-      );
+      .mockResolvedValue(createPreparedRuntimeSnapshot(runtimeCfg));
 
     const overrideCfg = {
       agents: { defaults: { userTimezone: "America/New_York" } },
@@ -1511,17 +1418,7 @@ describe("dispatchReplyFromConfig", () => {
     const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
     const preparedLookup = vi
       .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
-      .mockResolvedValue(
-        Object.freeze({
-          agentId: "main",
-          agentDir: "/tmp/prepared-agent",
-          workspaceDir: "/tmp/prepared-workspace",
-          config: runtimeCfg,
-          modelCatalog: { entries: [], routeVariants: [] },
-          inboundPluginRegistry: createTestRegistry([]),
-          pluginGeneration: {} as never,
-        }),
-      );
+      .mockResolvedValue(createPreparedRuntimeSnapshot(runtimeCfg));
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
 
@@ -2039,16 +1936,7 @@ describe("dispatchReplyFromConfig", () => {
   it("does not wait for same-channel block dispatcher delivery before resolving block replies", async () => {
     setNoAbort();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const delivered: ReplyPayload[] = [];
-    const deliveryStarted = createDeferred();
-    const deliveryGate = createDeferred();
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-        deliveryStarted.resolve();
-        await deliveryGate.promise;
-      },
-    });
+    const { delivered, deliveryStarted, deliveryGate, dispatcher } = createHeldDeliveryDispatcher();
     let blockReplySettled = false;
     const replyResolver = async (
       _ctx: MsgContext,
@@ -2084,16 +1972,7 @@ describe("dispatchReplyFromConfig", () => {
   it("waits for pending same-channel block delivery before completing block-only dispatch", async () => {
     setNoAbort();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const delivered: ReplyPayload[] = [];
-    const deliveryStarted = createDeferred();
-    const deliveryGate = createDeferred();
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-        deliveryStarted.resolve();
-        await deliveryGate.promise;
-      },
-    });
+    const { delivered, deliveryStarted, deliveryGate, dispatcher } = createHeldDeliveryDispatcher();
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
@@ -2208,16 +2087,7 @@ describe("dispatchReplyFromConfig", () => {
       agents: { defaults: { verboseDefault: "on" } },
     } as const satisfies OpenClawConfig;
     const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const delivered: ReplyPayload[] = [];
-    const deliveryStarted = createDeferred();
-    const deliveryGate = createDeferred();
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-        deliveryStarted.resolve();
-        await deliveryGate.promise;
-      },
-    });
+    const { delivered, deliveryStarted, deliveryGate, dispatcher } = createHeldDeliveryDispatcher();
     const onItemEvent = vi.fn();
     let itemProgressSettled = false;
     const replyResolver = async (
@@ -2357,7 +2227,7 @@ describe("dispatchReplyFromConfig", () => {
           OriginatingChannel: "telegram",
           OriginatingTo: "original",
         }),
-        cfg: emptyConfig,
+        cfg: captionedTtsConfig,
         dispatcher: createDispatcher(),
         replyResolver: async () => ({ text: "voice caption" }),
       });
@@ -2382,7 +2252,7 @@ describe("dispatchReplyFromConfig", () => {
       return undefined;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
@@ -2408,7 +2278,7 @@ describe("dispatchReplyFromConfig", () => {
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram:999",
       }),
-      cfg: emptyConfig,
+      cfg: captionedTtsConfig,
       dispatcher,
       replyResolver: async () => ({ text: "One captioned answer." }),
     });
@@ -2555,12 +2425,7 @@ describe("dispatchReplyFromConfig", () => {
         if (info.kind === "block") {
           blockStarted.resolve();
           await releaseBlock.promise;
-          throw Object.assign(
-            new OutboundDeliveryError("queued block", {
-              cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
-            }),
-            { queueCustody: "held" as const },
-          );
+          throw queuedBlockError();
         }
       },
     });
@@ -2660,7 +2525,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "Deployment complete." };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
       text: "The selected environment is ready.\nDeployment complete.",
@@ -2737,12 +2602,7 @@ describe("dispatchReplyFromConfig", () => {
               deliver: async (reply, info) => {
                 nativePayloads.push(reply);
                 if (info.kind === "block") {
-                  throw Object.assign(
-                    new OutboundDeliveryError("queued block", {
-                      cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
-                    }),
-                    { queueCustody: "held" as const },
-                  );
+                  throw queuedBlockError();
                 }
               },
             })
@@ -2808,7 +2668,7 @@ describe("dispatchReplyFromConfig", () => {
       return undefined;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Fallback text content." });
@@ -2828,7 +2688,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "Final text." };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Streamed text.\nFinal text." });
@@ -2851,7 +2711,7 @@ describe("dispatchReplyFromConfig", () => {
       return undefined;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Streamed text." });
@@ -2870,7 +2730,7 @@ describe("dispatchReplyFromConfig", () => {
       throw new Error("provider unavailable");
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Partial useful answer." });
@@ -2907,7 +2767,7 @@ describe("dispatchReplyFromConfig", () => {
 
       await dispatchReplyFromConfig({
         ctx,
-        cfg: emptyConfig,
+        cfg: captionedTtsConfig,
         dispatcher,
         replyOptions: { abortSignal: abortController.signal },
         replyResolver,
@@ -2936,7 +2796,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "Runtime status.", isStatusNotice: true };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(vi.mocked(dispatcher.sendFinalReply).mock.calls).toEqual([
@@ -2971,7 +2831,7 @@ describe("dispatchReplyFromConfig", () => {
       return undefined;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)?.text).toBeUndefined();
@@ -2993,7 +2853,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "Visible final." };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
       text: "Visible block. \nVisible final.",
@@ -3015,7 +2875,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: " speech.[[/tts:text]] Done." };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
       text: "Visible.  Done.",
@@ -3037,7 +2897,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "Second paragraph." };
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: captionedTtsConfig, dispatcher, replyResolver });
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
@@ -3049,12 +2909,6 @@ describe("dispatchReplyFromConfig", () => {
   it("keeps tagged-mode Telegram block text visible", async () => {
     setNoAbort();
     installCaptionedVoiceTestPlugin("telegram");
-    ttsMocks.state.statusSnapshot = {
-      autoMode: "tagged",
-      provider: "auto",
-      maxLength: 1500,
-      summarize: true,
-    };
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
     const replyResolver = async (
@@ -3065,7 +2919,12 @@ describe("dispatchReplyFromConfig", () => {
       return undefined;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: { tts: { auto: "tagged" } },
+      dispatcher,
+      replyResolver,
+    });
 
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "Plain tagged text." });
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -3092,7 +2951,6 @@ describe("dispatchReplyFromConfig", () => {
     },
   ])("keeps tagged TTS delivery single for $streamedText", async (testCase) => {
     setNoAbort();
-    ttsMocks.state.statusSnapshot.autoMode = "tagged";
     ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce(testCase.ttsReply);
     const dispatcher = createDispatcher();
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -3102,7 +2960,7 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
-      cfg: emptyConfig,
+      cfg: { tts: { auto: "tagged" } },
       dispatcher,
       replyResolver,
     });

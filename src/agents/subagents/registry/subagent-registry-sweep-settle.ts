@@ -1,93 +1,24 @@
-import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { isTerminalSessionStatus } from "../../../config/sessions/types.js";
+import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
+import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
 } from "./subagent-lifecycle-events.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { resolveSubagentYieldWaitSource } from "./subagent-registry-read.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
-import {
-  loadSubagentSessionEntry,
-  resolveCompletionFromSessionEntry,
-  resolveSubagentRunOrphanReason,
-} from "./subagent-session-reconciliation.js";
 
 type CompleteRun = ReturnType<
   typeof createSubagentRegistryCompletionRuntime
 >["completeSubagentRunWithRecovery"];
 type SweepReadScope = ReturnType<typeof createSubagentSweepReadScope>;
-
-/** Settles an active-looking run whose execution context is gone, from its session or as lost. */
-export async function settleStaleActiveSubagentRun(params: {
-  runId: string;
-  entry: SubagentRunRecord;
-  now: number;
-  readScope: SweepReadScope;
-  complete: CompleteRun;
-}): Promise<void> {
-  const { runId, entry, now, readScope, complete } = params;
-  const assertActiveReadCurrent = () => {
-    readScope.assertRunCurrent(entry);
-    if (
-      typeof entry.execution.endedAt === "number" ||
-      entry.execution.status === "queued" ||
-      entry.killIntent ||
-      entry.killReconciliation ||
-      getAgentRunContext(runId)
-    ) {
-      throw readScope.retiredRead;
-    }
-  };
-  let observation;
-  try {
-    assertActiveReadCurrent();
-    const classification = resolveSubagentRunOrphanReason({ entry });
-    observation =
-      typeof classification === "object" && classification !== null
-        ? await classification.read(assertActiveReadCurrent)
-        : {
-            orphanReason: classification,
-            sessionEntry: await loadSubagentSessionEntry({
-              childSessionKey: entry.childSessionKey,
-              childAgentId: entry.childAgentId,
-              assertCurrent: assertActiveReadCurrent,
-            }),
-          };
-    assertActiveReadCurrent();
-  } catch (error) {
-    if (error === readScope.retiredRead) {
-      return;
-    }
-    throw error;
-  }
-  const { orphanReason, sessionEntry } = observation;
-  const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
-    notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
-  });
-  await complete(
-    {
-      runId,
-      expectedEntry: entry,
-      recoveryCurrent: readScope.completionCurrent,
-      ...(completion ?? {
-        endedAt: now,
-        outcome: {
-          status: "error" as const,
-          error: orphanReason
-            ? `subagent run orphaned: ${orphanReason}`
-            : "subagent run lost active execution context",
-        },
-        reason: SUBAGENT_ENDED_REASON_ERROR,
-      }),
-      sendFarewell: true,
-      accountId: entry.requesterOrigin?.accountId,
-      triggerCleanup: true,
-    },
-    completion ? "sweeper-session-completion" : "sweeper-lost-context",
-  );
-}
 
 /**
  * Settles a yielded run that no continuation can reach (see
@@ -96,13 +27,35 @@ export async function settleStaleActiveSubagentRun(params: {
 export async function settleUnreachableYieldedSubagentRun(params: {
   runId: string;
   entry: SubagentRunRecord;
-  readScope: Pick<SweepReadScope, "completionCurrent">;
+  readScope?: Pick<SweepReadScope, "completionCurrent">;
   complete: CompleteRun;
+  requesterEnded?: boolean;
 }): Promise<boolean> {
   const { runId, entry, readScope, complete } = params;
-  const continuation = isYieldedSubagentRun(entry)
-    ? resolveYieldedRunContinuation(entry)
+  let requesterEnded = params.requesterEnded;
+  if (isYieldedSubagentRun(entry) && entry.waitForMessage && requesterEnded === undefined) {
+    const requester = await loadSessionEntryByKey(
+      entry.requesterSessionKey,
+      entry.requesterAgentId,
+    );
+    requesterEnded =
+      !requester || requester.archivedAt !== undefined || isTerminalSessionStatus(requester.status);
+  }
+  const retired = subagentRuns.isCompletionAuthorityRetired(entry);
+  let continuation = isYieldedSubagentRun(entry)
+    ? resolveYieldedRunContinuation(entry, requesterEnded)
     : undefined;
+  if (
+    continuation?.state === "continuable" &&
+    retired &&
+    !entry.collect &&
+    !resolveSubagentYieldWaitSource(entry)
+  ) {
+    continuation = {
+      state: "unreachable",
+      error: "Descendant completion can no longer continue this yielded requester.",
+    };
+  }
   if (continuation?.state !== "unreachable") {
     return false;
   }
@@ -116,7 +69,7 @@ export async function settleUnreachableYieldedSubagentRun(params: {
     {
       runId,
       expectedEntry: entry,
-      recoveryCurrent: readScope.completionCurrent,
+      recoveryCurrent: readScope?.completionCurrent,
       // The run ended when it yielded; settling now must not rewrite that time.
       endedAt: entry.execution.endedAt,
       outcome,
@@ -129,5 +82,28 @@ export async function settleUnreachableYieldedSubagentRun(params: {
     },
     "sweeper-unreachable-yield",
   );
+  // A restored task has no old delivery authority. Close only its exact parked
+  // lifecycle through the system projection; never revive its execution or tools.
+  if (retired) {
+    const authority = resolveSubagentChildAuthority(entry);
+    const settled = subagentRuns.get(runId);
+    if (
+      authority.status === "verified" &&
+      isSameSubagentRunOwner(settled, entry) &&
+      settled?.endedReason === SUBAGENT_ENDED_REASON_ERROR
+    ) {
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey: entry.childSessionKey,
+        agentId: authority.childAgentId,
+        expectedWriter: { ...authority.sessionIdentity, runId, requireYielded: true },
+        event: {
+          runId,
+          sessionId: authority.sessionIdentity.sessionId,
+          ts: Date.now(),
+          data: { phase: "error", error: outcome.status === "error" ? outcome.error : undefined },
+        },
+      });
+    }
+  }
   return true;
 }

@@ -9,7 +9,6 @@ import {
 
 export const RELEASE_PLAN_SCHEMA = "openclaw.release-plan.v1";
 const RELEASE_PLAN_LOCK_SCHEMA = "openclaw.release-plan-lock.v1";
-export const RELEASE_PLAN_CANONICALIZATION = "ascii-sorted-compact-json-trailing-newline-v1";
 const RELEASE_PLAN_MAX_BYTES = 32 * 1024;
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;

@@ -12,22 +12,18 @@ import type { PackageActivationRecord } from "./package-update-activation-journa
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 
 const [cut, root, encodedAuthority, encodedRecord] = process.argv.slice(2);
-if (!cut || !root || !encodedAuthority) {
-  throw new Error(
-    "Package activation crash fixture requires its cut, root and original authority.",
-  );
-}
+assert(cut && root && encodedAuthority, "Crash fixture requires cut, root and original authority");
 const authority: ReturnType<typeof captureUpdateCommandExecutorAuthority> =
   JSON.parse(encodedAuthority);
 const later = cut.startsWith("transition-");
 const expectedRecord: PackageActivationRecord | undefined = encodedRecord
   ? JSON.parse(encodedRecord)
   : undefined;
-if (later && !expectedRecord) {
-  throw new Error("A later journal cut requires the parent's exact expected record.");
-}
 let updated = false;
-const interrupt = () => {
+const interrupt = (when = true) => {
+  if (!when) {
+    return;
+  }
   fs.writeSync(1, `${JSON.stringify({ cut, pid: process.pid })}\n`);
   process.kill(process.pid, "SIGKILL");
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
@@ -39,9 +35,7 @@ const isPrivateJournal = (file: string) =>
 const open = fs.openSync.bind(fs);
 fs.openSync = (file, flags, mode) => {
   const fd = open(file, flags, mode);
-  if (cut === "created" && flags === "wx" && isPrivateJournal(String(file))) {
-    interrupt();
-  }
+  interrupt(cut === "created" && flags === "wx" && isPrivateJournal(String(file)));
   return fd;
 };
 const isSelectedJournal = (file: string) =>
@@ -72,9 +66,7 @@ DatabaseSync.prototype.prepare = function (sql) {
         assert(result !== null && typeof result === "object" && "changes" in result);
         assert(result.changes === 1 || result.changes === 1n, "Expected exactly one updated slot");
         updated = true;
-        if (cut.endsWith("after-update")) {
-          interrupt();
-        }
+        interrupt(cut.endsWith("after-update"));
         return result;
       },
     });
@@ -85,25 +77,17 @@ DatabaseSync.prototype.prepare = function (sql) {
 const exec: DatabaseSync["exec"] = Reflect.get(DatabaseSync.prototype, "exec");
 DatabaseSync.prototype.exec = function (sql) {
   const selectedCommit = updated && isSelectedJournal(this.location() ?? "") && sql === "COMMIT";
-  if (selectedCommit && cut.endsWith("before-commit")) {
-    interrupt();
-  }
+  interrupt(selectedCommit && cut.endsWith("before-commit"));
   exec.call(this, sql);
-  if (selectedCommit && cut.endsWith("after-commit")) {
-    interrupt();
-  }
+  interrupt(selectedCommit && cut.endsWith("after-commit"));
 };
 const rename = fs.renameSync.bind(fs);
 fs.renameSync = (from, to) => {
   const publish =
     String(from).includes(`${path.sep}.activation-control-`) && String(to).endsWith(".control");
-  if (publish && cut === "before-publication") {
-    interrupt();
-  }
+  interrupt(publish && cut === "before-publication");
   rename(from, to);
-  if (publish && cut === "after-publication") {
-    interrupt();
-  }
+  interrupt(publish && cut === "after-publication");
 };
 
 const { withUpdateCommandExecutor } = await import("../cli/update-cli/update-command-executor.js");

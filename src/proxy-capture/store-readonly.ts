@@ -103,7 +103,7 @@ export function queryDebugProxyCapturePreset(
         .groupBy(["host", "path", "method", "data_sha256"])
         .having(count, ">", 1)
         .orderBy("duplicateCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "retry-storms":
       query = locations
@@ -113,7 +113,7 @@ export function queryDebugProxyCapturePreset(
         .groupBy(["host", "path"])
         .having(count, ">", 1)
         .orderBy("errorCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "cache-busting":
       query = locations
@@ -128,7 +128,7 @@ export function queryDebugProxyCapturePreset(
         )
         .groupBy(["host", "path"])
         .orderBy("variantCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "ws-duplicate-frames":
       query = locations
@@ -138,7 +138,7 @@ export function queryDebugProxyCapturePreset(
         .groupBy(["host", "path", "data_sha256"])
         .having(count, ">", 1)
         .orderBy("duplicateFrames", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "missing-ack":
       query = events
@@ -162,7 +162,7 @@ export function queryDebugProxyCapturePreset(
         .where("kind", "=", "error")
         .groupBy(["host", "path"])
         .orderBy("errorCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     default:
       return [];

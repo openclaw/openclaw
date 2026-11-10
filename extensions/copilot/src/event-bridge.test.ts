@@ -43,33 +43,27 @@ function planEvent(title: string, data: EventData) {
   return { stream: "plan", data: { phase: "update", source: "copilot-sdk", title, ...data } };
 }
 
-function expectedUsage(output: number) {
+function expectedUsage(output: number, input = 0) {
   return {
     cacheRead: 0,
     cacheWrite: 0,
-    input: 0,
+    input,
     output,
     totalTokens: output,
     cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
   };
 }
 
-function makeAssistantMessageEvent(
-  content = "assistant text",
+const makeAssistantMessageEvent = (
+  content: string,
   overrides: EventData = {},
   metadata: EventMeta = {},
-): SessionEvent {
-  return makeEvent(
+) =>
+  makeEvent(
     "assistant.message",
-    {
-      content,
-      messageId: "msg-1",
-      model: "gpt-5",
-      ...overrides,
-    },
+    { content, messageId: "msg-1", model: "gpt-5", ...overrides },
     metadata,
   );
-}
 
 function createFakeSession(
   options: {
@@ -80,9 +74,7 @@ function createFakeSession(
   return {
     abort: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
-    emit: (type, event) => {
-      events.emit(type, event);
-    },
+    emit: (type, event) => events.emit(type, event),
     id: "session-id",
     listenerCount: (type) => events.listenerCount(type),
     on: vi.fn((type: string, handler: (event: SessionEvent) => void) => {
@@ -136,14 +128,7 @@ describe("attachEventBridge", () => {
         now: () => 9,
         usage: { input: 4 },
       }).usage,
-    ).toEqual({
-      cacheRead: 0,
-      cacheWrite: 0,
-      cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
-      input: 4,
-      output: 0,
-      totalTokens: 0,
-    });
+    ).toEqual(expectedUsage(0, 4));
   });
 
   it("ignores child assistant and usage events but keeps child tool side effects", async () => {
@@ -184,10 +169,11 @@ describe("attachEventBridge", () => {
     emit(session, "assistant.usage", { inputTokens: 99, outputTokens: 99 }, { agentId: "child-1" });
 
     expect(bridge.finalizeAssistantTexts()).toEqual(["root"]);
-    expect(bridge.snapshot().startedCount).toBe(0);
-    expect(bridge.snapshot().toolMetas).toEqual([
-      { meta: "child write", toolName: "write", isError: false },
-    ]);
+    const { startedCount, toolMetas } = bridge.snapshot();
+    expect({ startedCount, toolMetas }).toEqual({
+      startedCount: 0,
+      toolMetas: [{ meta: "child write", toolName: "write", isError: false }],
+    });
     expect(
       bridge.recordSendResult(makeAssistantMessageEvent("child final", {}, { agentId: "child-1" })),
     ).toBe(false);
@@ -430,8 +416,8 @@ describe("attachEventBridge", () => {
       toolCallId: "missing",
     });
 
-    expect(bridge.snapshot().completedCount).toBe(1);
-    expect(bridge.snapshot().toolMetas).toEqual([]);
+    const { completedCount, toolMetas } = bridge.snapshot();
+    expect({ completedCount, toolMetas }).toEqual({ completedCount: 1, toolMetas: [] });
   });
 
   it("serializes compaction callbacks and clears active compaction state on completion", async () => {

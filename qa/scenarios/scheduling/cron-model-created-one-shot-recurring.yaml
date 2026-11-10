@@ -206,13 +206,13 @@ flow:
         - set: preRestartBaseUrl
           value:
             expr: env.gateway.baseUrl
-        - set: preRestartTransportCursor
+        - set: preRestartInboundCursors
           value:
-            expr: state.getSnapshot().cursor
+            expr: "state.getSnapshot().events.filter((event) => event.kind === 'inbound-message' && event.accountId === transport.accountId).map((event) => event.cursor)"
         - call: waitForCondition
           args:
             - lambda:
-                expr: "state.getAcknowledgedPollCursor(transport.accountId) >= preRestartTransportCursor ? true : undefined"
+                expr: "preRestartInboundCursors.every((cursor) => state.hasCompletedInboundEvent(transport.accountId, cursor)) || undefined"
             - 10000
             - 25
         - assert:

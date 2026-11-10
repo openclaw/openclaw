@@ -3,6 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../test-support/message-fixtures.test-support.js";
 import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
 import type { CodexTurnStartParams } from "./protocol.js";
 import {
@@ -64,14 +65,13 @@ describe("Codex transient retry continuation", () => {
               ],
               stopReason: "toolUse",
             },
-            {
-              role: "toolResult",
-              toolCallId: "receipt-call",
-              toolName: "create_receipt",
-              content: [{ type: "text", text: "Created amber receipt AMBER-731." }],
-              isError: false,
-              timestamp: 5,
-            },
+            makeTextToolResult(
+              "receipt-call",
+              "create_receipt",
+              "Created amber receipt AMBER-731.",
+              false,
+              5,
+            ),
           ] satisfies AgentMessage[])
         : [];
       const currentManager = await SessionManager.openAsync(target, params.workspaceDir);

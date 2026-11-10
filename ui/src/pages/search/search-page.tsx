@@ -2,6 +2,7 @@ import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   Errored,
+  For,
   Loading,
   Show,
   action,
@@ -18,8 +19,11 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
+  RetryAction,
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsNavRow,
@@ -34,8 +38,9 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { i18n } from "../../i18n/lib/translate.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
@@ -47,13 +52,34 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { newSessionModelSearch } from "../new-session/model-location.ts";
 import { createCredentialPresentation } from "../plugins/credential-presentation.ts";
-import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
-import { renderSearchTestResult } from "./search-results.tsx";
-import { SearchSetup, AdvancedSearchSettings } from "./search-setup.tsx";
+import {
+  providerToOpen,
+  readConfigValue,
+  routeStatusKind,
+  searchConfigRevision,
+  isSearchConfigSettled,
+} from "./search-config.ts";
+import {
+  SearchTestDetail,
+  SearchTestStatus,
+  type SearchTestOutcomeProps,
+} from "./search-results.tsx";
+import "./search-page.css";
+import { AdvancedSearchSettings, SearchProviderRow } from "./search-setup.tsx";
 
 registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
+
+/** Results arrive unvalidated, and the page renders these fields without further checks. */
+function isSearchStatus(value: unknown): value is WebSearchStatusResult {
+  const status = asNullableRecord(value);
+  return Boolean(
+    asNullableRecord(status?.route) &&
+    asNullableRecord(status?.model) &&
+    Array.isArray(status?.providers),
+  );
+}
 
 export function SearchPage() {
   const context = useApplication();
@@ -72,6 +98,8 @@ export function SearchPage() {
   const [models, setModels] = createSignal<ModelCatalogEntry[]>([]);
   const [model, setModel] = createSignal("");
   const [setupProvider, setSetupProvider] = createSignal("");
+  // The first status opens a provider that needs attention; later refreshes keep the operator's choice.
+  let setupDecided = false;
   const credentialPresentation = createCredentialPresentation(context.router);
   function selectSetupProvider(provider: string) {
     if (provider !== setupProvider()) {
@@ -97,6 +125,7 @@ export function SearchPage() {
     onIdentityChange: () => {
       resetModelOnConnect = true;
       setModel("");
+      setupDecided = false;
       selectSetupProvider("");
     },
     invalidateRequests: () => {
@@ -213,22 +242,16 @@ export function SearchPage() {
         if (!current()) {
           return;
         }
-        const status = await scope.client.request<WebSearchStatusResult>(
-          "webSearch.status",
-          selected,
-        );
+        const status = await scope.client.request("webSearch.status", selected);
         if (current()) {
+          if (!isSearchStatus(status)) {
+            throw new UserFacingError(t("searchPage.statusNotReady"));
+          }
           setModels(catalog?.models ?? []);
           setResult(status);
-          if (!status.providers.some((provider) => provider.id === setupProvider())) {
-            const preferred = status.provider ?? status.route.provider;
-            selectSetupProvider(
-              status.providers.find((provider) => provider.id === preferred)?.id ??
-                status.providers.find((provider) => provider.available && provider.configured)
-                  ?.id ??
-                status.providers.toSorted((a, b) => a.label.localeCompare(b.label))[0]?.id ??
-                "",
-            );
+          if (!setupDecided) {
+            setupDecided = true;
+            selectSetupProvider(providerToOpen(status));
           }
         }
       } catch (cause) {
@@ -380,42 +403,35 @@ export function SearchPage() {
       provider: entry.provider,
     })),
   ];
-  const routeStatus = () => {
-    const kind = result()!.route.kind;
-    return kind === "unavailable"
-      ? "warn"
-      : kind === "disabled" || kind === "external"
-        ? "muted"
-        : "ok";
-  };
-  function TestHealth(props: { pending?: boolean; failed?: boolean }) {
-    const pending = () => props.pending || testing();
-    const last = () => (pending() || props.failed ? null : testResult());
-    const failed = () => !pending() && (props.failed || last()?.status === "error");
-    const description = () => {
-      const response = last();
-      return response
-        ? `${response.provider} · ${t("searchPage.duration", { ms: String(response.latencyMs) })}${response.cached ? ` · ${t("searchPage.cached")}` : ""}`
-        : undefined;
+  const providerLabel = (id: string) =>
+    providers().find((provider) => provider.id === id)?.label ?? id;
+  /** The test outcome fills one part of one row, so the query and button never remount. */
+  function TestOutcome(props: { part: "status" | "detail" }) {
+    const View = (view: Omit<SearchTestOutcomeProps, "route" | "providerLabel">) => {
+      const Part = props.part === "status" ? SearchTestStatus : SearchTestDetail;
+      return (
+        <Part
+          pending={view.pending}
+          result={view.result}
+          error={view.error}
+          route={result()?.testProvider?.label ?? result()?.route.label ?? ""}
+          providerLabel={providerLabel}
+        />
+      );
     };
     return (
-      <SettingsRow
-        title={t("searchPage.health")}
-        description={description()}
-        control={
-          <span role="status">
-            <SettingsStatus
-              kind={failed() ? "danger" : last() ? "ok" : "muted"}
-              label={t(
-                `searchPage.${pending() ? "testing" : failed() ? "failure" : last() ? "success" : "untested"}`,
-              )}
-            />
-          </span>
-        }
-      />
+      <Loading on={testRequest()} fallback={<View pending />}>
+        <Errored fallback={(error) => <View pending={testing()} error={formatUiError(error())} />}>
+          <View pending={testing()} result={testResult()} />
+        </Errored>
+      </Loading>
     );
   }
-  const selectedProvider = () => providers().find((provider) => provider.id === setupProvider());
+  const canTestHere = () => Boolean(result()?.testProvider || result()?.route.testable);
+  const canTestInChat = () =>
+    result()?.route.kind === "native" || result()?.route.kind === "external";
+  const providerInUse = (id: string) =>
+    id === configuredProvider() || id === result()?.route.provider;
   const agentOptions = () =>
     (agents.read().agentsList?.agents ?? [])
       .filter((agent) => agent.kind !== "system")
@@ -433,12 +449,10 @@ export function SearchPage() {
               <Errored
                 fallback={(error) =>
                   gateway.connected ? (
-                    <div role="alert" class="callout danger">
+                    <InlineAlert tone="danger" role="alert">
                       {formatUiError(error())}
-                      <button class="btn btn--sm" onClick={() => void load()}>
-                        {t("common.retry")}
-                      </button>
-                    </div>
+                      <RetryAction onRetry={() => void load()} />
+                    </InlineAlert>
                   ) : undefined
                 }
               >
@@ -452,12 +466,10 @@ export function SearchPage() {
             )}
           </Show>
           {configState().lastError ? (
-            <div role="alert" class="callout danger">
+            <InlineAlert tone="danger" role="alert">
               {configState().lastError}
-              <button class="btn btn--sm" onClick={() => void retryConfig(gateway.capture())}>
-                {t("common.retry")}
-              </button>
-            </div>
+              <RetryAction onRetry={() => void retryConfig(gateway.capture())} />
+            </InlineAlert>
           ) : undefined}
           <Loading>
             <Show when={result()}>
@@ -488,7 +500,9 @@ export function SearchPage() {
                         options={configuredOptions()}
                         disabled={disabled()}
                         onChange={(provider) => {
-                          selectSetupProvider(provider || setupProvider());
+                          if (provider) {
+                            selectSetupProvider(provider);
+                          }
                           void patch(
                             renderScope,
                             ["tools", "web", "search", "provider"],
@@ -497,7 +511,17 @@ export function SearchPage() {
                         }}
                       />
                     </SettingsSection>
-                    <SettingsSection title={t("searchPage.route")}>
+                    <SettingsSection
+                      title={t("searchPage.route")}
+                      actions={
+                        <RefreshButton
+                          label={t("searchPage.refresh")}
+                          busy={loading()}
+                          disabled={testing() || !gateway.connected}
+                          onClick={() => void load()}
+                        />
+                      }
+                    >
                       <SettingsSelectRow
                         title={t("searchPage.agent")}
                         value={selectionProjection.read().state.selectedId ?? ""}
@@ -526,7 +550,7 @@ export function SearchPage() {
                         description={current().route.reason}
                         control={
                           <SettingsStatus
-                            kind={routeStatus()}
+                            kind={routeStatusKind(current())}
                             label={
                               loading()
                                 ? t("searchPage.loading")
@@ -536,137 +560,116 @@ export function SearchPage() {
                         }
                       />
                     </SettingsSection>
-                    <SettingsSection
-                      title={t("searchPage.health")}
-                      description={t("searchPage.untestedHint")}
-                      actions={
-                        <button
-                          class="btn btn--sm"
-                          disabled={loading() || testing() || !gateway.connected}
-                          onClick={() => void load()}
-                        >
-                          {t("searchPage.refresh")}
-                        </button>
-                      }
-                    >
-                      <Loading on={testRequest()} fallback={<TestHealth pending />}>
-                        <Errored fallback={() => <TestHealth failed />}>
-                          <TestHealth />
-                        </Errored>
-                      </Loading>
-                      <Show when={current().testProvider || current().route.testable}>
-                        <SettingsRow
-                          title={t("searchPage.query")}
-                          control={
-                            <input
-                              ref={(element) => {
-                                queryInput = element;
-                              }}
-                              class="settings-input"
-                              aria-label={t("searchPage.query")}
-                              maxlength="500"
-                              disabled={testing()}
-                              value={query()}
-                              placeholder={t("searchPage.queryPlaceholder")}
-                              onInput={(event) => {
-                                if (!testing()) {
-                                  setQuery(event.currentTarget.value);
-                                  invalidateTest();
-                                }
-                              }}
-                              onCompositionEnd={recordCompositionEnd}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter" && !isComposingKeyboardEvent(event)) {
-                                  void test(renderScope);
-                                }
-                              }}
-                            />
-                          }
-                        />
-                        <SettingsRow
-                          title={t("searchPage.test")}
-                          control={
-                            <button
-                              class="btn"
-                              disabled={
-                                !canEdit() ||
-                                !query().trim() ||
-                                query().trim().length > 500 ||
-                                testing() ||
-                                loading() ||
-                                !isSearchConfigSettled(configState()) ||
-                                !gateway.connected
-                              }
-                              onClick={() => void test(renderScope)}
-                            >
-                              {testing()
-                                ? t("searchPage.testing")
-                                : current().testProvider
-                                  ? t("searchPage.testProvider", {
-                                      provider: current().testProvider!.label,
-                                    })
-                                  : t("searchPage.test")}
-                            </button>
-                          }
-                        />
-                      </Show>
-                      <Show
-                        when={
-                          current().route.kind === "native" || current().route.kind === "external"
-                        }
+                    <Show when={canTestHere() || canTestInChat()}>
+                      <SettingsSection
+                        title={t("searchPage.health")}
+                        description={canTestHere() ? t("searchPage.untestedHint") : undefined}
                       >
-                        <SettingsNavRow
-                          title={t("searchPage.testInChat")}
-                          description={t("searchPage.testInChatHint")}
-                          onClick={() => {
-                            if (renderScope && gateway.isCurrent(renderScope) && !loading()) {
-                              context.navigate("new-session", {
-                                search: newSessionModelSearch(
-                                  current().agentId,
-                                  `${current().model.provider}/${current().model.id}`,
-                                ),
-                              });
+                        <Show when={canTestHere()}>
+                          <SettingsRow
+                            title={t("searchPage.query")}
+                            control={
+                              <input
+                                ref={(element) => {
+                                  queryInput = element;
+                                }}
+                                class="settings-input"
+                                aria-label={t("searchPage.query")}
+                                maxlength="500"
+                                disabled={testing()}
+                                value={query()}
+                                placeholder={t("searchPage.queryPlaceholder")}
+                                onInput={(event) => {
+                                  if (!testing()) {
+                                    setQuery(event.currentTarget.value);
+                                    invalidateTest();
+                                  }
+                                }}
+                                onCompositionEnd={recordCompositionEnd}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" && !isComposingKeyboardEvent(event)) {
+                                    void test(renderScope);
+                                  }
+                                }}
+                              />
                             }
-                          }}
-                        />
-                      </Show>
-                    </SettingsSection>
-                    <Loading on={testRequest()} fallback={undefined}>
-                      <Errored
-                        fallback={(error) => renderSearchTestResult(null, formatUiError(error()))}
-                      >
-                        {renderSearchTestResult(testResult(), "")}
-                      </Errored>
-                    </Loading>
+                          />
+                          <SettingsRow
+                            title={<TestOutcome part="status" />}
+                            description={<TestOutcome part="detail" />}
+                            control={
+                              <button
+                                class="btn"
+                                disabled={
+                                  !canEdit() ||
+                                  !query().trim() ||
+                                  query().trim().length > 500 ||
+                                  testing() ||
+                                  loading() ||
+                                  !isSearchConfigSettled(configState()) ||
+                                  !gateway.connected
+                                }
+                                onClick={() => void test(renderScope)}
+                              >
+                                {testing()
+                                  ? t("searchPage.testing")
+                                  : current().testProvider
+                                    ? t("searchPage.testProvider", {
+                                        provider: current().testProvider!.label,
+                                      })
+                                    : t("searchPage.test")}
+                              </button>
+                            }
+                          />
+                        </Show>
+                        <Show when={canTestInChat()}>
+                          <SettingsNavRow
+                            title={t("searchPage.testInChat")}
+                            description={t("searchPage.testInChatHint")}
+                            onClick={() => {
+                              if (renderScope && gateway.isCurrent(renderScope) && !loading()) {
+                                context.navigate("new-session", {
+                                  search: newSessionModelSearch(
+                                    current().agentId,
+                                    `${current().model.provider}/${current().model.id}`,
+                                  ),
+                                });
+                              }
+                            }}
+                          />
+                        </Show>
+                      </SettingsSection>
+                    </Show>
                     <SettingsSection
                       title={t("searchPage.setup")}
                       description={t("searchPage.setupHint")}
                     >
-                      <SettingsSelectRow
-                        title={t("searchPage.setupProvider")}
-                        description={selectedProvider()?.hint}
-                        value={setupProvider()}
-                        options={providerOptions()}
-                        onChange={selectSetupProvider}
-                      />
-                      <Show when={selectedProvider()?.id} keyed>
-                        {(providerId) => (
-                          <SearchSetup
-                            provider={selectedProvider()!}
+                      <For each={providers()} keyed={(provider) => provider.id}>
+                        {(provider) => (
+                          <SearchProviderRow
+                            provider={provider()}
+                            open={setupProvider() === provider().id}
+                            inUse={providerInUse(provider().id)}
+                            onToggle={() =>
+                              selectSetupProvider(
+                                setupProvider() === provider().id ? "" : provider().id,
+                              )
+                            }
                             state={configState}
                             context={context}
                             gateway={gateway}
                             getPresentationLifetime={() => credentialPresentation.lifetime}
                             canEdit={canEdit}
                             busy={busy}
+                            secretFields={configSecretFields(context)}
                             commit={(path, value) =>
-                              providerId === setupProvider()
+                              provider().id === setupProvider()
                                 ? patch(renderScope, path, value)
                                 : Promise.resolve(false)
                             }
                           />
                         )}
-                      </Show>
+                      </For>
                       <SettingsNavRow
                         title={t("searchPage.moreProviders")}
                         description={t("searchPage.moreProvidersHint")}
@@ -677,6 +680,7 @@ export function SearchPage() {
                       state={configState}
                       canEdit={canEdit}
                       busy={busy}
+                      secretFields={configSecretFields(context)}
                       commit={(path, value) => patch(renderScope, path, value)}
                     />
                   </>

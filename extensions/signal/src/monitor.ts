@@ -43,7 +43,6 @@ import {
   registerSignalApprovalReactionTargetForDeliveredPayload,
 } from "./approval-reactions.js";
 import { signalRpcRequest } from "./client-adapter.js";
-import type { SignalTransportKind } from "./client-adapter.js";
 import {
   assertSignalDaemonEndpointAvailable,
   formatSignalDaemonExit,
@@ -122,66 +121,6 @@ function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | u
     (maxBytes * SIGNAL_BASE64_OVERHEAD_NUMERATOR) / SIGNAL_BASE64_OVERHEAD_DENOMINATOR,
   );
   return base64Bytes + SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES;
-}
-
-async function fetchAttachment(
-  params: Parameters<SignalEventHandlerDeps["fetchAttachment"]>[0] & {
-    transportKind?: SignalTransportKind;
-  },
-) {
-  const { attachment } = params;
-  if (!attachment?.id) {
-    return null;
-  }
-  if (typeof attachment.size === "number" && attachment.size > params.maxBytes) {
-    throw new Error(
-      `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
-    );
-  }
-  const rpcParams: Record<string, unknown> = {
-    id: attachment.id,
-  };
-  if (params.account) {
-    rpcParams.account = params.account;
-  }
-  if (params.groupId) {
-    rpcParams.groupId = params.groupId;
-  } else if (params.sender) {
-    rpcParams.recipient = params.sender;
-  } else {
-    return null;
-  }
-
-  const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
-    baseUrl: params.baseUrl,
-    maxResponseBytes: deriveSignalAttachmentRpcMaxResponseBytes(params.maxBytes),
-    transportKind: params.transportKind,
-  });
-  if (!result?.data) {
-    return null;
-  }
-  if (estimateBase64DecodedBytes(result.data) > params.maxBytes) {
-    throw new Error(
-      `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
-    );
-  }
-  const canonicalData = canonicalizeBase64(result.data);
-  if (!canonicalData) {
-    throw new Error(`Signal attachment ${attachment.id} returned malformed base64 data`);
-  }
-  const buffer = Buffer.from(canonicalData, "base64");
-  const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
-  const contentType =
-    normalizeOptionalString(attachment.contentType ?? undefined) ??
-    (await detectMime({ buffer, filePath: originalFilename }));
-  const saved = await saveMediaBuffer(
-    buffer,
-    contentType,
-    "inbound",
-    params.maxBytes,
-    originalFilename,
-  );
-  return { path: saved.path, contentType: saved.contentType };
 }
 
 export async function deliverReplies(
@@ -487,7 +426,62 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       ignoreAttachments,
       sendReadReceipts,
       readReceiptsViaDaemon,
-      fetchAttachment: (params) => fetchAttachment({ ...params, transportKind }),
+      fetchAttachment: async (attachmentInput) => {
+        const params = { ...attachmentInput, transportKind };
+        const { attachment } = params;
+        if (!attachment?.id) {
+          return null;
+        }
+        if (typeof attachment.size === "number" && attachment.size > params.maxBytes) {
+          throw new Error(
+            `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
+          );
+        }
+        const rpcParams: Record<string, unknown> = {
+          id: attachment.id,
+        };
+        if (params.account) {
+          rpcParams.account = params.account;
+        }
+        if (params.groupId) {
+          rpcParams.groupId = params.groupId;
+        } else if (params.sender) {
+          rpcParams.recipient = params.sender;
+        } else {
+          return null;
+        }
+
+        const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
+          baseUrl: params.baseUrl,
+          maxResponseBytes: deriveSignalAttachmentRpcMaxResponseBytes(params.maxBytes),
+          transportKind: params.transportKind,
+        });
+        if (!result?.data) {
+          return null;
+        }
+        if (estimateBase64DecodedBytes(result.data) > params.maxBytes) {
+          throw new Error(
+            `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
+          );
+        }
+        const canonicalData = canonicalizeBase64(result.data);
+        if (!canonicalData) {
+          throw new Error(`Signal attachment ${attachment.id} returned malformed base64 data`);
+        }
+        const buffer = Buffer.from(canonicalData, "base64");
+        const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
+        const contentType =
+          normalizeOptionalString(attachment.contentType ?? undefined) ??
+          (await detectMime({ buffer, filePath: originalFilename }));
+        const saved = await saveMediaBuffer(
+          buffer,
+          contentType,
+          "inbound",
+          params.maxBytes,
+          originalFilename,
+        );
+        return { path: saved.path, contentType: saved.contentType };
+      },
       deliverReplies: (params) => deliverReplies({ ...params, cfg, chunkMode }),
     });
 
