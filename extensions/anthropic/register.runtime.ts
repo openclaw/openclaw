@@ -34,6 +34,7 @@ import {
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createClaudeCodeVersionRequirement } from "./claude-code-version-requirement.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -640,6 +641,12 @@ export function buildAnthropicProvider(): ProviderPlugin {
 
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   const version = createClaudeCodeVersionProbe(api);
+  const identity = createClaudeCodeVersionRequirement({
+    openStore: () =>
+      api.runtime.state.openKeyedStoreV2({ namespace: "claude-code-version", maxEntries: 1 }),
+    resolveInstalledVersion: version.resolveVersion,
+    warn: (message) => api.logger.warn?.(message),
+  });
   api.registerCliBackend(buildAnthropicCliBackend(version));
   api.registerProvider({
     ...buildAnthropicProvider(),
@@ -647,18 +654,14 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
       const loadStream = createLazyRuntimeSurface(loadStreamRuntime, (runtime) =>
         runtime.createAnthropicClaudeCodeIdentityWrapper(
           runtime.wrapAnthropicProviderStream(ctx),
-          version.resolveVersion,
+          identity,
         ),
       );
       return async (...args) => (await loadStream())(...args);
     },
     wrapSimpleCompletionStreamFn: (ctx) => {
       const loadStream = createLazyRuntimeSurface(loadStreamRuntime, (runtime) =>
-        runtime.createAnthropicClaudeCodeIdentityWrapper(
-          ctx.streamFn,
-          version.resolveVersion,
-          ctx.sourceApi,
-        ),
+        runtime.createAnthropicClaudeCodeIdentityWrapper(ctx.streamFn, identity, ctx.sourceApi),
       );
       return async (...args) => (await loadStream())(...args);
     },
