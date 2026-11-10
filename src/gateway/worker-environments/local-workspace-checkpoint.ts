@@ -34,6 +34,22 @@ export type LocalWorkspaceSyncOptions = {
   capture?: (run: (source?: LocalWorkspaceCapture) => Promise<void>) => Promise<void>;
 };
 
+export type LocalWorkspaceCaptureDiagnostics = {
+  reason:
+    | "adaptive-direct"
+    | "btrfs"
+    | "non-subvolume"
+    | "btrfs-unavailable"
+    | "clone-unavailable"
+    | "nested-incomplete";
+  cloneError?: "CLONE_UNAVAILABLE" | "EXDEV" | "ENOSYS";
+  pausedAt?: number;
+  preCopyMs?: number;
+  copyMs?: number;
+  postCopyBeforeResumeMs?: number;
+  resumeMs?: number;
+};
+
 type CaptureOptions = Parameters<typeof nativeWorktreeFilesystem.remove>[1] & {
   env?: NodeJS.ProcessEnv;
 };
@@ -128,34 +144,49 @@ export async function prepareLocalWorkspaceCheckpointCapture(
   options: CaptureOptions,
   resume: () => Promise<void>,
   pause: () => Promise<void>,
+  diagnostics: LocalWorkspaceCaptureDiagnostics,
 ): Promise<LocalWorkspaceSyncOptions["capture"]> {
   // The lease owns this sibling artifact, including leftovers from interrupted capture.
   await finishRetiredCheckpointCaptures(projectionPath, options);
   await removeLocalWorkspaceCheckpointCapture(projectionPath, options);
   const source = await fs.lstat(projectionPath, { bigint: true });
-  if (
-    source.ino !== 256n ||
-    (await nativeWorktreeFilesystem.probe(path.dirname(projectionPath), options)) !== "btrfs"
-  ) {
+  if (source.ino !== 256n) {
+    diagnostics.reason = "non-subvolume";
     return undefined;
   }
+  if ((await nativeWorktreeFilesystem.probe(path.dirname(projectionPath), options)) !== "btrfs") {
+    diagnostics.reason = "btrfs-unavailable";
+    return undefined;
+  }
+  diagnostics.reason = "btrfs";
   const root = path.join(path.dirname(projectionPath), "checkpoint-capture");
   return async (run) => {
     const capturedAtMs = Date.now();
+    const copyStarted = performance.now();
+    diagnostics.preCopyMs =
+      diagnostics.pausedAt === undefined ? undefined : copyStarted - diagnostics.pausedAt;
+    let copyFinished: number;
     try {
-      await nativeWorktreeFilesystem.copy(projectionPath, root, options);
+      try {
+        await nativeWorktreeFilesystem.copy(projectionPath, root, options);
+      } finally {
+        copyFinished = performance.now();
+        diagnostics.copyMs = copyFinished - copyStarted;
+      }
     } catch (error) {
-      if (
-        !hasErrnoCode(error, "CLONE_UNAVAILABLE") &&
-        !hasErrnoCode(error, "EXDEV") &&
-        !hasErrnoCode(error, "ENOSYS")
-      ) {
+      const code = (["CLONE_UNAVAILABLE", "EXDEV", "ENOSYS"] as const).find((value) =>
+        hasErrnoCode(error, value),
+      );
+      if (!code) {
         throw error;
       }
+      diagnostics.reason = "clone-unavailable";
+      diagnostics.cloneError = code;
       await run();
       return;
     }
     const snapshot = await fs.lstat(root, { bigint: true });
+    diagnostics.postCopyBeforeResumeMs = performance.now() - copyFinished;
     await resume();
     try {
       await run({ root, sourceDev: source.dev, snapshotDev: snapshot.dev, capturedAtMs });
@@ -165,6 +196,7 @@ export async function prepareLocalWorkspaceCheckpointCapture(
       }
       // Btrfs omits nested subvolumes. No receipt was accepted; recapture the
       // complete live tree under the same lease using the durable Git path.
+      diagnostics.reason = "nested-incomplete";
       await pause();
       await run();
     }

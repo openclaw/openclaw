@@ -6834,7 +6834,7 @@ it("pins generated publisher and maturity owners before credentials and selected
   ]);
   expect(action.runs.steps[0]).toEqual({
     ...PINNED_GIT_OWNER,
-    uses: "openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae",
+    uses: "openclaw/openclaw/.github/actions/git-owner@8743f1bfafa41aebdb3a33a7137eaa6d70bd0eb7",
   });
   const sanitySteps: WorkflowStep[] = readWorkflowSanityWorkflow().jobs.actionlint.steps;
   const audit = sanitySteps.findIndex(

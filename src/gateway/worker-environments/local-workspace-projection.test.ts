@@ -77,6 +77,19 @@ import {
 } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
+const checkpointLog = vi.hoisted(() => vi.fn<(message: string) => void>());
+// mock-isolation: capture checkpoint diagnostics before imports create the owner logger.
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      info: checkpointLog,
+    }),
+  };
+});
+
 let root: string;
 let stateRoot: string;
 let repo: string;
@@ -188,7 +201,7 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
-registerSandboxCheckpointTests(() => owner);
+registerSandboxCheckpointTests(() => owner, checkpointLog);
 
 it.each(["canonical", "projection"] as const)(
   "quarantines rejected checkpoints while allowing new agent work: %s",
