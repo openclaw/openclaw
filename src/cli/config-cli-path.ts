@@ -58,6 +58,27 @@ function replacePathArgument(pathLabel: string): string {
   return `--replace-path ${posix} in bash and zsh, or --replace-path ${powershell} in PowerShell`;
 }
 
+/**
+ * The out-of-range index itself is not the array's name; name the parent array and tell the user
+ * that appending takes the next index (equal to the current length) while lower indexes update
+ * existing entries.
+ */
+function outOfRangeArrayIndexMessage(params: {
+  parentPath: string;
+  index: number;
+  length: number;
+}): string {
+  const { parentPath, index, length } = params;
+  const append = `Use index ${length} to append a new entry`;
+  const update =
+    length === 0
+      ? ""
+      : length === 1
+        ? `, or index 0 to update the existing entry`
+        : `, or index 0-${length - 1} to update an existing entry`;
+  return `Cannot set index ${index} of array "${parentPath}": index out of range (length ${length}). ${append}${update}.`;
+}
+
 type SetAtPathOptions = {
   numericObjectKeys?: boolean;
   pathTokens?: readonly ConcreteConfigPathSegment[];
@@ -274,7 +295,11 @@ export function setAtPath(
       }
       if (index > current.length) {
         throw new Error(
-          `Cannot set index ${index} of array "${segment}": index out of range (length ${current.length})`,
+          outOfRangeArrayIndexMessage({
+            parentPath: toDotPath(path.slice(0, i)),
+            index,
+            length: current.length,
+          }),
         );
       }
       const existing = current[index];
@@ -303,7 +328,11 @@ export function setAtPath(
     }
     if (index > current.length) {
       throw new Error(
-        `Cannot set index ${index} of array "${last}": index out of range (length ${current.length})`,
+        outOfRangeArrayIndexMessage({
+          parentPath: toDotPath(path.slice(0, -1)),
+          index,
+          length: current.length,
+        }),
       );
     }
     current[index] = value;
