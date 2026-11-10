@@ -56,7 +56,7 @@ test("saved freshness keeps the K_gw its snapshot order belongs to", () => {
       kind: "openclaw-id",
       openclawId: {
         ...target,
-        freshness: { claw_id: target.pin.claw_id, snapshot: { ...marker, k_gw: "nope" } },
+        freshness: { claw_id: target.pin.claw_id, snapshot: { ...marker, k_gw: "nope" as never } },
       },
     }),
   ).toThrow("freshness");
