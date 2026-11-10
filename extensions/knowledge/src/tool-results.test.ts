@@ -31,7 +31,8 @@ async function registered() {
     }
     const result = await tool.execute(randomUUID(), input);
     const [content] = result.content as { type: "text"; text: string }[];
-    return { value: result.details as any, chars: content!.text.length };
+    const value: any = result.details;
+    return { value, chars: content!.text.length };
   };
   const tool = async (name: string, input: Record<string, unknown> = {}) =>
     (await call(name, input)).value;
@@ -470,31 +471,27 @@ it("maxChars bounds claim text too, continuing over the stored text", async () =
 
 it("authored IDs of merged pages count once, as the page they resolve to", () => {
   const survivor = { id: "survivor-page", title: "Survivor", kind: "page", type: "person" };
-  const lean = leanRecord(
-    {
-      view: "content",
-      record: {
-        ...survivor,
-        id: "claim-0001",
-        kind: "claim",
-        type: "fact",
-        title: "A fact",
-        path: "claims/a.md",
-        lifecycle: "active",
-        revision: 1,
-        valid: true,
-        hash: "a".repeat(64),
-        body: "A fact.",
-        about: [
-          { ...survivor, path: "people/s.md", lifecycle: "active", revision: 3, valid: true },
-        ],
-        metadata: { entities: ["absorbed-page", "survivor-page"] },
-      },
-      content: { offset: 0, totalChars: 7, nextOffset: null },
-      issues: [],
-      redirects: [{ from: "absorbed-page", to: "survivor-page" }],
-    } as any,
-    {},
-  );
+  const output: any = {
+    view: "content",
+    record: {
+      ...survivor,
+      id: "claim-0001",
+      kind: "claim",
+      type: "fact",
+      title: "A fact",
+      path: "claims/a.md",
+      lifecycle: "active",
+      revision: 1,
+      valid: true,
+      hash: "a".repeat(64),
+      body: "A fact.",
+      about: [{ ...survivor, path: "people/s.md", lifecycle: "active", revision: 3, valid: true }],
+      metadata: { entities: ["absorbed-page", "survivor-page"] },
+    },
+    content: { offset: 0, totalChars: 7, nextOffset: null },
+    issues: [],
+    redirects: [{ from: "absorbed-page", to: "survivor-page" }],
+  };
+  const lean = leanRecord(output, {});
   expect(lean.record?.about).toStrictEqual([{ id: "survivor-page", title: "Survivor" }]);
 });

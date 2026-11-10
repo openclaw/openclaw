@@ -57,6 +57,8 @@ async function fixture() {
     await writeFile(target, `---\n${stringify(envelope)}---\n${body}`);
     return target;
   }
+  // What agent tools see: the service behind the lean tool-result adapter.
+  const agent: any = leanToolResults(service);
   return {
     // Total keyword hits and exact-lookup outcome for the current owner audience.
     total: async (input: any) => (await service.grep(input, owner)).total,
@@ -69,8 +71,7 @@ async function fixture() {
     owner,
     operator,
     service,
-    // What agent tools see: the service behind the lean tool-result adapter.
-    agent: leanToolResults(service) as any,
+    agent,
     store,
     put,
     group: () => {

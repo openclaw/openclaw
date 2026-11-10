@@ -85,10 +85,11 @@ const ref = (r: { id: string; title?: string }): Static<typeof Ref> => ({
   id: r.id,
   ...(r.title ? { title: r.title } : {}),
 });
-const present = <K extends string, V>(key: K, value: V | undefined | null) =>
-  (value === undefined || value === null || (Array.isArray(value) && !value.length)
-    ? {}
-    : { [key]: value }) as Partial<Record<K, V>>;
+const present = <K extends string, V>(key: K, value: V | undefined | null) => {
+  const empty = value === undefined || value === null || (Array.isArray(value) && !value.length);
+  // SAFETY: the computed key is exactly K, present only with a non-empty value.
+  return (empty ? {} : { [key]: value }) as Partial<Record<K, V>>;
+};
 
 export function leanRecord(
   output: RecordOutput,
@@ -364,6 +365,7 @@ export const leanRecords = (o: RecordsFull): Static<typeof LeanRecordsOutput> =>
 
 // knowledge_ontology
 const nonEmpty = <K extends string, T>(key: K, value: T[] | undefined) =>
+  // SAFETY: the computed key is exactly K, present only with a non-empty array.
   (value?.length ? { [key]: value } : {}) as Partial<Record<K, T[]>>;
 
 export function leanOntology(o: OntologyOutput): Static<typeof LeanOntologyOutput> {

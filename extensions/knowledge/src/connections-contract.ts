@@ -38,8 +38,15 @@ const FullConnection = Type.Object({
   evidence: Type.Optional(Type.Array(Evidence, { maxItems: 3 })),
   evidenceTruncated: Type.Optional(Type.Boolean()),
 });
-const directed = <T extends typeof ClaimRow | typeof RelationshipRow | typeof PageRow>(row: T) =>
-  Type.Object({ direction: Direction, ...row.properties }, { additionalProperties: false });
+/** A list row plus the direction it connects from. */
+export const DirectedRow = Type.Union([
+  Type.Object({ direction: Direction, ...ClaimRow.properties }, { additionalProperties: false }),
+  Type.Object(
+    { direction: Direction, ...RelationshipRow.properties },
+    { additionalProperties: false },
+  ),
+  Type.Object({ direction: Direction, ...PageRow.properties }, { additionalProperties: false }),
+]);
 export const ConnectionsOutput = Type.Object(
   {
     endpoints: Type.Optional(Type.Array(Type.Union([Summary, PageRow]), { maxItems: 200 })),
@@ -53,15 +60,7 @@ export const ConnectionsOutput = Type.Object(
           "The requested ID belongs to a page merged into the page these connections describe.",
       }),
     ),
-    connections: Type.Array(
-      Type.Union([
-        FullConnection,
-        directed(ClaimRow),
-        directed(RelationshipRow),
-        directed(PageRow),
-      ]),
-      { maxItems: 100 },
-    ),
+    connections: Type.Array(Type.Union([FullConnection, ...DirectedRow.anyOf]), { maxItems: 100 }),
   },
   { additionalProperties: false },
 );

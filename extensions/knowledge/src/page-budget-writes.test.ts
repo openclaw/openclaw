@@ -10,6 +10,7 @@ import { createKnowledgeService } from "./service.js";
 import { storeFixture, toolContext, useTestTempDirs } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
+const byText = (a: string, b: string) => a.localeCompare(b);
 
 // One isolated private vault driven through the agent tool handlers.
 async function fixture() {
@@ -248,8 +249,10 @@ it("extracts a section with its links, evidence, claim subjects and history, or 
   const links = async (id: string) =>
     (await f.call("connections_detail", { id, direction: "links" })).connections
       .map((c: any) => c.id)
-      .toSorted();
-  expect(await links(destination.id)).toStrictEqual([ledger.id, owner.id, provider.id].toSorted());
+      .toSorted(byText);
+  expect(await links(destination.id)).toStrictEqual(
+    [ledger.id, owner.id, provider.id].toSorted(byText),
+  );
   expect(await links(atlas.id)).toStrictEqual([destination.id, ledger.id, search.id].toSorted());
   const carried = await f.call("record_detail", {
     id: destination.id,

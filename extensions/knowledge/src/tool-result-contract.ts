@@ -1,12 +1,12 @@
 import { Type, type Static } from "typebox";
-import { ConnectionsInput } from "./connections-contract.js";
+import { ConnectionsInput, DirectedRow } from "./connections-contract.js";
 import { RecordInput, RecordOutput } from "./inspection-contract.js";
 import { Definition, Field, text } from "./model.js";
 import { Receipt } from "./mutation-contract.js";
 import { PageBudget } from "./page-budget.js";
 import { RememberResult } from "./remember-contract.js";
 import { StoreState } from "./stores-contract.js";
-import { ClaimRow, PageRow, Ref, RelationshipRow, Row } from "./tool-rows.js";
+import { PageRow, Ref, Row } from "./tool-rows.js";
 
 // Agent tool outputs; tool-results.ts owns the projection. Operations the
 // Control UI also calls declare the union of this shape and the complete one.
@@ -395,22 +395,9 @@ export const LeanSourceCheckOutput = Type.Object(
   { additionalProperties: false },
 );
 
-const Direction = Type.Union([
-  Type.Literal("incoming"),
-  Type.Literal("outgoing"),
-  Type.Literal("dependents"),
-  Type.Literal("claims"),
-  Type.Literal("backlinks"),
-  Type.Literal("links"),
-]);
-const directed = <T extends typeof ClaimRow | typeof RelationshipRow | typeof PageRow>(row: T) =>
-  Type.Object({ direction: Direction, ...row.properties }, { additionalProperties: false });
 export const LeanConnectionsOutput = Type.Object(
   {
-    connections: Type.Array(
-      Type.Union([directed(ClaimRow), directed(RelationshipRow), directed(PageRow)]),
-      { maxItems: 100 },
-    ),
+    connections: Type.Array(DirectedRow, { maxItems: 100 }),
     total: Type.Integer(),
     nextOffset: Type.Union([Type.Integer(), Type.Null()]),
     snapshot: Type.Optional(text(64)),
