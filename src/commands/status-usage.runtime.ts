@@ -8,6 +8,7 @@ import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabelAsync } from "../agents/model-auth-label.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { ignoreNonCleanupCommandError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -60,13 +61,18 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
           mode: "read_only_status",
           gatewaySecretResolveTimeoutMs: resolveStatusGatewayProbeTimeoutMs(params),
           ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
-        }),
+        }).catch(ignoreNonCleanupCommandError),
       params.gatewayProbeDeadlineMs,
       () => performance.now(),
     ),
   );
-  const config = prepared === ABSOLUTE_DEADLINE_EXPIRED ? params.config : prepared.resolvedConfig;
-  if (prepared !== ABSOLUTE_DEADLINE_EXPIRED) {
+  let config = params.config;
+  if (prepared === null) {
+    params.onSecretDiagnostics?.([
+      "status --usage: could not resolve configured provider API keys; check the configured secret sources and gateway access.",
+    ]);
+  } else if (prepared !== ABSOLUTE_DEADLINE_EXPIRED) {
+    config = prepared.resolvedConfig;
     params.onSecretDiagnostics?.(prepared.diagnostics);
   }
   const usage = await loadProviderUsageSummary({

@@ -19,6 +19,7 @@ const native = vi.hoisted(() => ({
   dispose: vi.fn(),
 }));
 const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+const nodeVersion = Object.getOwnPropertyDescriptor(process.versions, "node")!;
 vi.mock("node:v8", async (original) => ({
   ...(await original<typeof import("node:v8")>()),
   startCpuProfile: native.start,
@@ -85,9 +86,13 @@ function profile(): ProfileFixture {
   };
 }
 
-async function capture(signal = new AbortController().signal, hasAuthority = () => true) {
+async function capture(
+  signal = new AbortController().signal,
+  hasAuthority = () => true,
+  params: { windows?: number; windowMs?: number } = {},
+) {
   const { captureDiagnosticCpuProfile } = await import("./diagnostic-cpu-profile.js");
-  return captureDiagnosticCpuProfile({ signal, hasAuthority });
+  return captureDiagnosticCpuProfile({ ...params, signal, hasAuthority });
 }
 
 function returnProfile(value: Profiler.Profile = profile()) {
@@ -127,6 +132,7 @@ beforeEach(() => {
   native.wait.mockResolvedValue(undefined);
 });
 afterEach(() => {
+  Object.defineProperty(process.versions, "node", nodeVersion);
   if (bunVersion) {
     Object.defineProperty(process.versions, "bun", bunVersion);
   } else {
@@ -137,6 +143,70 @@ afterEach(() => {
 });
 
 describe("diagnostic CPU profile owner", () => {
+  it.each(["24.22.1", "26.12.1"])(
+    "returns contiguous batch windows without losing signed-delta samples on Node %s",
+    async (version) => {
+      Object.defineProperty(process.versions, "node", { configurable: true, value: version });
+      Reflect.deleteProperty(process.versions, "bun");
+      const value = {
+        ...profile(),
+        endTime: 3_110_000,
+        samples: [2, 3, 2, 3, 2],
+        timeDeltas: [1_000_000, -500, 500, 1_000_000, 1_000_000],
+      };
+      returnProfile(value);
+      native.stop.mockReturnValue(JSON.stringify(value));
+      native.wait.mockImplementationOnce(async () => {
+        expect(await capture()).toMatchObject({ status: "unavailable", reason: "busy" });
+      });
+      const outcome = await capture(undefined, undefined, { windows: 3, windowMs: 1_000 });
+      expect(outcome).toMatchObject({
+        status: "complete",
+        result: {
+          requestedDurationMs: 3_000,
+          windowBoundariesMicros: [10_000, 1_010_000, 2_010_000, 3_110_000],
+          profile: { samples: value.samples, timeDeltas: value.timeDeltas },
+        },
+      });
+      if (outcome.status !== "complete" || !outcome.result.profile) {
+        throw new Error("expected a full batch profile");
+      }
+      const boundaries = outcome.result.windowBoundariesMicros!;
+      let timestamp = outcome.result.profile.startTime;
+      const timestamps = outcome.result.profile.timeDeltas.map((delta) => (timestamp += delta));
+      const counts = boundaries
+        .slice(1)
+        .map(
+          (end, index) =>
+            timestamps.filter(
+              (at) =>
+                at >= boundaries[index]! &&
+                (at < end || (index === boundaries.length - 2 && at === end)),
+            ).length,
+        );
+      expect(counts).toEqual([1, 2, 2]);
+      expect(counts.reduce((total, count) => total + count, 0)).toBe(value.samples.length);
+      expect(native.wait).toHaveBeenCalledExactlyOnceWith(3_000, undefined, {
+        signal: expect.any(AbortSignal),
+      });
+      if (version.startsWith("24")) {
+        expect(native.start).not.toHaveBeenCalled();
+        expect(native.post.mock.calls.map(([method]) => method)).toEqual([
+          "Profiler.enable",
+          "Profiler.setSamplingInterval",
+          "Profiler.start",
+          "Profiler.stop",
+          "Profiler.disable",
+        ]);
+        expect(native.post).toHaveBeenCalledWith("Profiler.setSamplingInterval", {
+          interval: 10_000,
+        });
+      } else {
+        expect(native.start).toHaveBeenCalledOnce();
+        expect(native.stop).toHaveBeenCalledOnce();
+      }
+    },
+  );
   it("preserves a large native graph while repairing names, URLs and signed script IDs", async () => {
     const { parseNativeCpuProfile } = await import("./diagnostic-profile.js");
     const nodes: Profiler.ProfileNode[] = Array.from({ length: 4_096 }, (_, index) => ({
@@ -185,7 +255,7 @@ describe("diagnostic CPU profile owner", () => {
     expect((await capture()).status).toBe("complete");
     expect(native.start).toHaveBeenCalledTimes(2);
   });
-  it("reports synchronous start blocking separately from awaited capture time", async () => {
+  it("reports elapsed capture time including native startup and stop completion", async () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     native.post.mockImplementation((method: string) => {
@@ -204,7 +274,7 @@ describe("diagnostic CPU profile owner", () => {
     });
     expect(await capture()).toMatchObject({
       status: "complete",
-      result: { startBlockedMs: 2_100, actualDurationMs: 5_500 },
+      result: { startBlockedMs: 2_100, actualDurationMs: 7_820 },
     });
   });
   it("returns a complete sanitized graph only after native cleanup", async () => {
@@ -215,7 +285,6 @@ describe("diagnostic CPU profile owner", () => {
     }
     expect(outcome.result).toMatchObject({
       requestedDurationMs: 5_000,
-      actualDurationMs: 5_500,
       samplingIntervalMicros: 10_000,
       sampleLossCount: null,
       redactedNodeCount: 1,
@@ -525,6 +594,10 @@ describe("diagnostic CPU profile owner", () => {
     expect(JSON.stringify(outcome)).not.toContain("private payload");
     expect(Buffer.byteLength(JSON.stringify(outcome))).toBeLessThan(1024 * 1024);
     expect(native.disconnect).toHaveBeenCalledOnce();
+    expect(await capture(undefined, undefined, { windows: 2 })).toMatchObject({
+      status: "unavailable",
+      reason: "profile-too-large",
+    });
   });
 
   it.each([8, 12])(
@@ -680,7 +753,7 @@ const pid = process.pid;
 const outcome = await captureDiagnosticCpuProfile({ signal: new AbortController().signal, hasAuthority: () => true });
 assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
 const result = outcome.result;
-assert.ok(result.actualDurationMs > 0);
+assert.ok(result.actualDurationMs >= result.requestedDurationMs - 1_000);
 assert.ok(result.profile.samples.length > 0);
 assert.equal(result.profile.samples.length, result.profile.timeDeltas.length);
 assert.ok(result.profile.timeDeltas.every(delta => Number.isFinite(delta)));

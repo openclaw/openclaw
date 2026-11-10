@@ -2,6 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import {
   resolveStatusGatewayDiagnosticsSafe,
@@ -240,6 +241,37 @@ describe("status-runtime-shared", () => {
       config: params.config,
       agentDir: params.agentDir,
     });
+  });
+
+  it("still reports available usage if provider API key preparation fails", async () => {
+    const params = usageParams("openclaw");
+    const reportDiagnostics = vi.fn();
+    const availableUsage = usageSummary(1, [openaiUsage(12)]);
+    mocks.resolveCommandConfigWithSecrets.mockRejectedValueOnce(
+      new Error("opaque resolver detail"),
+    );
+    mocks.loadProviderUsageSummary.mockResolvedValueOnce(availableUsage);
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        ...params,
+        sourceConfig: params.config,
+        usage: true,
+        gatewayReachable: false,
+        onSecretDiagnostics: reportDiagnostics,
+      }),
+    ).resolves.toMatchObject({ usage: availableUsage });
+    expect(reportDiagnostics).toHaveBeenCalledExactlyOnceWith([
+      "status --usage: could not resolve configured provider API keys; check the configured secret sources and gateway access.",
+    ]);
+  });
+
+  it("does not continue to usage when credential process cleanup is uncertain", async () => {
+    const error = new CommandProcessCleanupError();
+    mocks.resolveCommandConfigWithSecrets.mockRejectedValueOnce(error);
+
+    await expect(resolveStatusUsageSummary(usageParams("openclaw"))).rejects.toBe(error);
+    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
   it("cancels credential subprocess ownership when the usage deadline expires", async () => {

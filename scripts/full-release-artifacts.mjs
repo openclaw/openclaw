@@ -14,7 +14,9 @@ import {
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,
+  inspectActionsArtifactZipWithPolicy,
   validateActionsArtifactBinding,
+  verifyExactActionsArtifactDigest,
 } from "./lib/actions-artifact-archive.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
@@ -24,6 +26,7 @@ import {
   sameJobExecution,
   validatePreparedNpmBundleDescriptor,
   verifyNpmBundleProducer,
+  verifyPreparedNpmBundleFiles,
 } from "./npm-prepared-bundle.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 
@@ -43,7 +46,19 @@ function requireValue(condition, message) {
 }
 
 function api(repository, path) {
-  return JSON.parse(runReleaseToolingGh(["api", `repos/${repository}/${path}`]));
+  const args = ["api", `repos/${repository}/${path}`];
+  let response;
+  try {
+    response = runReleaseToolingGh(args);
+  } catch (error) {
+    if (!isRecord(error) || String(error.stderr).trim() !== "unexpected end of JSON input") {
+      throw error;
+    }
+    // Replay this GET once when gh could not decode its response; a successful
+    // command's invalid JSON and all producer identity failures remain fatal.
+    response = runReleaseToolingGh(args);
+  }
+  return JSON.parse(response);
 }
 
 function artifactRequest(env) {
@@ -309,6 +324,8 @@ async function readArtifact(request, runId, name, fileName, { retained = false }
     runId: String(metadata.workflow_run.id),
     value: JSON.parse(files.get(fileName).toString("utf8")),
     bytes: files.get(fileName),
+    metadata,
+    archiveSha256: createHash("sha256").update(archiveBytes).digest("hex"),
   };
 }
 
@@ -324,27 +341,30 @@ function verifyRetainedArtifact({
     retainedArtifactGh(["api", `repos/${repository}/actions/artifacts/${artifact.id}`]),
   );
   const run = api(repository, `actions/runs/${producer.runId}/attempts/${producer.runAttempt}`);
+  const expected = {
+    repository,
+    artifactId: Number(artifact.id),
+    artifactName: artifact.name,
+    artifactDigest: artifact.digest.startsWith("sha256:")
+      ? artifact.digest
+      : "sha256:" + artifact.digest,
+    artifactSizeBytes: artifact.sizeBytes ?? metadata.size_in_bytes,
+    runId: Number(producer.runId),
+    runAttempt: Number(producer.runAttempt),
+    workflowSha: producer.workflowSha,
+    workflowHeadBranch: workflowRef,
+    workflowPath,
+    workflowEvent: "workflow_dispatch",
+    runStatePolicy: job ? "completed-producer-success" : "completed-success",
+    ...(job ? { producerJobName: job } : {}),
+    artifactExpiresAt: metadata.expires_at,
+  };
   validateActionsArtifactBinding({
-    expected: {
-      repository,
-      artifactId: Number(artifact.id),
-      artifactName: artifact.name,
-      artifactDigest: artifact.digest.startsWith("sha256:")
-        ? artifact.digest
-        : "sha256:" + artifact.digest,
-      artifactSizeBytes: artifact.sizeBytes ?? metadata.size_in_bytes,
-      runId: Number(producer.runId),
-      runAttempt: Number(producer.runAttempt),
-      workflowSha: producer.workflowSha,
-      workflowHeadBranch: workflowRef,
-      workflowPath,
-      workflowEvent: "workflow_dispatch",
-      runStatePolicy: job ? "completed-producer-success" : "completed-success",
-      ...(job ? { producerJobName: job } : {}),
-    },
+    expected,
     artifactMetadata: metadata,
     workflowRun: { ...run, path: String(run.path).split("@", 1)[0] },
   });
+  return expected;
 }
 
 async function reusePublicationArtifacts(env) {
@@ -426,10 +446,90 @@ async function reusePublicationArtifacts(env) {
     output({ publication_artifacts_reused: "false" });
     return;
   }
+  output((await verifyRetainedPublicationArtifacts(root, env)).outputs);
+}
+
+// The caller authenticates the root. This verifies its original producers, never
+// dispatches replacements, and deliberately lets unavailable artifacts fail closed.
+// Payload SHA-256 values hash the complete Actions ZIP; npm entries additionally
+// report the verified package digest, and Docker reports its manifest digest.
+export async function verifyRetainedPublicationArtifacts(root, env, options = {}) {
+  requireValue(
+    root?.workflowName === "Full Release Validation" &&
+      DECIMAL.test(String(root.runId)) &&
+      DECIMAL.test(String(root.runAttempt)) &&
+      DECIMAL.test(String(root.sourceParentRunAttempt)) &&
+      SHA.test(root.targetSha) &&
+      (env.TARGET_SHA === undefined || root.targetSha === env.TARGET_SHA) &&
+      SHA.test(root.workflowSha) &&
+      typeof root.workflowRef === "string" &&
+      root.workflowRef.length > 0 &&
+      /^refs\/(?:heads|tags)\/.+$/u.test(root.workflowFullRef),
+    "Retained publication artifacts require their original qualification root.",
+  );
+  const artifacts = root.publicationArtifacts;
+  const qualified = artifacts?.npmPreflight;
+  const raw = qualified?.preparedBundle;
+  const docker = artifacts?.docker;
+  requireValue(
+    raw &&
+      docker &&
+      qualified.producer?.workflowRef ===
+        `${env.GITHUB_REPOSITORY}/${WORKFLOW}@${root.workflowFullRef}` &&
+      (env.PLUGIN_NPM_REQUIRED !== "true" || artifacts.pluginNpm),
+    "Original publication artifact descriptors are unavailable.",
+  );
+  const expectedPackage = options.expectedPackage;
+  requireValue(
+    expectedPackage === undefined ||
+      (options.verifyPayloads === true &&
+        typeof expectedPackage.fileName === "string" &&
+        /^[A-Za-z0-9_.-]+\.tgz$/u.test(expectedPackage.fileName) &&
+        SHA256.test(expectedPackage.sha256) &&
+        raw.package?.sha256 === expectedPackage.sha256),
+    "Retained npm package differs from the expected package.",
+  );
+  const payloads = [];
+  const retainPayload = async (kind, expected, packageIdentity, digestOnly = false) => {
+    if (!options.verifyPayloads) {
+      return undefined;
+    }
+    const params = { expected, token: env.GH_TOKEN ?? process.env.GH_TOKEN };
+    let archiveBytes;
+    let archiveSha256;
+    if (digestOnly) {
+      const verified = await verifyExactActionsArtifactDigest({
+        ...params,
+        archiveTimeoutMs: options.dockerArchiveTimeoutMs,
+      });
+      archiveSha256 = verified.digest.slice("sha256:".length);
+    } else {
+      archiveBytes = (await downloadExactActionsArtifactArchive(params)).archiveBytes;
+      archiveSha256 = createHash("sha256").update(archiveBytes).digest("hex");
+    }
+    payloads.push({
+      kind,
+      artifact: {
+        id: String(expected.artifactId),
+        name: expected.artifactName,
+        digest: expected.artifactDigest,
+        sizeBytes: expected.artifactSizeBytes,
+        expiresAt: expected.artifactExpiresAt,
+      },
+      producer: {
+        runId: String(expected.runId),
+        runAttempt: String(expected.runAttempt),
+        workflowSha: expected.workflowSha,
+      },
+      sha256: archiveSha256,
+      ...(packageIdentity ? { package: packageIdentity } : {}),
+    });
+    return archiveBytes;
+  };
   const baseRequest = {
     repository: env.GITHUB_REPOSITORY,
-    sourceSha: env.TARGET_SHA,
-    toolingSha: env.PARENT_WORKFLOW_SHA,
+    sourceSha: root.targetSha,
+    toolingSha: root.workflowSha,
     workflowRef: root.workflowRef,
     releaseTag: env.RELEASE_TAG,
     preflightPhase: "all",
@@ -480,7 +580,7 @@ async function reusePublicationArtifacts(env) {
     toolingSha: baseRequest.toolingSha,
     requireCompletedParent: true,
   });
-  verifyRetainedArtifact({
+  const rawBinding = verifyRetainedArtifact({
     repository: baseRequest.repository,
     artifact: raw.artifact,
     producer: raw.producer,
@@ -488,6 +588,54 @@ async function reusePublicationArtifacts(env) {
     workflowPath: WORKFLOW,
     job: raw.producer.jobName,
   });
+  const packageIdentity = { fileName: raw.package.fileName, sha256: raw.package.sha256 };
+  const rawBytes = await retainPayload("raw-npm", rawBinding, packageIdentity);
+  if (rawBytes) {
+    const files = inspectActionsArtifactZipWithPolicy(rawBytes, {
+      expectedEntries: [
+        "package-bundle.json",
+        raw.package.fileName,
+        ...raw.corePackages.map((entry) => entry.tarballName),
+      ],
+      maxEntryBytes: (name) => (name.endsWith(".tgz") ? 192 : 1) * 1024 * 1024,
+    });
+    verifyPreparedNpmBundleFiles({ descriptor: raw, files });
+  }
+  const qualifiedBinding = options.verifyPayloads
+    ? verifyRetainedArtifact({
+        repository: baseRequest.repository,
+        artifact: qualified.artifact,
+        producer: qualified.producer,
+        workflowRef: root.workflowRef,
+        workflowPath: WORKFLOW,
+        job: qualified.producer.jobName,
+      })
+    : undefined;
+  const qualifiedBytes =
+    qualifiedBinding && (await retainPayload("qualified-npm", qualifiedBinding, packageIdentity));
+  if (qualifiedBytes) {
+    const files = inspectActionsArtifactZipWithPolicy(qualifiedBytes, {
+      minEntries: 1,
+      maxEntries: 1024,
+      // The exact archive digest already authenticates the full inventory. Only
+      // the package and manifest need semantic inspection here, not extraction.
+      allowPath: () => true,
+      maxEntryBytes: (name) => (name.endsWith(".tgz") ? 192 : 32) * 1024 * 1024,
+    });
+    requireValue(
+      files.has("preflight-manifest.json") &&
+        createHash("sha256").update(files.get("preflight-manifest.json")).digest("hex") ===
+          qualified.manifestSha256,
+      "Retained qualified npm manifest digest mismatch.",
+    );
+    const packageBytes = files.get(raw.package.fileName);
+    requireValue(
+      packageBytes &&
+        createHash("sha256").update(packageBytes).digest("hex") ===
+          (expectedPackage?.sha256 ?? raw.package.sha256),
+      "Retained qualified npm package digest mismatch.",
+    );
+  }
   const sdk = findArtifact(
     baseRequest,
     qualified.producer.runId,
@@ -497,14 +645,17 @@ async function reusePublicationArtifacts(env) {
   if (!sdk) {
     throw new PublicationArtifactUnavailable("Original Plugin SDK evidence is unavailable.");
   }
-  verifyRetainedArtifact({
-    repository: baseRequest.repository,
-    artifact: sdk,
-    producer: qualified.producer,
-    workflowRef: root.workflowRef,
-    workflowPath: WORKFLOW,
-    job: qualified.producer.jobName,
-  });
+  await retainPayload(
+    "sdk",
+    verifyRetainedArtifact({
+      repository: baseRequest.repository,
+      artifact: sdk,
+      producer: qualified.producer,
+      workflowRef: root.workflowRef,
+      workflowPath: WORKFLOW,
+      job: qualified.producer.jobName,
+    }),
+  );
 
   const dockerReceipt = await receiptFor("docker", docker.preparedRunId, docker.preparedRunAttempt);
   requireValue(
@@ -578,14 +729,39 @@ async function reusePublicationArtifacts(env) {
       seal.conclusion === "success",
     "Reused Docker preparation job did not complete successfully.",
   );
-  for (const entry of dockerManifest.architectures) {
-    verifyRetainedArtifact({
-      repository: baseRequest.repository,
-      artifact: entry.artifact,
-      producer: { ...dockerManifest.producer, workflowSha: dockerManifest.toolingSha },
-      workflowRef: root.workflowRef,
-      workflowPath: WORKFLOW,
+  if (options.verifyPayloads) {
+    const metadata = prepared.metadata;
+    payloads.push({
+      kind: "docker-manifest",
+      artifact: {
+        id: String(metadata.id),
+        name: metadata.name,
+        digest: metadata.digest,
+        sizeBytes: metadata.size_in_bytes,
+        expiresAt: metadata.expires_at,
+      },
+      producer: {
+        runId: docker.preparedRunId,
+        runAttempt: docker.preparedRunAttempt,
+        workflowSha: baseRequest.toolingSha,
+      },
+      sha256: prepared.archiveSha256,
+      manifestSha256: docker.preparedManifestSha256,
     });
+  }
+  for (const entry of dockerManifest.architectures) {
+    await retainPayload(
+      `docker-${entry.architecture}`,
+      verifyRetainedArtifact({
+        repository: baseRequest.repository,
+        artifact: entry.artifact,
+        producer: { ...dockerManifest.producer, workflowSha: dockerManifest.toolingSha },
+        workflowRef: root.workflowRef,
+        workflowPath: WORKFLOW,
+      }),
+      undefined,
+      true,
+    );
   }
   if (artifacts.pluginNpm) {
     const plugin = artifacts.pluginNpm;
@@ -604,18 +780,21 @@ async function reusePublicationArtifacts(env) {
       current.run_attempt === plugin.runAttempt,
       "Reused plugin npm producer attempt changed.",
     );
-    verifyRetainedArtifact({
-      repository: baseRequest.repository,
-      artifact: {
-        id: plugin.artifactId,
-        name: plugin.artifactName,
-        digest: plugin.artifactDigest,
-        sizeBytes: plugin.artifactSizeBytes,
-      },
-      producer: plugin,
-      workflowRef: root.workflowRef,
-      workflowPath: plugin.workflowPath,
-    });
+    await retainPayload(
+      "plugin-npm",
+      verifyRetainedArtifact({
+        repository: baseRequest.repository,
+        artifact: {
+          id: plugin.artifactId,
+          name: plugin.artifactName,
+          digest: plugin.artifactDigest,
+          sizeBytes: plugin.artifactSizeBytes,
+        },
+        producer: plugin,
+        workflowRef: root.workflowRef,
+        workflowPath: plugin.workflowPath,
+      }),
+    );
   }
   const outputs = {
     publication_artifacts_reused: "true",
@@ -637,7 +816,7 @@ async function reusePublicationArtifacts(env) {
     Buffer.byteLength(JSON.stringify(outputs)) <= MAX_RECEIPT_BYTES,
     "Reused publication artifact outputs exceed the receipt limit.",
   );
-  output(outputs);
+  return { outputs, payloads };
 }
 
 function output(values) {
@@ -698,24 +877,34 @@ function artifactAttemptJobs(request, runId, attempt, run) {
         response.total_count <= 1000,
       "Artifact producer job inventory is incomplete.",
     );
+    requireValue(
+      response.jobs.every(
+        (job) =>
+          String(job.run_id) === String(runId) &&
+          String(job.run_attempt) === String(attempt) &&
+          job.head_sha === request.toolingSha,
+      ),
+      "Artifact producer job identity changed.",
+    );
     jobs.push(...response.jobs);
     if (jobs.length === response.total_count) {
       break;
+    }
+    // A live reusable workflow can expose its expanded count before all jobs
+    // appear. Leave this observation pending; never admit a partial inventory.
+    if (
+      run &&
+      run.status !== "completed" &&
+      response.jobs.length < 100 &&
+      jobs.length < response.total_count
+    ) {
+      return [];
     }
     requireValue(
       response.jobs.length === 100 && page < 10 && jobs.length < response.total_count,
       "Artifact producer job inventory is incomplete.",
     );
   }
-  requireValue(
-    jobs.every(
-      (job) =>
-        String(job.run_id) === String(runId) &&
-        String(job.run_attempt) === String(attempt) &&
-        job.head_sha === request.toolingSha,
-    ),
-    "Artifact producer job identity changed.",
-  );
   return jobs;
 }
 

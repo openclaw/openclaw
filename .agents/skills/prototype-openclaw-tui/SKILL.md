@@ -45,9 +45,8 @@ recipes joined only by the tmux comparison loop.
 5. Give every variant the same fixture data and terminal dimensions.
 6. Run each variant directly in its own tmux pane. Do not pipe interactive TUI
    output; tmux must provide the PTY.
-7. Iterate on the harness with the launcher's `--refresh` mode. Respawn the
-   panes in the existing session; do not kill the session or reopen the user's
-   terminal.
+7. Iterate on the harness with the launcher's `--refresh` mode. Replace the
+   comparison grid in the existing session without reopening the user's terminal.
 8. After the user chooses a direction, carry the decision into production code
    with normal tests and validation. Remove or separately capture the prototype.
 
@@ -66,8 +65,9 @@ command pairs:
 ```
 
 After editing the prototype, run the same command with `--refresh` instead of
-`--open`. This preserves the tmux session, attached external terminal, window,
-and first pane while restarting all pane commands and reapplying the grid:
+`--open`. This preserves the tmux session and attached external terminal.
+The launcher builds a replacement window and grid before removing the old window
+and its panes. Window and pane IDs change, and the old pane commands stop:
 
 ```bash
 .agents/skills/prototype-openclaw-tui/scripts/launch-tmux-grid.sh \

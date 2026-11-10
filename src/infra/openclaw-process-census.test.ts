@@ -45,7 +45,10 @@ vi.mock("node:fs", () => {
   };
   return { ...filesystem, default: filesystem };
 });
-vi.mock("../shared/pid-alive.js", () => ({ isPidDefinitelyDead: definitelyDead }));
+vi.mock("../shared/pid-alive.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/pid-alive.js")>()),
+  isPidDefinitelyDead: definitelyDead,
+}));
 vi.mock("./container-environment.js", () => ({ isContainerEnvironment: container }));
 // mock-isolation: the real detector reads and caches the test host's CPU brand.
 vi.mock("../shared/rosetta-translation.js", () => ({ isRosettaTranslatedProcess: rosetta }));
@@ -58,7 +61,10 @@ vi.mock("../process/supervisor/darwin-process-command.js", () => ({
 }));
 // mock-isolation: Native ancestry would otherwise read real host PIDs behind the synthetic table.
 vi.mock("@openclaw/proc-safe/identity", () => ({ readProcessAncestry: ancestry }));
-import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
+import {
+  type HandoffReferences,
+  inspectOtherOpenClawProcesses,
+} from "./openclaw-process-census.js";
 
 const self = process.pid;
 const launcher = self + 1;
@@ -147,7 +153,7 @@ beforeEach(() => {
     }
     return match?.[2] === "cmdline"
       ? row.argv.join("\0")
-      : `${pid} (name ) (with\nparentheses) ${row.state ?? "S"} ${row.ppid} ${self} 0 0 0 ${row.flags ?? 0}`;
+      : `${pid} (name ) (with\nparentheses) ${row.state ?? "S"} ${row.ppid} ${self} 0 0 0 ${row.flags ?? 0} ${"0 ".repeat(12)}100`;
   });
 });
 
@@ -198,6 +204,52 @@ it.each([
   }
   rows.delete(peer);
   expectPids([], undefined, free);
+});
+
+it("releases runtimes from Gateway processes without artifact evidence", () => {
+  const runtime = "/tmp/openclaw-update-runtime-Held01";
+  const alias = "/tmp/runtime-alias/dist/worker.js";
+  realpath.mockImplementation((file: string) =>
+    file === alias ? `${runtime}/dist/worker.js` : file,
+  );
+  // A Gateway's process title erases its script path.
+  processRow(peer, ["openclaw-gateway"], { cwd: "/" });
+  processRow(peer + 1, ["node", "/app/dist/index.js", "gateway", "--port", "18789"]);
+  processRow(peer + 2, ["node", "/app/dist/process/spawn-broker/worker.js"]);
+  // Title-erased CLIs, update, Doctor's git update, and update workers may be its creator.
+  const updaters: string[][] = [
+    ["openclaw"],
+    ["node", "/app/dist/index.js", "update", "--yes"],
+    ["node", "/app/openclaw.mjs", "--update", "gateway"],
+    ["node", "/app/dist/index.js", "doctor"],
+    ["node", "/app/dist/infra/update-migrated-finalize.worker.js"],
+    // Resolved artifact evidence survives a later OpenClaw preload.
+    ["node", "--import", "/app/dist/version.js", alias],
+    ["openclaw-gateway", `${runtime}/dist/worker.js`],
+    // A preload alias is not resolved before the Gateway entrypoint is identified.
+    ["node", "--import", alias, "/app/dist/index.js", "gateway"],
+  ];
+  const holders = updaters.map((argv, index) => {
+    processRow(peer + 3 + index, argv, { cwd: "/" });
+    return peer + 3 + index;
+  });
+  expectPids(holders, undefined, runtime);
+  expectPids([peer, peer + 1, peer + 2, ...holders]);
+});
+
+it.each([
+  ["the update it launched", ["node", "/app/dist/index.js", "update", "--yes"], []],
+  ["a nested worker", ["node", "/app/dist/infra/update-migrated-finalize.worker.js"], [launcher]],
+] as const)("releases an update respawn launcher only to %s", (_name, inspectorArgv, pids) => {
+  const runtime = "/tmp/openclaw-update-runtime-Held01";
+  const argv = process.argv;
+  rows.set(launcher, { ppid: 1, argv: ["node", "/app/openclaw.mjs", "--update", "--yes"] });
+  process.argv = [...inspectorArgv];
+  try {
+    expectPids(pids, undefined, runtime);
+  } finally {
+    process.argv = argv;
+  }
 });
 
 it.each(["relative", "alias", "cwd-and-preload"])(
@@ -328,7 +380,7 @@ it.each([
   expectPids(verified ? [] : [launcher]);
 });
 
-it.each(["missing self", "missing ancestor", "failed enumeration", "container", "win32"])(
+it.each(["missing self", "missing ancestor", "failed enumeration", "container"])(
   "does not authorize cleanup with %s",
   (failure) => {
     if (failure === "missing self") {
@@ -345,18 +397,10 @@ it.each(["missing self", "missing ancestor", "failed enumeration", "container", 
     if (failure === "container") {
       container.mockReturnValue(true);
     }
-    if (failure === "win32") {
-      mockProcessPlatform("win32");
-    }
     const result = inspectOtherOpenClawProcesses();
     if (failure === "container") {
       expect(result).toEqual({ error: expect.stringContaining("Host process visibility") });
       expect(directory).not.toHaveBeenCalled();
-    } else if (failure === "win32") {
-      expect(result).toEqual({
-        error: expect.stringContaining("Exact process command census is unavailable on win32"),
-      });
-      expect(census).not.toHaveBeenCalled();
     } else {
       expect(result).toHaveProperty("error");
     }
@@ -451,6 +495,31 @@ it.each([peer, launcher, self])(
   },
 );
 
+it("classifies title-erased Darwin runtimes whose environment is unbounded", () => {
+  // Before macOS 27, process.title leaves a JS runtime's environment unterminated.
+  processRow(peer, ["openclaw-gateway", "", "", ""]);
+  processRow(peer + 1, ["node", "/standalone/server.mjs"]);
+  processRow(peer + 2, ["/bin/sleep", "60"]);
+  mockDarwinBatch({ status: 0, stdout: "" });
+  darwinCommand.mockImplementation((pid: number) => {
+    if (pid === peer + 2) {
+      throw new ProcSafeError("layout-mismatch", "invalid Darwin argument alignment");
+    }
+    return {
+      argv: rows.get(pid)!.argv,
+      executable: "/opt/homebrew/bin/node",
+      ...(pid === peer || pid === peer + 1 ? { serviceMarkerUnavailable: true } : {}),
+    };
+  });
+  expect(inspectOtherOpenClawProcesses("/tmp/openclaw-update-runtime-Held01")).toEqual({
+    pids: [peer + 1, peer + 2],
+    warnings: [
+      `Could not verify runtime custody for PID ${peer + 1}: process environment is unreadable`,
+      `Could not verify runtime custody for PID ${peer + 2}: process command is unavailable`,
+    ],
+  });
+});
+
 it("retains Darwin cwd holders from one partial batch without trusting other PID records", () => {
   processRow(peer, ["node", "/vendor/worker.js"]);
   processRow(peer + 1, ["bun", "run", "--silent", "start"]);
@@ -484,7 +553,7 @@ const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
 function expectReferences(
   matchingPids: number[],
   unverifiedPids: number[] = [],
-  handoff: typeof references & { sharedRoots?: string[]; familyDeadline?: number } = references,
+  handoff: HandoffReferences = references,
 ) {
   expect(inspectOtherOpenClawProcesses(handoff)).toEqual({
     matchingPids,
@@ -522,6 +591,12 @@ it.each([0, 1000])(
   (uid) => {
     processRow(peer, ["/bin/sh", "worker.sh"], { uid, cwd: denied() });
     expectPids([]);
+    for (const startIdentity of ["99", "100", "101"]) {
+      const handoff = { ...references, drivers: [{ pid: self, startIdentity }] };
+      expectReferences([], uid === 1000 && startIdentity !== "101" ? [peer] : [], handoff);
+    }
+    rows.get(peer)!.argv.push(references.artifactPaths[0]!);
+    expectReferences([peer], [], { ...references, drivers: [{ pid: self, startIdentity: "101" }] });
   },
 );
 

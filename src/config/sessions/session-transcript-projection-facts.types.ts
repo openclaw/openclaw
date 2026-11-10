@@ -1,4 +1,5 @@
 import type { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-projection-append.js";
 
 /** Complete eligible metadata for a bounded, boundary-free active path. No event bodies. */
@@ -43,6 +44,7 @@ export type SessionTranscriptProjectionReceipt = {
   writeScopes: Parameters<typeof readSqliteDatabaseScopedWriteToken>[1];
   facts?: SessionTranscriptProjectionFacts;
   contextStats?: SessionTranscriptContextStats;
-  /** Accounting retains its own projection snapshot, borrowing only bounded context metadata. */
+  contextStatsVersion?: SessionTranscriptContextVersion;
+  /** Accounting borrows totals only when its native snapshot matches contextStatsVersion. */
   contextOnly?: boolean;
 };

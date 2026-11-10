@@ -3,11 +3,14 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { captureSessionPendingInputWorkerCustody } from "./session-accessor.sqlite-pending-inputs.js";
-import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
-import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
+import { prepareSqliteScope } from "./session-accessor.sqlite-read-scope.js";
+import {
+  resolveSqliteSessionKey,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import type {
   SessionActor,
@@ -76,7 +79,7 @@ export async function acquireSessionInputActor(
     ...requestedTarget,
     target: { ...requestedTarget.target, canonicalKey: sessionKey },
   };
-  const database = {
+  let database = {
     agentId,
     path: target.readSource?.path ?? target.storePath,
     env: target.env,
@@ -105,49 +108,56 @@ export async function acquireSessionInputActor(
       },
     };
   }
+  if (!target.readSource) {
+    // Fresh targets retain a logical selector; the scope owner selects its physical store.
+    const prepared = toDatabaseOptions(
+      await prepareSqliteScope({
+        agentId,
+        storePath: target.storePath,
+        sessionKey,
+        env: target.env,
+      }),
+    );
+    database = {
+      agentId: prepared.agentId,
+      path: resolveOpenClawAgentSqlitePath(prepared),
+      env: prepared.env,
+    };
+  }
   const { createSessionActorFactory } = await import("./session-actor-durable.js");
   lifetime.assertCurrent();
-  const execution = captureOpenClawAgentDatabaseExecution(database, {
-    expectedIdentity: target.readSource && {
-      kind: "file",
-      physicalIdentity: target.readSource.databaseIdentity,
-      birthtime: target.readSource.databaseBirthtime,
-      nativeLocation: database.path,
+  const actor = await createSessionActorFactory(database).acquire(
+    {
+      database: target.readSource
+        ? {
+            kind: "file",
+            physicalIdentity: target.readSource.databaseIdentity,
+            birthtime: target.readSource.databaseBirthtime,
+            nativeLocation: database.path,
+          }
+        : { kind: "file" },
+      sessionKey,
     },
-  });
-  try {
-    // Native receipts already identify the file; only cold owners need writer preparation.
-    if (!execution.fileIdentity) {
-      await prepareSessionEntryReplacementDatabase(
-        database,
-        () => lifetime.assertCurrent(),
-        execution,
-        followRegistration,
-      );
-    }
-    const identity = execution.fileIdentity;
-    if (!identity) {
-      throw new Error("Input actor has no admitted physical database");
-    }
-    const actor = await createSessionActorFactory(database).acquire(
-      { database: identity, sessionKey },
-      lifetime,
-    );
-    return {
-      actor,
-      target: {
-        ...target,
-        readSource: target.readSource ?? {
-          agentId: database.agentId,
-          path: database.path,
-          databaseIdentity: identity.physicalIdentity,
-          databaseBirthtime: identity.birthtime,
-        },
-      },
-    };
-  } finally {
-    await execution.release();
+    lifetime,
+    followRegistration,
+  );
+  const identity = actor.target.database;
+  if (identity.kind !== "file") {
+    await actor.release();
+    throw new Error("Input actor has no admitted physical database");
   }
+  return {
+    actor,
+    target: {
+      ...target,
+      readSource: target.readSource ?? {
+        agentId: database.agentId,
+        path: database.path,
+        databaseIdentity: identity.physicalIdentity,
+        databaseBirthtime: identity.birthtime,
+      },
+    },
+  };
 }
 
 const inputActor = new AsyncLocalStorage<SessionInputActorBinding | undefined>();

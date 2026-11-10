@@ -4,6 +4,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -11,9 +12,10 @@ import {
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence-feedback.ts";
+import { chatComposerDraftStorageError } from "../chat/composer-persistence-feedback.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import { BackgroundCreatePreview } from "./background-create-preview.ts";
 import { promptNewSessionNotifications } from "./background-session-notice.ts";
 import { NewSessionCapabilities } from "./capabilities.ts";
 import * as catalog from "./catalog-target.ts";
@@ -76,12 +78,11 @@ export class DraftSubmissionFlow {
     message: ReturnType<typeof buildLocalUserMessage>;
   } | null = null;
   private blockedSubmitAttempt = false;
-  private rejectedPromptError: string | null = null;
   submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   private readonly startedSession = new StartedSessionNavigation();
+  private readonly backgroundPreview = new BackgroundCreatePreview();
   error: string | null = null;
-  private submitRequest = new AbortController();
-  private readonly sessionStartup: DraftSessionStartup;
+  readonly sessionStartup: DraftSessionStartup;
   readonly pendingPlacement = new PendingSessionPlacementRecoveryState(() => this.read().context);
   readonly attachmentDraft: NewSessionAttachmentDraft;
   readonly composerDraft = createComposerDraftSource(() => ({
@@ -115,26 +116,29 @@ export class DraftSubmissionFlow {
       callbacks.changed,
       () => (this.startedSession.current = null),
     );
-    this.sessionStartup = new DraftSessionStartup(gateway);
+    this.sessionStartup = new DraftSessionStartup(gateway, () => ({
+      context: this.read().context,
+      client: this.gateway.client,
+      params: this.buildDraftSessionCreateParams(),
+      access: this.submissionAccess(),
+      changed: this.callbacks.changed,
+    }));
     this.draftPersistence = new NewSessionDraftPersistence(
       () => ({
         message: this.messageText,
         mentions: this.mentionsValue,
         attachments: this.attachmentDraft.attachments,
         incognito: this.visibilityValue === "incognito",
+        permissionMode: this.permissionMode,
       }),
-      (message, attachments, resetVisibility, mentions) => {
+      (state, resetVisibility) =>
         this.restoreDraftState({
-          message,
-          mentions,
-          attachments,
+          ...state,
           visibility: resetVisibility ? "normal" : this.visibilityValue,
-        });
-      },
-      () => this.setError(CHAT_COMPOSER_DRAFT_STORAGE_ERROR),
+        }),
+      () => this.setError(chatComposerDraftStorageError()),
     );
     this.attachmentDraft = new NewSessionAttachmentDraft(this.draftChanged, () => {
-      this.rejectedPromptError = null;
       this.startedSession.current = null;
       this.draftPersistence.noteUserMutation();
     });
@@ -167,7 +171,7 @@ export class DraftSubmissionFlow {
   openSubmittedSession() {
     return this.startedSession.openSubmission(this.read().context, this.completedSubmission, {
       capture: () => {
-        const requestSignal = this.captureSubmitRequest();
+        const requestSignal = this.sessionStartup.captureRequest();
         return () => !requestSignal.aborted;
       },
       publish: (message, error) => {
@@ -193,9 +197,6 @@ export class DraftSubmissionFlow {
   }
 
   setMessage(message: string, mentions?: readonly HumanMention[]) {
-    if (message !== this.messageText) {
-      this.rejectedPromptError = null;
-    }
     this.startedSession.current = null;
     this.mentionsValue =
       mentions ?? updateHumanMentions(this.messageText, message, this.mentionsValue);
@@ -205,7 +206,6 @@ export class DraftSubmissionFlow {
   }
 
   restoreMessage(message: string, mentions: readonly HumanMention[] = []) {
-    this.rejectedPromptError = null;
     this.draftPersistence.noteDraftReplaced();
     this.updateMessage(message);
     this.mentionsValue = mentions;
@@ -229,6 +229,7 @@ export class DraftSubmissionFlow {
   setPermissionMode(permissionMode: SessionCreateParams["permissionMode"]) {
     this.permissionMode = permissionMode;
     this.startedSession.current = null;
+    this.draftPersistence.noteSelectionMutation("permission");
     this.callbacks.changed();
   }
 
@@ -313,9 +314,6 @@ export class DraftSubmissionFlow {
 
   /** Single owner for submit state, tooltips, and blocked-Enter notices. */
   submitBlock(): NewSessionSubmitBlock | undefined {
-    if (this.rejectedPromptError) {
-      return { gate: "initial-turn-rejected", reason: this.rejectedPromptError };
-    }
     if (
       !catalog.isTarget(this.read().data) &&
       this.attachmentDraft.reads.pendingReads === 0 &&
@@ -336,14 +334,9 @@ export class DraftSubmissionFlow {
       pendingPlacement: this.pendingPlacement,
     });
 
-  private captureSubmitRequest(): AbortSignal {
-    this.submitRequest.abort();
-    this.submitRequest = new AbortController();
-    return this.submitRequest.signal;
-  }
-
   invalidate(outcomeUnknown: SubmissionOutcomeReason | null = null) {
-    this.submitRequest.abort();
+    this.sessionStartup.clearPreparation();
+    this.sessionStartup.abortRequest();
     this.startedSession.current = null;
     const creating = this.activeSubmission?.phase === "creating";
     const interrupted = outcomeUnknown !== null && creating && this.sessionStartup.interrupt();
@@ -362,7 +355,7 @@ export class DraftSubmissionFlow {
     this.creationComposerValue?.releaseDraft();
     this.creationComposerValue = undefined;
     this.startedSession.clearSubmission();
-    this.rejectedPromptError = null;
+    this.backgroundPreview.clear();
     this.sessionStartup.clear();
     this.blockedSubmitAttempt = false;
     const preservePendingPlacement = Boolean(this.pendingPlacement.sessionKey);
@@ -434,7 +427,7 @@ export class DraftSubmissionFlow {
       return;
     }
     const preparedTitle = this.callbacks.takePreparedTitle?.();
-    const requestSignal = this.captureSubmitRequest();
+    const requestSignal = this.sessionStartup.captureRequest();
     const submittedDraft = this.draftPersistence.captureSubmission();
     const submittedMessage = this.startedSession.messageForTurn(context, input.agentId, input.turn);
     const retainSubmittedSession = this.startedSession.captureSubmission(
@@ -555,18 +548,25 @@ export class DraftSubmissionFlow {
       if (input.apiAttachments?.length) {
         assertUploadsEnabled(context.config);
       }
-      const createRequest =
-        input.pendingPlacement && pending.phase !== "creating"
-          ? Promise.resolve({ key: pending.sessionKey, initialRun: { status: "idle" as const } })
-          : context.sessions.createResult(
-              placementCreateParams ??
-                startup?.params ??
-                this.sessionStartup.start(createParams, background),
-              {
-                reconciliation: "background",
-                signal: requestSignal,
-              },
-            );
+      if (background && !placementTarget) {
+        this.backgroundPreview.begin({
+          context,
+          agentId: input.agentId,
+          params: createParams,
+          resumed: Boolean(startup),
+          message: submittedMessage,
+          displayName: preparedTitle,
+          retry: () => void this.submit(undefined, true),
+        });
+      }
+      const createRequest = this.sessionStartup.create(context, createParams, {
+        pendingKey:
+          input.pendingPlacement && pending.phase !== "creating" ? pending.sessionKey : undefined,
+        resumedParams: placementCreateParams ?? startup?.params,
+        background,
+        allowPrepared: !placementTarget,
+        signal: requestSignal,
+      });
       instant = beginInstant?.();
       const result = await createRequest;
       if (result && !placementTarget && result.initialRun.status !== "rejected") {
@@ -639,14 +639,6 @@ export class DraftSubmissionFlow {
         return;
       }
       await completeInitialSessionTurn({
-        onRejectedPrompt:
-          background && this.callbacks.retainRejectedPrompt
-            ? (error) => {
-                this.rejectedPromptError = error;
-                this.error = error;
-                this.sessionStartup.clear();
-              }
-            : undefined,
         context,
         client: input.client,
         agentId: input.agentId,
@@ -665,14 +657,14 @@ export class DraftSubmissionFlow {
           }
           return this.clearSubmittedDraft(release, submittedDraft, keepPending);
         },
-        completeInBackground: input.completeInBackground,
+        completeInBackground: this.backgroundPreview.admitBefore(input.completeInBackground),
         onAccepted: () => this.callbacks.onAccepted?.({ ...result, agentId: input.agentId }),
         finishNavigation: () => this.sessionStartup.clear(),
       });
     } catch (error) {
       if (!requestSignal.aborted && this.gateway.client === input.client) {
         this.sessionStartup.clear();
-        this.error = error instanceof Error ? error.message : String(error);
+        this.error = formatUiError(error);
         if (instant) {
           await instant.rollback();
         }
@@ -686,6 +678,7 @@ export class DraftSubmissionFlow {
         this.activeSubmission = null;
         this.callbacks.changed();
       }
+      this.backgroundPreview.settle(this.error, this.submitting);
     }
   }
 
@@ -698,7 +691,7 @@ export class DraftSubmissionFlow {
       capture: (client) => {
         this.blockedSubmitAttempt = false;
         this.error = null;
-        const requestSignal = this.captureSubmitRequest();
+        const requestSignal = this.sessionStartup.captureRequest();
         const submitted = this.draftPersistence.captureSubmission();
         const isRequestCurrent = () => !requestSignal.aborted;
         return {
@@ -727,6 +720,7 @@ export class DraftSubmissionFlow {
       }
       this.updateMessage("");
       this.mentionsValue = [];
+      this.permissionMode = undefined;
       this.draftPersistence.noteDraftReplaced();
       this.attachmentDraft.clearAfterSubmit(release);
       this.sessionStartup.clear();
@@ -734,7 +728,8 @@ export class DraftSubmissionFlow {
   }
 
   disconnect() {
-    this.submitRequest.abort();
+    this.sessionStartup.abortRequest();
+    this.backgroundPreview.clear();
     this.creationComposerValue?.releaseDraft();
     this.pendingPlacement.releaseClaim();
     this.startedSession.current = null;

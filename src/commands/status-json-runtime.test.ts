@@ -10,6 +10,7 @@ import type { PluginCompatibilityNotice } from "../plugins/status-compatibility.
 import type { RuntimeEnv } from "../runtime.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import type { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
+import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import type { StatusJsonScanResult } from "./status.scan-result.ts";
 import { createStatusScanResultFixture } from "./status.test-support.ts";
@@ -303,27 +304,36 @@ describe("runStatusJsonCommand", () => {
     };
     const runtimeConfig: OpenClawConfig = { ...sourceConfig, gateway: { port: 18789 } };
     mocks.readConfigFileSnapshot.mockResolvedValueOnce({ runtimeConfig, sourceConfig });
-    mocks.resolveStatusUsageSummary.mockImplementationOnce(async () => {
-      expect(readRuntimeConfig().plugins).toEqual(sourceConfig.plugins);
-      expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
-      return { updatedAt: 123, providers: [] };
-    });
+    mocks.resolveStatusUsageSummary.mockImplementationOnce(
+      async (input: StatusUsageSummaryOptions) => {
+        expect(readRuntimeConfig().plugins).toEqual(sourceConfig.plugins);
+        expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
+        input.onSecretDiagnostics?.(["usage credential diagnostic"]);
+        return { updatedAt: 123, providers: [] };
+      },
+    );
     mocks.resolveStatusRuntimeSnapshot.mockImplementationOnce(
       async (input: Parameters<typeof resolveStatusRuntimeSnapshot>[0]) => ({
         usage: await input.resolveUsage?.({
           config: input.config,
           gatewayProbeDeadlineMs: input.gatewayProbeDeadlineMs,
+          onSecretDiagnostics: input.onSecretDiagnostics,
         }),
       }),
     );
     const scan = createScan();
     scan.collection = { source: "gateway", notCollected: [] };
+    scan.secretDiagnostics = ["scan credential diagnostic"];
 
     const result = await runJson(scan, { ...createStatusGatewayProbeBudget(), usage: true });
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
     expect(mocks.resolveStatusUsageSummary).toHaveBeenCalledOnce();
     expect(result.usage).toEqual({ updatedAt: 123, providers: [] });
+    expect(result.secretDiagnostics).toEqual([
+      "scan credential diagnostic",
+      "usage credential diagnostic",
+    ]);
   });
 
   it("skips optional sections when flags are off", async () => {

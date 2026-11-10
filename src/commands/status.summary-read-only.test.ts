@@ -18,7 +18,7 @@ import {
 import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.sqlite-summary.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { spyOnSessionStoreSummaries } from "../config/sessions/session-store-summary.test-support.js";
-import type { SessionAcpMeta } from "../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDefaultProactiveJob } from "../cron/default-proactive-job.js";
 import { saveProactiveJobsForTest } from "../cron/proactive-job.test-support.js";
@@ -369,7 +369,7 @@ describe("getStatusSummary read-only session access", () => {
           contextTokensSource: "resolved",
           totalTokens: 121_000,
           totalTokensFresh: true,
-          totalTokensVersion: 1,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         },
       );
       await closeOpenClawAgentDatabasesAsync(state.root);

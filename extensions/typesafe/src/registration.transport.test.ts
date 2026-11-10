@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
-import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
+import type { DecisionBatchV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
@@ -14,7 +14,7 @@ import {
   mockFetch,
   mockResponse as mockBodyResponse,
   mockJsonResponse as mockResponse,
-  registeredDecisionProvider,
+  registeredPreparedDecisionProvider,
 } from "./transport.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
@@ -22,15 +22,20 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
 }));
 const { batch, input, response, result: expectedResult } = mixedFixture;
 function registeredProvider(config: Record<string, unknown> = {}) {
-  return registeredDecisionProvider(() => ({ plugins: { entries: { typesafe: { config } } } }));
+  return registeredPreparedDecisionProvider(() => ({
+    plugins: { entries: { typesafe: { config } } },
+  }));
 }
 const context = (
   signal = new AbortController().signal,
   deadlineMonotonicMs = performance.now() + 1000,
-) => ({
-  model: "jev-agent-selected",
+): DecisionProviderContextV2 => ({
+  model: { provider: "typesafe", id: "jev-agent-selected", name: "Jev" },
+  config: {},
+  auth: { mode: "api-key", apiKey: "synthetic-key" },
   signal,
   deadlineMonotonicMs,
+  isAdmissible: () => true,
 });
 const withAnswer = (id: keyof typeof response.answers, overrides: object) => ({
   answers: { ...response.answers, [id]: { ...response.answers[id], ...overrides } },
@@ -286,7 +291,10 @@ it("rejects ambient and unprepared hosted credentials before dispatch", async ()
   const fetch = mockResponse(response);
   vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 1 });
   await expectUnavailable(
-    registeredProvider({ apiKey: "synthetic-unprepared" }).evaluate(batch, context()),
+    registeredProvider({ apiKey: "synthetic-unprepared" }).evaluate(batch, {
+      ...context(),
+      auth: { mode: "api-key" },
+    }),
     "credentials-unavailable",
   );
   await expect(
@@ -300,10 +308,16 @@ it("rejects ambient and unprepared hosted credentials before dispatch", async ()
 const oversizedChoices = Object.fromEntries(
   Array.from({ length: 256 }, (_, i) => [String(i), null]),
 );
-it.each<DecisionBatch>([
-  { state: null, questions: { s: { type: "score", criteria: Array(11).fill("level") } } },
-  { state: null, questions: { c: { type: "choice", criteria: oversizedChoices } } },
-  { ...batch, state: { constructor: "synthetic reserved key" } },
+it.each<DecisionBatchV2>([
+  {
+    state: { type: "json", value: null },
+    questions: { s: { type: "score", criteria: Array(11).fill("level") } },
+  },
+  {
+    state: { type: "json", value: null },
+    questions: { c: { type: "choice", criteria: oversizedChoices } },
+  },
+  { ...batch, state: { type: "json", value: { constructor: "synthetic reserved key" } } },
 ])("rejects unsupported vendor input without dispatch", async (value) => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);

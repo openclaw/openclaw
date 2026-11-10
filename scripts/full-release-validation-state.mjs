@@ -58,6 +58,7 @@ import {
 import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
+  ReleaseAggregateValidationError,
   validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
 import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
@@ -159,6 +160,20 @@ async function runGh(args, options = {}) {
   throw lastError;
 }
 
+// gh 2.97+ refuses raw job logs containing terminal escapes, even off a TTY;
+// older gh rejects the flag before issuing the request.
+async function readJobLog(id, signal) {
+  const args = ["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`];
+  try {
+    return await runGh([...args, "--allow-escape-sequences"], { signal });
+  } catch (error) {
+    if (!String(error?.stderr).includes("unknown flag: --allow-escape-sequences")) {
+      throw error;
+    }
+    return runGh(args, { signal });
+  }
+}
+
 async function githubJson(path, signal) {
   return JSON.parse(
     await runGh(["api", `repos/${process.env.GITHUB_REPOSITORY}/${path}`], { signal }),
@@ -182,6 +197,28 @@ async function githubAttemptJobs(runId, runAttempt, signal) {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+}
+
+const EFFECTIVE_PARENT_GATE_ENV = new Map([
+  ["Prepare release npm artifacts", "NPM_PREPARATION_RESULT"],
+  ["Qualify release npm artifacts", "NPM_QUALIFICATION_RESULT"],
+  ["Prepare exact plugin npm artifacts", "PLUGIN_NPM_PREPARATION_RESULT"],
+  ["Prepare release Docker artifacts", "DOCKER_PREPARATION_RESULT"],
+]);
+const EFFECTIVE_PARENT_GATE_RESULTS = new Set(["success", "failure", "cancelled", "skipped"]);
+
+export function effectiveReleasePlanGates(gates, env = process.env) {
+  return gates.map((gate) => {
+    const envName = EFFECTIVE_PARENT_GATE_ENV.get(gate.name);
+    if (!envName || !env[envName]) {
+      return gate;
+    }
+    const result = env[envName];
+    if (!EFFECTIVE_PARENT_GATE_RESULTS.has(result)) {
+      throw new Error(`Invalid effective release gate result: ${gate.name}`);
+    }
+    return { ...gate, result };
+  });
 }
 
 function issue(kind, child, message, extra = {}) {
@@ -306,16 +343,18 @@ export async function readChild(child, previous, signal, options = {}) {
           .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
           .jobs.find((raw) => raw.name === job.name),
       );
-      await validateReleaseWaiverAggregates({
-        policy,
-        jobs,
-        getJobLog:
-          options.readJobLog ??
-          ((id) =>
-            runGh(["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`], {
-              signal,
-            })),
-      });
+      try {
+        await validateReleaseWaiverAggregates({
+          policy,
+          jobs,
+          getJobLog: options.readJobLog ?? ((id) => readJobLog(id, signal)),
+        });
+      } catch (error) {
+        if (!(error instanceof ReleaseAggregateValidationError)) {
+          throw error;
+        }
+        snapshot.errors.push(issue("aggregate_validation", child, error.message));
+      }
     }
     return snapshot;
   } catch (error) {
@@ -698,14 +737,15 @@ function stateArtifactExpected(attemptLabel = "parent run attempt") {
 
 function verifyMode() {
   const expected = stateArtifactExpected();
+  const executionPlan = readArtifact(
+    requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),
+    "execution plan",
+  );
   const verified = verifyReleaseStateArtifacts(
-    readArtifact(
-      requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),
-      "execution plan",
-    ),
+    executionPlan,
     readArtifact(requiredString(process.env.RELEASE_DECISION_PATH, "decision path"), "decision"),
     readArtifact(requiredString(process.env.DIAGNOSTIC_DRAIN_PATH, "drain path"), "drain"),
-    expected,
+    { ...expected, effectiveGates: effectiveReleasePlanGates(executionPlan.gates) },
   );
   appendSummary("decision", verified.decision);
   appendSummary("drain", verified.drain);
@@ -1349,7 +1389,10 @@ async function collectMode(mode) {
     },
   );
   const plan = executionPlan.children;
-  const gateFailures = releasePlanGateFailures(executionPlan.gates);
+  // The plan freezes which parent gates are required. Their effective result is
+  // supplied by this same parent attempt so failed-job recovery can clear a
+  // retryable qualification failure without changing the admitted gate set.
+  const gateFailures = releasePlanGateFailures(effectiveReleasePlanGates(executionPlan.gates));
   const failFast = mode === "decision" && process.env.FAIL_FAST === "true";
   const pollIntervalMs =
     Number(process.env.FULL_RELEASE_POLL_INTERVAL_MS) || DEFAULT_POLL_INTERVAL_MS;
@@ -1468,10 +1511,11 @@ async function collectMode(mode) {
     );
     transport = updateReleaseTransportEpisode(transport, snapshots);
     const transportReadErrors = transport.error ? [transport.error] : [];
+    const extraErrors = [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors];
     let decision = classifyReleaseSnapshot({
       children: snapshots,
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
-      extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
+      extraErrors,
       localFailures: gateFailures,
       targetVersion: executionPlan.targetVersion,
     });
@@ -1505,12 +1549,22 @@ async function collectMode(mode) {
         });
       }
     }
+    // The displayed errors are capped; drain admission uses every fatal input.
+    const hasNonAggregateError =
+      extraErrors.some((error) => error.kind !== "aggregate_validation") ||
+      snapshots.some(
+        (child) =>
+          child.selected &&
+          child.errors.some(
+            (error) => !["dispatch_missing", "aggregate_validation"].includes(error.kind),
+          ),
+      );
     const done =
       mode === "decision"
         ? decision.state !== "qualifying" &&
           !(decision.state === "passed" && transport.status === "uncertain")
         : transport.status !== "uncertain" &&
-          (decision.state === "orchestration_error" ||
+          ((decision.state === "orchestration_error" && hasNonAggregateError) ||
             (decision.state !== "qualifying" && decision.activeRunIds.length === 0));
     if (done) {
       const payload = writePayload(decision, { cancelledRunIds, requested: false });
@@ -1577,7 +1631,7 @@ async function validateManifestMode() {
             requiredString(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain path"),
             "diagnostic drain",
           ),
-          expected,
+          { ...expected, effectiveGates: effectiveReleasePlanGates(executionPlan.gates) },
         )
       : undefined;
   const drain = verified?.drain;
@@ -1661,11 +1715,12 @@ async function validateManifestMode() {
 
 function selectMode() {
   const expected = stateArtifactExpected("current parent run attempt");
+  const executionPlan = readArtifact(
+    requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),
+    "execution plan",
+  );
   const selected = selectReleaseStateArtifacts(
-    readArtifact(
-      requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),
-      "execution plan",
-    ),
+    executionPlan,
     readStateCandidates(
       requiredString(process.env.RELEASE_DECISION_ATTEMPTS_PATH, "decision attempts path"),
       "full-release-decision",
@@ -1680,7 +1735,7 @@ function selectMode() {
       expected.maxParentRunAttempt,
       "full-release-diagnostic-manifest.json",
     ),
-    expected,
+    { ...expected, effectiveGates: effectiveReleasePlanGates(executionPlan.gates) },
   );
   writeArtifact(
     requiredString(process.env.RELEASE_DECISION_PATH, "selected decision path"),

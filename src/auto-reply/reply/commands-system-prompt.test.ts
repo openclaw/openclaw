@@ -1,6 +1,6 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.async.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import type { resolveRuntimeChannelPromptContext } from "../../agents/runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
@@ -90,6 +90,7 @@ vi.mock("../../agents/model-selection.js", () => ({
 
 // mock-isolation: Keep host discovery outside command prompt fixtures.
 vi.mock("../../agents/system-prompt-params.js", () => ({
+  resolveSystemPromptRepoRoot: async () => undefined,
   buildSystemPromptParams: vi.fn(() => ({
     runtimeInfo: { host: "unknown", os: "unknown", arch: "unknown", node: process.version },
   })),
@@ -100,14 +101,13 @@ vi.mock("../../agents/system-prompt.js", () => ({
 }));
 
 // mock-isolation: Inspect prompt composition with fixture tools without initializing tool integrations.
-vi.mock("../../agents/agent-tools.js", () => ({
+vi.mock("../../agents/agent-tools.async.js", () => ({
   createOpenClawCodingToolsAsync: createOpenClawCodingToolsAsyncMock,
 }));
 
-vi.mock("../../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: vi.fn(() => undefined),
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: vi.fn(async () => undefined),
 }));
 
 function makeParams(overrides: Partial<HandleCommandsParams> = {}): HandleCommandsParams {

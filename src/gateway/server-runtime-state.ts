@@ -104,6 +104,7 @@ export async function createGatewayHttpTransport(params: {
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
   getPluginRouteRegistry?: () => PluginRegistry;
+  isRequestRuntimeReady?: () => boolean;
   isStartupPluginRuntimeReady?: () => boolean;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   httpRequestLifetime?: GatewayHttpRequestLifetime;
@@ -174,6 +175,7 @@ export async function createGatewayHttpTransport(params: {
           deps: params.deps,
           logHooks: params.logHooks,
           deferHookWake: params.deferHookWake,
+          resolvePluginRegistry: resolvePluginRouteRegistry,
           ...(params.getGatewayRequestContext
             ? { resolveGatewayContext: params.getGatewayRequestContext }
             : {}),
@@ -369,6 +371,7 @@ export async function createGatewayHttpTransport(params: {
       getRuntimeConfig: loadRuntimeConfig,
       getGatewayRequestContext: params.getGatewayRequestContext,
       waitForRequestRuntime: params.waitForRequestRuntime,
+      isRequestRuntimeReady: params.isRequestRuntimeReady,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
       httpRequestLifetime: params.httpRequestLifetime,
       isTerminalEnabled: params.isTerminalEnabled,
@@ -436,7 +439,7 @@ export async function createGatewayHttpTransport(params: {
       getRuntimeConfig: loadRuntimeConfig,
       handleRequest: getGatewayHttpRequestHandler(httpServer),
       handleUpgrade: controlUiUpgradeHandler,
-      handleSandboxRequest: createSandboxHostHttpRequestHandler(),
+      handleSandboxRequest: createSandboxHostHttpRequestHandler({ clients: params.clients }),
       signal: requestLifetime
         ? AbortSignal.any([gatewayLifetime, requestLifetime])
         : gatewayLifetime,
@@ -463,6 +466,7 @@ export async function createGatewayHttpTransport(params: {
       const sandboxServers = bindHosts.map(() =>
         createSandboxHostHttpServer(
           params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+          { clients: params.clients },
         ),
       );
       // Register before binding so normal runtime cleanup closes a partially

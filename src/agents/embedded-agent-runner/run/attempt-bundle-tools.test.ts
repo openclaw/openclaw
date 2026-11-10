@@ -3,11 +3,12 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
+import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
-import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { createClientToolDefinition, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 import { listPersistedRuntimeToolSchemaQuarantines } from "../../tool-schema-quarantine-health.js";
 import { withRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
@@ -94,13 +95,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools, dispose });
   }
 
-  function clientTools(...names: string[]) {
-    return names.map((name) => ({
-      type: "function" as const,
-      function: { name, parameters: { type: "object" as const } },
-    }));
-  }
-
   function setAllow(input: ReturnType<typeof createInput>, allow: string[]) {
     input.attempt.toolsAllow = allow;
     input.preparedToolBase.effectiveToolsAllow = allow;
@@ -114,7 +108,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     return tool;
   }
 
-  it.each(["memory flush", "disabled tools", "raw", "model"])(
+  it.each(["memory flush", "disabled tools", "raw", "model", "global denial"])(
     "does not widen %s with auxiliary tools",
     async (mode) => {
       const input = createInput([], [createStubTool("read"), createStubTool("write")]);
@@ -123,11 +117,18 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       input.attempt.disableTools = mode === "disabled tools";
       input.isRawModelRun = mode === "raw";
       input.preparedToolBase.toolsEnabled = mode !== "model";
+      if (mode === "global denial") {
+        input.attempt.config.tools = { deny: ["*"] };
+        input.preparedToolBase.runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+          config: input.attempt.config,
+        });
+        input.preparedToolBase.toolsRaw = [];
+      }
       if (mode === "memory flush") {
         input.attempt.trigger = "memory";
         input.attempt.memoryFlushWritePath = "memory/2026-10-08.md";
       }
-      input.attempt.clientTools = clientTools("client_canary");
+      input.attempt.clientTools = [createClientToolDefinition("client_canary")];
       mockMcp([createStubTool("canary__write")]);
       mocks.createBundleLspToolRuntime.mockResolvedValue({
         tools: [createStubTool("lsp_canary")],
@@ -136,11 +137,11 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
       const result = await prepare(input);
 
-      const expected = mode === "model" ? [] : ["read", "write"];
-      expect(toolNames(result.uncompactedEffectiveTools)).toEqual(expected);
-      expect(result.clientTools).toBeUndefined();
       expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
       expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
+      const expected = ["model", "global denial"].includes(mode) ? [] : ["read", "write"];
+      expect(toolNames(result.uncompactedEffectiveTools)).toEqual(expected);
+      expect(result.clientTools).toBeUndefined();
       await withRuntimeToolSchemaQuarantine((record) => result.refreshTools(record));
       expect(toolNames(result.uncompactedEffectiveTools)).toEqual(expected);
     },
@@ -192,7 +193,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     "applies %s client capabilities before tool reservation",
     async (_name, allow, expected, reserves) => {
       const input = createInput([], [{ name: "message" }]);
-      input.attempt.clientTools = clientTools(...clients);
+      input.attempt.clientTools = clients.map(createClientToolDefinition);
       setAllow(input, allow);
       mockMcp();
       mocks.createBundleLspToolRuntime.mockResolvedValue({
@@ -320,9 +321,17 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     });
 
     const cleanupScope = createAgentCleanupScope();
-    await expect(cleanupScope.run(() => prepare(createInput()))).rejects.toThrow(
-      "bundle policy failed",
-    );
+    const completed: string[] = [];
+    await expect(
+      withDiagnosticsTimelineObserver(
+        (name) => () => {
+          completed.push(name);
+        },
+        () => cleanupScope.run(() => prepare(createInput())),
+      ),
+    ).rejects.toThrow("bundle policy failed");
+    expect(completed).toContain("attempt.bundle-tools.policy");
+    expect(completed).toContain("attempt.bundle-tools.cleanup");
     expect(cleanupScope.outcome).toBe("uncertain");
     expect(disposeMcp).toHaveBeenCalledOnce();
     expect(disposeLsp).toHaveBeenCalledOnce();

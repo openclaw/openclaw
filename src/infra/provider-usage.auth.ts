@@ -33,7 +33,6 @@ import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = ProviderUsageAuthToken & {
   provider: UsageProviderId;
-  authProfileId?: string;
   hookProvider?: string;
 };
 
@@ -42,6 +41,7 @@ type AuthStore = AuthProfileStore;
 function projectUsageAuthToken(auth: ProviderUsageAuthToken): ProviderUsageAuthToken {
   return {
     token: auth.token,
+    ...(auth.authProfileId ? { authProfileId: auth.authProfileId } : {}),
     ...(auth.authFlow ? { authFlow: auth.authFlow } : {}),
     ...(auth.accountId ? { accountId: auth.accountId } : {}),
     ...(auth.subscriptionType ? { subscriptionType: auth.subscriptionType } : {}),
@@ -294,6 +294,7 @@ async function resolveOAuthToken(params: {
       return {
         provider: params.provider,
         token: resolved.apiKey,
+        authProfileId: resolved.profileId,
         ...(credential.type === "oauth" && credential.authFlow
           ? { authFlow: credential.authFlow }
           : {}),

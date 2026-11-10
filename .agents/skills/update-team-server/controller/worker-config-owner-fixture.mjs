@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   chownSync,
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -463,6 +464,9 @@ if(command==="busctl") {
   if(present("start-count")&&present("health-failure")) probes["/healthz"].ok=false;
   if(!Object.hasOwn(probes,endpoint)) reject("unsupported synthetic HTTP probe");
   event("probe."+endpoint.slice(1));
+  if(scenario==="operator-no-response"&&!present("start-count")) {
+    process.stdout.write("000");process.exit(28);
+  }
   if(read("system")!=="active"||read("listener-pid")==="0") process.exit(7);
   process.stdout.write(JSON.stringify(probes[endpoint])+"\n200");
 } else if(command==="systemctl") {
@@ -694,7 +698,7 @@ export async function callGatewayFromCli(method,opts,params,extra) {
     ["manifest", release, sha, String(process.getuid()), sha],
     ["seal-tree", release],
   ]) {
-    const result = spawnSync(process.execPath, ["--no-warnings", library, ...args], {
+    const result = spawnSync("bash", ["-c", 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"', "fixture-seal", process.execPath, "--no-warnings", library, ...args], {
       encoding: "utf8",
       env: fixture.env,
       cwd: fixture.root,
@@ -740,6 +744,10 @@ function makeOwnerFixture(t, scenario, workerConfig) {
     writableTree(root);
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
+  for (const name of ["openclaw-release-deploy", "release-lib.mjs", "gateway-suspension-contract.mjs", "startup-profile.mjs"]) {
+    copyFileSync(join(import.meta.dirname, name), join(root, name));
+    chmodSync(join(root, name), name === "openclaw-release-deploy" ? 0o755 : 0o644);
+  }
   const state = join(root, "state"),
     commands = join(root, "commands");
   const serving = join(root, "opt", "openclaw-team"),
@@ -923,8 +931,8 @@ function makeOwnerFixture(t, scenario, workerConfig) {
     permit,
     journal: join(serving, "journal", "activation.json"),
     eventlog: join(state, "events"),
-    owner,
-    library,
+    owner: join(root, "openclaw-release-deploy"),
+    library: join(root, "release-lib.mjs"),
     realCommands,
     runtimeUid,
     runtimeGid,
@@ -995,7 +1003,8 @@ function makeOwnerFixture(t, scenario, workerConfig) {
     OPENCLAW_TEAM_CONFIG_FILE: config,
     OPENCLAW_TEAM_STATE_DATABASE: databasePath,
     OPENCLAW_TEAM_NODE_BIN: process.execPath,
-    OPENCLAW_TEAM_RELEASE_LIB: library,
+    OPENCLAW_TEAM_RELEASE_LIB: fixture.library,
+    OPENCLAW_TEAM_DEPLOY_EXECUTABLE: fixture.owner,
     OPENCLAW_TEAM_OPERATOR_PROFILE: process.env.OPENCLAW_TEAM_OPERATOR_PROFILE,
     OPENCLAW_TEAM_RUNUSER: fixture.commandPaths.runuser,
     OPENCLAW_TEAM_TIMEOUT: realCommands.timeout,
@@ -1019,6 +1028,7 @@ function makeOwnerFixture(t, scenario, workerConfig) {
     OPENCLAW_TEAM_DRAIN_BUDGET: "12",
     OPENCLAW_TEAM_DRAIN_POLL_INTERVAL: "1",
   };
+  writeFileSync(fixture.lockFile, "", { mode: 0o600 });
   writeRelease(fixture);
   fixture.addRelease = (releaseSha) => {
     writeRelease(fixture, releaseSha);

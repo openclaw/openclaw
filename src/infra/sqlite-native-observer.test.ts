@@ -76,6 +76,43 @@ it("binds iterators immediately and holds custody until exhaustion or explicit r
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
 });
 
+it.each(["exhaustion", "return"] as const)(
+  "releases the WAL reader after %s and keeps completed iterators terminal",
+  (completion) => {
+    const filename = path.join(tempDirs.make("sqlite-finished-reader-"), "state.sqlite");
+    using writer = open(filename);
+    writer.exec(
+      "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; " +
+        "CREATE TABLE entries (value); INSERT INTO entries VALUES (1), (2)",
+    );
+    using reader = open(filename);
+    const statement = reader.prepare("SELECT value FROM entries");
+    const rows = statement.iterate();
+    expect(rows.next().value).toEqual({ value: 1 });
+    if (completion === "return") {
+      rows.return?.();
+    } else {
+      expect([...rows]).toEqual([{ value: 2 }]);
+    }
+    const afterDone = rows.next();
+    writer.exec("INSERT INTO entries VALUES (3)");
+    const checkpoint = writer.prepare("PRAGMA wal_checkpoint(PASSIVE)").get();
+    expect(checkpoint?.checkpointed).toBe(checkpoint?.log);
+    expect(afterDone.done).toBe(true);
+    expect(reader.isTransaction).toBe(false);
+    expect(hasPendingSqliteNativeExecution(reader)).toBe(false);
+    const successor = statement.iterate();
+    expect(successor.next().value).toEqual({ value: 1 });
+    rows.return?.();
+    expect(rows.next().done).toBe(true);
+    expect([...successor]).toEqual([{ value: 2 }, { value: 3 }]);
+    expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+      busy: 0,
+      log: 0,
+    });
+  },
+);
+
 it.each(["all", "close"] as const)("settles RETURNING cursors on %s", (method) => {
   using db = open();
   db.exec(

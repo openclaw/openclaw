@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureFrame } from "./sidebar-assertions.test-support.ts";
@@ -8,6 +9,64 @@ import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Sidebar rail alignment" });
 
 suite.define(() => {
+  it("matches Templates page icon ink to neighboring page icons", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+      const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+      await installMockGateway(page, {
+        methodResponses: {
+          "config.get": {
+            config,
+            sourceConfig: config,
+            hash: "icon-proof",
+            valid: true,
+            issues: [],
+          },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.locator('[data-navigation-view="pages"]').click();
+      const pages = page.locator(".sidebar-pages");
+      const templates = pages.locator('.nav-item[href$="/templates"]');
+      const systems = pages.locator('.nav-item[href$="/systems"]');
+      await templates.waitFor();
+      await systems.waitFor();
+      const ink = (link: typeof templates) =>
+        link.evaluate((element) => {
+          const svg = element.querySelector("svg")!;
+          const shape = svg.querySelector("path, rect")!;
+          const style = getComputedStyle(shape);
+          return {
+            stroke: style.stroke,
+            weight: Number.parseFloat(style.strokeWidth) * svg.getScreenCTM()!.a,
+          };
+        });
+      const expectMatchingInk = () =>
+        expect
+          .poll(async () => {
+            const reference = await ink(systems);
+            const actual = await ink(templates);
+            return {
+              stroke: actual.stroke === reference.stroke,
+              weight: actual.weight - reference.weight,
+            };
+          })
+          .toEqual({ stroke: true, weight: 0 });
+      for (const theme of ["dark", "light"] as const) {
+        await page.emulateMedia({ colorScheme: theme });
+        await page.mouse.move(1000, 700);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await captureFrame(suite.artifactDir, "templates-" + theme + ".png", pages, [
+            templates,
+            systems,
+          ]);
+        }
+        await expectMatchingInk();
+        await templates.hover();
+        await expectMatchingInk();
+      }
+    });
+  });
+
   it.each([false, true])(
     "centers rail controls and the owner toolbar (touch: %s)",
     async (hasTouch) => {
@@ -26,7 +85,10 @@ suite.define(() => {
           ];
           await installMockGateway(page, {
             sessionKey: "agent:main:current",
-            presenceUsers: [{ id: "riley", name: "Riley", self: true }],
+            presenceUsers: [
+              { id: "riley", name: "Riley", self: true },
+              { id: "devon", name: "Devon" },
+            ],
             sessions,
             methodResponses: {
               "sessions.list": sidebarSessionList(
@@ -44,6 +106,70 @@ suite.define(() => {
           const rail = page.locator("openclaw-app-sidebar .sidebar-rail");
           const owner = page.locator(".sidebar-session-owner-filter .picker-select__trigger");
           await owner.waitFor();
+          await selectAllSidebarSessions(page);
+          const firstRow = page.locator(".sidebar-sessions .sidebar-recent-session").first();
+          await firstRow.waitFor();
+          // The Sessions title picker is one toolbar control among the header's
+          // buttons and mirrors the row beneath it: a plain title starts on the
+          // row glyph column; with an owner avatar, the avatar centers on that
+          // column and the label starts on the row text column.
+          const measureHeader = () =>
+            page.locator(".sidebar-session-toolbar").evaluate((toolbar) => {
+              const box = (selector: string) =>
+                toolbar.querySelector(selector)?.getBoundingClientRect() ?? null;
+              const leading = box(".picker-select__trigger .picker-select__leading");
+              return {
+                controls: [
+                  ".sidebar-session-owner-filter .picker-select__trigger",
+                  ".sidebar-session-sort",
+                  ".sidebar-session-toolbar__collapse",
+                ].map((selector) => ({
+                  selector,
+                  height: box(selector)!.height,
+                  radius: getComputedStyle(toolbar.querySelector(selector)!).borderRadius,
+                })),
+                radiusToken: getComputedStyle(document.documentElement)
+                  .getPropertyValue("--radius-md")
+                  .trim(),
+                avatarCenter: leading ? leading.x + leading.width / 2 : null,
+                labelLeft: box(".picker-select__label")!.x,
+              };
+            });
+          const row = await firstRow.evaluate((element) => {
+            const glyph = element
+              .querySelector(".sidebar-session-indicator")!
+              .getBoundingClientRect();
+            return {
+              glyphLeft: glyph.x,
+              glyphCenter: glyph.x + glyph.width / 2,
+              textLeft: element
+                .querySelector(".sidebar-recent-session__text")!
+                .getBoundingClientRect().x,
+            };
+          });
+          const allOwners = await measureHeader();
+          for (const control of allOwners.controls) {
+            expect(control.height, control.selector).toBe(28);
+            expect(control.radius, control.selector).toBe(allOwners.radiusToken);
+          }
+          expect(allOwners.avatarCenter).toBeNull();
+          expect(allOwners.labelLeft).toBe(row.glyphLeft);
+          await page.locator("#sidebar-session-owner-title").click();
+          await page
+            .locator('.sidebar-session-owner-filter [role="option"][data-value="owner:riley"]')
+            .click();
+          // The owner avatar arrives with the picker's next render.
+          await expect
+            .poll(async () => {
+              const mine = await measureHeader();
+              return mine.avatarCenter === null
+                ? null
+                : {
+                    avatarCentered: Math.abs(mine.avatarCenter - row.glyphCenter) <= 0.5,
+                    label: mine.labelLeft,
+                  };
+            })
+            .toEqual({ avatarCentered: true, label: row.textLeft });
           await selectAllSidebarSessions(page);
           await page
             .locator(".sidebar-recent-session__name")
@@ -65,11 +191,24 @@ suite.define(() => {
               ),
             ].map((control) => {
               const box = control.getBoundingClientRect();
-              return { control: control.className, offset: box.x + box.width / 2 - center };
+              return {
+                control: control.className,
+                offset: box.x + box.width / 2 - center,
+                size: [box.width, box.height, getComputedStyle(control).borderRadius].join(" "),
+                top: box.top,
+                bottom: box.bottom,
+              };
             });
           });
           for (const measured of geometry) {
             expect(Math.abs(measured.offset), measured.control).toBeLessThanOrEqual(0.5);
+            expect(measured.size, measured.control).toBe(geometry[0]!.size);
+          }
+          // The top stack (agent card, New session, views, search) keeps one 8px pitch;
+          // New session differs from its neighbors only by its accent fill.
+          for (let index = 1; index < 6; index += 1) {
+            const control = geometry[index]!;
+            expect(control.top - geometry[index - 1]!.bottom, control.control).toBeCloseTo(8, 1);
           }
           const agentBox = await rail.locator(".sidebar-agent-card__main").boundingBox();
           const ownerBox = await owner.boundingBox();
@@ -105,8 +244,45 @@ suite.define(() => {
           expect(toolbarBox).not.toBeNull();
           expect(sessionsBox).not.toBeNull();
           expect(firstRowBox).not.toBeNull();
-          expect(sessionsBox!.y - toolbarBox!.y - toolbarBox!.height).toBe(4);
+          expect(sessionsBox!.y - toolbarBox!.y - toolbarBox!.height).toBe(6);
           expect(firstRowBox!.y - sessionsBox!.y).toBe(0);
+
+          // Every view's row fill starts at the panel content edge and every title
+          // starts on one text column. Views slide in, so wait for each fill to settle.
+          const left = (locator: ReturnType<typeof page.locator>) =>
+            locator.evaluate((element) => element.getBoundingClientRect().left);
+          const contentLeft = await left(
+            page.locator("openclaw-app-sidebar .sidebar-shell__content"),
+          );
+          const columns: number[] = [];
+          const measure = async (view: string, fill: string, text: string) => {
+            const pageRow = page.locator(fill).first();
+            await pageRow.waitFor();
+            await expect.poll(() => left(pageRow), { message: view }).toBeCloseTo(contentLeft, 1);
+            columns.push(await left(pageRow.locator(text)));
+          };
+          await measure(
+            "sessions",
+            ".sidebar-sessions .sidebar-recent-session",
+            ".sidebar-recent-session__name",
+          );
+          await page.locator('[data-navigation-view="pages"]').click();
+          await measure("pages", ".sidebar-pages__entry .nav-item", ".nav-item__text");
+          await evaluateControlUiContext(
+            page,
+            ({ navigation }, entries) => navigation.update({ sidebarEntries: entries }),
+            ["session:agent:main:notes"],
+          );
+          await measure(
+            "pinned",
+            ".sidebar-pages__entry .sidebar-recent-session",
+            ".sidebar-recent-session__name",
+          );
+          await page.locator('[data-navigation-view="online"]').click();
+          await measure("users", ".sidebar-online__person", ".sidebar-online__person-name");
+          for (const text of columns) {
+            expect(text, JSON.stringify(columns)).toBeCloseTo(columns[0]!, 1);
+          }
         },
       );
     },

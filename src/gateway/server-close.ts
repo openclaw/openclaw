@@ -44,6 +44,7 @@ import { clearSessionTypingState } from "./server-methods/session-typing-state.j
 import type { GatewayCloseOptions } from "./server-public.js";
 import { prepareGatewayRunShutdown, type GatewayRunShutdownParams } from "./server-run-shutdown.js";
 import {
+  createGatewayCloseSteps,
   recordGatewayShutdownWarning as recordShutdownWarning,
   resolveGatewayShutdownNotice,
   GatewayShutdownCleanupRetainedError,
@@ -64,48 +65,6 @@ type ShutdownResult = {
   durationMs: number;
   warnings: string[];
 };
-
-function createCloseSteps(
-  reason: string,
-  warnings: string[],
-  cleanupWork: AsyncWorkScope,
-  exitAfterClose: boolean,
-) {
-  const retainedErrors: unknown[] = [];
-  const measureCloseStep = async <T>(
-    name: string,
-    run: () => Promise<T> | T,
-    timeoutMs = RUNTIME_CLOSE_GRACE_MS,
-  ) => {
-    const work = measureGatewayCloseStep(`restart.close.${name}`, run, [["reason", reason]]);
-    if (exitAfterClose && !(await settlesWithin(work, timeoutMs))) {
-      throw new GatewayShutdownCleanupRetainedError([], `${name} resources remain after grace`);
-    }
-    return await work;
-  };
-  const shutdownStep = async (name: string, fn: () => Promise<void> | void, phase = name) => {
-    const work = cleanupWork.track(async () => {
-      try {
-        await measureGatewayCloseStep(`restart.close.${phase}`, fn, [["reason", reason]]);
-      } catch (err: unknown) {
-        if (isGatewayCleanupRetainedError(err)) {
-          retainedErrors.push(err);
-        }
-        const detail = err instanceof Error ? err.message : String(err);
-        shutdownLog.warn(`${name}: ${detail}`);
-        recordShutdownWarning(warnings, name);
-      }
-    });
-    if (!exitAfterClose) {
-      await work;
-    } else if (!(await settlesWithin(work, RUNTIME_CLOSE_GRACE_MS))) {
-      // The final persistence barrier still owns this exact operation after its grace.
-      shutdownLog.warn(`${name}: resources remain after grace`);
-      recordShutdownWarning(warnings, name);
-    }
-  };
-  return { measureCloseStep, shutdownStep, retainedErrors };
-}
 
 export async function runGatewayClosePrelude(params: {
   stopDiagnostics?: () => void;
@@ -247,7 +206,7 @@ export async function prepareGatewayClose(
   const restart = restartExpectedMs !== null;
   const cleanupWork = new AsyncWorkScope();
   const exitAfterClose = opts?.exitAfterClose === true;
-  const { shutdownStep, retainedErrors } = createCloseSteps(
+  const { shutdownStep, retainedErrors } = createGatewayCloseSteps(
     reason,
     warnings,
     cleanupWork,
@@ -286,15 +245,8 @@ export async function prepareGatewayClose(
         warnings,
       }),
     );
-    // Track settlement immediately: ordinary-stop hooks may still be running
-    // when an admission releases or its cancellation callback fails.
-    const settlement = cleanupWork.track(() =>
-      measureGatewayCloseStep("restart.close.session-admissions", () => admissions.released),
-    );
-    void settlement.catch((error: unknown) => {
-      shutdownLog.warn(`session admission settlement failed: ${formatErrorMessage(error)}`);
-      recordShutdownWarning(warnings, "session-admissions");
-    });
+    // Start the join immediately, alongside the remaining shutdown hooks.
+    void shutdownStep("session-admissions", () => admissions.released, admissions.inspectPending);
     return admissions.failure;
   };
 
@@ -387,7 +339,7 @@ async function closeGatewayResources(
     resourceCleanupErrors.push(error);
   };
   let closeFailure: { error: unknown } | undefined;
-  const { measureCloseStep, shutdownStep, retainedErrors } = createCloseSteps(
+  const { measureCloseStep, shutdownStep, retainedErrors } = createGatewayCloseSteps(
     reason,
     warnings,
     cleanupWork,
@@ -591,9 +543,11 @@ async function closeGatewayResources(
     closeFailure = { error };
   }
   try {
-    // Keep shared databases alive when a model, tool, or cleanup owner outlives
-    // its grace. Only a fresh process may restart that retained generation.
-    await measureCloseStep("cleanup-work", () => cleanupWork.runWhenIdle(() => {}));
+    // Grace warnings must not strand retirement after accepted finalizers settle.
+    // The process deadline bounds this join; databases stay live until it completes.
+    await measureGatewayCloseStep("restart.close.cleanup-work", () =>
+      cleanupWork.runWhenIdle(() => {}),
+    );
     if (resourceCleanupErrors.length) {
       throw resourceCleanupErrors[0];
     }
@@ -648,14 +602,18 @@ async function closeGatewayResources(
                 await measureCloseStep("incognito-sessions", () =>
                   memorySessionActorOwners.reset(),
                 );
-                // Owned process trees get their normal TERM window before shared state retires.
-                await measureCloseStep(
+                const supervisorFailure = await measureCloseStep(
                   "process-supervisor",
-                  shutdownProcessSupervisor,
+                  () => shutdownProcessSupervisor().catch((error: unknown) => ({ error })),
                   GRACEFUL_CANCEL_TIMEOUT_MS + 1_000,
                 );
+                // A settled failure has joined owned runs; failed out-of-process trees own
+                // their own connections and leases. Pending cleanup still retains our handles.
                 // Releasing agent leases still writes shared state; keep its owner alive until then.
                 await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
+                if (supervisorFailure) {
+                  throw supervisorFailure.error;
+                }
                 await measureCloseStep("debug-proxy", () =>
                   finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure),
                 );
@@ -712,7 +670,7 @@ async function closeGatewayResources(
   const durationMs = Date.now() - start;
   if (resourceCleanupErrors.length > 0 || closeFailure) {
     shutdownLog.warn(
-      `shutdown failed in ${durationMs}ms${warnings.length ? `: ${warnings.join(", ")}` : ""}`,
+      `shutdown failed in ${durationMs}ms: ${resourceCleanupErrors.map(formatErrorMessage).join("; ")}${warnings.length ? `; warnings: ${warnings.join(", ")}` : ""}`,
     );
   } else if (warnings.length > 0) {
     shutdownLog.warn(`shutdown completed in ${durationMs}ms with warnings: ${warnings.join(", ")}`);

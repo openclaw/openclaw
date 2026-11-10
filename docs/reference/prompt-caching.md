@@ -124,7 +124,21 @@ guidance beside the receiving turn, including recovered deliveries. These
 instructions keep their wording without changing the earlier system prefix.
 Unrelated caller-supplied system instructions retain their existing placement.
 
+Background results accepted during an active run remain immediately visible and
+durable, but enter model history only at the next request boundary. An appended
+`openclaw.background-result-placement` transcript marker references the original
+result entries and its preceding entry. Live requests and replay consume that
+same placement, after any assistant output already committed. Accepted result
+bytes are never rewritten. If a run stops before placement, its next request
+places the pending result. Transcripts without placement markers keep their
+existing interpretation; older readers omit pending results rather than insert
+them ahead of signed output.
+
 ## Keep replayed tool results stable
+
+Image attachments use the same agent image sanitization on initial submission and
+history replay. Replay loads the original attachment bytes without a separate
+delivery resize, so an aborted turn or session reopen preserves the image prefix.
 
 OpenClaw applies the same tool-result text cap before the first model request
 and when persisting the result. Subsequent turns therefore replay the same
@@ -294,6 +308,7 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 - Lifetime fields require both cache-key support and `compat.supportsLongCacheRetention` (true by default; Together AI and Cloudflare profiles disable it). Opted-in proxies use the same GPT-5.6+ TTL mapping and otherwise receive `"24h"`; disable long-retention support if the proxy rejects lifetime fields.
 - `cacheRetention: "short"` sends the key without lifetime fields, leaving the provider's default lifetime in effect. `cacheRetention: "none"` suppresses the key and both lifetime fields; it does not disable OpenAI's automatic prompt caching.
 - Native ChatGPT-backed Responses routes keep the session cache key, honor `none`, and omit both OpenAI lifetime fields.
+- Azure OpenAI Responses sends the cache key by default and honors `none`; set `compat.supportsPromptCacheKey: false` on deployments that reject `prompt_cache_key`.
 - Cache hits surface via `usage.prompt_tokens_details.cached_tokens` (Chat Completions) or `input_tokens_details.cached_tokens` (Responses API), mapped to `cacheRead`.
 - Responses API payloads can also expose `input_tokens_details.cache_write_tokens`, mapped to `cacheWrite` and priced at the model's cache-write rate; Responses payloads that omit the field keep `cacheWrite` at `0`. Chat Completions payloads that include `prompt_tokens_details.cache_write_tokens` also populate `cacheWrite`; availability depends on the model and route.
 - Captured consecutive Responses request bodies retained byte-identical history prefixes, so history rewriting did not explain the observed shortfall. Provider breakpoint placement can affect reported `cacheRead`: OpenAI documents message-end breakpoints for GPT-5.6 and later on the Platform API, while the ChatGPT-backed Responses route was observed to report hits in 1,024-token steps. See [OpenAI live expectations](#openai-live-expectations) below.
@@ -600,7 +615,9 @@ The route part names the first changed element: `provider`, `model`, `api`,
 tokens are reported, never profile IDs, route-key contents, or prompt text.
 Routes without a system-prompt series omit the field.
 
-The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; active sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
+History baselines share a 16 MiB budget for fingerprint strings and container overhead, in addition to the 512-tracker limit. The least recently used baselines are released when either limit is reached; a single history exceeding the byte budget is not retained and can also evict older baselines. Evicted sessions start a fresh diagnostic baseline on their next request. Provider prompt observations retain bounded digests and wire metadata, not request payloads.
+
+The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; resident sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
 
 For encoded provider requests, `providerPrefix` compares the serialized instructions, tools, and up to 512 input items. It names the first changed item, with bounded protocol fields for the first 32 items, such as `message:3.encrypted_content`, plus changed request parameters such as `parameters:prompt_cache_key`. Values and unknown field names are never logged. `order` means object key order changed without a tracked field-value change; it is wire evidence, not proof that the provider rendered different tokens. Beyond the item limit, a tail digest can detect changes but cannot locate the first differing item.
 

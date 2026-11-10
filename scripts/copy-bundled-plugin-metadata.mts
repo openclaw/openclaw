@@ -19,6 +19,7 @@ import {
   mapPluginCatalogEntries,
 } from "./lib/bundled-plugin-build-entries.mjs";
 import { linkSourcePluginDependencies } from "./lib/bundled-plugin-dependency-links.mjs";
+import { ensureOpenClawExtensionAlias } from "./lib/bundled-plugin-sdk-alias.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   mergeGeneratedChannelConfigs,
@@ -32,7 +33,6 @@ import {
   removePathIfExists,
   writeTextFileIfChanged,
 } from "./runtime-postbuild-shared.mjs";
-import { ensureOpenClawExtensionAlias } from "./stage-bundled-plugin-runtime.mts";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
@@ -69,6 +69,30 @@ function rewritePackageEntry(entry: unknown, extension: string): string | undefi
   const normalized = entry.replace(/^\.\//, "");
   const rewritten = normalized.replace(/\.[^.]+$/u, extension);
   return `./${rewritten}`;
+}
+
+function rewritePackageExportTargets(value: unknown, extension: string, types = false): unknown {
+  if (typeof value === "string") {
+    return !types && /(?<!\.d)\.[cm]?tsx?$/u.test(value)
+      ? rewritePackageEntry(value, extension)
+      : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((target) => rewritePackageExportTargets(target, extension, types));
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([condition, target]) => [
+        condition,
+        rewritePackageExportTargets(
+          target,
+          extension,
+          types || condition === "types" || condition.startsWith("types@"),
+        ),
+      ]),
+    );
+  }
+  return value;
 }
 
 function ensurePathInsideRoot(rootDir: string, rawPath: string): string {
@@ -438,6 +462,12 @@ function copyMetadata(params: CopyMetadataParams): void {
       };
     }
 
+    if (packageJson && packageJson.exports !== undefined) {
+      packageJson.exports = rewritePackageExportTargets(
+        packageJson.exports,
+        buildEntry.runtimeExtension,
+      );
+    }
     writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
     if (buildEntry.isolated) {
       linkSourcePluginDependencies(pluginDir, distNodeModules);

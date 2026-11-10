@@ -74,6 +74,9 @@ type ChatHistoryLoadState =
   | ({ phase: "failed"; message: string; retryable: boolean } & ChatHistoryLoadRequest);
 
 type ChatHistoryPaneRequests = {
+  // A failed authoritative read must not restore a prefix invalidated by a
+  // cursor reset. Keep that fact only for the connection and selected session.
+  windowReset?: { isCurrent: () => boolean };
   historyVersion: number;
   branchVersion: number;
   branchQuery: ChatBranchesQueryReceipt | undefined;
@@ -363,7 +366,11 @@ export function acceptsHistoryResult(
   );
 }
 
-export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+export function resetChatHistoryProjection(
+  state: ChatState,
+  agentId?: string,
+  retainedHistory: unknown[] = [],
+): void {
   retireChatHistoryRead(state);
   retireInitialChatSnapshot(state);
   retirePullRequestRefreshes(state);
@@ -373,6 +380,7 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
   delete requests.initialHistory;
+  delete requests.windowReset;
   // Keep the presentation accessor installed when clearing accepted history.
   requests.acceptedHistory = undefined;
   setChatHistoryLoad(state, { phase: "idle" });
@@ -381,6 +389,15 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // Destructive operations keep the public session key, so only an explicit
   // reducer reset can prevent old live or pending rows from crossing epochs.
   reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
+  if (retainedHistory.length) {
+    // A successful rewind proves its unchanged prefix. Publish it in the same
+    // turn as the epoch reset so the mounted transcript never becomes empty.
+    reduceChatSessionProjection(
+      state,
+      { type: "snapshotLoaded", messages: retainedHistory },
+      { scope },
+    );
+  }
 }
 
 export function setChatError(

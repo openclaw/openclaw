@@ -1,0 +1,2 @@
+120
+# Real Gateway title-publication ordering regression; preserves the original three modes.

@@ -6,6 +6,7 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
+import type { OperationalRunInstanceRef } from "../../operational-run-instance.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
@@ -113,6 +114,8 @@ export type RequesterSettleWakeState = {
   batchRunIds?: string[];
   /** Batch frozen while its spawning requester turn was yielding. */
   requesterYieldBatch?: true;
+  /** Exact parked lifecycle this cohort must settle if no continuation starts. */
+  requesterRunId?: string;
   /** Present only when an idle requester needs a new turn after yielding. */
   afterRequesterYield?: true;
   /**
@@ -171,6 +174,8 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   requesterTurnRunId?: string;
   /** Durable proof that this requester attempt invoked sessions_yield. */
   requesterTurnYielded?: true;
+  /** This yield waits for its requester, rather than owned child completions. */
+  waitForMessage?: true;
   /** Completion-producing row retirement deferred until requesterTurnRunId settles. */
   retireAfterRequesterTurn?: boolean;
   requesterOrigin?: DeliveryContext;
@@ -260,6 +265,8 @@ export type SubagentRegistrationScope = {
 };
 
 export type RegisterSubagentRunOptions = {
+  /** In-process receipt owner, never persisted or recovered from a run ID. */
+  requesterRunInstance?: OperationalRunInstanceRef;
   /** An accepted dispatch replay retains its original completion owner and waiter. */
   acceptedRunReplay?: true;
   assertCurrent?: () => void;

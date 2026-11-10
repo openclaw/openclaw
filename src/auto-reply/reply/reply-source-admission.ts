@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import { prepareSessionSystemTurnAuthority } from "../../gateway/session-system-turn-authority.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { assertSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
@@ -9,6 +13,7 @@ import {
   getReplyOperationSessionTarget,
 } from "../../sessions/session-controller.session-reader.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { FollowupRun } from "./queue/types.js";
@@ -44,7 +49,10 @@ export async function prepareReplySourceAdmission(params: {
   const release = ownsCustody
     ? async () => {
         try {
-          recorder.finishPendingInput?.("cancelled");
+          recorder.finishPendingInput?.(
+            "cancelled",
+            isUserInitiatedAgentRunAbortReason(operation.abortSignal.reason) ? true : undefined,
+          );
         } finally {
           await recorder.waitForPendingInputSettlement?.();
         }
@@ -74,6 +82,34 @@ export async function prepareReplySourceAdmission(params: {
   } catch (error) {
     await release?.();
     throw error;
+  }
+}
+
+/** Required preflight can invoke models and tools before the reply runner exists. */
+export async function admitReplyMaintenance(
+  turn: {
+    readonly runId: string;
+    queued: FollowupRun;
+    operation: ReplyOperation;
+  },
+  sessionKey: string | undefined,
+  assertCurrent: () => void,
+): Promise<void> {
+  const execution = turn.queued.run.internalEventExecution;
+  await execution?.beforeScheduledStart?.(turn.runId);
+  assertCurrent();
+  // Maintenance owns the occurrence before effects, preventing pre-execution policy replay.
+  execution?.onStarted(turn.runId);
+  const automation = turn.queued.run.scheduledAutomation;
+  if (automation && sessionKey) {
+    automation.onExecutionStarted?.({
+      runId: turn.runId,
+      sessionId: turn.operation.sessionId,
+      sessionKey,
+      provider: turn.queued.run.provider,
+      model: turn.queued.run.model,
+    });
+    automation.onExecutionPhase?.({ jobId: automation.job.id, phase: "context_engine" });
   }
 }
 
@@ -117,4 +153,47 @@ export async function enqueueReplySourceAdmission(params: {
     await recorder?.waitForPendingInputSettlement?.();
   }
   return enqueued;
+}
+
+/** Only unattributed host inputs may fall back to the current session principal. */
+export async function prepareReplySystemPrincipalAuthority(params: {
+  followupRun: FollowupRun;
+  sessionKey?: string;
+  sessionId: string;
+  storePath?: string;
+  resolveGatewayContext?: GatewayContextResolver;
+  assertCurrent: () => void;
+}) {
+  const { followupRun, sessionKey } = params;
+  if (!followupRun.sessionPrincipalTurn || followupRun.operatorAuthority) {
+    return undefined;
+  }
+  const context = getInProcessGatewayRequestContext(params.resolveGatewayContext);
+  if (!context || !sessionKey) {
+    return undefined;
+  }
+  const principal = await prepareSessionSystemTurnAuthority({
+    context,
+    agentId: followupRun.run.agentId,
+    sessionKey,
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    assertCurrent: params.assertCurrent,
+  });
+  if (principal) {
+    const { authority } = principal;
+    const run = followupRun.run;
+    run.senderIsOwner = authority.scopes.includes("operator.admin");
+    run.traceAuthorized = run.senderIsOwner;
+    run.senderId = undefined;
+    run.senderName = undefined;
+    bindCommandOwnerAuthority(run, {
+      operatorAuthority: authority,
+      isCurrent: () => {
+        authority.assertCurrent();
+        return true;
+      },
+    });
+  }
+  return principal;
 }

@@ -3,6 +3,7 @@
   "doctorHealthChecks": true,
   "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "sessionRouteStateOwners": [
     {
       "id": "openai",
@@ -52,7 +53,7 @@
       "openai": {
         "baseUrl": "https://api.openai.com/v1",
         "api": "openai-responses",
-        "defaultUtilityModel": "gpt-5.6-luna",
+        "defaultUtilityModel": "gpt-6-luna",
         "family": "openai",
         "models": [
           {

@@ -13,7 +13,10 @@ import { resolvePluginDoctorContractArtifact } from "../../../plugins/doctor-con
 import { createInstalledPluginIndexScopeLookup } from "../../../plugins/installed-plugin-index-scope-lookup.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "../../../plugins/installed-plugin-index-store-path.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
-import { passesManifestOwnerBasePolicy } from "../../../plugins/manifest-owner-policy.js";
+import {
+  isActivatedManifestOwner,
+  passesManifestOwnerBasePolicy,
+} from "../../../plugins/manifest-owner-policy.js";
 import { isTrustedOfficialCatalogLookupDuplicate } from "../../../plugins/official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntry,
@@ -44,6 +47,7 @@ export type PluginMigrationInspection = {
   runtimePluginAliases: readonly string[];
   unavailablePluginIds?: readonly string[];
   discoveryBlockedPluginIds?: readonly string[];
+  inactivePluginIds?: readonly string[];
   replacementPluginIds?: Readonly<Record<string, string>>;
 };
 
@@ -256,6 +260,19 @@ export async function inspectPluginMigrationAvailability(params: {
             statelessPlugins,
             runtimePluginAliases,
             discoveryBlockedPluginIds,
+            inactivePluginIds: [...inspectedIds].filter((id) => {
+              const plugin = metadata.byPluginId.get(id);
+              return (
+                !selected.has(id) ||
+                (plugin
+                  ? !isActivatedManifestOwner({
+                      plugin,
+                      normalizedConfig,
+                      rootConfig: params.cfg,
+                    })
+                  : !passesManifestOwnerBasePolicy({ plugin: { id }, normalizedConfig }))
+              );
+            }),
             // The updating parent still owns package availability until convergence resumes.
             ...(!params.deferInstallation ? { unavailablePluginIds, replacementPluginIds } : {}),
           };

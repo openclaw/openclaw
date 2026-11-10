@@ -53,7 +53,7 @@ export type { SessionSystemPromptReport } from "./session-system-prompt-report.j
 export type { SessionScope } from "../types.base.js";
 export type SessionChatType = ChatType;
 export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
-export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
+export const SESSION_TOTAL_TOKENS_VERSION = 2 as const;
 
 type SessionGitHubPullRequestSource = {
   repository: string;
@@ -69,6 +69,8 @@ export type SessionGitHubPullRequestBinding = {
   number: number;
   base: SessionGitHubPullRequestSource;
   head: SessionGitHubPullRequestSource;
+  /** Verified publication before first binding; absent on already-admitted legacy bindings. */
+  origin?: "session-publication" | "external-pr";
   /** Prepared initial PR head; absence means its first import is incomplete. */
   preparedHeadCommit?: string;
 };
@@ -561,8 +563,8 @@ type SessionEntryCore = SessionEntryProvenance &
      * totalTokens as stale/unknown for context-utilization displays.
      */
     totalTokensFresh?: boolean;
-    /** Version 1 records totalTokens as the current prompt/context snapshot only. */
-    totalTokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
+    /** Version 2 includes the last response's completion and pending request additions. */
+    totalTokensVersion?: 1 | typeof SESSION_TOTAL_TOKENS_VERSION;
     estimatedCostUsd?: number;
     cacheRead?: number;
     cacheWrite?: number;
@@ -640,6 +642,14 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
+  localWorkspaceHandoff?: {
+    worktreeId: string;
+    fromSessionId: string;
+    toSessionId: string;
+    lifecycleRevision: string | null;
+    projectionRevision: number;
+  };
   /** Original unbound files, private to this conversation's adopted workspace. */
   priorWorkspace?: {
     worktreeId: string;
@@ -674,6 +684,16 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Written only by committed graceful shutdown, consumed by the next startup. */
   resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
+  /**
+   * Latest authenticated source per person who sent input here, keyed by profile ID. Restored only
+   * through current device, auth, profile and role revalidation; never an executable grant.
+   */
+  operatorSources?: Record<
+    string,
+    import("../../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot
+  >;
+  /** Upgrade-only cycle; remove once stable includes the restart redesign (#185730). */
+  mainRestartRecovery?: { cycleId: string };
 };
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}

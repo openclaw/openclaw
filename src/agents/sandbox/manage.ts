@@ -114,7 +114,8 @@ export async function removeSandboxRuntimeGeneration(params: {
   id: string | null;
   bridges: ReadonlyArray<readonly [string, CachedBrowserBridge]>;
   assertCurrent: () => void;
-  assertGenerationCurrent?: () => Promise<void>;
+  assertGenerationCurrent?: () => void | Promise<void>;
+  signal?: AbortSignal;
 }): Promise<void> {
   const { runtime, engine, id } = params;
   const revalidateGeneration = async () => {
@@ -136,7 +137,11 @@ export async function removeSandboxRuntimeGeneration(params: {
   );
   await revalidateGeneration();
   assertCurrent();
-  await removeSandboxContainerRuntime(engine, runtime.entry.containerName, { id, assertCurrent });
+  await removeSandboxContainerRuntime(engine, runtime.entry.containerName, {
+    id,
+    assertCurrent,
+    signal: params.signal,
+  });
   // A name can be rebound without a registry update. Never forget its replacement's
   // metadata or bridge merely because the old physical ID was already absent.
   const assertAbsent = async () => {

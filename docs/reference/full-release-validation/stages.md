@@ -86,6 +86,15 @@ producer run, and attempt; it does not repack plugin npm candidates after Full
 Release Validation. Source-only files and fixtures therefore cannot trigger the
 artifact checks unless npm actually includes them in a shipped tarball.
 
+Normal publication instead repacks plugins with the admitted publisher tooling
+P and scans them with P's reviewed inventory. When P differs from this run's
+tooling, `Prepare exact plugin npm artifacts` does the same while the child runs:
+it packs every selected plugin with reviewed findings using P's packer and scans
+with P's scanner. A reviewed hash, path, or count that P's toolchain changes
+fails that job minutes into the run, not at publish. The failure names the
+package, packed file, and new `contentSha256`. Review that file before you record
+the new value in `scripts/plugin-npm-security-scan.mts` on `main`.
+
 For directly dispatched `OpenClaw NPM Release` preflight-only runs, if qualification
 fails after source checks and package preparation succeed, rerun the failed
 qualification job. It reuses the exact successful producer jobs

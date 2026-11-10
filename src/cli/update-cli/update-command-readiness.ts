@@ -373,28 +373,13 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       );
       assertCurrent();
       const readyz = http.readyz === 200;
+      // HTTP does not change the restart owner's observed process/build identity.
       if (
-        health.healthy &&
-        (!params.requireRunningService || health.runtime.status === "running")
+        params.requireRunningService &&
+        (health.runtime.status !== "running" ||
+          (process.platform !== "win32" && health.runtime.pid === undefined))
       ) {
-        const startupPhase = health.startupPhase;
-        health = await deadline.read("final Gateway identity", () =>
-          inspectGatewayRestart({
-            ...probeParams,
-            probeContext: context,
-            timeoutMs: Math.max(1, remainingMs()),
-          }),
-        );
-        assertCurrent();
-        retainChannelTimeouts(health);
-        health.startupPhase = startupPhase;
-        if (
-          params.requireRunningService &&
-          (health.runtime.status !== "running" ||
-            (process.platform !== "win32" && health.runtime.pid === undefined))
-        ) {
-          health.healthy = false;
-        }
+        health.healthy = false;
       }
       if (!(http.coreReady ?? readyz) || remainingMs() === 0) {
         health = {

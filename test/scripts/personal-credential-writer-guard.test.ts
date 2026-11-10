@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import type * as ts from "typescript/ast";
+import { Checker } from "typescript/sync";
 import { expect, it } from "vitest";
 import { inspectDatabaseWorkerBoundaries } from "../../scripts/lib/database-worker-compat.mts";
 
@@ -471,6 +473,45 @@ it("guards publication mutation entry paths and the existing repeated factory ca
   );
 });
 
+it("admits only the personal restart owner and its selected registry export", () => {
+  const personal = "src/gateway/github-personal-publication-store.worker.ts";
+  const registry = "src/state/openclaw-state-worker-registry.ts";
+  const writer = "requirePersonalGitHubPublicationConfirmationInDatabase";
+  const message = "unreviewed GitHub publication writer reference";
+  const reject = allowedGraph({
+    [personal]: `
+      export function ${writer}() {}
+      export const personalPublicationRestartOperations = {
+        'githubPublications.personalRestart': () => ${writer}(),
+      };
+    `,
+    [registry]: `
+      export const loaders = {
+        'githubPublications.personalRestart': () =>
+          import('../gateway/github-personal-publication-store.worker.js').then(
+            ({ personalPublicationRestartOperations }) => personalPublicationRestartOperations,
+          ),
+      };
+    `,
+  });
+  reject(
+    personal,
+    (source) => source.replace("githubPublications.personalRestart", "githubPublications.bypass"),
+    message,
+  );
+  reject(
+    publicationWorker,
+    `import { ${writer} } from '../gateway/github-personal-publication-store.worker.js';
+     function personalMutation() { ${writer}(); }`,
+    message,
+  );
+  reject(
+    registry,
+    (source) => source.replaceAll("personalPublicationRestartOperations", writer),
+    message,
+  );
+});
+
 it("counts the receipt deletion loop and lifecycle deletion as two reviewed sinks", () => {
   const file = "src/state/github-personal-publication-lifecycle.ts";
   const source = `export function deletePersonalGitHubSessionReceiptsInDatabase() {
@@ -551,6 +592,65 @@ it("requires the host publication adapter for direct and aliased machine-state c
       { "src/new-writer.ts": direct },
       "machineState.write credential writes require the host publication adapter",
     );
+  }
+});
+
+it("batches semantic command types per file while retaining literal and owner checks", () => {
+  const queries: (ts.Node | readonly ts.Node[])[] = [];
+  const descriptor = Object.getOwnPropertyDescriptor(Checker.prototype, "getTypeAtLocation")!;
+  try {
+    Object.defineProperty(Checker.prototype, "getTypeAtLocation", {
+      ...descriptor,
+      get(this: Checker) {
+        const query: Checker["getTypeAtLocation"] = descriptor.get!.call(this);
+        const observed = Object.assign(
+          ((input: ts.Node | readonly ts.Node[]) => {
+            queries.push(input);
+            return Array.isArray(input) ? query(input) : query(input as ts.Node);
+          }) as Checker["getTypeAtLocation"],
+          { gen: query.gen.bind(query) },
+        );
+        Object.defineProperty(this, "getTypeAtLocation", { configurable: true, value: observed });
+        return observed;
+      },
+    });
+    const violations = inspect({
+      "src/state/config-machine-state-async.ts": `export function writeConfigMachineStateAsync(command: "machineState.write" | "safe.read") {
+        scope.execute({ type: command });
+      }`,
+      "src/new-writer.ts": `export function bypass(union: "machineState.write" | "safe.read") {
+        const alias = "machineState.write" as const;
+        const type = alias;
+        scope.execute({ type: alias });
+        scope.execute({ type });
+        scope.execute({ type: union });
+      }`,
+      "src/literal-writer.ts": `export function bypass() {
+        scope.execute({ type: "machineState.write" });
+      }`,
+    });
+    expect(violations).toHaveLength(4);
+    expect(violations).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("src/literal-writer.ts:2: machineState.write credential writes"),
+        ...[4, 5, 6].map((line) =>
+          expect.stringContaining(
+            `src/new-writer.ts:${line}: machineState.write credential writes`,
+          ),
+        ),
+      ]),
+    );
+    expect(queries.every(Array.isArray)).toBe(true);
+    expect(
+      queries.map((nodes) => (nodes as readonly ts.Node[]).length).toSorted((a, b) => a - b),
+    ).toEqual([1, 3]);
+    expect(
+      queries.flatMap((nodes) =>
+        (nodes as readonly ts.Node[]).map((node) => node.getSourceFile().fileName),
+      ),
+    ).not.toContainEqual(expect.stringContaining("literal-writer"));
+  } finally {
+    Object.defineProperty(Checker.prototype, "getTypeAtLocation", descriptor);
   }
 });
 
@@ -881,16 +981,31 @@ it("permits supplied-database SDK save custody without granting sibling factory 
 });
 
 const authStorageSources = {
-  "src/agents/sessions/auth-storage.ts": `
+  "src/agents/sessions/auth-storage.core.ts": `
     export class AuthStorage {
       static forAgent() { return new AuthStorage(); }
-      static create() { return AuthStorage.forAgent(); }
       static forAgentAsync() { return new AuthStorage(); }
       static fromStorage() { return new AuthStorage(); }
       static inMemory() { return new AuthStorage(); }
       set() {}
       remove() {}
     }
+  `,
+  "src/agents/sessions/auth-storage.ts": `
+    import { AuthStorage as CoreAuthStorage } from './auth-storage.core.js';
+    declare const Object: {
+      assign<T, U>(target: T, source: U): T & U;
+      defineProperty(target: unknown, property: string, descriptor: unknown): void;
+    };
+    export type AuthStorage = CoreAuthStorage;
+    const forAgent = CoreAuthStorage.forAgent;
+    const forAgentAsync = CoreAuthStorage.forAgentAsync;
+    export const AuthStorage = Object.assign(CoreAuthStorage, {
+      forAgent() { return forAgent(); },
+      async forAgentAsync() { return forAgentAsync(); },
+      create() { return AuthStorage.forAgent(); },
+    });
+    Object.defineProperty(AuthStorage, 'create', { enumerable: false });
   `,
   "src/agents/sessions/index.ts": `export * from './auth-storage.js';`,
   "src/plugin-sdk/agent-sessions.ts": `export { AuthStorage } from '../agents/sessions/index.js';`,
@@ -913,6 +1028,9 @@ it("preserves the released AuthStorage barrel and nonnative constructors", () =>
 
 it.each([
   "import { AuthStorage } from './plugin-sdk/agent-sessions.js'; AuthStorage.forAgent().set();",
+  "import { AuthStorage } from './agents/sessions/auth-storage.core.js'; AuthStorage.forAgent().set();",
+  "import { AuthStorage } from './agents/sessions/auth-storage.core.js'; export const Storage = AuthStorage;",
+  "import { AuthStorage } from './plugin-sdk/agent-sessions.js'; new AuthStorage();",
   "import { AuthStorage as Storage } from './plugin-sdk/agent-sessions.js'; Storage.create().remove();",
   "import * as sdk from './plugin-sdk/agent-sessions.js'; sdk.AuthStorage.forAgent().set();",
   "import * as sdk from './plugin-sdk/agent-sessions.js'; sdk.AuthStorage['create']().remove();",
@@ -929,13 +1047,52 @@ it.each([
   );
 });
 
+it.each([
+  "Object.defineProperty(AuthStorage, 'create', { value: () => undefined });",
+  "Object.defineProperty(AuthStorage, 'forAgent', { enumerable: false });",
+  "export const escaped = forAgent;",
+  "{ const forAgent = CoreAuthStorage.forAgent; }",
+  "export function escapeNestedFactory() { const forAgent = CoreAuthStorage.forAgent; return forAgent; }",
+  "export function escapeNestedConstructor() { const AuthStorage = Object.assign(CoreAuthStorage, { forAgent() {}, async forAgentAsync() {}, create() {} }); return AuthStorage; }",
+])("rejects AuthStorage facade escapes beyond its descriptor adapter: %s", (extra) => {
+  expectDenied({
+    ...authStorageSources,
+    "src/agents/sessions/auth-storage.ts":
+      authStorageSources["src/agents/sessions/auth-storage.ts"] + extra,
+  });
+});
+
+it("rejects exporting the captured synchronous AuthStorage factory", () => {
+  expectDenied(
+    {
+      ...authStorageSources,
+      "src/agents/sessions/auth-storage.ts": authStorageSources[
+        "src/agents/sessions/auth-storage.ts"
+      ].replace("const forAgent =", "export const forAgent ="),
+    },
+    [
+      "auth-storage.core.ts:AuthStorage/forAgent",
+      "auth-storage.ts:forAgent from src/agents/sessions/index.ts",
+    ],
+  );
+});
+
 it("keeps session membership writes with the worker and canonical entry owners", () => {
   const members = "src/config/sessions/session-sharing-store.native.ts";
   const reject = allowedGraph({
-    [members]: `export function addSessionMember() { db.insertInto('session_members'); }`,
+    [members]: `
+      export function addSessionMember() { addSessionMemberInTransaction(); }
+      export function addSessionMemberInTransaction() { db.insertInto('session_members'); }
+    `,
     "src/config/sessions/session-sharing-store.worker.ts": `
       import { addSessionMember } from './session-sharing-store.native.js';
       function bindSqliteWorkerBackend() { return { execute() { addSessionMember(); } }; }
+    `,
+    "src/config/sessions/session-accessor.sqlite-involvement.worker.ts": `
+      import { addSessionMemberInTransaction } from './session-sharing-store.native.js';
+      export function updateSessionProfileInvolvementInTransaction() {
+        addSessionMemberInTransaction();
+      }
     `,
     "src/config/sessions/session-accessor.sqlite-node-artifacts.ts": `
       export function clearSessionCollaborationForKey() {
@@ -952,14 +1109,21 @@ it("keeps session membership writes with the worker and canonical entry owners",
     `,
   });
 
-  reject(
-    "src/new-writer.ts",
-    `
-        import { addSessionMember } from './config/sessions/session-sharing-store.native.js';
-        addSessionMember();
+  for (const writer of ["addSessionMember", "addSessionMemberInTransaction"]) {
+    reject(
+      "src/new-writer.ts",
+      `
+        import { ${writer} } from './config/sessions/session-sharing-store.native.js';
+        ${writer}();
         db.exec('DELETE FROM session_members');
       `,
-    ["unreviewed session membership writer reference", "raw authority-table write"],
+      ["unreviewed session membership writer reference", "raw authority-table write"],
+    );
+  }
+  reject(
+    "src/config/sessions/session-accessor.sqlite-involvement.worker.ts",
+    (source) => source.replace("updateSessionProfileInvolvementInTransaction", "unreviewedWriter"),
+    "unreviewed session membership writer reference",
   );
 });
 

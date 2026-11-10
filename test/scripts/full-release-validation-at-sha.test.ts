@@ -412,6 +412,9 @@ describe("full-release-validation-at-sha", () => {
         `release-publish/${"a".repeat(12)}-123`,
         "--target-ref",
         "release/2026.7.1",
+        "--admission-workflow-sha",
+        "b".repeat(40),
+        "--pin-admission-workflow",
         "--keep-branch",
         "--dry-run",
         "-f",
@@ -422,6 +425,7 @@ describe("full-release-validation-at-sha", () => {
     ).toMatchObject({
       dryRun: true,
       keepBranch: true,
+      pinAdmissionWorkflow: true,
       inputs: {
         mode: "linux",
         provider: "anthropic",
@@ -446,6 +450,14 @@ describe("full-release-validation-at-sha", () => {
     rejectArgs(["--", "-f"], "-f requires a value");
   });
 
+  it("requires an exact admission SHA when main is explicitly pinned", () => {
+    rejectArgs(["--pin-admission-workflow"], "requires a full --admission-workflow-sha");
+    expect(
+      parseArgs(["--admission-workflow-sha", "b".repeat(40), "--pin-admission-workflow"])
+        .pinAdmissionWorkflow,
+    ).toBe(true);
+  });
+
   it("requires an exact Tooling SHA for protected workflow tags", () => {
     const trustedTag = `release-publish/${"a".repeat(12)}-123`;
     rejectArgs(["--trusted-workflow-ref", trustedTag], "explicit full Tooling SHA");
@@ -459,6 +471,8 @@ describe("full-release-validation-at-sha", () => {
     rejectArgs(["-f", "rerun_group=release-checks"], "rerun_group must be one of");
     rejectArgs(["-f", "rerun_group=qa"], "rerun_group must be one of");
     expect(parseArgs(["-f", "rerun_group=qa-parity"]).inputs.rerun_group).toBe("qa-parity");
+    const qualified = parseArgs(["-f", "rerun_group=qualified-package"]);
+    expect(qualified.inputs.rerun_group).toBe("qualified-package");
     expect(parseArgs(["-f", "rerun_group=windows-node"]).inputs.rerun_group).toBe("windows-node");
   });
 
@@ -1508,13 +1522,31 @@ describe("full-release-validation-at-sha", () => {
       ],
     });
     const result = fixture.run();
-    expectDispatchFailure(result, "blocked_diagnostics_running");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Full Release Validation remains active:");
+    expect(result.stdout).toContain("Continue with: pnpm frv watch --run 123");
     expect(fixture.readWaits()).toEqual([120_000]);
     const calls = fixture.calls();
     expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(1);
     expect(calls.some((args) => args.includes("cancel") || args.includes("watch"))).toBe(false);
     expect(fixture.refs()).toHaveLength(1);
   });
+
+  it.each(["failure", "cancelled"])(
+    "keeps terminal %s authoritative over retained diagnostic-pending evidence",
+    (conclusion) => {
+      const fixture = createDispatchFixture({
+        parentRunStates: [
+          { conclusion, status: "completed", decisionState: "blocked_diagnostics_running" },
+        ],
+      });
+      const result = fixture.run();
+      expectDispatchFailure(result, `Full Release Validation concluded ${conclusion}`);
+      expect(result.stdout).not.toContain("remains active");
+      expect(fixture.readWaits()).toEqual([]);
+      expect(fixture.refs()).toHaveLength(1);
+    },
+  );
 
   it("does not redownload a validated decision or adopt a newer parent attempt", () => {
     const fixture = createDispatchFixture({

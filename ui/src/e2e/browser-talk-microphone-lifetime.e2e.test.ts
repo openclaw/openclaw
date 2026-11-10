@@ -86,7 +86,7 @@ suite.define(() => {
         ).openclawMicrophoneLossE2e?.endMicrophone();
       });
 
-      const alert = page.locator('.agent-chat__talk-status[role="alert"]');
+      const alert = page.locator('.agent-chat__composer-alert[role="alert"]');
       await expect
         .poll(() => alert.textContent())
         .toContain("Microphone input stopped. Choose an available input and start again.");

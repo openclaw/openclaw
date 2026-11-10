@@ -483,7 +483,7 @@ describe("session row transcript backfill", () => {
         openOpenClawAgentDatabase(options)
           .db.prepare("SELECT transcript_updated_at FROM session_windows WHERE session_id = ?")
           .get(params.sessionId),
-      ).toEqual({ transcript_updated_at: transcriptMtimeMs });
+      ).toEqual({ transcript_updated_at: transcriptMtimeMs + 1 });
       expect(readFacts()?.transcriptPreview).toBeUndefined();
       await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
         lastMessagePreview: "Imported next",

@@ -12,7 +12,10 @@ Read [shared conventions](references/conventions.md). This workflow is read-only
    default; try a concise variant, `any`, or `phrase` when useful. No embeddings,
    regex, graph traversal or server-side synthesis is available. Narrow by
    ontology type/kind when appropriate; use `knowledge_records` and pagination
-   for an inventory, not a ranked search pretending to be exhaustive.
+   for an inventory, not a ranked search pretending to be exhaustive. A hit with
+   `matches: ["superseded"]` is the current replacement of an earlier record the
+   query matched; `via` names that earlier revision. The words matched `via`,
+   not the returned record.
 2. Use `knowledge_lookup({query})` only for an already-known exact record ID,
    full title or declared alias. It does not perform keyword search. If it returns
    `missing`, fall back to `knowledge_grep` before concluding no relevant record
@@ -49,7 +52,9 @@ because they appeared in an answer.
 
 Use knowledge_chronicle_day for a day/week, knowledge_chronicle_since for an
 occurrence range, knowledge_timeline for an entity's dated records or a chosen
-timeField, and knowledge_chronicle_last_seen for latest dated context. Resolve
+timeField (group: "source" gives the entity's Timeline: one row per dated
+source with its note, filtered by the source's date; claims dated apart from
+their source keep their own rows), and knowledge_chronicle_last_seen for latest dated context. Resolve
 an entity to a stable page ID first. Dated mentions do not prove attendance.
 For keyword/inventory queries add since/until and timeField to knowledge_grep
 or knowledge_records. occurred_at answers when something happened; recorded_at

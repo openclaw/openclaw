@@ -1,11 +1,24 @@
-import { err, ok } from "@openclaw/normalization-core/result";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
+import type { CombinedSessionStoreTopologyRequest } from "./combined-store.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
+import {
+  measureSessionStoreTargetInventoryInputBytes,
+  type SessionStoreReadCandidate,
+} from "./session-store-read-candidates.js";
+import type {
+  SessionStoreTargetReadRequest,
+  SessionStoreTargetReadResult,
+  SessionStoreTargetInventoryRequest,
+} from "./session-store-target-inventory.js";
+import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
+  type SessionHistoryWorkerInput,
   type SessionHistoryWorkerDatabase,
   type SessionHistoryWorkerPreparedInput,
   type SessionTranscriptWorkerValues,
@@ -302,9 +315,12 @@ const readers: Readers & ThisType<ReaderContext> = {
     return this.runRequest(prepare, inputBytes, (value) => value);
   },
   async readTranscript(input, signal) {
+    const caller = input.caller ?? getSessionTranscriptHydrationCaller();
     const events: TranscriptEvent[] = [];
     const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
-    const eventSeqs: number[] | undefined = input.includeEventJson ? [] : undefined;
+    const streamSelection = input.limits && "compaction" in input.limits && input.limits.compaction;
+    const eventSeqs: number[] | undefined =
+      input.includeEventJson || streamSelection ? [] : undefined;
     const parts: Uint8Array[] = [];
     let decoder: TextDecoder | undefined;
     const receiveChunk = (raw: unknown) => {
@@ -329,7 +345,7 @@ const readers: Readers & ThisType<ReaderContext> = {
       }
     };
     return await this.runRequest(
-      () => ({ kind: "transcript-hydration", ...input }),
+      () => ({ kind: "transcript-hydration", ...input, caller }),
       JSON.stringify(input).length * 2,
       (value) => {
         if (value.kind === "bounded") {
@@ -337,6 +353,28 @@ const readers: Readers & ThisType<ReaderContext> = {
         }
         if (parts.length !== 0 || events.length !== value.eventCount) {
           throw new Error("Session history worker returned an incomplete transcript");
+        }
+        if (value.kind === "streamed-bounded") {
+          const bySequence = new Map(eventSeqs!.map((seq, index) => [seq, events[index]!]));
+          if (
+            bySequence.size !== value.eventCount ||
+            new Set(value.sequences).size !== value.eventCount ||
+            value.sequences.some((seq) => !bySequence.has(seq))
+          ) {
+            throw new Error("Session history worker returned an incomplete selected transcript");
+          }
+          // SQL streams physical order; the semantic window can inject a later boundary
+          // before retained earlier entries, and a migrated header always comes first.
+          return {
+            kind: "bounded",
+            snapshot: {
+              ...value.snapshot,
+              events: value.sequences.map((seq) => bySequence.get(seq)!),
+            },
+            residentRows: value.residentRows,
+            ...(value.transcript ? { transcript: value.transcript } : {}),
+            ...(value.compaction ? { compaction: value.compaction } : {}),
+          };
         }
         return {
           kind: "full",
@@ -348,7 +386,7 @@ const readers: Readers & ThisType<ReaderContext> = {
         };
       },
       signal,
-      input.limits ? undefined : receiveChunk,
+      !input.limits || streamSelection ? receiveChunk : undefined,
     );
   },
   readMaintenance: reader(
@@ -494,3 +532,88 @@ const readers: Readers & ThisType<ReaderContext> = {
     (value) => value,
   ),
 };
+
+// Discovery uses routing settings; model and plugin config stays with host consumers.
+export function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
+  return { agents, acp, session };
+}
+
+export function createSessionStoreTargetReaders(
+  capturedCandidates: SessionStoreReadCandidate[],
+  runRead: <
+    Input extends Extract<
+      SessionHistoryWorkerInput,
+      { kind: "session-store-target" | "session-target-inventory" | "combined-store-topology" }
+    >,
+  >(
+    input: Input,
+    inputBytes: number,
+  ) => Promise<SessionTranscriptWorkerValues[Input["kind"]]>,
+  settleCandidates: () => Promise<void>,
+) {
+  const readStoreTargetResult = async (
+    request: Omit<SessionStoreTargetReadRequest, "candidates">,
+  ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
+    const preparedRequest = {
+      ...request,
+      env: captureSessionTranscriptStorageEnvironment(request.env),
+      candidates: capturedCandidates,
+    };
+    const result = await runRead(
+      { kind: "session-store-target", request: preparedRequest },
+      JSON.stringify(preparedRequest).length * 2,
+    );
+    return "readError" in result
+      ? err(decodeSessionTranscriptWorkerReadError(result.readError))
+      : ok(result);
+  };
+  return {
+    readCombinedTopology: async (
+      request: Omit<CombinedSessionStoreTopologyRequest, "candidates">,
+    ) => {
+      const preparedRequest = {
+        ...request,
+        config: sessionDiscoveryConfig(request.config),
+        options: {
+          ...request.options,
+          discovery: {
+            ...request.options.discovery,
+            env: captureSessionTranscriptStorageEnvironment(request.options.discovery.env),
+          },
+        },
+        candidates: capturedCandidates,
+      };
+      return await runRead(
+        { kind: "combined-store-topology", request: preparedRequest },
+        JSON.stringify(preparedRequest).length * 2,
+      );
+    },
+    readStoreTargetResult,
+    readStoreTarget: async (request: Omit<SessionStoreTargetReadRequest, "candidates">) => {
+      const read = await readStoreTargetResult(request);
+      if (!read.ok) {
+        throw read.error;
+      }
+      return read.value;
+    },
+    readTargetInventory: async (
+      request: Omit<SessionStoreTargetInventoryRequest, "candidates">,
+    ) => {
+      const preparedRequest = {
+        ...request,
+        config: sessionDiscoveryConfig(request.config),
+        env: captureSessionTranscriptStorageEnvironment(request.env),
+        candidates: capturedCandidates,
+      };
+      const result = await runRead(
+        { kind: "session-target-inventory", request: preparedRequest },
+        measureSessionStoreTargetInventoryInputBytes(preparedRequest),
+      );
+      if (result.kind === "session-target-registry-required") {
+        // Release native readers before registry work without discarding a healthy worker.
+        await settleCandidates();
+      }
+      return result;
+    },
+  };
+}

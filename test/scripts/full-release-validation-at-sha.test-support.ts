@@ -53,6 +53,7 @@ export function createDispatchFixture(
     admissionRevokedActor?: boolean;
     admissionFailedUpload?: boolean;
     qualificationMovedRef?: boolean;
+    qualificationRefReadFailure?: boolean;
     advanceMainAfterAdmission?: boolean;
     stopAfterAccepted?: "admission" | "qualification";
     bareShaFetchFailure?: boolean;
@@ -95,6 +96,7 @@ export function createDispatchFixture(
     runDiscoveryMisses?: number;
     targetAlreadyRemote?: boolean;
     includeTargetRef?: boolean;
+    releaseRef?: string;
     workflowSource?: string;
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
@@ -136,7 +138,7 @@ export function createDispatchFixture(
   const payloadCapturePath = join(root, "payload-capture.json");
   const preloadPath = join(root, "immediate-poll.mjs");
   const waitCallsPath = join(root, "wait-calls.txt");
-  const releaseRef = "release/2026.8.1";
+  const releaseRef = options.releaseRef ?? "release/2026.8.1";
   mkdirSync(binDir);
   writeFileSync(npmCallsPath, "");
   writeFileSync(
@@ -147,7 +149,7 @@ export function createDispatchFixture(
   writeFileSync(
     npmPath,
     `#!${testNodeExecPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(npmCallsPath)}, JSON.stringify(args) + "\\n");
 if (JSON.stringify(args) !== JSON.stringify(["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"])) {
@@ -176,6 +178,32 @@ import fs from "node:fs";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { basename, dirname, join } from "node:path";
+// Record CLI Git calls here so ordinary native Git work needs no Node forwarding process.
+// The fake GitHub transport uses MOCK_REAL_PATH for its own unrecorded repository reads.
+for (const method of ["execFileSync", "spawnSync"]) {
+  const executeGit = childProcess[method];
+  childProcess[method] = (file, args, options) => {
+    if (file !== "git" || options?.env?.PATH === process.env.MOCK_REAL_PATH) {
+      return executeGit(file, args, options);
+    }
+    appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
+    let failure = "";
+    if (args[0] === "fetch" && args.includes("refs/heads/main:refs/remotes/origin/main") && ${JSON.stringify(options.toolingLagFetchFailure ?? false)}) {
+      const mainFetches = fs.readFileSync(process.env.MOCK_GIT_CALLS, "utf8").trim().split("\\n")
+        .filter((line) => line.includes("refs/heads/main:refs/remotes/origin/main"));
+      if (mainFetches.length > 1) failure = "fixture origin/main fetch failed";
+    }
+    const bareFetch = args.includes("https://github.com/openclaw/openclaw.git");
+    if (bareFetch && ${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
+      failure = "fatal: remote error: upload-pack: not our ref " + args.at(-1);
+    }
+    if (bareFetch || failure) {
+      return executeGit(process.execPath, ["-e", failure
+        ? "console.error(" + JSON.stringify(failure) + ");process.exit(1)" : ""], options);
+    }
+    return executeGit(file, args, options);
+  };
+}
 const payloadEvent = (stage, path, extra = {}) => appendFileSync(
   ${JSON.stringify(payloadEventsPath)}, JSON.stringify({ stage, path, ...extra }) + "\\n",
 );
@@ -186,7 +214,7 @@ fs.mkdtempSync = (prefix, ...args) => {
   const requests = join(process.cwd(), ".artifacts", "full-release-validation");
   const requestPath = process.env.MOCK_REQUEST_FILE || join(requests, fs.readdirSync(requests).find((name) => name.endsWith(".json")));
   const intent = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-  if (intent.phase !== "prepared" || intent.refs.workflow !== "intended") {
+  if (intent.phase !== "prepared" || !["intended", "uncertain"].includes(intent.refs.workflow)) {
     throw new Error("payload preparation requires durable prepared intent before the workflow ref");
   }
   const directory = makeDirectory(prefix, ...args);
@@ -310,43 +338,11 @@ module.exports = async () => {
 };
 `,
   );
-  const gitPath = join(binDir, "git");
-  writeFileSync(
-    gitPath,
-    `#!${testNodeExecPath}
-const fs = require("node:fs");
-const { spawnSync } = require("node:child_process");
-const args = process.argv.slice(2);
-fs.appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
-if (args[0] === "fetch" && args.includes("refs/heads/main:refs/remotes/origin/main") && ${JSON.stringify(options.toolingLagFetchFailure ?? false)}) {
-  const mainFetches = fs.readFileSync(process.env.MOCK_GIT_CALLS, "utf8").trim().split("\\n")
-    .filter((line) => line.includes("refs/heads/main:refs/remotes/origin/main"));
-  if (mainFetches.length > 1) {
-    console.error("fixture origin/main fetch failed");
-    process.exit(1);
-  }
-}
-if (args.includes("https://github.com/openclaw/openclaw.git")) {
-  if (${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
-    console.error("fatal: remote error: upload-pack: not our ref " + args.at(-1));
-    process.exit(1);
-  }
-  process.exit(0);
-}
-const result = spawnSync("git", args, {
-  env: { ...process.env, PATH: process.env.MOCK_REAL_PATH },
-  stdio: "inherit",
-});
-process.exit(result.status ?? 1);
-`,
-  );
-  chmodSync(gitPath, 0o755);
-
   const ghPath = join(binDir, "gh");
   writeFileSync(
     ghPath,
     `#!${testNodeExecPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 fs.appendFileSync(process.env.MOCK_PATH_GH_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");
 console.error("PATH gh must not be used");
 process.exit(89);
@@ -358,8 +354,10 @@ process.exit(89);
   writeFileSync(
     selectedGhPath,
     `#!${testNodeExecPath}
-const fs = require("node:fs");
-const { spawnSync } = require("node:child_process");
+import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GH_CALLS, JSON.stringify(args) + "\\n");
 const fail = (message, code = 1) => { console.error(message); process.exit(code); };
@@ -540,6 +538,9 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
   console.log(JSON.stringify({ id: 17, path: ".github/workflows/full-release-validation.yml" }));
 } else if (args[0] === "api" && /\\/actions\\/workflows\\/(?:17|full-release-validation.yml)\\/runs$/.test(endpoint)) {
   const concurrencyInventory = fields.has("status");
+  if (!concurrencyInventory && fs.existsSync(${JSON.stringify(admissionCapturePath)} + ".ref-read-failed")) {
+    fs.writeFileSync(${JSON.stringify(admissionCapturePath)} + ".recovery-inventory", "authority revoked during recovery inventory");
+  }
   const requestDirectory = require("node:path").join(process.cwd(), ".artifacts", "full-release-validation");
   const requestFile = fs.existsSync(requestDirectory)
     ? fs.readdirSync(requestDirectory).find((name) => name.endsWith(".json"))
@@ -558,7 +559,7 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
     !fs.existsSync(acceptedRunPath) && concurrencyInventory && fields.get("status") === "in_progress"
     ? [{ ...runMetadata(777, { conclusion: null, status: "in_progress" }), head_branch: request?.request?.workflowRef?.replace(/[0-9]{13}$/, "0000000000001") }]
     : [];
-  const runs = activeConcurrencyRuns.length > 0
+  const runs = concurrencyInventory
     ? activeConcurrencyRuns
     : index < ${JSON.stringify(options.runDiscoveryMisses ?? 0)} || !fs.existsSync(acceptedRunPath)
       ? []
@@ -673,14 +674,8 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
     const args: string[] = [];
     if (!recoveryOnly) {
       if (options.candidateOwned) {
-        args.push(
-          "--admission-workflow-sha",
-          workflowSha,
-          "-f",
-          "provider=openai",
-          "-f",
-          "release_profile=stable",
-        );
+        args.push("--admission-workflow-sha", workflowSha);
+        args.push("-f", "provider=openai", "-f", "release_profile=stable");
       } else if (!extraArgs.includes("--trusted-workflow-ref")) {
         args.push("--trusted-workflow-ref", "main", "--workflow-sha", workflowSha);
       }

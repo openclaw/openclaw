@@ -1785,6 +1785,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     // Freeze preflight elapsed time to keep the forwarding assertions exact.
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.spyOn(performance, "now").mockReturnValue(0);
     setupSuccessfulAttempt();
 
     await runBasicAgentCommand({
@@ -2755,13 +2756,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect([thinkingArgs.provider, thinkingArgs.model]).toEqual(["gmn", "gpt-5.4"]);
     expect(thinkingArgs.level).toBe("xhigh");
     const catalog = requireArray(thinkingArgs.catalog, "thinking catalog");
+    const supportedReasoningEfforts = ["low", "medium", "high", "xhigh"];
     expectRecordFields(catalog[0], {
       provider: "gmn",
       id: "gpt-5.4",
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
-      },
+      compat: expect.objectContaining({ supportedReasoningEfforts }),
     });
   });
 

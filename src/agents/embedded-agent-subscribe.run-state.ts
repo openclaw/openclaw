@@ -149,6 +149,7 @@ export class EmbeddedAgentSubscribeState {
    */
   deltaBufferIsCommentary = false;
   declare nextCommentaryAt?: number;
+  declare commentaryTextProjection?: ReturnType<typeof createAssistantVisibleStreamText>;
   /** Whether timeout settlement committed visible text for this message. */
   hasFlushedPartialText = false;
   partialBlockState: StreamBlockState & { inlineCode: InlineCodeState } =

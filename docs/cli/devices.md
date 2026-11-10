@@ -10,6 +10,19 @@ title: "Devices"
 
 Manage device pairing requests and device-scoped tokens.
 
+## Browser-code pairing
+
+A browser's **Cancel** action withdraws its pending pairing-code request on the
+Gateway. A withdrawn code cannot be approved. If approval has already completed,
+Cancel reports that outcome instead; it does not revoke the paired device. If the
+request record has expired or is already absent, Cancel cannot confirm a withdrawal.
+
+Browser-code pairing does not verify a person's identity, so it is unavailable
+when `gateway.roles` is configured. Use the Gateway's identity-aware sign-in,
+or ask an administrator which sign-in method is supported. Enabling roles while
+a code is pending also prevents approval of that code. This restriction applies
+only to browser-code pairing, not other sign-in or device-pairing methods.
+
 ## Doctor pairing findings
 
 A pending first-time request or a request for more access is an operator decision,
@@ -141,7 +154,7 @@ then `gateway.publicOrigin` precedes discovery for freshly provisioned workers.
 For other deployment prerequisites, see
 [Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).
 Plaintext LAN pairing can use a setup code directly instead of an HTTP join URL.
-See [Connect a machine](/cli/connect).
+See [Connect a device](/cli/connect).
 
 ### `openclaw devices remove <deviceId>`
 

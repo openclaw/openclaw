@@ -9,11 +9,7 @@ import {
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import { withInstallActivity } from "../infra/install-progress.js";
-import {
-  buildNpmResolutionFields,
-  formatNpmCommandFailureOutput,
-  type NpmSpecResolution,
-} from "../infra/install-source-utils.js";
+import { formatNpmCommandFailureOutput } from "../infra/install-source-utils.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
 import {
   listMissingRequiredPlatformPackages,
@@ -24,6 +20,7 @@ import {
   upsertManagedNpmRootDependency,
   type ManagedNpmRootInstalledDependency,
 } from "../infra/npm-managed-root.js";
+import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
@@ -135,6 +132,7 @@ export async function installPluginFromManagedNpmRoot(
     defaultLogger,
   );
   const expectedPluginId = params.expectedPluginId;
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
   const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
   const {
     npmRoot: targetNpmRoot,
@@ -147,6 +145,7 @@ export async function installPluginFromManagedNpmRoot(
     packageName: params.packageName,
     requestedMode: mode,
     npmResolution: params.npmResolution,
+    forceFreshGeneration: transactionRequest?.cohort?.forceFreshGeneration,
   });
   const availability = await ensureInstallTargetAvailableForMode({
     runtime,
@@ -593,7 +592,6 @@ export async function installPluginFromManagedNpmRoot(
   };
 
   const staged: { result?: InstallPluginResult; failure?: { cause: unknown } } = {};
-  const transactionRequest = resolvePluginInstallTransactionRequest(params);
   const published = await installPackageDir(
     requestDeferredPackageDirInstall(
       {
@@ -615,6 +613,16 @@ export async function installPluginFromManagedNpmRoot(
             staged.result = await withInstallActivity(logger, "dependencies", () =>
               runManagedNpmInstall(stageDir),
             );
+            if (staged.result.ok) {
+              await transactionRequest?.cohort?.beforeManagedNpmPublish({
+                pluginId: staged.result.pluginId,
+                packageName: params.packageName,
+                targetNpmRoot,
+                targetPackageDir,
+                stagedNpmRoot: stageDir,
+                stagedPackageDir: resolveManagedNpmRootPackageDir(stageDir, params.packageName),
+              });
+            }
             return staged.result;
           } catch (error) {
             // The directory owner cleans its stage before the original consent/policy error escapes.

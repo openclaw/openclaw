@@ -1,14 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import { Value } from "typebox/value";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type {
-  DecisionBatchResultV2,
-  DecisionBatchV2,
-  ProviderDecisionOutcomeV2,
-} from "../../decisions/types-v2.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import type { ProviderDecisionOutcomeV2 } from "../../decisions/provider-outcomes.js";
+import type { DecisionBatchResultV2, DecisionBatchV2 } from "../../decisions/types-v2.js";
 import type { DecisionBatch } from "../../decisions/types.js";
+import { setCurrentPluginMetadataSnapshotState } from "../../plugins/current-plugin-metadata-state.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
   createColdPluginFixture,
   createColdPluginConfig,
@@ -16,8 +17,9 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resolveAgentDir } from "../agent-scope.js";
 import * as harness from "../decision-inference.test-support.js";
+import { createEmptyPreparedModelRuntimeFixture } from "../embedded-agent-runner/model.fixture.test-support.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../prepared-model-runtime.js";
-import { DecisionEvaluateInput, DecisionEvaluateOutput } from "./decision-tool-contract.js";
+import { DecisionEvaluateInput, DecisionEvaluateOutput } from "./decision-tool-schema.js";
 import { createDecisionTool } from "./decision-tool.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -33,6 +35,111 @@ const nativeOutcome = (result: DecisionBatchResultV2): ProviderDecisionOutcomeV2
   result,
 });
 afterEach(() => harness.resetDecisionTestRuntime(traceKey));
+
+it("keeps capability guidance bound to catalog order, visibility and prepared precedence", () => {
+  const decision: ModelDecisionCapabilities = {
+    protocol: "fixture",
+    input: ["text"],
+    limits: { maxQuestions: 3 },
+  };
+  const model = {
+    id: "native",
+    name: "Native",
+    provider: "row-provider-must-not-win",
+    inference: { chat: false, decision },
+  };
+  const later = {
+    ...model,
+    id: "undeclared",
+    inference: {
+      chat: false,
+      decision: {
+        ...decision,
+        limits: { maxQuestions: 7 },
+      },
+    },
+  };
+  const catalog = { models: [model, { id: "undeclared", name: "First match" }, later] };
+  const providers = { fixture: catalog };
+  Object.setPrototypeOf(providers, { inherited: catalog });
+  Object.defineProperty(providers, "hidden", { value: catalog, enumerable: false });
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      { id: "first", contracts: { decisionProviders: ["fixture"] }, modelCatalog: { providers } },
+      {
+        id: "later",
+        contracts: { decisionProviders: ["fixture"] },
+        modelCatalog: {
+          providers: { fixture: { models: [later] } },
+        },
+      },
+    ],
+  });
+  setCurrentPluginMetadataSnapshotState(snapshot, undefined, undefined, undefined, "gateway");
+  for (const [selection, guidance] of [
+    ["fixture/native", "at most 3 questions"],
+    ["fixture/native@fixture-profile", "at most 3 questions"],
+    ["fixture/undeclared", "Provider limits are undeclared"],
+    ["inherited/native", "Provider limits are undeclared"],
+    ["hidden/native", "Provider limits are undeclared"],
+    ["fixture/missing", "Provider limits are undeclared"],
+  ]) {
+    expect(
+      createDecisionTool("main", {
+        config: { agents: { defaults: { decisionModel: selection } } },
+      })?.description,
+    ).toContain(guidance);
+  }
+  const config = { agents: { defaults: { decisionModel: "fixture/native" } } };
+  const prepared = createEmptyPreparedModelRuntimeFixture({
+    agentDir: "/tmp/decision-catalog-fixture",
+    config,
+    metadataSnapshot: snapshot,
+    createStores: () => expect.fail("Catalog guidance must not acquire runtime stores"),
+  });
+  expect(
+    createDecisionTool("main", {
+      config,
+      preparedModelRuntime: {
+        ...prepared,
+        modelCatalog: {
+          ...prepared.modelCatalog,
+          entries: [{ ...later, id: "native", provider: "fixture" }],
+        },
+      },
+    })?.description,
+  ).toContain("at most 7 questions");
+  expect(
+    createDecisionTool("main", { config, preparedModelRuntime: prepared })?.description,
+  ).toContain("Provider limits are undeclared");
+
+  setCurrentPluginMetadataSnapshotState(
+    {
+      ...snapshot,
+      get plugins() {
+        return expect.fail("Disabled plugins must not inspect the fallback catalog");
+      },
+    },
+    undefined,
+    undefined,
+    undefined,
+    "gateway",
+  );
+  const disabled = { ...config, plugins: { enabled: false } };
+  for (const preparedModelRuntime of [
+    undefined,
+    {
+      ...prepared,
+      get modelCatalog() {
+        return expect.fail("Disabled plugins must not read the prepared catalog");
+      },
+    },
+  ]) {
+    expect(
+      createDecisionTool("main", { config: disabled, preparedModelRuntime })?.description,
+    ).toContain("Provider limits are undeclared");
+  }
+});
 
 it("returns rich native outcomes through the core tool, registered host and real preparation", async () => {
   const events = harness.trackDecisionUsage();
@@ -64,6 +171,16 @@ it("returns rich native outcomes through the core tool, registered host and real
       },
     },
   };
+  const otherDecision: ModelDecisionCapabilities = {
+    protocol: "fixture",
+    input: ["text"],
+    limits: { maxQuestions: 3 },
+  };
+  const otherModel = {
+    id: "other",
+    name: "Other fixture",
+    inference: { chat: false, decision: otherDecision },
+  };
   const fixture = createColdPluginFixture({
     rootDir: pluginRoot,
     pluginId: id,
@@ -73,7 +190,14 @@ it("returns rich native outcomes through the core tool, registered host and real
       channelConfigs: {},
       providerAuthChoices: [],
       contracts: { decisionProviders: [id] },
-      modelCatalog: { providers: { [id]: { authScope: "plugin", models: [model] } } },
+      modelCatalog: {
+        providers: {
+          [id]: {
+            authScope: "plugin",
+            models: [model, otherModel],
+          },
+        },
+      },
     },
   });
   fs.writeFileSync(
@@ -202,5 +326,61 @@ it("returns rich native outcomes through the core tool, registered host and real
     expect(trace.batch).toEqual(imageBatch);
     expect(trace.calls).toBe(3);
     expect(events).toHaveLength(1);
+
+    const metadata = prepared.snapshot.metadataSnapshot;
+    setCurrentPluginMetadataSnapshotState(metadata, undefined, undefined, undefined, "gateway");
+    const captured =
+      createDecisionTool("main", { config: cfg }) ?? expect.fail("Missing captured tool");
+    expect(captured.description).toContain("at most 8 questions");
+    const record =
+      metadata.plugins.find((plugin) => plugin.id === id) ?? expect.fail("Missing fixture");
+    const replacement = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          ...record,
+          modelCatalog: {
+            providers: {
+              [id]: {
+                authScope: "plugin",
+                models: [
+                  {
+                    ...otherModel,
+                    inference: {
+                      chat: false,
+                      decision: {
+                        ...otherDecision,
+                        limits: { maxQuestions: 99 },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+    setCurrentPluginMetadataSnapshotState(replacement, undefined, undefined, undefined, "gateway");
+    setRuntimeConfigSnapshot({
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          decisionModel: `${id}/other`,
+        },
+      },
+    });
+    trace.outcome = { status: "unavailable", reason: "unsupported-input" };
+    const changed = await captured.execute("changed-selection", {
+      state: "Synthetic selection evidence",
+      questions: { selected: { type: "boolean" } },
+    });
+    expect(changed.details).toMatchObject({ status: "unavailable", reason: "unsupported-input" });
+    expect(changed.content[0]).toMatchObject({
+      text: expect.stringContaining("at most 3 questions"),
+    });
+    expect(captured.description).toContain("at most 8 questions");
+    expect(trace.calls).toBe(4);
   });
 });

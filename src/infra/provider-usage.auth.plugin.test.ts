@@ -28,7 +28,7 @@ const {
     resolveKey: vi.fn(
       async (_params: {
         profileId: string;
-      }): Promise<{ apiKey: string; provider: string } | null> => null,
+      }): Promise<{ apiKey: string; provider: string; profileId?: string } | null> => null,
     ),
   };
 });
@@ -260,6 +260,7 @@ describe("provider usage auth boundary", () => {
     resolveKey.mockImplementation(async ({ profileId }) => ({
       apiKey: profileId === "anthropic:managed" ? "managed-access" : "native-access",
       provider: "anthropic",
+      profileId: "anthropic:resolved",
     }));
     resolvePlugin.mockImplementationOnce(
       async ({ context }) =>
@@ -267,7 +268,12 @@ describe("provider usage auth boundary", () => {
         undefined,
     );
     expect(await resolve(["anthropic"])).toEqual([
-      { provider: "anthropic", token: "managed-access", authFlow: "external-flow" },
+      {
+        provider: "anthropic",
+        token: "managed-access",
+        authFlow: "external-flow",
+        authProfileId: "anthropic:resolved",
+      },
     ]);
     expect(resolveKey).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ profileId: "anthropic:managed" }),

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { resolveMemoryAudienceFromEntry } from "../plugins/memory-audience.js";
 import { fakeSessionOwner } from "../plugins/memory-audience.test-support.js";
 import {
@@ -26,6 +26,9 @@ it("forwards one host-minted memory audience and its currency assertion", async 
   const sessionKey = "agent:main:direct:owner";
   const entry = { sessionId, updatedAt: 1, chatType: "direct" as const };
   fakeSessionOwner.rows.set(sessionKey, entry);
+  onTestFinished(() => {
+    fakeSessionOwner.rows.delete(sessionKey);
+  });
   const resolution = await resolveMemoryAudienceFromEntry(
     {
       agentId: "main",
@@ -37,6 +40,9 @@ it("forwards one host-minted memory audience and its currency assertion", async 
     entry,
   );
   const memoryAudience = resolution.status === "granted" ? resolution.audience : undefined;
+  if (resolution.status === "granted") {
+    onTestFinished(resolution.release);
+  }
   expect(memoryAudience).toBeDefined();
   const result = resolve({ memoryAudience, agentSessionKey: sessionKey });
 
@@ -44,6 +50,11 @@ it("forwards one host-minted memory audience and its currency assertion", async 
   result.assertMemoryAudienceCurrent!();
   expect(() => resolve({ memoryAudience, agentSessionKey: "agent:main:other" })).toThrow(
     "memory audience is bound to a different session",
+  );
+
+  fakeSessionOwner.rows.set(sessionKey, { ...entry, sessionId: randomUUID() });
+  expect(() => result.assertMemoryAudienceCurrent!()).toThrow(
+    "memory audience is no longer current",
   );
 });
 

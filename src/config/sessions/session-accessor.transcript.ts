@@ -35,12 +35,12 @@ export {
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
   readTranscriptExportSnapshotReadOnlySync,
-  readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
   validatePreparedAssistantAppendSync,
   readTranscriptEventAtSeqSync,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
+export { readTranscriptStatsBatchReadOnlySync } from "./session-accessor.sqlite-transcript-stats-read.js";
 export { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
 export { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 export {

@@ -1,10 +1,70 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
+import {
+  GatewayRetainedWorkTimeoutError,
+  type AsyncWorkScope,
+} from "../shared/async-work-scope.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { formatGatewayPendingCloseSteps, measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayCloseOptions } from "./server-public.js";
+
+const shutdownLog = createSubsystemLogger("gateway/shutdown");
+const RUNTIME_CLOSE_GRACE_MS = 5_000;
+
+export function createGatewayCloseSteps(
+  reason: string,
+  warnings: string[],
+  cleanupWork: AsyncWorkScope,
+  exitAfterClose: boolean,
+) {
+  const retainedErrors: unknown[] = [];
+  const measureCloseStep = async <T>(
+    name: string,
+    run: () => Promise<T> | T,
+    timeoutMs = RUNTIME_CLOSE_GRACE_MS,
+  ) => {
+    const work = measureGatewayCloseStep(`restart.close.${name}`, run, [["reason", reason]]);
+    if (exitAfterClose && !(await settlesWithin(work, timeoutMs))) {
+      throw new GatewayShutdownCleanupRetainedError([], `${name} resources remain after grace`);
+    }
+    return await work;
+  };
+  const shutdownStep = async (
+    name: string,
+    fn: () => Promise<void> | void,
+    inspectPending?: () => Readonly<Record<string, string | number | boolean | null>>,
+  ) => {
+    const work = cleanupWork.track(async () => {
+      try {
+        await measureGatewayCloseStep(
+          `restart.close.${name}`,
+          fn,
+          inspectPending ?? [["reason", reason]],
+        );
+      } catch (err: unknown) {
+        if (isGatewayCleanupRetainedError(err)) {
+          retainedErrors.push(err);
+        }
+        const detail = err instanceof Error ? err.message : String(err);
+        shutdownLog.warn(`${name}: ${detail}`);
+        recordGatewayShutdownWarning(warnings, name);
+      }
+    });
+    if (!exitAfterClose) {
+      await work;
+    } else if (!(await settlesWithin(work, RUNTIME_CLOSE_GRACE_MS))) {
+      // The final persistence barrier still owns this exact operation after its grace.
+      shutdownLog.warn(
+        `${name}: resources remain after grace${inspectPending ? `; pending: ${JSON.stringify(inspectPending())}` : ""}`,
+      );
+      recordGatewayShutdownWarning(warnings, name);
+    }
+  };
+  return { measureCloseStep, shutdownStep, retainedErrors };
+}
 
 export function recordGatewayShutdownWarning(warnings: string[], name: string): void {
   if (!warnings.includes(name)) {
@@ -40,6 +100,7 @@ export class GatewayShutdownCleanupRetainedError extends AggregateError {
 export function isGatewayCleanupRetainedError(error: unknown): boolean {
   if (
     error instanceof GatewayShutdownCleanupRetainedError ||
+    error instanceof GatewayRetainedWorkTimeoutError ||
     error instanceof PluginRuntimeCloseRetainedError
   ) {
     return true;
@@ -97,7 +158,7 @@ export async function runGatewayCloseSteps(params: {
       run: owner.sealAndJoinRegisteredSidecarStops,
       required: true,
     },
-    { name: "gateway close", run: params.close },
+    { name: "gateway close", run: params.close, required: true },
   ];
   // Collect owner failures, but never release dependencies beyond a failed required join.
   const errors: Error[] = [];
@@ -116,11 +177,13 @@ export async function runGatewayCloseSteps(params: {
       if (!(await settlesWithin(pending, graceMs))) {
         const message = `${step.name} cleanup exceeded ${graceMs}ms; resources remain; pending: ${formatGatewayPendingCloseSteps()}`;
         params.onError(message);
-        leftovers.push(new Error(message));
-        // Dependencies of a retained connection writer cannot be disposed safely.
+        // Grace is diagnostic for required joins: releasing the Gateway lock
+        // invalidates state admission while their accepted finalizers still write.
         if (step.required) {
-          break;
+          await pending;
+          continue;
         }
+        leftovers.push(new Error(message));
       }
     } catch (error) {
       const message = `shutdown step failed (${step.name}): ${formatErrorMessage(error)}`;

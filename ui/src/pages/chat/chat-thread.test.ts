@@ -409,11 +409,13 @@ describe("collapseCompletedTurnWork", () => {
         assistant("All done.", 4_000),
       ],
     });
-    expectKinds(items, ["group", "group", "group", "work-group", "group"]);
-    expect(canvasBlocksIn(requireGroup(items[1]))).toHaveLength(1);
-    expect(messageRecord(requireGroup(items[2])).content).toBe("Checking the details.");
-    expect(requireWorkGroup(items[3]).groups.map((group) => group.role)).toEqual(["tool"]);
-    expect(messageRecord(requireGroup(items[4])).content).toBe("All done.");
+    expectKinds(items, ["group", "work-group", "group", "group"]);
+    expect(canvasBlocksIn(requireGroup(items[2]))).toHaveLength(1);
+    expect(requireWorkGroup(items[1]).groups.map((group) => group.role)).toEqual([
+      "assistant",
+      "tool",
+    ]);
+    expect(messageRecord(requireGroup(items[3])).content).toBe("All done.");
   });
 
   it("keeps completed work expanded for non-dashboard session", () => {
@@ -456,8 +458,8 @@ describe("collapseCompletedTurnWork", () => {
     ).toBe(false);
 
     const completed = collapsedItems({ messages });
-    expectKinds(completed, ["group", "group", "work-group", "group", "group", "group"]);
-    expect(messagesIn(requireWorkGroup(completed[2]).groups)).toEqual([messages[2]]);
+    expectKinds(completed, ["group", "work-group", "group", "group", "group", "group"]);
+    expect(messagesIn(requireWorkGroup(completed[1]).groups)).toEqual([messages[2]]);
     expect(messagesIn(groupsIn(completed))).toEqual(messages.filter((_, index) => index !== 2));
   });
 
@@ -502,9 +504,7 @@ describe("collapseCompletedTurnWork", () => {
       messages: [...messages, assistant("Recovered via another route.", 7_000)],
     });
     expect(messagesIn(groupsIn(recovered))).not.toContain(failed);
-    expect(
-      messagesIn(recovered.flatMap((item) => (item.kind === "work-group" ? item.groups : []))),
-    ).toContain(failed);
+    expect(messagesIn(requireWorkGroup(recovered[1]).groups)).toContain(failed);
   });
 });
 
@@ -764,15 +764,15 @@ describe("buildCachedChatItems", () => {
       ],
     });
 
-    expect(groups).toHaveLength(1);
-    const entries = groupAt(groups, 0).messages;
+    expect(groups.map((group) => group.role)).toEqual(["user", "tool"]);
+    expect(firstMessageContent(groupAt(groups, 0))).toEqual([mixedContent[0]]);
+    const entries = groupAt(groups, 1).messages;
     expect(entries).toHaveLength(1);
     const cards = entries.flatMap((entry) => extractToolCards(entry.message));
     expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
       ["call-a", { path: "a.ts" }, "contents of a"],
       ["call-b", { path: "b.ts" }, "contents of b"],
     ]);
-    expect(firstMessageContent(groupAt(groups, 0))).toContainEqual(mixedContent[0]);
   });
 
   describe("distinct tool invocations", () => {
@@ -1658,7 +1658,7 @@ describe("expansion-state render dependencies", () => {
 
     expect(expanded.has(hiddenCardId)).toBe(false);
     expect(expanded.has("visible-card:toolcard:0")).toBe(true);
-    expect(getExpansionStateVersion(expanded)).toBe(filteredVersion + 1);
+    expect(getExpansionStateVersion(expanded)).toBe(filteredVersion);
   });
 
   it("retains explicit choices when sibling panes have different loaded history", () => {

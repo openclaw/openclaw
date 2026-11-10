@@ -4,13 +4,14 @@ import path from "node:path";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveGatewayLaunchAgentLabel, isNodeLaunchAgentLabel } from "./constants.js";
+import { parseLaunchctlJob } from "./launchctl-job.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
   isLaunchctlNotLoaded,
 } from "./launchd-exec.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
-import { parseLaunchctlJob, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
+import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 
 type GatewayAction = "restart" | "start" | "stop";
 export type ForeignLaunchdJob = {
