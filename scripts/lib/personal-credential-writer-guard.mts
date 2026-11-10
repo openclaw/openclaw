@@ -1028,6 +1028,9 @@ export function inspectPersonalCredentialWriters(
 ): string[] {
   const symbolAt = (node: ts.Node) => symbolsAt([node])[0];
   const approvedCallers = new Map([...callers, ...exclusiveMaintenanceCallers]);
+  const declarationFiles = new Set(
+    [...approvedCallers.keys()].map((entry) => entry.slice(0, entry.indexOf(":"))),
+  );
   const protectedDeclarations = new Map<ts.Node, string>();
   const names = new Set(
     [...approvedCallers.keys()].map((entry) =>
@@ -1037,8 +1040,10 @@ export function inspectPersonalCredentialWriters(
   const aliases: [string, string][] = [];
   const bindingNames: (ts.Identifier | ts.StringLiteral)[] = [];
   for (const { file, source } of sources) {
+    const declaresWriter = declarationFiles.has(file);
     const visit = (node: ts.Node) => {
       if (
+        declaresWriter &&
         (ts.isFunctionDeclaration(node) ||
           ts.isFunctionExpression(node) ||
           ts.isClassDeclaration(node) ||
@@ -1049,7 +1054,8 @@ export function inspectPersonalCredentialWriters(
           ts.isVariableDeclaration(node) ||
           ts.isBindingElement(node)) &&
         node.name &&
-        ts.isIdentifier(node.name)
+        ts.isIdentifier(node.name) &&
+        names.has(node.name.text)
       ) {
         const enclosing = operation(node);
         const id = key(
