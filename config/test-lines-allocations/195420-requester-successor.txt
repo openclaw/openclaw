@@ -1,2 +1,2 @@
-197
-# Real Gateway sessions_send ownership, paused-task adoption, and successor completion regression.
+219
+# Real Gateway ownership, requester adoption, and completion before a child parks or a later turn finishes.

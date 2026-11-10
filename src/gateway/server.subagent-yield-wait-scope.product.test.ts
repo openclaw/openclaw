@@ -314,9 +314,13 @@ it("treats a subagent's waitFor yield for its own children as a child wait, not 
   }
 });
 
-it.each(["before", "after"] as const)(
-  "closes a child's message wait when its requester finishes %s it parks",
-  async (order) => {
+it.each([
+  ["before", false],
+  ["after", false],
+  ["before", true],
+] as const)(
+  "closes a child's message wait when its requester finishes %s it parks (later turn: %s)",
+  async (order, laterTurn) => {
     const model = await startModelServer("direct");
     const state = await createOpenClawTestState({ label: "subagent-message-wait-requester-done" });
     const gateway = await startGatewayWithClient({
@@ -365,6 +369,24 @@ it.each(["before", "after"] as const)(
       };
       if (order === "before") {
         await finishRequester();
+      }
+      if (laterTurn) {
+        const later = await gateway.client.request<{ runId: string }>("chat.send", {
+          sessionKey: "main",
+          message: "An unrelated later request.",
+          idempotencyKey: `message-wait-later-${randomUUID()}`,
+          deliver: false,
+        });
+        await expect(
+          gateway.client.request("agent.wait", { runId: later.runId, timeoutMs: 30_000 }),
+        ).resolves.toMatchObject({ status: "ok" });
+        const pending = getSubagentRunByRunId(child.runId)!;
+        expect(subagentRuns.getRequesterRunInstance(pending)?.runId).toBe(requester.runId);
+        const entry = await readSessionEntryReadOnlyInWorker({
+          agentId: "main",
+          sessionKey: pending.requesterSessionKey,
+        });
+        expect(entry?.lastRunId).toBe(later.runId);
       }
       model.allowMessageWait();
       await expect(
