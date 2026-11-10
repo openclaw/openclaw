@@ -6,6 +6,7 @@ import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontm
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
   DEFAULT_AGENTS_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_SOUL_FILENAME,
 } from "./workspace-bootstrap-policy.js";
@@ -21,6 +22,10 @@ const RETIRED_GENERATED_TEMPLATE_SHA256: Readonly<Record<string, readonly string
   [DEFAULT_AGENTS_FILENAME]: [
     "1e17784e422c0e47e44c5214d0b37092f7b378bb2d3746976032be3075203c88",
     "490fc2b32865dd310a3af1225a409ac5c942d89ba456167feb0fd95e2807aaff",
+  ],
+  // Stock BOOTSTRAP.md seeded by v2026.9.2 (3928bad9badf), after frontmatter removal.
+  [DEFAULT_BOOTSTRAP_FILENAME]: [
+    "5743df065658a002025a52190f114c57b0883b71c84a55670b9b3fbdaaed3c1b",
   ],
   [DEFAULT_SOUL_FILENAME]: ["4f9042f259b076e429d0f01ce39340030f47ea5b7f5befe306296c36baf1f60f"],
   [DEFAULT_IDENTITY_FILENAME]: ["59b223766c8dd978162044e333a684c72e22af753d1ba3dc3bff4b2d915c54e2"],
@@ -58,8 +63,7 @@ export async function fileDiffersFromTemplate(
       );
     });
   } catch (err) {
-    const anyErr = err as { code?: string };
-    if (anyErr.code === "ENOENT") {
+    if (hasNodeErrorCode(err, "ENOENT")) {
       return false;
     }
     throw err;

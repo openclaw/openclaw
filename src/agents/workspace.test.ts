@@ -274,17 +274,31 @@ it("treats git-backed workspaces as existing even when template files are missin
   await expectCompletedWithoutBootstrap(tempDir);
 });
 
-it("keeps bootstrap status read-only when stale completion evidence exists", async () => {
-  await ensureWorkspace();
-  await writeWorkspaceFile(IDENTITY, "# IDENTITY.md\n\n- **Name:** Example\n");
-  await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
-  await fs.access(workspacePath(BOOTSTRAP));
-  expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
-  await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
-  await ensureWorkspace();
-  await expectCompletedWithoutBootstrap(tempDir);
-  await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
-});
+it.each(["current", "v2026.9.2"])(
+  "keeps %s stock bootstrap pending across restart until profiles are edited",
+  async (version) => {
+    await ensureWorkspace();
+    if (version === "v2026.9.2") {
+      await writeWorkspaceFile(
+        BOOTSTRAP,
+        await fs.readFile(
+          new URL("../../test/fixtures/bootstrap-template-v2026.9.2.md", import.meta.url),
+          "utf8",
+        ),
+      );
+    }
+    closeOpenClawStateDatabaseForTest();
+    await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: true });
+    await writeWorkspaceFile(IDENTITY, "# IDENTITY.md\n\n- **Name:** Example\n");
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+    await fs.access(workspacePath(BOOTSTRAP));
+    expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
+    await ensureWorkspace();
+    await expectCompletedWithoutBootstrap(tempDir);
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+  },
+);
 
 it("does not read setup state for an absent bootstrap file and refreshes after a setup wait", async () => {
   const actual = workspaceState.readWorkspaceStateSnapshot;
