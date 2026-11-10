@@ -32,7 +32,6 @@ function fixture(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
     ...snapshot,
   });
   gateway.connection.gatewayUrl = gatewayUrl;
-  let facet: SessionListSnapshot | undefined;
   let invalidate = () => {};
   const filter = new SessionOwnerFilter(
     () => gateway,
@@ -56,14 +55,10 @@ function fixture(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
     mounted = mountSolid(() => {
       const [revision, setRevision] = createSignal(0);
       invalidate = () => setRevision((value) => value + 1);
-      createSessionOwnerFilterQuery(
-        filter,
-        () => {
-          revision();
-          return host;
-        },
-        () => facet,
-      );
+      createSessionOwnerFilterQuery(filter, () => {
+        revision();
+        return host;
+      });
       return null;
     });
     host.isConnected = true;
@@ -82,7 +77,7 @@ function fixture(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
   };
   connect();
   const setFacet = (value: SessionListSnapshot) => {
-    facet = value;
+    filter.observeOwnerFacet("main", value.result?.owners);
     update();
   };
   return { host, filter, connect, disconnect, gateway, update, facet: setFacet };
@@ -204,10 +199,10 @@ describe("sidebar owner filter", () => {
       (sessionCap) => {
         storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-bob"));
         const { host, update } = fixture({ hello: hello("profile-ada", sessionCap) });
-        expectOwner(host, null, true);
+        expectOwner(host, "owner-bob");
         update();
         expectReads(host, 1);
-        expect(saved()).toEqual(choice(null, true));
+        expect(saved()).toEqual(choice("owner-bob"));
       },
     );
 
@@ -256,14 +251,14 @@ describe("sidebar owner filter", () => {
       expect(saved()).toEqual(choice("owner-bob"));
     });
 
-    it("reconciles a new hello for the same profile but preserves explicit same-hello denial", () => {
+    it("keeps the selected owner across a reduced-authority hello and read errors", () => {
       const { filter, host, update, facet } = fixture({ hello: hello() });
       update();
       filter.set("owner-bob");
       update();
       update({ hello: hello("profile-ada") });
-      expectOwner(host, null, true);
-      expect(saved()).toEqual(choice(null, true));
+      expectOwner(host, "owner-bob");
+      expect(saved()).toEqual(choice("owner-bob"));
       filter.set("owner-bob");
       update();
       facet({ ...ownerFacet("profile-ada"), error: "Other people's activity is private." });
@@ -279,10 +274,10 @@ describe("sidebar owner filter", () => {
       update({ phase: "reconnecting", selfUser: undefined });
       expectOwner(host, "owner-before");
       update({ phase: "connected", selfUser: undefined, hello: hello("profile-bob") });
-      expectOwner(host, null, true);
+      expectOwner(host, "owner-foreign");
       expect(filter.selfUserId).toBe("profile-bob");
       expect(saved("profile-ada")).toEqual(choice("owner-before"));
-      expect(saved("profile-bob")).toEqual(choice(null, true));
+      expect(saved("profile-bob")).toEqual(choice("owner-foreign"));
     });
 
     it("does not overwrite a retained profile preference for an unidentified restricted hello", () => {
@@ -334,7 +329,7 @@ describe("sidebar owner filter", () => {
     expectReads(host, 2);
   });
 
-  it("clears absent owners only from a settled complete owner facet", async () => {
+  it("keeps an absent owner selected when the readable session facet becomes empty", async () => {
     const { filter, host, update, facet } = fixture();
     filter.set("owner-bob");
     update();
@@ -352,9 +347,9 @@ describe("sidebar owner filter", () => {
     facet(ownerFacet("owner-bob"));
     expect(filter.read().ownerId).toBe("owner-bob");
     facet(ownerFacet("profile-ada"));
-    expect(filter.read().ownerId).toBeNull();
-    expect(saved()).toEqual(choice(null));
+    expect(filter.read().ownerId).toBe("owner-bob");
+    expect(saved()).toEqual(choice("owner-bob"));
     update();
-    expectReads(host, 1, 1);
+    expectReads(host, 0, 1);
   });
 });
