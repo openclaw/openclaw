@@ -41,6 +41,7 @@ import {
   type ModelFallbackRunOptions,
   type ModelFallbackRunResult,
   type ModelFallbackStepHandler,
+  type RunWithModelFallbackParams,
   recordFailedCandidateAttempt,
   resolveFallbackAuthScope,
   resolveFallbackSoonestCooldownExpiry,
@@ -73,7 +74,6 @@ import {
   MODEL_FALLBACK_SKIPPED_CODE,
   type FallbackAttempt,
   type ModelFallbackCandidate,
-  type RunWithModelFallbackParams,
 } from "./model-fallback.types.js";
 import {
   resolveSessionSuspensionReason,

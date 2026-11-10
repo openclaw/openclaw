@@ -5,6 +5,7 @@ import { isCronTerminalAbortReasonText } from "../cron/service/execution-errors.
 import { renewAgentRunDeadline } from "../infra/agent-run-deadline.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-operator-authority.types.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
@@ -38,9 +39,11 @@ import type {
   FallbackAttempt,
   ModelCandidate,
   ModelFallbackAttemptProvenance,
+  ModelFallbackCandidate,
+  ModelFallbackRouteResolution,
   ModelFallbackResultClassification,
 } from "./model-fallback.types.js";
-import { modelKey } from "./model-ref-shared.js";
+import { modelKey, type ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
 import { isCliProvider } from "./model-selection-cli.js";
 import {
@@ -128,6 +131,38 @@ export type ModelFallbackResultClassifier<T> = (attempt: {
   attempt: number;
   total: number;
 }) => ModelFallbackAttemptClassification | Promise<ModelFallbackAttemptClassification>;
+
+export type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  model: string;
+  runId?: string;
+  sessionId?: string;
+  /** Keeps a rate-limit fallback first for this session's next turns so the provider prompt cache stays warm. */
+  stickyRateLimitFallback?: boolean;
+  userLockedAuthProfileId?: string;
+  admitCandidate?: (provider: string, model: string) => Promise<string | undefined>;
+  resolveCandidateAuthProfileId?: (provider: string, model: string) => string | undefined;
+  prepareCandidateChain?: (candidates: readonly ModelFallbackCandidate[]) => Promise<void> | void;
+  lane?: string;
+  agentDir?: string;
+  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+  fallbacksOverride?: string[];
+  requestedRouteResolution?: ModelFallbackRouteResolution;
+  run: ModelFallbackRunFn<T>;
+  onError?: ModelFallbackErrorHandler;
+  onFallbackStep?: ModelFallbackStepHandler;
+  classifyResult?: ModelFallbackResultClassifier<T>;
+  /** Return false when a thrown attempt committed work that must not be replayed. */
+  canFallbackAfterError?: (
+    attempt: Parameters<ModelFallbackErrorHandler>[0],
+  ) => boolean | Promise<boolean>;
+  mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
+  /** The attempt owner admits its runtime and selects credentials. */
+  skipAuthProfileRuntime?: boolean;
+  abortSignal?: AbortSignal;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+} & ModelManifestNormalizationContext;
 
 export type ModelFallbackClassifiedResult<T> = ModelCandidate & { result: T };
 

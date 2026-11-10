@@ -93,6 +93,7 @@ describe("cron inference admission", () => {
     if (!binding) {
       throw new Error("Expected stored account");
     }
+    const alternate = { ...binding };
     const job = makeAuthJob({
       payload: {
         kind: "agentTurn",
@@ -101,7 +102,7 @@ describe("cron inference admission", () => {
         fallbacks: ["openai/gpt-4o"],
       },
       inferenceBinding: { ...binding },
-      inferenceGrants: { "openai/gpt-4o": { ...binding } },
+      inferenceGrants: { "openai/gpt-4o": alternate },
     });
     h.loadPublishedReplyDispatchRuntimeMock.mockImplementationOnce(async () => {
       if (job.payload.kind !== "agentTurn") {
@@ -110,7 +111,7 @@ describe("cron inference admission", () => {
       job.payload.model = "openai/gpt-4o";
       job.payload.fallbacks!.splice(0);
       job.inferenceBinding!.profileId = subscriptionId;
-      job.inferenceGrants!["openai/gpt-4o"].profileId = subscriptionId;
+      alternate.profileId = subscriptionId;
       return undefined;
     });
     h.runWithModelFallbackMock.mockImplementationOnce(async (params) => {

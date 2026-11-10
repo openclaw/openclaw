@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import { zstdDecompressSync } from "node:zlib";
 import { getAiTransportHost } from "@openclaw/ai";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildAnthropicCliBackend } from "../../extensions/anthropic/cli-backend.js";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
@@ -18,7 +17,9 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-mo
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as browserOpen from "../infra/browser-open.js";
+import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import * as runtimeBackends from "../plugins/cli-backends.runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -418,6 +419,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 `,
     );
     // Replace only the external executable; provider preparation and FD forwarding stay real.
+    const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
+      buildAnthropicCliBackend: () => CliBackendPlugin;
+    }>({ pluginId: "anthropic", artifactBasename: "api.js" });
     const backend = buildAnthropicCliBackend();
     vi.spyOn(runtimeBackends, "resolveRuntimeCliBackends").mockReturnValue([
       {

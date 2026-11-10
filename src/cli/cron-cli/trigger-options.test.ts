@@ -112,7 +112,7 @@ it.each`
 `(
   "patches $options without loading the old job",
   async ({ options, patch }: Pick<EditCase, "options" | "patch">) => {
-    await edit(flags(options), patch);
+    await edit(flags(options), patch, options["clear-model"] ? { reviewModelPolicy: true } : {});
     expect(methods()).toEqual(["cron.update", "cron.status"]);
   },
 );
