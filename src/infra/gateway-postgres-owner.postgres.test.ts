@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs";
 import net from "node:net";
 import { hostname } from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
@@ -23,6 +25,7 @@ afterEach(async () => {
     await step();
   }
   resetDatabaseEngineSelectionForTest();
+  vi.unstubAllEnvs();
 });
 
 async function query<T extends pg.QueryResultRow>(sql: string, values: unknown[] = []) {
@@ -209,6 +212,51 @@ describe.skipIf(!connection)("Gateway ownership with database.localStores none",
 
     await vi.waitFor(() => expect(onLost).toHaveBeenCalledTimes(1), { timeout: 6_000 });
     expect(String(onLost.mock.calls[0]?.[0])).toMatch(/heartbeat failed: Query read timeout/);
+  });
+
+  it("refuses a cold CLI owner whose configured engine is resolved after its lock", async () => {
+    const schemaPrefix = install({ connection: connection!, localStores: "none" });
+    const gateway = await acquireOnHost("gateway");
+    // A fresh CLI process has no engine selection until it reads its config under custody.
+    resetDatabaseEngineSelectionForTest();
+    const stateDir = tempDirs.make("gateway-pg-owner-cli-");
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        database: {
+          engine: "postgres",
+          localStores: "none",
+          postgres: { connection, schemaPrefix },
+        },
+      }),
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    const runLocal = vi.fn(async () => "ran");
+    const runCli = () =>
+      runWithLocalStateOwner({
+        method: "config.set",
+        params: {},
+        target: "config",
+        databaseEngine: "configured",
+        runLocal,
+      });
+
+    await expect(runCli()).rejects.toThrow(
+      new RegExp(`busy at PostgreSQL schema prefix ${schemaPrefix}`),
+    );
+    expect(runLocal).not.toHaveBeenCalled();
+    expect(await ownerBackends(schemaPrefix)).toHaveLength(1);
+
+    // Once the Gateway stops, the CLI holds the lock for its own work and releases it after.
+    await gateway.lock.release();
+    runLocal.mockImplementation(async () => {
+      expect(await ownerBackends(schemaPrefix)).toHaveLength(1);
+      return "ran";
+    });
+    await expect(runCli()).resolves.toBe("ran");
+    await vi.waitFor(async () => expect(await ownerBackends(schemaPrefix)).toHaveLength(0));
   });
 
   it("leaves the default mode on per-state-dir file ownership", async () => {

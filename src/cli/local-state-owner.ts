@@ -371,6 +371,15 @@ export async function runWithLocalStateOwner<T>(params: {
       throw error;
     }
     const runOwned = async () => {
+      if (params.databaseAccess !== "none") {
+        try {
+          // The configured engine may only now be in scope; take its PostgreSQL custody first.
+          await lock.acquireConfiguredPostgresOwner?.();
+        } catch (error) {
+          await lock.release();
+          refuse(error);
+        }
+      }
       const resources =
         params.databasePortMaintenance || params.databaseAccess === "none"
           ? undefined
