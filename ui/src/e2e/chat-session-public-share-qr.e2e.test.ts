@@ -93,7 +93,11 @@ async function expectLobster(qr: Locator, page: Page, surface: Locator, url: str
     exact: true,
   });
   await image.waitFor();
-  await image.evaluate((element) => element instanceof HTMLImageElement && element.decode());
+  await image.evaluate(async (element) => {
+    if (element instanceof HTMLImageElement) {
+      await element.decode();
+    }
+  });
   const download = surface.getByRole("link", { name: "Download lobster QR" });
   expect(await download.getAttribute("href")).toBe(await image.getAttribute("src"));
   const frame = await takeControlUiScreenshotFrame(page, surface, [image, download], {
