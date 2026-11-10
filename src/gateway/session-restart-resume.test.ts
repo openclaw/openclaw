@@ -642,11 +642,18 @@ it.for([
         queuedInputIds: [],
       });
       for (let boot = 0; boot < 2; boot++) {
+        const warn = vi.fn();
         await resumeMarkedSessions({
           context: createContext([], () => cfg),
           signal: new AbortController().signal,
-          log: { warn() {} },
+          log: { warn },
         });
+        const parked = warn.mock.calls.filter(([message]) => message.includes("(yield-waiting)"));
+        expect(parked).toEqual(
+          ["message", "nested-message", "current-completed"].includes(source)
+            ? [[expect.stringContaining(target.sessionKey)]]
+            : [],
+        );
         const restored = (await readSessionEntryReadOnlyInWorker(target))!;
         expect(restored.resumeAfterRestart).toBeUndefined();
         expect(restored.activeWriterRunId).toBe(runId);

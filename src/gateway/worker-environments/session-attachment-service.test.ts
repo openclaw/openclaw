@@ -460,61 +460,72 @@ it("closes authorization before waiting for provider teardown and requires a fre
   expect(next.attachment.generation).toBe(attachment.generation + 1);
 });
 
-it("reports bounded current cleanup failures without losing the original failure or lease", async () => {
-  const originalFailure = "worker bootstrap could not finish";
-  const firstCleanupFailure = "initial provider cleanup is unavailable";
-  vi.mocked(state.bootstrapWorker).mockRejectedValue(new Error(originalFailure));
-  const destroy = vi.fn().mockRejectedValue(new Error(firstCleanupFailure));
-  const warn = vi.fn<(message: string) => void>();
-  makeService({ destroy }, { logger: { warn } });
+it.each([false, true])(
+  "preserves the original failure through cleanup (parked=%s)",
+  async (park) => {
+    const originalFailure = "worker bootstrap could not finish";
+    const firstCleanupFailure = "initial provider cleanup is unavailable";
+    vi.mocked(state.bootstrapWorker).mockRejectedValue(new Error(originalFailure));
+    const destroy = vi.fn().mockRejectedValue(new Error(firstCleanupFailure));
+    const warn = vi.fn<(message: string) => void>();
+    makeService({ destroy }, { logger: { warn } });
 
-  await expect(create()).rejects.toThrow(originalFailure);
-  await expect(stop()).rejects.toThrow(firstCleanupFailure);
-  const environmentId = service.getSessionAttachmentStatus(identity.sessionId)!.environment
-    .environmentId;
-  const pending = state.store.get(environmentId)!;
-  expect(pending).toMatchObject({
-    state: "destroying",
-    leaseId: "lease-1",
-    teardownTerminalState: "failed",
-    lastError: originalFailure,
-  });
-  expect(warn).not.toHaveBeenCalled();
-  const secret = `synthetic-cleanup-auth-${"x".repeat(48)}`;
-  const currentDiagnosis = "provider stop timed out while confirming release";
-  destroy.mockRejectedValue(
-    new Error(
-      `Current cleanup failed: Authorization: Bearer ${secret}\n${"provider progress ".repeat(200)}\n${currentDiagnosis}`,
-    ),
-  );
-  state.nowMs += 30_000;
-  await service.reconcileSessionAttachments();
+    await expect(create()).rejects.toThrow(originalFailure);
+    await expect(stop()).rejects.toThrow(firstCleanupFailure);
+    const environmentId = service.getSessionAttachmentStatus(identity.sessionId)!.environment
+      .environmentId;
+    const pending = state.store.get(environmentId)!;
+    expect(pending).toMatchObject({
+      state: "destroying",
+      leaseId: "lease-1",
+      teardownTerminalState: "failed",
+      lastError: originalFailure,
+    });
+    expect(warn).not.toHaveBeenCalled();
+    const secret = `synthetic-cleanup-auth-${"x".repeat(48)}`;
+    const currentDiagnosis = "provider stop timed out while confirming release";
+    destroy.mockRejectedValue(
+      new Error(
+        `Current cleanup failed: Authorization: Bearer ${secret}\n${"provider progress ".repeat(200)}\n${currentDiagnosis}`,
+      ),
+    );
+    state.nowMs += 30_000;
+    await service.reconcileSessionAttachments();
 
-  expect(warn).toHaveBeenCalledOnce();
-  const warning = warn.mock.calls[0]![0];
-  const prefix = `Conversation environment cleanup will retry (${environmentId}): `;
-  expect.soft(warning).toContain(prefix);
-  expect.soft(warning).toContain("Current cleanup failed:");
-  expect.soft(warning).toContain(currentDiagnosis);
-  expect(warning).not.toContain(secret);
-  expect(warning).not.toContain(originalFailure);
-  expect(warning.length).toBeLessThanOrEqual(prefix.length + 1_024);
-  expect(state.store.get(environmentId)).toMatchObject({
-    state: "destroying",
-    leaseId: pending.leaseId,
-    lastError: originalFailure,
-  });
+    expect(warn).toHaveBeenCalledOnce();
+    const warning = warn.mock.calls[0]![0];
+    const prefix = `Conversation environment cleanup will retry (${environmentId}): `;
+    expect.soft(warning).toContain(prefix);
+    expect.soft(warning).toContain("Current cleanup failed:");
+    expect.soft(warning).toContain(currentDiagnosis);
+    expect(warning).not.toContain(secret);
+    expect(warning).not.toContain(originalFailure);
+    expect(warning.length).toBeLessThanOrEqual(prefix.length + 1_024);
+    expect(state.store.get(environmentId)).toMatchObject({
+      state: "destroying",
+      leaseId: pending.leaseId,
+      lastError: originalFailure,
+    });
 
-  destroy.mockResolvedValue(undefined);
-  state.nowMs += 60_000;
-  await service.reconcileSessionAttachments();
-  expect(state.store.get(environmentId)).toMatchObject({
-    state: "failed",
-    leaseId: null,
-    lastError: originalFailure,
-  });
-  expect(warn).toHaveBeenCalledOnce();
-});
+    destroy.mockResolvedValue(undefined);
+    if (park) {
+      state.nowMs += 3_600_000;
+      await service.reconcileSessionAttachments();
+      await support.reopenWorkerEnvironmentStore();
+      makeService({ destroy }, { logger: { warn } });
+      await stop();
+    } else {
+      state.nowMs += 60_000;
+      await service.reconcileSessionAttachments();
+    }
+    expect(state.store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      lastError: originalFailure,
+    });
+    expect(warn).toHaveBeenCalledTimes(park ? 2 : 1);
+  },
+);
 
 it("bounds conversation cleanup attempts across four hours of transient provider failure", async () => {
   const destroy = vi.fn().mockRejectedValue(new Error("coordinator release: http 503"));
@@ -534,8 +545,7 @@ it("bounds conversation cleanup attempts across four hours of transient provider
   expect(parked).toHaveLength(1);
   expect(parked[0]![0]).toContain("lease-1");
   expect(parked[0]![0]).toContain("http 503");
-  expect(parked[0]![0]).toContain("crabbox stop lease-1");
-  expect(parked[0]![0]).toContain("crabbox inspect --id lease-1 --json");
+  expect(parked[0]![0]).toContain("crabbox inspect --provider <backend> --id lease-1 --json");
   expect(service.get(attachment.environmentId)?.error).toBe(parked[0]![0]);
   await runAsCaller(async () => {
     const { respond, invoke } = createRpc({}, {}, "environments.session.status");
@@ -566,38 +576,45 @@ it("parks after one hour and resumes only on explicit stop", async () => {
   expect(service.get(attachment.environmentId)?.error).toBeUndefined();
 });
 
-it("keeps the cleanup deadline across restart while allowing recovery and explicit stop", async () => {
-  const failure =
-    "Crabbox stop failed with exit code 4: lease_id_conflict: fixed Machine0 lease lease-1 has an unresolved create attempt";
-  const destroy = vi.fn().mockRejectedValue(new Error(failure));
-  const warn = vi.fn<(message: string) => void>();
-  makeService({ id: "crabbox", destroy }, { logger: { warn } });
-  support.getDevelopmentProfile().provider = "crabbox";
-  const { attachment } = await create();
-  await expect(stop()).rejects.toThrow(failure);
-  state.nowMs += 3_600_000;
-  await service.reconcileSessionAttachments();
-  expect(service.get(attachment.environmentId)?.error).toContain("cleanup parked");
+it.each(["deadline", "attempts"])(
+  "keeps cleanup parked across restarts after %s",
+  async (budget) => {
+    const failure =
+      "Crabbox stop failed with exit code 3: Machine0 authentication is required; run machine0 login";
+    const destroy = vi.fn().mockRejectedValue(new Error(failure));
+    const warn = vi.fn<(message: string) => void>();
+    makeService({ id: "crabbox", destroy }, { logger: { warn } });
+    support.getDevelopmentProfile().provider = "crabbox";
+    const { attachment } = await create();
+    await expect(stop()).rejects.toThrow(failure);
+    for (let attempt = 0; attempt < (budget === "deadline" ? 1 : 9); attempt++) {
+      state.nowMs += budget === "deadline" ? 3_600_000 : 300_000;
+      await service.reconcileSessionAttachments();
+    }
+    expect(service.get(attachment.environmentId)?.error).toContain("cleanup parked");
+    destroy.mockClear();
+    warn.mockClear();
+    for (let sweep = 0; sweep < 3; sweep += 1) {
+      await support.reopenWorkerEnvironmentStore();
+      makeService({ id: "crabbox", destroy }, { logger: { warn } });
+      await service.reconcileSessionAttachments();
+      state.nowMs += 300_000;
+    }
+    expect(destroy).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(service.get(attachment.environmentId)).toMatchObject({
+      state: "destroying",
+      leaseId: "lease-1",
+      error: expect.stringContaining("cleanup parked"),
+    });
+    expect(service.get(attachment.environmentId)?.error).toContain(failure);
 
-  await support.reopenWorkerEnvironmentStore();
-  makeService({ id: "crabbox", destroy }, { logger: { warn } });
-  for (let sweep = 0; sweep < 3; sweep += 1) {
-    await service.reconcileSessionAttachments();
-    state.nowMs += 300_000;
-  }
-  expect(destroy).toHaveBeenCalledTimes(2);
-  expect(service.get(attachment.environmentId)).toMatchObject({
-    state: "destroying",
-    leaseId: "lease-1",
-    error: expect.stringContaining("cleanup parked"),
-  });
-  expect(service.get(attachment.environmentId)?.error).toContain(failure);
-
-  destroy.mockResolvedValue(undefined);
-  await stop();
-  expect(service.get(attachment.environmentId)).toMatchObject({ state: "destroyed" });
-  expect(service.get(attachment.environmentId)?.error).toBeUndefined();
-});
+    destroy.mockResolvedValue(undefined);
+    await stop();
+    expect(service.get(attachment.environmentId)).toMatchObject({ state: "destroyed" });
+    expect(service.get(attachment.environmentId)?.error).toBeUndefined();
+  },
+);
 
 it("keeps an unconfirmed orphaned lease parked across status reads and sweeps", async () => {
   const warn = vi.fn<(message: string) => void>();
