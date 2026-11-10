@@ -1,0 +1,2 @@
+# Real background descendants and terminal cleanup failure must not poison later shutdown.
+79
