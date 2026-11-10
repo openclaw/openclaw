@@ -349,6 +349,7 @@ export function createOpenClawIdService(params: {
       return lastPublish;
     }
     const { signer } = key;
+    const code = rebindPublication.code(enrollmentCode);
     if (signal.aborted || !isOpenClawIdEnabled(params.getConfig())) {
       return undefined;
     }
@@ -364,7 +365,7 @@ export function createOpenClawIdService(params: {
         relayUrl: config.relayUrl,
         client,
         signer,
-        enrollmentCode: rebindPublication.code(enrollmentCode),
+        enrollmentCode: code,
       }));
     lastPublish = outcome;
     if (outcome.state === "published") {
@@ -373,9 +374,7 @@ export function createOpenClawIdService(params: {
         const event = { type: "notify_owners", event: "rebind", ref: `${bindingSeq}` } as const;
         void notifyOwners([event]).catch((error: unknown) => params.log.warn(String(error)));
       }
-      await (
-        await getAuthority()
-      ).recordDiscovery({
+      await owner.recordDiscovery({
         owner_account_id: outcome.ownerAccountId,
         published_binding_seq: record.binding?.body.binding_seq ?? 0,
         published_snapshot_seq: outcome.snapshotSeq,

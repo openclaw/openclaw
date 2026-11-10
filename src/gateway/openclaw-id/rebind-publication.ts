@@ -9,7 +9,10 @@ export function createRebindPublication() {
     hold(next: string | undefined): void {
       code = next;
     },
-    /** The code to publish with: the caller's (held from now on for retries), else the held one. */
+    /**
+     * The code to publish with: the caller's (held from now on for retries), else the held one.
+     * Taken before registration recovery, which can fail transiently and leave it to a retry.
+     */
     code(given?: string): string | undefined {
       code = given ?? code;
       return code;
