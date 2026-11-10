@@ -1,0 +1,2 @@
+# Exact net test-line growth from PR #196430 (fence-aware chunking for markdown-mode channels) that left main over the ceiling.
+94

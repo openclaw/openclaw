@@ -65,9 +65,24 @@ function extractStoryText(content: unknown): string {
           parts.push(item);
         }
       }
+      continue;
+    }
+    const block =
+      verse && typeof verse === "object" && "block" in verse
+        ? (verse as { block?: unknown }).block
+        : undefined;
+    if (
+      block &&
+      typeof block === "object" &&
+      "code" in block &&
+      block.code &&
+      typeof block.code === "object" &&
+      typeof (block.code as { code?: unknown }).code === "string"
+    ) {
+      parts.push((block.code as { code: string }).code);
     }
   }
-  return parts.join("");
+  return parts.join("\n");
 }
 
 describe("tlon outbound loopback", () => {
@@ -94,6 +109,54 @@ describe("tlon outbound loopback", () => {
       server = undefined;
     }
   });
+
+  type ChunkPokeRecorder = {
+    pokes: TlonPoke[];
+    rejectedOversized: Array<{ length: number }>;
+    loginCount: number;
+  };
+
+  /** Loopback airlift fixture: accepts login, records channel pokes, rejects memos over the limit. */
+  async function listenChunkPokeLoopback(recorder: ChunkPokeRecorder): Promise<number> {
+    return listenLoopback((req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (req.method === "POST" && url.pathname === "/~/login") {
+        recorder.loginCount += 1;
+        res.writeHead(200, {
+          "Content-Type": "text/plain",
+          "set-cookie": "urbauth-~zod=mock-cookie",
+        });
+        res.end("ok");
+        return;
+      }
+      if (req.method === "PUT" && url.pathname.startsWith("/~/channel/")) {
+        let body = "";
+        req.setEncoding("utf8");
+        req.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          const received = JSON.parse(body) as TlonPoke[];
+          recorder.pokes.push(...received);
+          const oversized = received.some(
+            (poke) =>
+              extractStoryText(poke.json?.diff?.delta?.add?.memo?.content).length > TEXT_LIMIT,
+          );
+          if (oversized) {
+            recorder.rejectedOversized.push({ length: received.length });
+            res.writeHead(413, { "Content-Type": "text/plain" });
+            res.end("memo too long");
+            return;
+          }
+          res.writeHead(200, { "Content-Type": "text/plain" });
+          res.end("ok");
+        });
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("not found");
+    });
+  }
 
   it.each(["login", "redirect", "dispatch refresh"] as const)(
     "stops requests when authority closes during %s",
@@ -210,47 +273,9 @@ describe("tlon outbound loopback", () => {
   );
 
   it("delivers each chunked unit as a bounded independent poke the urbit transport accepts", async () => {
-    const pokes: TlonPoke[] = [];
-    const rejectedOversized: Array<{ length: number }> = [];
-    let loginCount = 0;
-    const port = await listenLoopback((req, res) => {
-      const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      if (req.method === "POST" && url.pathname === "/~/login") {
-        loginCount += 1;
-        res.writeHead(200, {
-          "Content-Type": "text/plain",
-          "set-cookie": "urbauth-~zod=mock-cookie",
-        });
-        res.end("ok");
-        return;
-      }
-      if (req.method === "PUT" && url.pathname.startsWith("/~/channel/")) {
-        let body = "";
-        req.setEncoding("utf8");
-        req.on("data", (chunk: string) => {
-          body += chunk;
-        });
-        req.on("end", () => {
-          const received = JSON.parse(body) as TlonPoke[];
-          pokes.push(...received);
-          const oversized = received.some(
-            (poke) =>
-              extractStoryText(poke.json?.diff?.delta?.add?.memo?.content).length > TEXT_LIMIT,
-          );
-          if (oversized) {
-            rejectedOversized.push({ length: received.length });
-            res.writeHead(413, { "Content-Type": "text/plain" });
-            res.end("memo too long");
-            return;
-          }
-          res.writeHead(200, { "Content-Type": "text/plain" });
-          res.end("ok");
-        });
-        return;
-      }
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("not found");
-    });
+    const recorder: ChunkPokeRecorder = { pokes: [], rejectedOversized: [], loginCount: 0 };
+    const port = await listenChunkPokeLoopback(recorder);
+    const { pokes, rejectedOversized } = recorder;
 
     const cfg = loopbackConfig(port);
 
@@ -274,7 +299,7 @@ describe("tlon outbound loopback", () => {
     expect(chunker(fenced, 14)).toEqual(["```py\n  a\n```", "```py\n  b\n```", "end"]);
     expect(chunks).toEqual(["x".repeat(TEXT_LIMIT), "x"]);
     expect(pokes).toHaveLength(chunks.length);
-    expect(loginCount).toBeGreaterThan(0);
+    expect(recorder.loginCount).toBeGreaterThan(0);
     // Every unit fits the transport limit, so the urbit transport accepts each poke.
     expect(rejectedOversized).toEqual([]);
     const delivered = pokes.map((poke) =>
@@ -282,6 +307,46 @@ describe("tlon outbound loopback", () => {
     );
     expect(delivered.every((part) => part.length <= TEXT_LIMIT)).toBe(true);
     expect(delivered.join("")).toBe(text);
+  });
+
+  it("delivers a long fenced reply as balanced code blocks the transport accepts", async () => {
+    const recorder: ChunkPokeRecorder = { pokes: [], rejectedOversized: [], loginCount: 0 };
+    const port = await listenChunkPokeLoopback(recorder);
+    const { pokes, rejectedOversized } = recorder;
+
+    const cfg = loopbackConfig(port);
+    const outbound = tlonPlugin.outbound;
+    if (!outbound) {
+      throw new Error("expected tlon plugin to declare an outbound adapter");
+    }
+    const chunker = outbound.chunker;
+    if (!chunker || outbound.textChunkLimit !== TEXT_LIMIT) {
+      throw new Error("expected tlon outbound to declare a bounded chunker");
+    }
+
+    const codeLines = Array.from({ length: 1_200 }, (_, i) => `print(${i})`).join("\n");
+    const text = `Here is the script:\n\n\`\`\`python\n${codeLines}\n\`\`\`\n\nDone.`;
+    const chunks = chunker(text, TEXT_LIMIT);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      await outbound.sendText?.({ cfg, to: "~nec", text: chunk });
+    }
+
+    // Every delivered poke stays inside the transport limit; fences never leak into the story.
+    expect(rejectedOversized).toEqual([]);
+    expect(recorder.loginCount).toBeGreaterThan(0);
+    const delivered = pokes.map((poke) =>
+      extractStoryText(poke.json?.diff?.delta?.add?.memo?.content),
+    );
+    expect(delivered).toHaveLength(chunks.length);
+    for (const part of delivered) {
+      expect(part).not.toContain("```");
+      expect(part.length).toBeLessThanOrEqual(TEXT_LIMIT);
+    }
+    const reassembled = delivered.join("\n");
+    expect(reassembled).toContain("print(0)");
+    expect(reassembled).toContain("print(1199)");
+    expect(reassembled).toContain("Done.");
   });
 
   it("redacts a reflected session cookie from a rejected poke", async () => {
