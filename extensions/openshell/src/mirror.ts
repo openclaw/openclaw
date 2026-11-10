@@ -48,7 +48,7 @@ async function reconcileMirrorPath(params: {
     // A remote file cannot replace a directory containing preserved host entries.
     if (sourceFile && preservedEntries === "metadata") {
       throw new Error(
-        `OpenShell mirror cannot replace ${JSON.stringify(path.basename(params.targetPath))}: the host directory contains repository metadata; copy the sandbox file elsewhere before another mirrored command.`,
+        `OpenShell mirror cannot replace ${JSON.stringify(path.basename(params.targetPath))}: the host directory contains repository metadata; download the sandbox file directly with the OpenShell CLI before another mirrored command discards it.`,
       );
     }
     if (sourceDir || preservedEntries !== "none") {

@@ -547,7 +547,7 @@ it
       await expectFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
       await expect(
         exec(mirrorBackend, "rm -rf nested-repo && printf collision > nested-repo"),
-      ).rejects.toThrow(/copy the sandbox file elsewhere before another mirrored command/u);
+      ).rejects.toThrow(/download the sandbox file directly/u);
       await expectFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
       expect((await fs.lstat(mirrorFifoPath)).isFIFO()).toBe(true);
       expect((await fs.lstat(mirrorSocketPath)).isSocket()).toBe(true);

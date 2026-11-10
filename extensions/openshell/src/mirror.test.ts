@@ -175,7 +175,7 @@ describe("replaceDirectoryContents", () => {
       await writeFiles(source, { repo: "sandbox file" });
 
       await expect(replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS)).rejects.toThrow(
-        /copy the sandbox file elsewhere before another mirrored command/u,
+        /download the sandbox file directly with the OpenShell CLI before another mirrored command discards it/u,
       );
       await expectFiles(target, { [metadataFile]: "host" });
     },
