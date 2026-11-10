@@ -132,7 +132,7 @@
   margin: 0;
   color: var(--text-strong);
   font-family: var(--font-display);
-  font-size: calc(clamp(24px, 5vw, 34px) * var(--control-ui-text-scale));
+  font-size: clamp(24px, 5vw, 34px);
   font-weight: 720;
   letter-spacing: -0.025em;
   line-height: 1.12;
@@ -412,7 +412,7 @@
 
   .approval-page__heading h1,
   .approval-page__state h1 {
-    font-size: calc(22px * var(--control-ui-text-scale));
+    font-size: 22px;
   }
 
   .approval-page__heading p {
@@ -545,7 +545,7 @@
   }
 
   .question-page .chat-question-panel__prompt {
-    font-size: var(--control-ui-text-lg);
+    font-size: 16px;
     line-height: 1.35;
   }
 
@@ -642,7 +642,7 @@
 
   .question-page .chat-question-summary__prompt {
     color: var(--text-strong);
-    font-size: var(--control-ui-text-lg);
+    font-size: 16px;
     font-weight: 600;
     line-height: 1.35;
   }

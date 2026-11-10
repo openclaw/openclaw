@@ -13,7 +13,7 @@
     border: 0;
     background: transparent;
     color: var(--muted);
-    font: 500 var(--control-ui-text-sm)/var(--control-ui-text-md) var(--font-body);
+    font: 500 12px/14px var(--font-body);
     text-align: start;
   }
   & .chat-pane__workspace-chip > span {

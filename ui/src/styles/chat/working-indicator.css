@@ -174,7 +174,7 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   position: absolute;
   right: -14px;
   top: -2px;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   line-height: 1;
   color: var(--accent);
   opacity: 0;

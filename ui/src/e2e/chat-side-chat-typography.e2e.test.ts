@@ -61,12 +61,6 @@ suite.define(() => {
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.25"),
       );
       expect(await textStyle(side, questionText)).toEqual(await textStyle(main, questionText));
-      for (const surface of [main, side]) {
-        expect(await typography(surface.locator(".code-block-viewport code"))).toMatchObject({
-          size: "15px",
-          lineHeight: "22.5px",
-        });
-      }
       const mainInput = await typography(
         page.getByRole("textbox", {
           name: "Chat composer",

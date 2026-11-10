@@ -9,7 +9,7 @@
   z-index: 1;
   flex-shrink: 0;
   flex-wrap: wrap;
-  font: calc(13px * var(--control-ui-text-scale))/1.4 var(--font-body, sans-serif);
+  font: 13px/1.4 var(--font-body, sans-serif);
   border-bottom: 1px solid var(--border);
 }
 .mcp-app-confirm:focus-visible {

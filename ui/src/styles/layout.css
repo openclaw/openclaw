@@ -3,7 +3,7 @@
 .palette-session-settings__title,
 .palette-session-settings__machine {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   line-height: 1.2;
@@ -111,7 +111,7 @@
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--control-ui-environment-color) 16%, transparent);
   color: var(--control-ui-environment-ink);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 500;
   line-height: 1;
 }
@@ -383,7 +383,7 @@ div.shell.shell--onboarding {
 }
 
 .shell--settings:not(.shell--mobile-nav) .page-title {
-  font-size: calc(26px * var(--control-ui-text-scale));
+  font-size: 26px;
 }
 
 .shell--settings .content-header,
@@ -652,7 +652,7 @@ div.shell.shell--onboarding {
   min-width: 0;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   font-weight: 650;
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -669,7 +669,7 @@ div.shell.shell--onboarding {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -961,7 +961,7 @@ div.shell.shell--onboarding {
   padding: 8px;
   border-top: 2px solid var(--accent);
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .sidebar-sessions--removal-drop {
@@ -1075,7 +1075,7 @@ div.shell.shell--onboarding {
   box-shadow: none;
   color: var(--danger);
   font-size: calc(12px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
 }
 
 .sidebar-session-tree__children > .sidebar-session-error .sidebar-session-tree__show-more {
@@ -1720,7 +1720,7 @@ div.shell.shell--onboarding {
   background: transparent;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
 }
 
 .sidebar-session-pagination__button:hover:not(:disabled),
@@ -1746,7 +1746,7 @@ div.shell.shell--onboarding {
   margin: 0;
   padding-block: 2px 14px;
   font-size: calc(12.5px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
 }
 
 .sidebar-session-empty-hint--startup,
@@ -3145,13 +3145,13 @@ openclaw-sidebar-attention {
   color: var(--text-strong);
   font-size: calc(13.5px * var(--control-ui-text-scale));
   font-weight: 600;
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
 }
 
 .sidebar-identity-card__gateway {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: var(--control-ui-text-md);
+  font-size: 11px;
+  line-height: 14px;
 }
 
 .sidebar-gateway-name,
@@ -3170,7 +3170,7 @@ openclaw-sidebar-attention {
 .sidebar-gateway-primary {
   flex: none;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .sidebar-gateway-health {
@@ -3700,7 +3700,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
     }
 
     .page-title {
-      font-size: calc(15px * var(--control-ui-text-scale));
+      font-size: 15px;
       font-weight: 600;
       letter-spacing: -0.01em;
       line-height: 1;
@@ -3812,7 +3812,7 @@ html.openclaw-native-web-chrome
 
 .page-title {
   margin: 0;
-  font-size: calc(22px * var(--control-ui-text-scale));
+  font-size: 22px;
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
@@ -3970,7 +3970,7 @@ html.openclaw-native-web-chrome
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: calc(12.5px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
   letter-spacing: 0;
   color: var(--session-row-muted, var(--muted));
 }
@@ -3978,7 +3978,7 @@ html.openclaw-native-web-chrome
 .sidebar-recent-session__channel {
   max-width: 120px;
   font-size: calc(12px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
   letter-spacing: 0;
 }
 
@@ -4112,8 +4112,8 @@ html.openclaw-native-web-chrome
   position: relative;
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(22px * var(--control-ui-text-scale));
-  line-height: calc(28px * var(--control-ui-text-scale));
+  font-size: 22px;
+  line-height: 28px;
   letter-spacing: -0.01em;
   font-weight: 600;
   text-wrap: balance;
@@ -4121,8 +4121,8 @@ html.openclaw-native-web-chrome
 .gateway-connection-view__description {
   margin: 6px 0 0;
   color: var(--muted);
-  font-size: var(--control-ui-text-md);
-  line-height: calc(21px * var(--control-ui-text-scale));
+  font-size: 14px;
+  line-height: 21px;
   text-wrap: pretty;
 }
 .gateway-connection-view__actions {
@@ -4139,7 +4139,7 @@ html.openclaw-native-web-chrome
 .gateway-connection-view__actions .btn {
   height: 32px;
   padding: 0 14px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 500;
 }
 
@@ -4214,7 +4214,7 @@ html.openclaw-native-web-chrome
   .gateway-connection-view__actions .btn {
     height: 36px;
     padding: 0 16px;
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
   }
 }
 
@@ -4227,8 +4227,8 @@ html.openclaw-native-web-chrome
     transform: none;
   }
   .gateway-connection-view h1 {
-    font-size: calc(20px * var(--control-ui-text-scale));
-    line-height: calc(26px * var(--control-ui-text-scale));
+    font-size: 20px;
+    line-height: 26px;
   }
 }
 

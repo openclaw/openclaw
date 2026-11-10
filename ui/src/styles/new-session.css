@@ -103,7 +103,7 @@ openclaw-new-session-page,
 
 .new-session-page__draft-toggle-label,
 .new-session-page__incognito-toggle-label {
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__incognito-rail {
@@ -145,7 +145,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 .new-session-page .agent-chat__welcome-name {
   max-width: 100%;
   min-width: 0;
-  font-size: calc(24px * var(--control-ui-text-scale));
+  font-size: 24px;
   font-weight: 600;
 }
 
@@ -195,7 +195,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   padding-inline: var(--chat-composer-editor-inset-inline, 14px);
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.4;
   opacity: 0;
   filter: blur(4px);
@@ -317,7 +317,7 @@ span.new-session-page__select {
 
 .new-session-page__hosted-workspace {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   padding: 4px 8px;
 }
 
@@ -332,7 +332,7 @@ span.new-session-page__select {
   gap: 6px;
   height: 26px;
   padding: 0 10px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--muted);
   list-style: none;
   cursor: var(--cursor-action);
@@ -374,7 +374,7 @@ span.new-session-page__select {
   align-items: center;
   gap: 8px;
   color: var(--danger);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .new-session-page__trigger-label {
@@ -495,7 +495,7 @@ span.new-session-page__select {
 .session-group-defaults__folder-copy strong,
 .session-group-defaults__resolved-copy strong {
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.3;
 }
@@ -504,7 +504,7 @@ span.new-session-page__select {
 .session-group-defaults__resolved-copy small {
   min-width: 0;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.35;
 }
 
@@ -571,7 +571,7 @@ span.new-session-page__select {
 .session-group-defaults__mode-menu .session-group-defaults__mode-option {
   color: var(--text);
   font: inherit;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .session-group-defaults__mode-option > .oc-menu-item__label {
@@ -616,7 +616,7 @@ span.new-session-page__select {
 .new-session-page__project-status,
 .new-session-page__project-error {
   padding: 5px 8px;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -634,7 +634,7 @@ span.new-session-page__select {
   gap: 8px;
   min-height: 30px;
   padding: 2px 8px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -650,7 +650,7 @@ span.new-session-page__select {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   outline: none;
 }
 
@@ -692,7 +692,7 @@ span.new-session-page__select {
 /* Context line inside a picker menu, e.g. which repo syncs to a cloud worker. */
 .new-session-page__menu-note {
   padding: 4px 8px 6px;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   line-height: 1.4;
   color: var(--muted);
 }
@@ -827,7 +827,7 @@ div.new-session-page__project-search {
 .connect-machine-dialog__status,
 .connect-machine-dialog__hint {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -927,14 +927,14 @@ div.new-session-page__project-search {
   padding: 0;
   border: 0;
   background: transparent;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--text);
   outline: none;
 }
 
 .new-session-page__browser-loading {
   flex: 0 0 auto;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -956,7 +956,7 @@ div.new-session-page__project-search {
   border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   text-align: left;
   cursor: var(--cursor-action);
 }
@@ -983,7 +983,7 @@ div.new-session-page__project-search {
 
 .new-session-page__browser-empty {
   padding: 10px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -997,7 +997,7 @@ div.new-session-page__project-search {
 
 .new-session-page__browser > .new-session-page__error {
   padding: 8px 10px 0;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--danger);
 }
 
@@ -1013,7 +1013,7 @@ div.new-session-page__project-search {
 .new-session-page__browser-register {
   padding: 6px 14px;
   border-radius: var(--radius-md);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 600;
   cursor: var(--cursor-action);
 }
@@ -1064,7 +1064,7 @@ div.new-session-page__project-search {
   }
 
   .new-session-page .agent-chat__welcome-name {
-    font-size: calc(20px * var(--control-ui-text-scale));
+    font-size: 20px;
   }
 
   .new-session-page .agent-chat__welcome-identity-copy {
@@ -1202,7 +1202,7 @@ div.new-session-page__project-search {
     max-width: 100%;
     padding-inline: 4px;
     color: var(--text);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     font-weight: 500;
     line-height: 1.4;
   }
@@ -1360,7 +1360,7 @@ div.new-session-page__project-search {
   align-items: center;
   gap: 4px;
   color: var(--warn);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .new-session-page__unavailable-status svg {
@@ -1396,7 +1396,7 @@ div.new-session-page__project-search {
 
 .new-session-page__selected-summary {
   display: block;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   margin-left: 8px;
   font-weight: 400;
 }
@@ -1480,7 +1480,7 @@ div.new-session-page__project-search {
 .new-session-page__fixed-machine {
   padding: 7px 8px;
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .new-session-page__fixed-machine {
@@ -1507,7 +1507,7 @@ div.new-session-page__project-search {
   width: min(320px, calc(100vw - 32px));
   padding: 12px 14px;
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 400;
   line-height: 1.45;
   text-align: start;

@@ -205,7 +205,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   border-radius: calc(18px * var(--openclaw-corner-radius-scale));
   background: var(--bg-elevated);
   color: var(--muted);
-  font: 400 var(--control-ui-text-sm)/calc(20px * var(--control-ui-text-scale)) var(--font-body);
+  font: 400 12px/20px var(--font-body);
 }
 
 .mobile-header__notice > svg {
@@ -331,10 +331,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     max-width: 100%;
     overflow: hidden;
     color: var(--text-strong);
-    font: 600 var(--control-ui-text-lg) / calc(20px * var(--control-ui-text-scale)) var(--font-body);
+    font: 600 16px / 20px var(--font-body);
     /* The narrowest phones leave less room than the pill takes: 15px keeps the
        settings titles whole and closer to center. */
-    font-size: calc(clamp(15px, 4.6vw, 16px) * var(--control-ui-text-scale));
+    font-size: clamp(15px, 4.6vw, 16px);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -591,7 +591,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .card-title {
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
   }
 
   .stat {
@@ -600,7 +600,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .stat-value {
-    font-size: calc(18px * var(--control-ui-text-scale));
+    font-size: 18px;
   }
 
   .chat-thread {
@@ -655,13 +655,13 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .list-title {
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
   }
 
   .code-block {
     padding: 8px;
     border-radius: var(--radius-md);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
 }
 
@@ -694,12 +694,12 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .field select {
     padding: 8px 10px;
     border-radius: var(--radius-md);
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
   }
 
   .btn {
     padding: 8px 12px;
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
 }
 
@@ -727,7 +727,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .stat-value {
-    font-size: var(--control-ui-text-lg);
+    font-size: 16px;
   }
 
   .chat-bubble {
@@ -768,7 +768,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .data-table th,
   .data-table td {
     padding: 8px 6px;
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
 
   .data-table-pagination {
@@ -787,7 +787,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .data-table-search input {
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
     padding: 8px 10px;
   }
 

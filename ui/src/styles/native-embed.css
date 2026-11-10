@@ -117,7 +117,7 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
 .settings-embed-list .settings-sidebar__item {
   min-height: 48px;
   padding: var(--space-3) var(--space-4);
-  font-size: var(--control-ui-text-lg);
+  font-size: 16px;
 }
 
 .settings-embed-list .settings-sidebar__empty {

@@ -354,7 +354,7 @@ a.activity-current-work__row:hover {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
 .activity-pulse__header {
@@ -413,10 +413,10 @@ a.activity-current-work__row:hover {
 .activity-pulse__axis {
   display: flex;
   gap: 3px;
-  height: calc(16px * var(--control-ui-text-scale));
+  height: 16px;
   margin-top: var(--space-1);
   font-size: var(--control-ui-text-xs);
-  line-height: calc(16px * var(--control-ui-text-scale));
+  line-height: 16px;
 }
 
 .activity-pulse__axis > span {

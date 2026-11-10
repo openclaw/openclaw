@@ -36,7 +36,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   min-width: 0;
   min-height: 32px;
   padding: 0;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   font-weight: 400;
   text-align: start;
 }
@@ -109,8 +109,8 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   gap: 7px;
   flex: 1;
   min-width: 0;
-  font-size: var(--control-ui-text-sm);
-  line-height: var(--control-ui-text-lg);
+  font-size: 12px;
+  line-height: 16px;
 }
 
 .session-diff-mobile__branch > svg {
@@ -141,8 +141,8 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 
 .session-diff-mobile__summary small {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: var(--control-ui-text-md);
+  font-size: 11px;
+  line-height: 14px;
 }
 
 .session-diff--mobile .session-diff__files {
@@ -188,7 +188,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   border-radius: 0;
   background: transparent;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 400;
 }
 
@@ -202,9 +202,9 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 
 .session-diff--mobile .session-diff__filename {
   max-width: none;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   font-weight: 500;
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
   overflow-wrap: anywhere;
 }
 
@@ -212,8 +212,8 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 .session-diff--mobile .session-diff__old-path {
   max-width: none;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: var(--control-ui-text-lg);
+  font-size: 12px;
+  line-height: 16px;
   overflow-wrap: anywhere;
 }
 
@@ -238,8 +238,8 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   border: 0;
   border-radius: 0;
   background: transparent;
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(20px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .session-diff--mobile :is(.chat-diff__gutter, .session-diff-split__gutter) {
@@ -285,7 +285,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 
 .session-diff--mobile .chat-diffstat {
   gap: 5px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 

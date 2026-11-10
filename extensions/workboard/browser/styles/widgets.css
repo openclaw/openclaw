@@ -2,7 +2,7 @@
   align-content: center;
   color: var(--muted);
   display: grid;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   gap: 10px;
   justify-items: center;
   margin: 0;
@@ -35,7 +35,7 @@
 .workboard-widget-card__heading > strong,
 .workboard-widget-mini__card > strong {
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -46,7 +46,7 @@
   border-radius: 999px;
   color: var(--muted);
   flex: 0 0 auto;
-  font-size: calc(9px * var(--control-ui-text-scale));
+  font-size: 9px;
   padding: 2px 6px;
 }
 
@@ -75,13 +75,13 @@
 .workboard-widget-card__meta dt,
 .workboard-widget-card__move > span {
   color: var(--muted);
-  font-size: calc(9px * var(--control-ui-text-scale));
+  font-size: 9px;
   text-transform: uppercase;
 }
 
 .workboard-widget-card__meta dd {
   color: var(--text);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   margin: 3px 0 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -104,7 +104,7 @@
 
 .workboard-widget-mini > header a {
   color: var(--accent);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
 }
 
 .workboard-widget-mini__counts {
@@ -116,14 +116,14 @@
 .workboard-widget-mini__counts span {
   color: var(--muted);
   display: grid;
-  font-size: calc(8px * var(--control-ui-text-scale));
+  font-size: 8px;
   gap: 2px;
   padding: 5px;
 }
 
 .workboard-widget-mini__counts b {
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .workboard-widget-mini__cards {
@@ -163,12 +163,12 @@
 
 .workboard-widget-board__header span {
   color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
 }
 
 .workboard-widget-board__header a {
   color: var(--accent);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   margin-left: auto;
   white-space: nowrap;
 }

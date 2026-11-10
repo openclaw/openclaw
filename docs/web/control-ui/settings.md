@@ -245,7 +245,7 @@ Existing unset and hex accents keep their meaning; upgrades do not migrate or re
 
 The **Typography** block lets you choose an **Interface** face and a separate **Chat prose** face. **Theme default** for both Interface and Chat prose restore the theme’s typography; Dash and Absolutely keep their own serif chat defaults. **System** uses the system sans-serif stack without loading a webfont. Code keeps its monospace stack. Opening either picker loads the self-hosted specimens on demand; startup loads only the active faces. Font overrides follow an authenticated Gateway profile, with a browser-local mirror for instant boot. Without a profile, they stay in that browser and are never written to `openclaw.json`.
 
-Appearance also has a Text size setting. It applies to interface text across pages, dialogs, panels, bundled plugin views, and chat, including code and tables. Icons, avatars, remote desktop and browser content, and terminal cells retain their own sizing. Text inputs stay at least 16px so mobile Safari does not auto-zoom on focus.
+Appearance also has a Text size setting. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
 
 Modal dialogs honor your operating system's reduced-motion preference, opening and closing without entrance or exit animations when it is enabled.
 

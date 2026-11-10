@@ -164,7 +164,7 @@
   max-width: 100%;
   background: color-mix(in srgb, var(--accent) 2%, var(--bg-elevated));
   box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 4%, transparent);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   display: block;
   overflow-x: auto;
 }
@@ -232,7 +232,7 @@
   gap: 6px;
   width: auto;
   font: inherit;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .markdown-table__actions button:hover,
@@ -1195,7 +1195,7 @@
   /* CODE_PREVIEW_LINE_COUNT in components/markdown-code-blocks.ts decides how many
      lines the renderer reports as hidden; the clip below must show the same count. */
   --code-block-preview-lines: 7;
-  --code-block-line-height: calc(18px * var(--control-ui-text-scale));
+  --code-block-line-height: 18px;
 
   min-width: 0;
   max-width: 100%;
@@ -1240,7 +1240,7 @@
   background: transparent;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   cursor: var(--cursor-action);
 }
 
@@ -1324,7 +1324,7 @@
 .chat-text :where(pre code) {
   background: none;
   padding: 0;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   white-space: pre;
 }
 
@@ -1384,7 +1384,7 @@
 
 @media (max-width: 640px) {
   .chat-text :where(pre) {
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
 
   .chat-text :where(.markdown-inline-image) {

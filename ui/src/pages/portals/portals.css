@@ -173,7 +173,7 @@ main.content:where(.content--portals-page) .portals-empty {
 .portals-preview__notice-title,
 .portals-empty__title {
   color: var(--text);
-  font-size: calc(0.95rem * var(--control-ui-text-scale));
+  font-size: 0.95rem;
   font-weight: 650;
 }
 
@@ -334,7 +334,7 @@ openclaw-portals-page[embedded],
 
 .portals-page--embedded[data-mobile] .portals-embedded__name {
   display: block;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   font-weight: 500;
 }
 

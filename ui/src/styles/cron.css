@@ -447,7 +447,7 @@
 
 .cron-empty-state__title {
   color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 650;
 }
 
@@ -496,7 +496,7 @@
 
 .cron-detail-title {
   color: var(--text-strong);
-  font-size: calc(20px * var(--control-ui-text-scale));
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.01em;
   min-width: 0;
@@ -634,7 +634,7 @@
   padding: var(--space-3) var(--space-4);
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   color: var(--text);
-  font-size: calc(12.5px * var(--control-ui-text-scale));
+  font-size: 12.5px;
   line-height: 1.4;
 }
 
@@ -698,7 +698,7 @@
 
 .cron-form-status__title {
   color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 600;
   margin-bottom: var(--space-1);
 }
@@ -770,7 +770,7 @@
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   text-align: left;
   padding: 7px 10px;
   border-radius: var(--menu-item-radius);
@@ -836,7 +836,7 @@
 .cron-condition-activity__metric dd {
   margin: 2px 0 0;
   color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -863,7 +863,7 @@
 }
 
 .cron-runs__empty {
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .cron-runs__list {
@@ -905,7 +905,7 @@
   gap: var(--space-2);
   align-items: center;
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .cron-filter-dropdown__option > .oc-menu-item__check {
@@ -956,7 +956,7 @@
 
 .cron-run-entry__title {
   color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 600;
 }
 

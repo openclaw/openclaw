@@ -79,7 +79,7 @@
     border: 0;
     background: transparent;
     color: inherit;
-    font: 600 var(--control-ui-text-md)/calc(20px * var(--control-ui-text-scale)) var(--font-body);
+    font: 600 14px/20px var(--font-body);
     text-align: start;
     cursor: var(--cursor-action);
   }
@@ -102,8 +102,8 @@
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
-    max-height: 2lh;
-    line-height: calc(18px * var(--control-ui-text-scale));
+    max-height: 36px;
+    line-height: 18px;
     overflow-wrap: anywhere;
     white-space: normal;
     text-wrap: balance;

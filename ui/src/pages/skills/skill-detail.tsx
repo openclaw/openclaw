@@ -346,11 +346,7 @@ function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps 
       <Show
         when={content() !== undefined}
         fallback={
-          <div
-            class="muted"
-            role="status"
-            style={{ "font-size": "calc(13px * var(--control-ui-text-scale))" }}
-          >
+          <div class="muted" role="status" style={{ "font-size": "13px" }}>
             {t("skillsPage.skillCardNotLoaded")}
           </div>
         }
@@ -369,11 +365,7 @@ function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps 
       <Loading
         on={acceptedContent() === undefined ? completion() : null}
         fallback={
-          <div
-            class="muted"
-            role="status"
-            style={{ "font-size": "calc(13px * var(--control-ui-text-scale))" }}
-          >
+          <div class="muted" role="status" style={{ "font-size": "13px" }}>
             {t("skillsPage.loadingSkillCard")}
           </div>
         }

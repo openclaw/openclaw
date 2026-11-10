@@ -7,13 +7,13 @@
   padding: 8px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--text-strong) 14%, transparent);
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .chat-reply-preview.composer-context-strip {
   padding-inline: var(--chat-composer-editor-inset-inline, 14px);
   border-bottom-color: color-mix(in srgb, var(--text-strong) 8%, transparent);
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
 .composer-context-strip__label {

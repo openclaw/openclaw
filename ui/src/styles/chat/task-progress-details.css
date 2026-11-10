@@ -131,8 +131,8 @@
   gap: 4px;
   min-width: 0;
   padding-block: 4px;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(24px * var(--control-ui-text-scale));
+  font-size: 13px;
+  line-height: 24px;
 }
 
 .task-progress-details__title {
@@ -198,9 +198,9 @@
 .task-progress-details__count {
   flex: none;
   color: color-mix(in srgb, var(--text) 70%, transparent);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 400;
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
 .task-progress-details__actions {
@@ -284,15 +284,15 @@
 .task-progress-details__plan .session-progress-card__markdown {
   margin: 0;
   font-family: var(--font-body);
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   font-weight: 400;
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
 .task-progress-details--desktop
   .task-progress-details__plan[data-has-steps="true"]
   .session-progress-card__markdown {
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 500;
 }
 
@@ -312,9 +312,9 @@
   position: relative;
   grid-template-columns: 16px minmax(0, 1fr);
   gap: 10px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 400;
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
 .task-progress-details__plan .session-progress-card__step-text {
@@ -361,7 +361,7 @@
   }
 
   .session-progress-card__step {
-    --details-row-line-height: calc(20px * var(--control-ui-text-scale));
+    --details-row-line-height: 20px;
     --session-progress-marker-size: var(--details-row-icon-size, 15px);
 
     grid-template-columns: var(--details-row-icon-slot, 16px) minmax(0, 1fr);
@@ -398,8 +398,8 @@
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .task-progress-details__refresh-status:is([data-state="pending"], [data-state="updated"]) {
@@ -423,7 +423,7 @@
 }
 
 .task-progress-details--mobile .session-progress-card__step {
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
 }
 
 .task-progress-details--mobile
@@ -435,8 +435,8 @@
   border: 0;
   border-radius: var(--radius-lg);
   background: var(--card);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 13px;
+  line-height: 18px;
 }
 
 .task-progress-details--mobile .task-progress-details__retry {
@@ -445,9 +445,9 @@
   border-radius: 999px;
   background: var(--primary);
   color: var(--primary-foreground);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
 .task-progress-details__mobile-controls {
@@ -479,8 +479,8 @@
 
 .task-progress-details__position {
   padding-inline: 12px;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(20px * var(--control-ui-text-scale));
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .task-progress-details__mobile-actions {

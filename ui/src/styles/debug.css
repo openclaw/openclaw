@@ -51,14 +51,14 @@ openclaw-debug-overlay-content {
 }
 
 .debug-overlay__header h2 {
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: 15px;
   letter-spacing: -0.01em;
 }
 
 .debug-overlay__eyebrow {
   margin-bottom: 2px;
   color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -117,7 +117,7 @@ openclaw-debug-overlay-content {
 .debug-overlay__section h3 {
   margin-bottom: 8px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -143,7 +143,7 @@ openclaw-debug-overlay-content {
   }
 
   .debug-overlay__header h2 {
-    font-size: var(--control-ui-text-xs);
+    font-size: 11px;
   }
 
   .debug-overlay__control {
@@ -166,14 +166,14 @@ openclaw-debug-overlay-content {
   }
 
   .sparkline-tile__label {
-    font-size: calc(8.5px * var(--control-ui-text-scale));
+    font-size: 8.5px;
     letter-spacing: 0.03em;
   }
 
   .sparkline-tile__value {
     overflow: hidden;
     margin: 2px 0 1px;
-    font-size: var(--control-ui-text-xs);
+    font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -191,8 +191,8 @@ openclaw-debug-overlay-content {
   }
 
   .sparkline-tile__secondary {
-    font-size: calc(8px * var(--control-ui-text-scale));
-    line-height: calc(9px * var(--control-ui-text-scale));
+    font-size: 8px;
+    line-height: 9px;
   }
 
   .gateway-vital--cpu .sparkline-tile__chart svg {
@@ -211,7 +211,7 @@ openclaw-debug-overlay-content {
   min-height: 50px;
   place-items: center;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .debug-overlay__placeholder-content {
@@ -225,7 +225,7 @@ openclaw-debug-overlay-content {
   gap: 15px 18px;
   padding: 6px 8px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .debug-overlay__placeholder-line {
@@ -245,7 +245,7 @@ openclaw-debug-overlay-content {
   min-width: 0;
   padding: 10px 12px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   background: var(--bg-muted);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

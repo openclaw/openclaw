@@ -4,7 +4,7 @@
   border: 0;
   border-radius: 0;
   background: transparent;
-  line-height: calc(24px * var(--control-ui-text-scale));
+  line-height: 24px;
 }
 
 .chat-details-desktop-section + .chat-details-desktop-section {
@@ -19,8 +19,8 @@
   padding: 0;
   list-style: none;
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(24px * var(--control-ui-text-scale));
+  font-size: 13px;
+  line-height: 24px;
   cursor: var(--cursor-action);
 }
 
@@ -130,7 +130,7 @@
   min-height: 28px;
   margin-inline: 0;
   padding: 0;
-  line-height: calc(24px * var(--control-ui-text-scale));
+  line-height: 24px;
 }
 
 .chat-details-session[data-details-desktop]
@@ -328,7 +328,7 @@
   font-family: var(--font-body);
   font-size: var(--details-row-font-size);
   font-weight: 400;
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
   letter-spacing: normal;
 }
 
