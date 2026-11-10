@@ -9,6 +9,7 @@ import {
   createPluginMetadataSnapshotFixture,
 } from "./plugin-metadata.test-support.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
+import { registerProviderNormalizationTests } from "./provider-runtime.normalization.test-support.js";
 import {
   createProviderRuntimeLogger,
   DEMO_SANITIZED_MESSAGE,
@@ -59,6 +60,7 @@ const resolveProviderPolicySurfaceMock = vi
 const providerRuntimeWarnMock = vi.fn();
 
 let runtime: typeof import("./provider-runtime.js");
+let normalizeDiscoveredAgentModel: typeof import("../agents/model-discovery-normalize.js").normalizeDiscoveredAgentModel;
 let getAiTransportHost: typeof import("@openclaw/ai").getAiTransportHost;
 let attachModelProviderRuntimePluginHandle: typeof import("./provider-hook-runtime.js").attachModelProviderRuntimePluginHandle;
 let resolveProviderPluginsForHooks: typeof import("./provider-hook-runtime.js").resolveProviderPluginsForHooks;
@@ -252,6 +254,7 @@ describe("provider-runtime", () => {
       createSubsystemLogger: () => createProviderRuntimeLogger(providerRuntimeWarnMock),
     }));
     runtime = await import("./provider-runtime.js");
+    ({ normalizeDiscoveredAgentModel } = await import("../agents/model-discovery-normalize.js"));
     ({ resolvePreparedExtraParams } =
       await import("../agents/embedded-agent-runner/extra-params.js"));
     ({
@@ -1436,42 +1439,12 @@ describe("provider-runtime", () => {
     ).toBe(true);
   });
 
-  it.each([
-    { change: "API", normalized: { api: "openai-responses" as const } },
-    { change: "base URL", normalized: { baseUrl: "https://api.openai.com/v1/normalized" } },
-  ])("applies foreign transport $change normalization for custom hosts", ({ normalized }) => {
-    const model = {
-      ...MODEL,
-      provider: "custom-openai",
-      id: "gpt-5.4",
-      api: "openai-completions" as const,
-      baseUrl: "https://api.openai.com/v1",
-    };
-    resolvePluginProvidersMock.mockImplementation((params) => {
-      const plugins = [
-        createDemoProvider({
-          id: "openai",
-          normalizeTransport: ({ provider, api, baseUrl }) =>
-            provider === model.provider && api === model.api && baseUrl === model.baseUrl
-              ? normalized
-              : undefined,
-        }),
-      ];
-      return params.onlyPluginIds?.length
-        ? plugins.filter((plugin) => params.onlyPluginIds?.includes(plugin.id))
-        : plugins;
-    });
-    expect(
-      runtime.applyProviderResolvedTransportWithPlugin({
-        provider: model.provider,
-        context: createDemoResolvedModelContext({
-          provider: model.provider,
-          modelId: model.id,
-          model,
-        }),
-      }),
-    ).toEqual({ ...model, ...normalized });
-  });
+  registerProviderNormalizationTests(() => ({
+    runtime,
+    normalizeDiscoveredAgentModel,
+    resolvePluginProvidersMock,
+    createDemoProvider,
+  }));
 
   it("does not reuse provider hook results during a nested provider load", () => {
     const cachedModel: ProviderRuntimeModel = {

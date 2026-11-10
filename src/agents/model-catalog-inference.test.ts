@@ -87,3 +87,16 @@ it("does not add task declarations to unchanged legacy chat catalog entries", ()
   const legacy = { ...base, inference: undefined };
   expect(overlayCatalogMetadata(legacy, { ...legacy, name: "Legacy" }).inference).toBeUndefined();
 });
+
+it("keeps invalid URL metadata changes distinct from transport whitespace normalization", () => {
+  const invalid = { ...base, baseUrl: "not a url ", contextWindow: 64000 };
+  const result = overlayCatalogMetadata(invalid, {
+    provider: base.provider,
+    id: base.id,
+    name: "Changed route",
+    baseUrl: "not a url",
+  });
+  expect(result.name).toBe("Changed route");
+  expect(result.contextWindow).toBeUndefined();
+  expect(result.inference).toEqual(inference);
+});

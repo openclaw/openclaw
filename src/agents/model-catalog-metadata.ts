@@ -25,6 +25,7 @@ function catalogRouteChanges(base: ModelCatalogEntry, overlay: ModelCatalogEntry
     (overlay.api !== undefined && base.api !== undefined && overlay.api !== base.api) ||
     (overlay.baseUrl !== undefined &&
       base.baseUrl !== undefined &&
+      overlay.baseUrl !== base.baseUrl &&
       normalizeCatalogRouteBaseUrl(overlay.baseUrl) !== normalizeCatalogRouteBaseUrl(base.baseUrl))
   );
 }
@@ -96,11 +97,12 @@ export function overlayCatalogMetadata(
   // routes. Capabilities are atomic with their route; never carry them across
   // an API/endpoint change when the new source omits those facts.
   const routeChanged = catalogRouteChanges(base, overlay);
+  const inferenceRouteChanged = !modelTransportRoutesMatch(base, overlay);
   // Applied configured routes need exact capability provenance, while names
   // retain the existing rule for known transport changes.
   const clearBaseCapabilities =
     options?.preserveBaseCompat && !options.preserveBaseRoute
-      ? !modelTransportRoutesMatch(base, overlay)
+      ? inferenceRouteChanged
       : routeChanged;
   const routeBase = clearBaseCapabilities ? clearRouteBoundCatalogMetadata(base) : base;
   const params = mergeCatalogFields(routeBase.params, overlay.params);
@@ -119,7 +121,6 @@ export function overlayCatalogMetadata(
     ? overlay.contextWindowDefault
     : (overlay.contextWindowDefault ?? routeBase.contextWindowDefault) || undefined;
   const applyRoute = !options?.preserveBaseRoute;
-  const inferenceRouteChanged = !modelTransportRoutesMatch(base, overlay);
   const inference =
     !applyRoute && inferenceRouteChanged
       ? base.inference
