@@ -1,8 +1,8 @@
 /* The schema-driven form itself renders through the settings design
    language (settings-section/settings-group/settings-row; see
    ui/src/styles/settings.css). This file keeps only the config page
-   chrome (tabs, actions, diff, raw editor). Shared form details belong
-   to components/config-form.css and load with the form controls. */
+   chrome (tabs, actions, diff, raw editor). Shared form details load
+   with the settings workspace in settings.css on every form route. */
 
 /* Mirrors the .settings-page column so config chrome lines up with it. */
 .config-lead,

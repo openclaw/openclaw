@@ -1,4 +1,3 @@
-import "./config-form.css";
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { ConfigUiHints } from "../api/types.ts";
