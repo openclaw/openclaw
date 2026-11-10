@@ -304,13 +304,20 @@ struct RootSidebar: View {
         ZStack {
             Circle()
                 .fill(OpenClawSidebarPalette.elevated)
-            Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
-                .font(OpenClawType.caption2Bold)
-                .foregroundStyle(OpenClawSidebarPalette.textStrong)
-                .minimumScaleFactor(0.65)
-                .lineLimit(1)
+            if let image = self.appModel.agentAvatarImage(for: agent.id) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
+                    .font(OpenClawType.caption2Bold)
+                    .foregroundStyle(OpenClawSidebarPalette.textStrong)
+                    .minimumScaleFactor(0.65)
+                    .lineLimit(1)
+            }
         }
         .frame(width: size, height: size)
+        .clipShape(Circle())
         .overlay(Circle().strokeBorder(OpenClawSidebarPalette.hairline, lineWidth: 1))
         .accessibilityHidden(true)
     }

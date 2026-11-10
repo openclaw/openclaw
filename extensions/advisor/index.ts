@@ -92,7 +92,7 @@ export default definePluginEntry({
         });
         text = result.text;
         api.logger.info(
-          `advisor: review usage for session ${sessionKey}: input=${result.usage?.inputTokens ?? "unknown"} cacheRead=${result.usage?.cacheReadTokens ?? "unknown"} output=${result.usage?.outputTokens ?? "unknown"}`,
+          `advisor: review usage for session ${sessionKey}: input=${result.usage?.inputTokens ?? "unknown"} cacheRead=${result.usage?.cacheReadTokens ?? "unknown"} cacheWrite=${result.usage?.cacheWriteTokens ?? "unknown"} output=${result.usage?.outputTokens ?? "unknown"}`,
         );
       } catch (error) {
         if (!cancel.aborted) {

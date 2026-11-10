@@ -24,7 +24,7 @@ import {
   runWithSessionPendingInputWorkerCustody,
   resolveSessionPendingInputAppend,
 } from "./session-accessor.sqlite-pending-inputs.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
 import {

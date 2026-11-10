@@ -69,7 +69,21 @@ export type SessionTranscriptHydrationWorkerResult =
       version: SessionTranscriptReadSnapshot["version"];
       eventCount: number;
     }
-  | Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
+  | Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>
+  | SessionTranscriptStreamedBoundedResult;
+
+export type SessionTranscriptStreamedBoundedResult = Omit<
+  Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>,
+  "kind" | "snapshot"
+> & {
+  kind: "streamed-bounded";
+  snapshot: Omit<
+    Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>["snapshot"],
+    "events"
+  >;
+  sequences: number[];
+  eventCount: number;
+};
 
 export type SessionTranscriptHydrationChunk = {
   kind: "transcript-hydration-chunk";
