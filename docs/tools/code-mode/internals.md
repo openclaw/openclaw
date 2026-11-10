@@ -86,7 +86,10 @@ history cannot be reconstructed from source code or outer results.
 Thrown tool errors are catchable. Returned values may instead report failure.
 Follow the tool's result contract, and inspect possible effects before retrying.
 If guest code does not catch an error, `exec` or `wait` returns a failed tool
-result and the agent can continue normally. Follow the
+result and the agent can continue normally. A rejected program cancels its
+remaining bridge calls instead of waiting for replies it can no longer consume.
+Successful programs still drain every dispatched call. Cancellation does not
+undo actions a tool already performed. Follow the
 [tool-error guidance](/tools/code-mode/quickstart#recover-from-tool-errors) to inspect possible partial
 effects before choosing another action. Network-controlled tool output and errors
 retain their existing untrusted-content wrapping and sanitization; continuing
