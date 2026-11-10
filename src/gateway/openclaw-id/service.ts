@@ -778,10 +778,7 @@ export function createOpenClawIdService(params: {
       return { ...result, ...(publication ? { publication } : {}) };
     },
 
-    /**
-     * "Move to new keys" (`openclaw id rebind`): prepare, commit or cancel a re-bind on this
-     * machine. See service-rebind.ts.
-     */
+    /** "Move to new keys" (`openclaw id rebind`) on this machine; see service-rebind.ts. */
     async rebind(action: RebindAction, channel?: Channel, input: RebindInput = {}) {
       const { createServiceRebind } = await import("./service-rebind.js");
       const restart = () => stopRuntime().then(reconcile);
@@ -795,9 +792,9 @@ export function createOpenClawIdService(params: {
       return await rebindSteps.run(action, channel, input);
     },
 
-    /** Retries publication, for example with an enrollment code obtained after linking. */
+    /** Retries publication with a code (after linking, or `needs_link_code`) held until success. */
     async publish(enrollmentCode?: string): Promise<PublishOutcome | undefined> {
-      return await publicationRetry.publishDirect(() => publish(enrollmentCode));
+      return await publicationRetry.publishAdopted(() => publish(enrollmentCode));
     },
 
     /** Applies an owner-signed statement sent directly by a client (never the mailbox). */
