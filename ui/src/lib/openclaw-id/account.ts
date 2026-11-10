@@ -235,20 +235,26 @@ export async function signInWithOpenClawId(params: {
   }
 }
 
-/** A one-time Discovery link code for the signed-in account, so Make reachable needs no paste. */
-export async function requestOpenClawIdLinkCode(
-  client: GatewayBrowserClient,
-  signedIn: OpenClawIdSignedIn,
-): Promise<string> {
+/** Captures account custody for work that can outlive a tab's sign-out or replacement. */
+export function guardOpenClawIdAccount(signedIn: OpenClawIdSignedIn): () => void {
   const epoch = getSafeLocalStorage()?.getItem(SIGN_OUT_KEY);
-  const assertCurrent = () => {
+  return () => {
     if (
       openClawIdAccount()?.idToken !== signedIn.idToken ||
+      readStored()?.idToken !== signedIn.idToken ||
       getSafeLocalStorage()?.getItem(SIGN_OUT_KEY) !== epoch
     ) {
       throw new Error("You signed out while linking was in progress. Sign in again.");
     }
   };
+}
+
+/** A one-time Discovery link code for the signed-in account, so Make reachable needs no paste. */
+export async function requestOpenClawIdLinkCode(
+  client: GatewayBrowserClient,
+  signedIn: OpenClawIdSignedIn,
+): Promise<string> {
+  const assertCurrent = guardOpenClawIdAccount(signedIn);
   assertCurrent();
   const result = await client.request<{ code: string }>("openclawId.authority", {
     action: "account_link_code",
