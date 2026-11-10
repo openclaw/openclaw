@@ -649,7 +649,11 @@ struct ChatProTab: View {
     nonisolated static func gatewayStatusTitle(state: GatewayDisplayState, isGatewayUsable: Bool) -> String {
         switch state {
         case .connected:
-            isGatewayUsable ? String(localized: "Connected") : String(localized: "Unavailable")
+            if isGatewayUsable {
+                String(localized: "Connected")
+            } else {
+                String(localized: "Unavailable")
+            }
         case .connecting:
             String(localized: "Connecting")
         case .error:
