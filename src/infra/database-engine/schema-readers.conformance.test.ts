@@ -9,7 +9,9 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
+import { readTemplatePackageRefsForAdd } from "../../templates/add-state-write.js";
 import { readAllTemplateCronRefsInDatabase } from "../../templates/cron-records.js";
+import { readTemplatePackageRefsInDatabase } from "../../templates/provenance-read.kernel.js";
 import { installDatabaseProcessRole, withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
@@ -88,6 +90,66 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           updatedAtMs: 20,
         },
       ]);
+    });
+
+    it("reads Template rollback owners with exact package filters and stable ordering", async () => {
+      const filters = {
+        agentId: "alpha",
+        kind: "plugin",
+        source: "clawhub",
+        ref: "@owner/audit' OR '1'='1",
+        version: "2.0.1",
+        integrity: `sha256:${"a".repeat(64)}`,
+        status: "pending",
+      } as const;
+      withEngineStoreAdmission(() =>
+        runOpenClawStateWriteTransaction(({ db }) => {
+          for (const agentId of ["zeta", "alpha"]) {
+            const status = agentId === "alpha" ? "pending" : "complete";
+            sessionSqlFixture(db)`INSERT INTO template_package_refs
+            (agent_id, package_kind, package_source, package_ref, package_version,
+             package_integrity, schema_version, template_name, package_status,
+             relationship, origin, independent_owner, installed_at_ms, updated_at_ms)
+            VALUES (${agentId}, 'plugin', 'clawhub', ${filters.ref}, '2.0.1', ${filters.integrity},
+              'openclaw.templatePackageRef.v1', 'package-fixture', ${status},
+              'referenced', 'template-introduced', 0, 100, 100)`.run();
+          }
+          expect(readTemplatePackageRefsInDatabase(db).map((row) => row.agentId)).toEqual([
+            "alpha",
+            "zeta",
+          ]);
+        }),
+      );
+      // The real rollback owner query must retain other agents' matching package claims.
+      const read = (query: Parameters<typeof readTemplatePackageRefsForAdd>[0]) =>
+        withEngineStoreAdmission(() => ({ pending: readTemplatePackageRefsForAdd(query) })).pending;
+      expect(await read(filters)).toEqual([
+        expect.objectContaining({
+          agentId: "alpha",
+          ref: filters.ref,
+          status: "pending",
+          independentOwner: false,
+        }),
+      ]);
+      for (const [key, value] of Object.entries({
+        agentId: "missing",
+        kind: "skill",
+        ref: "@owner/missing",
+        version: "9.0.0",
+        integrity: "sha256:missing",
+        status: "complete",
+      })) {
+        expect(await read({ ...filters, [key]: value }), key).toEqual([]);
+      }
+      expect(
+        await read({
+          kind: "plugin",
+          source: "clawhub",
+          ref: filters.ref,
+          version: filters.version,
+          integrity: filters.integrity,
+        }),
+      ).toHaveLength(2);
     });
 
     it("resumes Doctor's journal and rewrites scalar and JSON shared-state keys", async () => {
