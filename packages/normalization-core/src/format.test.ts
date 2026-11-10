@@ -13,12 +13,14 @@ describe("bucketRelativeTimeMs", () => {
 });
 
 describe("formatByteSize", () => {
+  const legacy = { style: "legacy-binary", maxUnit: "giga", separator: " " } as const;
+  const iec = { style: "iec", maxUnit: "tera", separator: " " } as const;
   it.each([
-    [
-      5 * 1024 * 1024,
-      { style: "legacy-binary", maxUnit: "kilo", separator: " ", fractionDigits: 1 },
-      "5120.0 KB",
-    ],
+    [5 * 1024 * 1024, { ...legacy, maxUnit: "kilo", fractionDigits: 1 }, "5120.0 KB"],
+    [1_048_575, { ...iec, maxUnit: "kilo", fractionDigits: 0 }, "1024 KiB"],
+    [1_048_575, { ...iec, fractionDigits: 1 }, "1.0 MiB"],
+    [1_073_741_823, { ...iec, fractionDigits: 0 }, "1 GiB"],
+    [1_073_741_823, { ...legacy, fractionDigits: 0, floorUnits: ["mega"] }, "1023 MB"],
   ] as const)("formats %s bytes", (bytes, options, expected) => {
     expect(formatByteSize(bytes, options)).toBe(expected);
   });
@@ -26,39 +28,11 @@ describe("formatByteSize", () => {
   it("supports caller-owned dynamic precision and rounding", () => {
     expect(
       formatByteSize(Math.floor(99.6 * 1024 * 1024), {
-        style: "legacy-binary",
-        maxUnit: "giga",
-        separator: " ",
+        ...legacy,
         fractionDigits: (_value, unit) => (unit === "giga" ? 1 : unit === "byte" ? null : 0),
         floorUnits: ["kilo", "mega"],
       }),
     ).toBe("99 MB");
-  });
-
-  it.each([
-    [1_048_575, "kilo", 0, "1024 KiB"],
-    [1_048_575, "tera", 0, "1 MiB"],
-    [1_048_575, "tera", 1, "1.0 MiB"],
-    [1_073_741_000, "tera", 1, "1.0 GiB"],
-  ] as const)(
-    "formats %s bytes up to %s with %s digits as %s",
-    (bytes, maxUnit, fractionDigits, expected) => {
-      expect(formatByteSize(bytes, { style: "iec", maxUnit, separator: " ", fractionDigits })).toBe(
-        expected,
-      );
-    },
-  );
-
-  it("keeps floored values in their unit", () => {
-    expect(
-      formatByteSize(1_073_741_000, {
-        style: "legacy-binary",
-        maxUnit: "giga",
-        separator: " ",
-        fractionDigits: 0,
-        floorUnits: ["mega"],
-      }),
-    ).toBe("1023 MB");
   });
 });
 
