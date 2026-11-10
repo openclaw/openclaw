@@ -1,0 +1,3 @@
+215
+# 204 lines for native history handoff, admission/reentry and bounded/privacy regressions.
+# Reconcile the verified 11-line inherited base overage; no extra headroom.
