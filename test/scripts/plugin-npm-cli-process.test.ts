@@ -45,6 +45,9 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
   const carrierJobsRoute = "actions/runs/800/attempts/2/jobs?per_page=100";
   // The selected package downloader independently authenticates its producer.
   const packageProducerRoute = "actions/runs/5001/attempts/1";
+  // Each retained child validates its pinned dispatch origin outside replay.
+  const childOriginRoute = "actions/runs/" + f.f.runId + "/attempts/1";
+  const childOriginReads = Object.keys(f.recovery.recovery.children).length;
   const replayRoutes = new Set(carrier.entries.map(([route]: [string, unknown]) => route));
   const categoryCounts = (name: string) => {
     const categories = { live: 0, immutable: 0, carrier: 0, selectedPackage: 0 };
@@ -53,7 +56,11 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
         categories.carrier += 1;
       } else if (route === "actions/artifacts/9002/zip") {
         categories.selectedPackage += 1;
-      } else if (route === carrierJobsRoute || route === packageProducerRoute) {
+      } else if (
+        route === carrierJobsRoute ||
+        route === packageProducerRoute ||
+        route === childOriginRoute
+      ) {
         categories.live += 1;
       } else if (
         replayRoutes.has(route) ||
@@ -131,6 +138,10 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
         name + " reacquired " + route,
       ).toEqual([]);
     }
+    expect(
+      calls.filter((row) => row.route === childOriginRoute),
+      name + " live child origins",
+    ).toHaveLength(childOriginReads);
     expect(calls.filter((row) => row.route === carrierJobsRoute)).toHaveLength(1);
     expect(calls.filter((row) => row.route === packageProducerRoute)).toHaveLength(
       name.startsWith("consume") ? 1 : 0,
