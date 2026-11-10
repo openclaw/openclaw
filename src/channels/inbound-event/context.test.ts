@@ -211,6 +211,19 @@ describe("buildChannelInboundEventContext", () => {
 });
 
 describe("finalizeChannelInboundContext supplemental media resolution", () => {
+  it.each([false, true])("marks quoted media after lazy resolution=%s", async (lazy) => {
+    const quoted = [{ path: "/tmp/quoted.ogg", contentType: "audio/ogg" }];
+    const { context: ctx } = await finalizeQuote({
+      media: [{ path: "/tmp/current.ogg", contentType: "audio/ogg" }],
+      supplemental: { quote: { media: lazy ? async () => quoted : quoted } },
+    });
+    expect(ctx.media?.map(({ path, source }) => ({ path, source }))).toEqual([
+      { path: "/tmp/current.ogg", source: undefined },
+      { path: "/tmp/quoted.ogg", source: "quote" },
+    ]);
+    expect(quoted[0]).not.toHaveProperty("source");
+  });
+
   it.each([false, true])(
     "suppresses self-quote %s body independently of media",
     async (suppressBody) => {
