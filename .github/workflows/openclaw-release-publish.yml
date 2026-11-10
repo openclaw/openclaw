@@ -558,6 +558,7 @@ jobs:
           import { appendFileSync, readFileSync } from 'node:fs';
           import { preparedDockerEvidenceFromFullRelease } from './.release-validation-tooling/scripts/docker-release-artifacts.mjs';
           import { validatePreparedNpmArtifactDescriptor } from './.release-validation-tooling/scripts/plugin-npm-prepared-release.mjs';
+          import { retainedPublicationArtifactSource } from './.release-validation-tooling/scripts/lib/release-evidence-identity.mjs';
           const env = process.env;
           const manifest = JSON.parse(readFileSync(`${env.RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json`, 'utf8'));
           const prepared = preparedDockerEvidenceFromFullRelease({ manifest, sourceSha: env.EXPECTED_SHA, runId: env.FULL_RELEASE_VALIDATION_RUN_ID, runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT });
@@ -570,8 +571,10 @@ jobs:
               throw new Error('Candidate-owned all-plugin publication requires the original FRV npm artifact; repacking is not allowed.');
             }
             if (descriptor) {
+              // Strict authentication above binds retained artifacts to their original producer, not recovery tooling.
+              const producerSha = retainedPublicationArtifactSource(manifest)?.workflow.sha ?? manifest.workflowSha;
               const npm = validatePreparedNpmArtifactDescriptor(descriptor, {
-                repository: env.GITHUB_REPOSITORY, sourceSha: env.EXPECTED_SHA, workflowSha: manifest.workflowSha,
+                repository: env.GITHUB_REPOSITORY, sourceSha: env.EXPECTED_SHA, workflowSha: producerSha,
               });
               appendFileSync(env.GITHUB_OUTPUT, `plugin_npm_artifact=${JSON.stringify(npm)}\n`);
             }
