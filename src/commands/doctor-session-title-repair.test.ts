@@ -152,7 +152,7 @@ it("repairs retained internal-wake titles without changing explicit names or ses
   await withSession(
     async (params) => {
       await sessionAccessor.patchSessionEntryCore(params, () => ({ displayName: marker }));
-      const before = expectDefined(sessionAccessor.loadSessionEntry(params));
+      const before = expectDefined(sessionAccessor.loadSessionEntry(params), params.sessionKey);
       const preview = await repairLegacySessionTitles({ cfg, env: process.env, apply: false });
       expect(preview).toMatchObject({ found: 1, repaired: 0 });
       expect(sessionAccessor.loadSessionEntry(params)).toEqual(before);
