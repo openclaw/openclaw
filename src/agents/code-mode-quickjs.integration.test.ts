@@ -16,6 +16,7 @@ import {
   resetCodeModeTestState,
   resultDetails,
   testing,
+  waitUntilCompleted,
 } from "./code-mode.test-support.js";
 
 afterEach(resetCodeModeTestState);
@@ -169,4 +170,52 @@ describe("QuickJS checkpoint admission through Code Mode", () => {
       expect(testing.activeRuns.size).toBe(0);
     },
   );
+});
+
+it.each([false, true])("stops reply decoding OOM after checkpoint=%s", async (checkpoint) => {
+  const started = createDeferred();
+  const large = pluginToolWithExecute("fixture_large", "Large reply", async () => {
+    started.resolve();
+    return { content: [], details: Array.from({ length: 500_000 }, () => ({})) };
+  });
+  const after = pluginTool("fixture_after", "Must not execute after decode failure");
+  const { ctx, config, tools } = createCodeModeHarness({
+    codeMode: {
+      executor: "quickjs",
+      memoryLimitBytes: 16 * 1024 * 1024,
+      maxSnapshotBytes: 32 * 1024 * 1024,
+    },
+  });
+  applyCodeModeCatalog({ ...ctx, config, tools: [...tools, large, after] });
+  const exec = expectDefined(tools[0], "exec");
+  const wait = expectDefined(tools[1], "wait");
+  const first = resultDetails(
+    await exec.execute("decode-oom", {
+      code: `const pending = fixture_large({});
+       ${checkpoint ? "await yield_control();" : ""}
+       const value = await pending;
+       await fixture_after({});
+       return { array: Array.isArray(value), length: value.length };`,
+      awaitResults: !checkpoint,
+    }),
+  );
+  if (checkpoint) {
+    expect(first.status).toBe("waiting");
+    await started.promise;
+  }
+  const result = await waitUntilCompleted({ details: first, waitTool: wait });
+  expect(result, JSON.stringify(result)).toMatchObject({
+    status: "failed",
+    code: "internal_error",
+    // Stable QuickJS classifies VM decode exceptions as guest failures.
+    failurePhase: "guest",
+    bridgeDispatchStarted: true,
+    error: expect.stringContaining("out of memory"),
+  });
+  expect(large.execute).toHaveBeenCalledOnce();
+  expect(after.execute).not.toHaveBeenCalled();
+  expect(
+    resultDetails(await exec.execute("healthy", { code: "return 42;", awaitResults: true })),
+  ).toMatchObject({ status: "completed", value: 42 });
+  expect(testing.activeRuns.size).toBe(0);
 });
