@@ -194,6 +194,27 @@ it.each(["owned", "foreign", "missing launcher"] as const)(
   },
 );
 
+it("rechecks start authority after awaited task enable before native Run", async () => {
+  const { env } = await fixture();
+  let retired = false;
+  native.afterEnable = async () => {
+    await Promise.resolve();
+    retired = true;
+  };
+  await expect(
+    startScheduledTask({
+      env,
+      stdout: new PassThrough(),
+      beforeEffect: () => {
+        if (retired) {
+          throw new Error("stop intent retired");
+        }
+      },
+    }),
+  ).rejects.toThrow("stop intent retired");
+  expect(native.calls.some((args) => args[0] === "/Run")).toBe(false);
+});
+
 it("explicitly starts a disabled registered node without replacing its launcher", async () => {
   const { env, file } = await fixture("node");
   const before = await fs.readFile(file);

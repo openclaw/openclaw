@@ -193,6 +193,7 @@ export async function launchFallbackTaskScript(
   env: GatewayServiceEnv,
   installedCommand?: GatewayServiceCommandConfig | null,
   assertCurrent?: () => void,
+  beforeEffect?: () => void,
 ): Promise<void> {
   if (isUpdateOwnedGatewayServiceCommand()) {
     throw new Error(
@@ -251,7 +252,10 @@ export async function launchFallbackTaskScript(
     };
   }
   const { child } = await spawnWithFallback({
-    assertCurrent,
+    assertCurrent: () => {
+      assertCurrent?.();
+      beforeEffect?.();
+    },
     argv,
     options: { detached: true, stdio: "ignore", windowsHide: true, ...options },
   });
@@ -557,8 +561,9 @@ export async function startStartupEntry(
   stdout: NodeJS.WritableStream,
   onMutation?: () => void,
   assertCurrent?: () => void,
+  beforeEffect?: () => void,
 ): Promise<void> {
-  await launchFallbackTaskScript(env, undefined, assertCurrent);
+  await launchFallbackTaskScript(env, undefined, assertCurrent, beforeEffect);
   onMutation?.();
   stdout.write(`${formatLine("Started Windows login item", resolveTaskName(env))}\n`);
 }

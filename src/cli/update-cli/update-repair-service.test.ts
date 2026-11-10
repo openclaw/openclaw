@@ -57,6 +57,7 @@ beforeEach(async () => {
     start: vi.fn(async (args) => {
       await args.beforeMutation?.();
       args.assertCurrent?.();
+      args.beforeEffect?.();
       events.push("start");
     }),
   });
@@ -200,6 +201,69 @@ it("finalizes an interrupted managed update, then starts and verifies its stoppe
   );
   await repair(false);
   expect(service.start).toHaveBeenCalledTimes(1);
+});
+
+it("does not revoke a successful repair start during post-effect authority checks", async () => {
+  const original = seed(true);
+  vi.mocked(service.start).mockImplementation(async (args) => {
+    args.beforeEffect?.();
+    const active = listUpdateRuns().find(({ status }) => status === "running")!;
+    expect(active.runId).not.toBe(original);
+    const updated = recordUpdateRunStep(active.runId, {
+      step: "service-start",
+      status: "completed",
+      endedAtMs: Date.now(),
+    });
+    expect(updated?.steps).toContainEqual(
+      expect.objectContaining({ step: "service-start", status: "completed" }),
+    );
+    args.assertCurrent?.();
+    events.push("start");
+  });
+
+  await repair();
+
+  expect(events).toEqual(["finalized", "start", "verified"]);
+  expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+    expect.objectContaining({ status: "ok", restart: true }),
+  );
+});
+
+it("does not start when native preparation retires the pending repair stop", async () => {
+  const original = seed(true);
+  vi.mocked(service.start).mockImplementation(async (args) => {
+    // Native preparation awaits before its final dispatch callback.
+    await Promise.resolve();
+    const active = listUpdateRuns().find(({ status }) => status === "running")!;
+    expect(active.runId).not.toBe(original);
+    const updated = recordUpdateRunStep(active.runId, {
+      step: "service-start",
+      status: "completed",
+      endedAtMs: Date.now(),
+    });
+    expect(updated?.steps).toContainEqual(
+      expect.objectContaining({ step: "service-start", status: "completed" }),
+    );
+    args.beforeEffect?.();
+    events.push("start");
+  });
+
+  await repair();
+
+  expect(events).toEqual(["finalized"]);
+  expect(healthApi.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+  expect(listUpdateRuns()[0]?.status).toBe("succeeded");
+  expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      status: "warning",
+      restart: false,
+      postUpdate: expect.objectContaining({
+        doctor: expect.objectContaining({
+          warnings: [expect.stringContaining("Gateway stop intent changed")],
+        }),
+      }),
+    }),
+  );
 });
 
 it.each(["recorded native handoff", "legacy activating phase"])(

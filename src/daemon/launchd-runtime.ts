@@ -330,6 +330,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   preserveAutoStart?: boolean;
   preservedEnabled?: boolean;
   assertCurrent?: () => void;
+  beforeEffect?: () => void;
   deadline?: GatewayServiceControlArgs["deadline"];
   // Opt-in for callers that just issued `bootout` on this label. Only those can
   // race a pending teardown, so start/install/recovery paths keep failing fast
@@ -349,7 +350,11 @@ export async function bootstrapLaunchAgentOrThrow(params: {
     }
     params.assertCurrent?.();
     if (!enabled) {
-      const enable = await execLaunchctl(["enable", params.serviceTarget], params.deadline);
+      const enable = await execLaunchctl(
+        ["enable", params.serviceTarget],
+        params.deadline,
+        params.beforeEffect,
+      );
       if (enable.code !== 0) {
         throw new Error(`launchctl enable failed: ${formatLaunchctlResultDetail(enable)}`);
       }
@@ -393,7 +398,11 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   // paths must clear it before asking launchd to load the job again.
   if (!params.skipEnable) {
     params.assertCurrent?.();
-    const enable = await execLaunchctl(["enable", params.serviceTarget], params.deadline);
+    const enable = await execLaunchctl(
+      ["enable", params.serviceTarget],
+      params.deadline,
+      params.beforeEffect,
+    );
     if (enable.code === 0) {
       params.onMutation?.("enable");
     }
@@ -404,6 +413,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
     const boot = await execLaunchctl(
       ["bootstrap", params.domain, params.plistPath],
       params.deadline,
+      params.beforeEffect,
     );
     if (boot.code === 0) {
       params.onMutation?.("bootstrap");
