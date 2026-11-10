@@ -241,6 +241,7 @@ export async function prepareEmbeddedSessionForkContext(params: {
     directApiKey: params.directApiKey,
   });
   const settings = createPreparedEmbeddedAgentSettingsManager({
+    agentId: params.target.agentId,
     sessionId: params.target.sessionId,
     cwd: params.workspaceDir,
     agentDir: params.agentDir,

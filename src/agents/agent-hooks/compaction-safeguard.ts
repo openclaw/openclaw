@@ -1,7 +1,7 @@
 /** Extension that safeguards compaction with structured summaries and quality repair. */
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   capCompactionSummary,
   fitCompactionSummary,
@@ -14,7 +14,6 @@ import {
   computeFileLists,
   extractCurrentCompactionUserRequest,
   extractCompactionMessageText as extractMessageText,
-  formatCompactionUserLabel,
   formatFileOperations,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
@@ -39,6 +38,7 @@ import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { resolveCompactionInstructions } from "./compaction-instructions.js";
+import { formatContextMessage } from "./compaction-safeguard-messages.js";
 import {
   appendSummarySection,
   auditSummaryQuality,
@@ -74,7 +74,6 @@ const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
-const MAX_RECENT_TURN_TEXT_CHARS = 600;
 const compactionSafeguardDeps = {
   summarizeCompactionHistory,
 };
@@ -337,32 +336,6 @@ function budgetCompactionSummary(
   };
 }
 
-function formatNonTextPlaceholder(content: unknown): string | null {
-  if (content == null || typeof content === "string") {
-    return null;
-  }
-  if (!Array.isArray(content)) {
-    return "[non-text content]";
-  }
-  const typeCounts = new Map<string, number>();
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typeRaw = (block as { type?: unknown }).type;
-    const type = typeof typeRaw === "string" && typeRaw.trim().length > 0 ? typeRaw : "unknown";
-    if (type === "text") {
-      continue;
-    }
-    typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
-  }
-  return typeCounts.size > 0
-    ? `[non-text content: ${Array.from(typeCounts, ([type, count]) =>
-        count > 1 ? `${type} x${count}` : type,
-      ).join(", ")}]`
-    : null;
-}
-
 function splitPreservedRecentTurns(params: {
   messages: AgentMessage[];
   recentTurnsPreserve: number;
@@ -430,35 +403,6 @@ function splitPreservedRecentTurns(params: {
   };
 }
 
-function formatContextMessage(message: AgentMessage): string | null {
-  let roleLabel: string;
-  if (message.role === "assistant") {
-    roleLabel = "Assistant";
-  } else if (message.role === "user") {
-    roleLabel = formatCompactionUserLabel(message);
-  } else if (message.role === "toolResult") {
-    const toolName = (message as { toolName?: unknown }).toolName;
-    const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
-    roleLabel = `Tool result (${safeToolName})`;
-  } else {
-    return null;
-  }
-  const rendered = [
-    extractMessageText(message),
-    formatNonTextPlaceholder((message as { content?: unknown }).content),
-  ]
-    .filter(Boolean)
-    .join("\n");
-  if (!rendered) {
-    return null;
-  }
-  const trimmed =
-    rendered.length > MAX_RECENT_TURN_TEXT_CHARS
-      ? `${truncateUtf16Safe(rendered, MAX_RECENT_TURN_TEXT_CHARS)}...`
-      : rendered;
-  return `- ${roleLabel}: ${trimmed}`;
-}
-
 function formatContextSegments(messages: AgentMessage[]): string[] {
   const frames = classifyToolUseResultPairing(messages);
   // A call-bearing assistant and all occurrence-matched results are one context
@@ -492,6 +436,7 @@ function formatBoundedContextSection(params: {
   heading: string;
   truncatedMarker: string;
   truncatedLoss: CompactionLoss;
+  maxChars: number;
 }): ContextSection {
   const segments = formatContextSegments(params.messages);
   if (segments.length === 0) {
@@ -500,14 +445,14 @@ function formatBoundedContextSection(params: {
 
   let prefix = `${params.heading}\n`;
   let retained = segments;
-  const truncated = !(prefix.length + segments.join("\n").length <= MAX_SPLIT_TURN_CONTEXT_CHARS);
+  const truncated = !(prefix.length + segments.join("\n").length <= params.maxChars);
   if (truncated) {
     prefix += params.truncatedMarker;
     retained = [];
     let usedChars = prefix.length;
     for (const segment of segments.toReversed()) {
       const segmentChars = segment.length + (retained.length > 0 ? 1 : 0);
-      if (usedChars + segmentChars > MAX_SPLIT_TURN_CONTEXT_CHARS) {
+      if (usedChars + segmentChars > params.maxChars) {
         break;
       }
       retained.unshift(segment);
@@ -526,27 +471,39 @@ function formatBoundedContextSection(params: {
   };
 }
 
-function buildPreservedTurnsSection(messages: AgentMessage[]): ContextSection {
+function buildPreservedTurnsSection(
+  messages: AgentMessage[],
+  maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
+): ContextSection {
   return formatBoundedContextSection({
     messages,
+    maxChars,
     heading: "\n\n## Recent turns preserved verbatim",
     truncatedMarker: PRESERVED_TURNS_TRUNCATED_MARKER,
     truncatedLoss: "preserved-turn-head",
   });
 }
 
-function buildSplitTurnContextSection(messages: AgentMessage[]): ContextSection {
+function buildSplitTurnContextSection(
+  messages: AgentMessage[],
+  maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
+): ContextSection {
   return formatBoundedContextSection({
     messages,
+    maxChars,
     heading: "**Turn Context (split turn):**\n",
     truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
     truncatedLoss: "split-turn-head",
   });
 }
 
-function formatGeneratedSplitTurnSection(summary: string, onTruncated: () => void): string {
+function formatGeneratedSplitTurnSection(
+  summary: string,
+  onTruncated: () => void,
+  maxChars: number,
+): string {
   const heading = `${SPLIT_TURN_SECTION_HEADING}\n\n`;
-  const summaryBudget = MAX_SPLIT_TURN_CONTEXT_CHARS - heading.length;
+  const summaryBudget = maxChars - heading.length;
   const nestedSummary = nestMarkdownHeadings(summary);
   const cappedSummary = capCompactionSummary(nestedSummary, summaryBudget);
   if (cappedSummary.length < nestedSummary.length) {
@@ -565,6 +522,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       thinkingLevel,
       streamFn,
     } = event;
+    const maxSummaryChars = preparation.settings.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS;
+    const splitTurnContextChars = Math.floor(maxSummaryChars / 2);
     const previousSummary = normalizeLegacySplitTurnSummary(preparation.previousSummary?.trim());
     let baseMessagesToSummarize = stripRuntimeContextCustomMessages(
       preparation.messagesToSummarize,
@@ -729,8 +688,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         ...(reservedChars > 0 ? { reservedChars } : {}),
       };
       const fit = (retention?: SummaryQualityRetention) =>
-        fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
-          budgetCompactionSummary(body, suffix, maxChars, retention),
+        fitCompactionSummary(
+          preparation.summaryTokenBudget,
+          (maxChars) => budgetCompactionSummary(body, suffix, maxChars, retention),
+          maxSummaryChars,
         );
       let fitted = fit(qualityRetention);
       const losses = new Set(producerLosses);
@@ -806,9 +767,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             });
             const finalized = await finalizeSummaryText(reconcileRequestSelection(providerResult), {
               splitTurnSection: preparation.isSplitTurn
-                ? buildSplitTurnContextSection(turnPrefixMessages)
+                ? buildSplitTurnContextSection(turnPrefixMessages, splitTurnContextChars)
                 : undefined,
-              preservedTurnsSection: buildPreservedTurnsSection(preservedMessages),
+              preservedTurnsSection: buildPreservedTurnsSection(
+                preservedMessages,
+                splitTurnContextChars,
+              ),
             });
             return compactionResult(finalized.summary);
           }
@@ -888,7 +852,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: baseMessagesToSummarize,
         recentTurnsPreserve,
       });
-      const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
+      const preservedTurnsSectionLocal = buildPreservedTurnsSection(
+        preservedRecentMessages,
+        splitTurnContextChars,
+      );
       const latestPreparedAsk = extractCurrentCompactionUserRequest(
         baseMessagesToSummarize,
         extractMessageText,
@@ -956,9 +923,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               previousSummary: undefined,
             });
             splitTurnSummaryLocal = prefixSummary;
-            splitTurnSectionLocal = formatGeneratedSplitTurnSection(prefixSummary, () => {
-              producerLosses.add("split-turn-tail");
-            });
+            splitTurnSectionLocal = formatGeneratedSplitTurnSection(
+              prefixSummary,
+              () => {
+                producerLosses.add("split-turn-tail");
+              },
+              splitTurnContextChars,
+            );
           }
         } catch (attemptError) {
           if (signal?.aborted) {

@@ -13,12 +13,18 @@ type ManualCompactionPreflight =
 export function preflightManualSessionCompaction(
   pathEntries: SessionEntry[],
   settings: CompactionSettings,
+  constraints?: Parameters<typeof prepareCompaction>[3],
 ): ManualCompactionPreflight {
-  let result = prepareCompaction(pathEntries, settings);
+  let result = prepareCompaction(pathEntries, settings, undefined, constraints);
   if (result.ok && !result.value) {
     // Explicit manual compaction uses the smallest valid history rather than
     // treating a session that fits the configured keep budget as a no-op.
-    result = prepareCompaction(pathEntries, { ...settings, keepRecentTokens: 0 });
+    result = prepareCompaction(
+      pathEntries,
+      { ...settings, keepRecentTokens: 0 },
+      undefined,
+      constraints,
+    );
   }
   if (!result.ok) {
     throw result.error;

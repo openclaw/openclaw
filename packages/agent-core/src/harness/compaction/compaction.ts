@@ -57,7 +57,7 @@ export interface CompactionResult<T = unknown> {
 }
 
 // Persisted summaries replay on every later request, so their owner enforces
-// this provider-independent 16K hard bound.
+// this provider-independent default unless the operator chooses another ceiling.
 export const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const TURN_CONTEXT_PREFIX = "\n\n---\n\n**Turn Context (split turn):**\n\n";
@@ -88,8 +88,7 @@ export function formatRequiredAskContext(rawAsk: string): string {
   const contentBudget =
     MAX_REQUIRED_ASK_CONTEXT_CHARS - REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER.length;
   const headBudget = Math.floor(contentBudget / 2);
-  const tailBudget = contentBudget - headBudget;
-  return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
+  return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -(contentBudget - headBudget))}`;
 }
 
 export function capCompactionSummary(
@@ -113,16 +112,17 @@ export function capCompactionSummary(
 export function fitCompactionSummary<T extends { summary: string }>(
   tokenBudget: number | undefined,
   render: (maxChars: number) => T | undefined,
+  maxChars = MAX_COMPACTION_SUMMARY_CHARS,
 ): Result<T, CompactionError> {
   const fits = (candidate: T) =>
     tokenBudget === undefined ||
     estimateStringChars(candidate.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget;
-  const full = render(MAX_COMPACTION_SUMMARY_CHARS);
+  const full = render(maxChars);
   if (full && fits(full)) {
     return ok(full);
   }
   let low = 1;
-  let high = MAX_COMPACTION_SUMMARY_CHARS - 1;
+  let high = maxChars - 1;
   let fitted: T | undefined;
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
@@ -147,6 +147,8 @@ export function fitCompactionSummary<T extends { summary: string }>(
 }
 
 export interface CompactionSettings {
+  /** Persisted summary character ceiling; omission preserves the 16,000-character default. */
+  maxSummaryChars?: number;
   /** Enable automatic compaction decisions. */
   enabled: boolean;
   /** Tokens reserved for summary prompt and output. */
@@ -702,9 +704,7 @@ export function compactWithoutSummary(
 }
 
 // File metadata is re-merged by finalizeCompaction, so the carried summary drops its old copy.
-function previousSummaryWithoutFileOperations(
-  preparation: CompactionPreparation,
-): string | undefined {
+function previousSummaryWithoutFileOperations(preparation: CompactionPreparation) {
   const { previousSummary, previousSummaryDetails } = preparation;
   const previousFileOperations = previousSummaryDetails
     ? formatFileOperations(previousSummaryDetails.readFiles, previousSummaryDetails.modifiedFiles)
@@ -740,37 +740,41 @@ function finalizeCompaction(
       ? `## Latest unresolved user request\n${JSON.stringify(preparation.latestUnresolvedUserRequest)}\n\n`
       : ""
   }`;
-  const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) => {
-    const requiredChars = fileOperations.length + requiredPrefix.length;
-    if (maxChars <= requiredChars + SUMMARY_TRUNCATED_MARKER.length) {
-      return undefined;
-    }
-    const preservedHistoryChars = Math.min(
-      reconciledHistorySummary.length,
-      Math.floor(
-        (preparation.summaryTokenBudget === undefined ? maxChars : maxChars - requiredChars) / 2,
-      ),
-    );
-    const latestContextBudget =
-      maxChars - requiredChars - SUMMARY_TRUNCATED_MARKER.length - preservedHistoryChars;
-    // Fitting must keep generated split-turn context beside required metadata,
-    // including its heading and loss marker when that context is shortened.
-    if (
-      preparation.summaryTokenBudget !== undefined &&
-      latestContext &&
-      latestContextBudget < TURN_CONTEXT_PREFIX.length + SUMMARY_TRUNCATED_MARKER.length + 1
-    ) {
-      return undefined;
-    }
-    const suffix = `${latestContextBudget > 0 ? capCompactionSummary(latestContext, latestContextBudget) : ""}${fileOperations}`;
-    return {
-      summary: `${requiredPrefix}${capCompactionSummary(
-        `${reconciledHistorySummary}${suffix}`,
-        maxChars - requiredPrefix.length,
-        suffix,
-      )}`,
-    };
-  });
+  const fitted = fitCompactionSummary(
+    preparation.summaryTokenBudget,
+    (maxChars) => {
+      const requiredChars = fileOperations.length + requiredPrefix.length;
+      if (maxChars <= requiredChars + SUMMARY_TRUNCATED_MARKER.length) {
+        return undefined;
+      }
+      const preservedHistoryChars = Math.min(
+        reconciledHistorySummary.length,
+        Math.floor(
+          (preparation.summaryTokenBudget === undefined ? maxChars : maxChars - requiredChars) / 2,
+        ),
+      );
+      const latestContextBudget =
+        maxChars - requiredChars - SUMMARY_TRUNCATED_MARKER.length - preservedHistoryChars;
+      // Fitting must keep generated split-turn context beside required metadata,
+      // including its heading and loss marker when that context is shortened.
+      if (
+        preparation.summaryTokenBudget !== undefined &&
+        latestContext &&
+        latestContextBudget < TURN_CONTEXT_PREFIX.length + SUMMARY_TRUNCATED_MARKER.length + 1
+      ) {
+        return undefined;
+      }
+      const suffix = `${latestContextBudget > 0 ? capCompactionSummary(latestContext, latestContextBudget) : ""}${fileOperations}`;
+      return {
+        summary: `${requiredPrefix}${capCompactionSummary(
+          `${reconciledHistorySummary}${suffix}`,
+          maxChars - requiredPrefix.length,
+          suffix,
+        )}`,
+      };
+    },
+    preparation.settings.maxSummaryChars,
+  );
   if (!fitted.ok) {
     return fitted;
   }

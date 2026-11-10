@@ -104,6 +104,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
 }) {
   const { attempt, prepareSystemPromptUpdate } = input;
   const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+    agentId: input.sessionAgentId,
     sessionId: attempt.sessionId,
     cwd: input.effectiveCwd,
     agentDir: input.agentDir,
@@ -147,11 +148,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
 
   // Tool creation needs the same runner later used by lifecycle hooks.
   const hookRunner = getGlobalHookRunner();
-  const preparedClientTools = prepareEmbeddedAttemptClientTools({
-    attempt,
-    ...input.clientToolPreparation,
-  });
-  const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } = preparedClientTools;
+  const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } =
+    prepareEmbeddedAttemptClientTools({ attempt, ...input.clientToolPreparation });
 
   const { session: activeSession } = await createAgentSession({
     systemPrompt: input.initialSystemPrompt.trim(),
@@ -266,7 +264,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     settingsManager,
     refreshTools: () => {
       const currentPrompt = activeSession.agent.state.systemPrompt;
-      preparedClientTools.refreshTools();
+      clientToolRuntime.refreshTools();
       activeSession.replaceCustomTools(allCustomTools, sessionToolAllowlist);
       setActiveSessionSystemPrompt(currentPrompt);
     },

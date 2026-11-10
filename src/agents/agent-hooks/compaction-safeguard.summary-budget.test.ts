@@ -35,6 +35,35 @@ afterEach(() => {
 });
 
 describe("compaction-safeguard mixed-script summary budget", () => {
+  it("uses the configured ceiling without losing protected quality facts", async () => {
+    const latestAsk = "confirm the rollout status";
+    const identifier = "https://example.com/deploy/release-v2";
+    mockSummarizeCompactionHistory.mockResolvedValue(
+      structuredSummary({
+        decisions: "Keep the confirmed deployment decision. ".repeat(1_500),
+        asks: latestAsk,
+        identifiers: identifier,
+      }),
+    );
+    const sessionManager = createQualityGuardSessionManager({ qualityGuardMaxRetries: 0 });
+    const event = createCompactionEvent({ messageText: `${latestAsk} ${identifier}` });
+    const configuredEvent = {
+      ...event,
+      preparation: {
+        ...event.preparation,
+        settings: { ...event.preparation.settings, maxSummaryChars: 48_000 },
+      },
+    };
+    const { result } = await runCompactionScenario(sessionManager, configuredEvent);
+    const { summary } = expectCompactionResult(result);
+    expect(summary.length).toBeGreaterThan(16_000);
+    expect(summary.length).toBeLessThanOrEqual(48_000);
+    expect(summary).toContain(latestAsk);
+    expect(summary).toContain(identifier);
+    expect(summary).toContain("## Exact identifiers");
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
+  });
+
   it("trims CJK prose while preserving an affordable ASCII request", async () => {
     const tokenBudget = 1_000;
     const sessionManager = createQualityGuardSessionManager({ qualityGuardMaxRetries: 0 });
