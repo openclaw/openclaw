@@ -13,6 +13,7 @@ import { verifyBindingForPin, type ClawPin } from "../statements/pin.js";
 import type { SignedStatement } from "../statements/types.js";
 import {
   assessFreshness,
+  clampFreshnessState,
   isOlderSnapshot,
   SNAPSHOT_MAX_AGE_SECONDS,
   SNAPSHOT_REPUBLISH_SECONDS,
@@ -109,11 +110,37 @@ async function gate(
 }
 
 describe("assessFreshness", () => {
-  it("refuses a year-old binding at the pinned seq once the Gateway signed a newer one", async () => {
+  it("refuses a year-old binding once the client verified a newer one", async () => {
     const w = await world();
+    const current = await gate(w, await w.binding(5, w.newSrv), {
+      snapshot: await w.snapshot(9, 5),
+    });
     const old = await w.binding(4, w.oldSrv, now - YEAR);
-    const r = await gate(w, old, { snapshot: await w.snapshot(9, 5) });
+    const r = await gate(w, old, { snapshot: await w.snapshot(9, 4) }, { stored: current.state });
     expect([r.ok, r.code]).toEqual([false, "stale_binding"]);
+  });
+
+  it("refuses a snapshot naming a binding beyond the verified one and keeps nothing of it (J5)", async () => {
+    const w = await world();
+    const b = await w.binding(4, w.oldSrv);
+    const honest = await gate(w, b, { snapshot: await w.snapshot(9, 4) });
+    // A stolen K_gw signs a snapshot claiming binding 99.
+    const inflated = await gate(
+      w,
+      b,
+      { snapshot: await w.snapshot(10, 99) },
+      { stored: honest.state, policy: "report" },
+    );
+    expect([inflated.ok, inflated.code]).toEqual([false, "snapshot_ahead"]);
+    expect(inflated.state).toEqual(honest.state);
+    // The honest binding still dials afterwards.
+    const again = await gate(
+      w,
+      b,
+      { snapshot: await w.snapshot(10, 4) },
+      { stored: inflated.state },
+    );
+    expect(again).toMatchObject({ ok: true, fresh: true });
   });
 
   it("passes the current binding with a fresh snapshot and records the marker", async () => {
@@ -127,7 +154,6 @@ describe("assessFreshness", () => {
       issued_at: now - 60,
       binding_seq: 5,
       k_gw: w.k_gw,
-      k_gw_binding_seq: 5,
     });
   });
 
@@ -201,7 +227,7 @@ describe("assessFreshness", () => {
   it("retains binding retirement and membership order independently across refused evidence", async () => {
     const w = await world();
     const old = await w.binding(4, w.oldSrv);
-    const first = await gate(w, old, { snapshot: await w.snapshot(9, 5) });
+    const first = await gate(w, await w.binding(5, w.newSrv), { snapshot: await w.snapshot(9, 5) });
     const inconsistent = await gate(
       w,
       old,
@@ -214,7 +240,6 @@ describe("assessFreshness", () => {
       issued_at: now - 60,
       binding_seq: 5,
       k_gw: w.k_gw,
-      k_gw_binding_seq: 4,
     });
     const replay = await gate(
       w,
@@ -253,7 +278,6 @@ describe("assessFreshness", () => {
       issued_at: now - 60,
       binding_seq: 5,
       k_gw: formatEd25519PublicKey(kgw2.publicKey),
-      k_gw_binding_seq: 5,
     });
     // Ordered among the new K_gw's snapshots from here.
     const replay = await gate(
@@ -279,7 +303,8 @@ describe("assessFreshness", () => {
     const old = await w.binding(4, w.oldSrv);
     // The old K_gw claims binding 5 before the owner re-binds: refused, but the high-water is kept.
     const claim = await gate(w, old, { snapshot: await w.snapshot(1_000, 5) });
-    expect(claim).toMatchObject({ ok: false, code: "stale_binding" });
+    expect(claim).toMatchObject({ ok: false, code: "snapshot_ahead" });
+    expect(claim.state?.snapshot).toBeNull();
     const kgw2 = await generateEd25519Signer();
     const rebound = await w.binding(5, w.newSrv, now - 10, kgw2);
     const first = await gate(
@@ -307,6 +332,16 @@ describe("assessFreshness", () => {
       { stored: newer.state, policy: "report" },
     );
     expect(replay.gap).toBe("snapshot_replayed");
+  });
+
+  it("caps a stored high-water a snapshot raised before the rule at the verified binding", async () => {
+    const stored = { claw_id: "c", snapshot: { seq: 3, issued_at: 1, binding_seq: 99 } };
+    expect(clampFreshnessState(stored, 4)).toEqual({
+      claw_id: "c",
+      snapshot: { seq: 3, issued_at: 1, binding_seq: 4 },
+    });
+    expect(clampFreshnessState(stored, 120)).toBe(stored);
+    expect(clampFreshnessState(null, 4)).toBeNull();
   });
 
   it("never stores a snapshot from the future", async () => {

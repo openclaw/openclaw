@@ -13,6 +13,11 @@
 // Snapshots are ordered only among those signed by the same K_gw. After a re-bind to a new K_gw
 // the order restarts with the first snapshot verified under the new binding: the retired key
 // may have signed an inflated seq or a future issued_at. The binding_seq high-water carries over.
+//
+// Only R-signed bindings raise the binding_seq high-water. A snapshot naming a binding_seq
+// above the binding it verified under is refused (`snapshot_ahead`) and nothing of it is kept:
+// a re-bind always replaces K_gw, so an honest K_gw never names a binding beyond its own, and a
+// stolen one must not be able to retire every binding a client could still verify.
 import type { Ed25519PublicKey } from "../keys.js";
 import type { ProtocolVersions, ServerBindingBody } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
@@ -40,21 +45,14 @@ export function isOlderSnapshot(a: SnapshotOrder, b: SnapshotOrder): boolean {
 export type FreshnessState = {
   claw_id: string;
   /**
-   * Independent high-water facts from verified snapshots: newest (seq, issued_at) among
-   * those signed by `k_gw`, and the highest binding_seq of any. This unsigned marker only
-   * refuses replays/retired bindings; it never supplies membership or protocols for
-   * authorization. `k_gw_binding_seq` is the R-signed binding the `k_gw` snapshot verified
-   * under: only a snapshot verified under a higher binding moves the order to another key
-   * (the snapshot's own binding_seq is K_gw's claim and could be inflated). A marker without
-   * `k_gw` (stored before per-key order) counts as the current K_gw's.
+   * High-water facts: the newest (seq, issued_at) among verified snapshots signed by `k_gw`,
+   * and the highest binding_seq of an R-signed binding verified with one. This unsigned marker
+   * only refuses replays/retired bindings; it never supplies membership or protocols for
+   * authorization. Only a snapshot verified under a higher binding moves the order to another
+   * key. A marker without `k_gw` (stored before per-key order) counts as the current K_gw's;
+   * load such markers through {@link clampFreshnessState}.
    */
-  snapshot: {
-    seq: number;
-    issued_at: number;
-    binding_seq: number;
-    k_gw?: Ed25519PublicKey;
-    k_gw_binding_seq?: number;
-  } | null;
+  snapshot: { seq: number; issued_at: number; binding_seq: number; k_gw?: Ed25519PublicKey } | null;
 };
 
 /** Untrusted evidence as served by Discovery (null: not served, or the call failed). */
@@ -69,6 +67,9 @@ export type FreshnessGap =
   | "snapshot_replayed"
   | "snapshot_lagging";
 
+/** Refusal codes of {@link assessFreshness}. */
+export type FreshnessRefusal = "stale_binding" | "snapshot_ahead" | "freshness_unavailable";
+
 /** Outcome of {@link assessFreshness}. */
 export type FreshnessAssessment = {
   /** The state to store, whatever the verdict. */
@@ -82,7 +83,7 @@ export type FreshnessAssessment = {
      */
     | { ok: true; fresh: true; snapshotAge: number; protocols: ProtocolVersions }
     | { ok: true; fresh: false; gap: FreshnessGap }
-    | { ok: false; code: "stale_binding" | "freshness_unavailable"; detail: string };
+    | { ok: false; code: FreshnessRefusal; detail: string };
 };
 
 /** Inputs besides the evidence. */
@@ -108,6 +109,18 @@ export async function assessFreshness(
   const base = ctx.stored?.claw_id === binding.claw_id ? ctx.stored : null;
   const served = evidence.snapshot !== null && evidence.snapshot !== undefined;
   const snapshot = served ? await verifiedSnapshot(evidence.snapshot, binding) : null;
+  // A snapshot naming a binding beyond the one it verified under is K_gw's claim alone: refused,
+  // and nothing of it is kept (J5).
+  if (snapshot && snapshot.binding_seq > binding.binding_seq) {
+    return {
+      state: base ?? { claw_id: binding.claw_id, snapshot: null },
+      verdict: {
+        ok: false,
+        code: "snapshot_ahead",
+        detail: `the snapshot names binding_seq ${snapshot.binding_seq}, Discovery served ${binding.binding_seq}`,
+      },
+    };
+  }
   const storable =
     snapshot && snapshot.issued_at <= now + SNAPSHOT_CLOCK_SKEW_SECONDS ? snapshot : null;
   // A snapshot from the future is never stored: it would make honest snapshots look replayed.
@@ -117,22 +130,21 @@ export async function assessFreshness(
       ? {
           seq: storable.seq,
           issued_at: storable.issued_at,
-          binding_seq: storable.binding_seq,
+          binding_seq: binding.binding_seq,
           k_gw: binding.k_gw,
-          k_gw_binding_seq: binding.binding_seq,
         }
       : null,
   });
   const result = { state };
-  // The Gateway has signed a newer binding than the one served: positive evidence of a replay.
-  const highest = Math.max(snapshot?.binding_seq ?? 0, base?.snapshot?.binding_seq ?? 0);
+  // This client verified a newer R-signed binding before: the served one is a replay.
+  const highest = base?.snapshot?.binding_seq ?? 0;
   if (highest > binding.binding_seq) {
     return {
       ...result,
       verdict: {
         ok: false,
         code: "stale_binding",
-        detail: `the Gateway signed binding_seq ${highest}, Discovery served ${binding.binding_seq}`,
+        detail: `binding_seq ${highest} was verified before, Discovery served ${binding.binding_seq}`,
       },
     };
   }
@@ -220,19 +232,16 @@ export function mergeFreshnessState(
     return { claw_id: candidate.claw_id, snapshot: before };
   }
   // Order is kept per K_gw; a new K_gw's snapshot restarts it only when it verified under a
-  // newer R-signed binding than the stored key's.
+  // newer R-signed binding (binding_seq comes only from verified bindings).
   const sameKey = (before.k_gw ?? next.k_gw) === next.k_gw;
   const newest = sameKey
     ? isOlderSnapshot(before, next)
       ? next
       : before
-    : (next.k_gw_binding_seq ?? 0) > (before.k_gw_binding_seq ?? 0)
+    : next.binding_seq > before.binding_seq
       ? next
       : before;
   const k_gw = sameKey ? (next.k_gw ?? before.k_gw) : newest.k_gw;
-  const k_gw_binding_seq = sameKey
-    ? Math.max(before.k_gw_binding_seq ?? 0, next.k_gw_binding_seq ?? 0)
-    : newest.k_gw_binding_seq;
   return {
     claw_id: candidate.claw_id,
     snapshot: {
@@ -240,7 +249,21 @@ export function mergeFreshnessState(
       issued_at: newest.issued_at,
       binding_seq: Math.max(before.binding_seq, next.binding_seq),
       ...(k_gw ? { k_gw } : {}),
-      ...(k_gw_binding_seq ? { k_gw_binding_seq } : {}),
     },
   };
+}
+
+/**
+ * Loads stored state under the rule that only verified bindings raise the high-water: a marker
+ * stored before that rule may carry a binding_seq a snapshot claimed, so it is capped at
+ * `verifiedBindingSeq`, the highest binding the client verified (its pin's).
+ */
+export function clampFreshnessState<T extends FreshnessState | null | undefined>(
+  state: T,
+  verifiedBindingSeq: number,
+): T {
+  if (!state?.snapshot || state.snapshot.binding_seq <= verifiedBindingSeq) {
+    return state;
+  }
+  return { ...state, snapshot: { ...state.snapshot, binding_seq: verifiedBindingSeq } };
 }
