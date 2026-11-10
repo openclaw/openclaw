@@ -4603,6 +4603,7 @@ process.on("exit", () => {
     ["aws", false, "arbitrary"],
     ["boat", false, "arbitrary"],
     ["boat", false, "native-git-lifetime"],
+    ["boat", false, "unpublished"],
     ["aws", false, "unchanged"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
@@ -4647,7 +4648,9 @@ process.on("exit", () => {
         GIT_OPTIONAL_LOCKS: "0",
         OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO: capturedBundle,
         OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE:
-          provider === "blacksmith-testbox" ? path.join(root, "native-sync.json") : "",
+          provider === "blacksmith-testbox" || scenario === "unpublished"
+            ? path.join(root, "native-sync.json")
+            : "",
         OPENCLAW_FAKE_CRABBOX_PRIVACY_PATHS: JSON.stringify([
           "private-canary.txt",
           "protected-deleted.ignored",
@@ -5046,6 +5049,54 @@ require('node:module').syncBuiltinESMExports();`,
         expect(git(imported.receiver, ["rev-parse", "HEAD^"])).toBe(base);
         expect(git(producer, ["rev-parse", "origin/main"])).toBe(sharedBase);
         expect(git(producer, ["diff", "--name-only", sharedBase, "HEAD"])).toContain("mode.sh");
+        return;
+      }
+      if (scenario === "unpublished") {
+        writeFileSync(path.join(producer, "owner.txt"), "unpublished source\n");
+        chmodSync(path.join(producer, "mode.sh"), 0o755);
+        rmSync(path.join(producer, "deleted.txt"));
+        git(producer, ["add", "-A"]);
+        git(producer, ["commit", "-qm", "unpublished candidate"]);
+        const source = git(producer, ["rev-parse", "HEAD"]);
+        writeFileSync(path.join(producer, "owner.txt"), "dirty unpublished source\n");
+        expect(runCommand("git", ["cat-file", "-e", source], { cwd: origin }).status).not.toBe(0);
+        const payload = [
+          'const {execFileSync}=require("node:child_process");',
+          'const fs=require("node:fs");',
+          'const git=(args)=>execFileSync("git",args,{encoding:"utf8"}).trim();',
+          'console.log(JSON.stringify({head:git(["rev-parse","HEAD"]),parent:git(["rev-parse","HEAD^"]),owner:fs.readFileSync("owner.txt","utf8"),mode:fs.statSync("mode.sh").mode&0o777,deleted:fs.existsSync("deleted.txt")}));',
+        ].join("");
+        const index = readFileSync(path.join(producer, ".git", "index"));
+        const status = git(producer, ["status", "--porcelain=v1"]);
+        const sent = runSender("direct", [
+          "run",
+          "--provider",
+          provider,
+          "--",
+          "node",
+          "-e",
+          payload,
+        ]);
+        const transport = readJson(env.OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE);
+        expect(transport).toMatchObject({ base, source: base, head: base });
+        expect(transport.changed).not.toContain("unchanged.bin");
+        const imported = receive("unpublished", sent);
+        expect(imported.result.status, failureDetail(imported.result)).toBe(0);
+        const observed = JSON.parse(imported.result.stdout);
+        expect(observed).toMatchObject({
+          parent: base,
+          owner: "dirty unpublished source\n",
+          mode: 0o755,
+          deleted: false,
+        });
+        expect(observed.head).not.toBe(base);
+        expect(observed.head).not.toBe(source);
+        expect(imported.result.stderr).toContain(source);
+        expect(git(imported.receiver, ["rev-parse", "HEAD"])).toBe(base);
+        expect(git(producer, ["rev-parse", "HEAD"])).toBe(source);
+        expectFileText(producer, "owner.txt", "dirty unpublished source\n");
+        expect(readFileSync(path.join(producer, ".git", "index"))).toEqual(index);
+        expect(git(producer, ["status", "--porcelain=v1"])).toBe(status);
         return;
       }
       if (scenario === "native-git-lifetime") {

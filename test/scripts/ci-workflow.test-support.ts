@@ -137,7 +137,7 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     resolveTargetOutputs?: Record<string, string>;
     validationTier?: "full" | "main";
     repository: string;
-    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson" | "boat";
     requestedRunnerBackend?: "default" | "hybrid" | "runson" | "boat";
     ciShape?: "default" | "main";
     inputs?: Record<string, unknown>;
