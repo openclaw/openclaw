@@ -138,7 +138,11 @@ while you scroll.
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
 name, so repositories from different organizations are easier to distinguish.
-Selecting a repository also shows its identity in the workspace control.
+The **Local projects** section filters the Gateway’s saved project catalog immediately;
+it does not scan the filesystem. GitHub search results appear separately, without
+repeating repositories already shown as local matches. If no local project matches,
+the picker says so explicitly. Selecting a repository also shows its identity in
+the workspace control.
 Session-only connections receive the same read-safe repository identity for
 projects they can already discover, without repository URLs, credentials, or host
 checkout paths. This label does not grant access to private repository content.
