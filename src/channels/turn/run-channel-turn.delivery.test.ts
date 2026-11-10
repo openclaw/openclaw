@@ -852,8 +852,8 @@ it.each(["raw", "prepared", "error"] as const)(
         runAssembled({
           dispatchReplyWithBufferedBlockDispatcher: dispatch,
           delivery: {
-            deliver: callback,
-            deliverPrepared: callback,
+            deliver: async () => callback(),
+            deliverPrepared: async () => callback(),
             onError: () => {
               callback();
             },
