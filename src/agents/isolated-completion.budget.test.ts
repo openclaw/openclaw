@@ -44,7 +44,11 @@ describe("isolated completion token budgets", () => {
         { streamParams: { maxTokens: 100, temperature: 0.2 } },
         { answerTokenBudget: 300, streamParams: { maxTokens: 150, temperature: 0.2 } },
         {},
-        { answerTokenBudget: 300, thinkLevel: "off" as const },
+        {
+          answerTokenBudget: 300,
+          thinkLevel: "off" as const,
+          streamParamsMode: "preferred" as const,
+        },
       ]) {
         await runIsolatedCompletion({ ...isolatedRequest(), ...budget });
       }
@@ -61,7 +65,11 @@ describe("isolated completion token budgets", () => {
       );
       expect(completion).toHaveBeenNthCalledWith(
         5,
-        expect.objectContaining({ thinkLevel: "off", streamParams: { maxTokens: 300 } }),
+        expect.objectContaining({
+          thinkLevel: "off",
+          streamParams: { maxTokens: 300 },
+          ...(route === "cli" ? {} : { streamParamsMode: "preferred" }),
+        }),
       );
     },
   );

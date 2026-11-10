@@ -442,6 +442,7 @@ async function runIsolatedCompletionOwned(
         assertCurrent,
         thinkLevel: request.thinkLevel,
         outputTextPolicy: request.outputTextPolicy,
+        streamParamsMode: request.streamParamsMode,
         onRequestComplete: request.onRequestComplete,
       };
       const prepareHostAuthorization = async (
