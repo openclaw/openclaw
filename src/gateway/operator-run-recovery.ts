@@ -150,6 +150,9 @@ async function restoreGatewayOperatorSnapshot(params: {
             snapshot.scopes,
           )
         : undefined;
+    if (ingress) {
+      subscriptions.push(ingress.release);
+    }
     assertLifetime();
     if (ingress) {
       ingress.signal.addEventListener("abort", revoke, { once: true });

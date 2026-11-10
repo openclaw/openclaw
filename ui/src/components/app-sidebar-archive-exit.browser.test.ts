@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
   createGatewayHarness,
@@ -52,6 +52,15 @@ it.each([false, true])(
     const next = rows[1]!;
     expect(next.getBoundingClientRect().top).toBeGreaterThan(row.getBoundingClientRect().top);
     const beforeTop = next.getBoundingClientRect().top;
+    const tree = next.closest<HTMLElement>(".sidebar-session-tree")!;
+    let observedTransform = false;
+    const observeTransform = (event: TransitionEvent) => {
+      if (event.target === tree && event.propertyName === "transform") {
+        observedTransform = true;
+      }
+    };
+    tree.addEventListener("transitionrun", observeTransform);
+    onTestFinished(() => tree.removeEventListener("transitionrun", observeTransform));
     const archive = row.querySelector<HTMLButtonElement>("[data-sidebar-session-archive]")!;
     expect(archive.disabled, archive.outerHTML).toBe(false);
     archive.click();
@@ -77,15 +86,8 @@ it.each([false, true])(
       expect(list.hasAttribute("data-sidebar-archive-exiting")).toBe(true);
       const [fade] = exit!.getAnimations();
       expect(fade!.effect!.getTiming().duration).toBe(240);
-      // The neighbor glides into the vacated slot instead of jumping.
-      await waitForSolid(() =>
-        expect(
-          next
-            .closest(".sidebar-session-tree")!
-            .getAnimations()
-            .some((animation) => animation instanceof CSSTransition),
-        ).toBe(true),
-      );
+      // Imports may settle after the transition ends; remember that the neighbor glided.
+      await waitForSolid(() => expect(observedTransform).toBe(true));
       for (const animation of sidebar.getAnimations({ subtree: true })) {
         animation.finish();
       }
