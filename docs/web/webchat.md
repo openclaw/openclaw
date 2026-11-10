@@ -60,6 +60,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 - WebChat excludes reasoning-flagged reply payloads (`isReasoning: true`) from assistant content, transcript replay text, and audio content blocks. Thinking-only payloads therefore do not surface as visible assistant messages or playable audio.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run). When session keys share a transcript, such as a cron base key and its isolated run key, the note is appended under the transcript's owner. The Control UI reconciles each note by transcript identity, so identical notes remain separate and do not become run activity or duplicate after a history reload.
 - Aborted runs can keep partial assistant output visible in the UI. Gateway persists that partial text into transcript history when buffered output exists, and marks the entry with abort metadata.
+- Accepted background image, video, and music generation hands the conversation off until its result arrives. Control UI does not mark that handoff as **Interrupted**, including after reload; actual stops and failures remain visible.
 
 ### Transcript and delivery model
 
