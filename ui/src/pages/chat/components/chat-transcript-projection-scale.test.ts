@@ -648,7 +648,7 @@ describe("voice reconciliation", () => {
 
   it.each(["absent", "empty", "ID-less"] as const)(
     "skips the voice membership scan for %s captions",
-    (kind) => {
+    async (kind) => {
       const messages = [savedMessage("Saved message", "voice:saved")];
       const map = vi.spyOn(messages, "map");
       const props = threadProps(`voice-${kind}`, undefined, messages);
@@ -659,7 +659,10 @@ describe("voice reconciliation", () => {
             ? () => []
             : () => [{ id: "live", role: "user", text: "Still speaking", isStreaming: true }];
 
-      expect(voiceProjection(props)()).toEqual(kind === "ID-less" ? ["Still speaking"] : []);
+      const project = voiceProjection(props);
+      await waitForSolid(() =>
+        expect(project()).toEqual(kind === "ID-less" ? ["Still speaking"] : []),
+      );
       expect(membershipScans(map.mock.calls)).toEqual([]);
     },
   );

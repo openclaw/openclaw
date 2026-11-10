@@ -227,6 +227,8 @@ export function projectChatTranscript(
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(props, chatItems);
   transcript.layout.configureRows(props, avatarPlacement, searchFiltering || recovery.revision > 0);
   const showLoadingSkeleton = props.loading && transcriptItems.length === 0 && !hasTypingActors;
+  // Pending nonempty rows must not settle an empty viewport or overwrite its saved reader.
+  transcript.layout.ready &&= isEmpty;
   const presented =
     typeof props.presented === "object" ? props.presented.isPresented() : (props.presented ?? true);
   const threadContextWindow =
@@ -706,8 +708,9 @@ export function projectChatTranscript(
     isEmpty,
     showLoadingSkeleton,
     searchOpen: search.open,
-    renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) =>
-      transcript.render(
+    renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) => {
+      transcript.layout.ready = !props.loading;
+      return transcript.render(
         transcriptRows,
         renderRow,
         latestTranscriptAnnouncement(collapsedItems, liveItem),
@@ -716,6 +719,7 @@ export function projectChatTranscript(
         header,
         props.transcriptVisible ?? true,
         props.applicationContext,
-      ),
+      );
+    },
   };
 }
