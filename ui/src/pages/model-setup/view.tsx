@@ -419,6 +419,14 @@ function DetectionProgress() {
 }
 
 export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
+  const checkAgainVisible = () =>
+    props.page.phase === "ready" &&
+    (props.embedded || !props.page.result.configuredModel) &&
+    props.activation.phase !== "success" &&
+    props.canAdmin &&
+    !props.gatewayTooOld;
+  const checkAgainLabel = () =>
+    t(props.detecting ? "modelSetup.verify.checkingButton" : "modelSetup.checkAgain");
   // Retain accepted forms without holding synchronous owner and busy publications.
   const detection: () => null = createDeferred(
     () =>
@@ -451,24 +459,28 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
             primary
           />
         </Show>
-        <Show
-          when={
-            props.page.phase === "ready" &&
-            (props.embedded || !props.page.result.configuredModel) &&
-            props.activation.phase !== "success" &&
-            props.canAdmin &&
-            !props.gatewayTooOld
-          }
+        <button
+          type="button"
+          class="btn"
+          aria-label={checkAgainLabel()}
+          aria-hidden={checkAgainVisible() ? undefined : "true"}
+          style={{
+            display: "inline-grid",
+            "grid-template-areas": '"label"',
+            visibility: checkAgainVisible() ? undefined : "hidden",
+          }}
+          disabled={!checkAgainVisible() || props.actionsDisabled || props.detecting}
+          onClick={() => props.onDetect()}
         >
-          <button
-            type="button"
-            class="btn"
-            disabled={props.actionsDisabled || props.detecting}
-            onClick={() => props.onDetect()}
-          >
-            {props.detecting ? t("modelSetup.verify.checkingButton") : t("modelSetup.checkAgain")}
-          </button>
-        </Show>
+          {/* Both translations reserve the action's footprint without entering its name. */}
+          <span aria-hidden="true" style={{ "grid-area": "label", visibility: "hidden" }}>
+            {t("modelSetup.checkAgain")}
+          </span>
+          <span aria-hidden="true" style={{ "grid-area": "label", visibility: "hidden" }}>
+            {t("modelSetup.verify.checkingButton")}
+          </span>
+          <span style={{ "grid-area": "label" }}>{checkAgainLabel()}</span>
+        </button>
       </div>
       {props.canAdmin && !props.gatewayTooOld
         ? renderActivationFeedback(props.activation, props.onFeedback)
