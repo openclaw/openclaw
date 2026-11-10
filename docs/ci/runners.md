@@ -462,6 +462,11 @@ for ordinary same-revision manual or scheduled validation.
 
 ### Boat build qualification
 
+With `OPENCLAW_CI_RUNNER_BACKEND=boat`, Live Media Runner Image and Sandbox Common
+Smoke use GitHub-hosted `ubuntu-24.04`. They retain their 30- and 45-minute job
+budgets and existing triggers, permissions, and Docker commands. Other backend
+settings retain their existing routes.
+
 A maintainer can dispatch `ci.yml` with `runner_backend=boat`,
 `release_gate=true`, `pull_request_number`, and `target_ref` set to the full
 current same-repository PR head. The workflow branch and revision must match
