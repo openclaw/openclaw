@@ -13,6 +13,8 @@ export type MediaFileRef = {
   raw: string;
   type: "path" | "media-uri";
   resolved: string;
+  /** A sandbox-staged copy of an admitted fact: the sandbox reader owns it. */
+  staged?: boolean;
 };
 
 export type MediaImageRef = MediaFileRef & {
@@ -75,6 +77,7 @@ export function mediaFactToImageRef(fact: MediaFact, factIndex: number): MediaIm
     localRef && !isOpenClawCliImageCachePath(localRef.resolved) ? localRef : undefined;
   return {
     ...(usableRef ?? { raw: identity ?? "", type: "path", resolved: identity ?? "" }),
+    ...(fact.staged === true ? { staged: true } : {}),
     aliases: [fact.path, fact.url, usableRef?.resolved].filter((value): value is string =>
       Boolean(value),
     ),

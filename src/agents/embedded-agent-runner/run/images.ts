@@ -179,6 +179,7 @@ async function loadMediaFromRef(
   // Admitted managed originals belong to Gateway; staged and discovered paths stay sandboxed.
   const gatewayAttachment =
     attachment &&
+    ref.staged !== true &&
     Boolean(
       ref.type === "media-uri" ||
       getAgentWorkspaceAccess(
