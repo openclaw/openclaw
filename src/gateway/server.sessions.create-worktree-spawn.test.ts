@@ -250,7 +250,7 @@ test.each([
   ["registered", false],
   ["github", false],
 ] as const)(
-  "required visible spawn selects %s project (managed worktree: %s)",
+  "required visible spawn selects %s project (explicit worktree request: %s)",
   async (source, worktree) => {
     const { entry: parent } = await createManagedProjectParent(true);
     const projectName = worktree ? "tool-selected-project" : "sandbox-external-project";
@@ -294,19 +294,13 @@ test.each([
         await settleWorkspaceRuns(context, storePath, childKey);
       }
       const child = childKey ? readEntry(childKey) : undefined;
-      if (!worktree) {
-        if (source === "registered") {
-          expect(creationError).toMatchObject({
-            message: expect.stringContaining("outside the sandboxed agent workspace"),
-          });
-          expect(childKey).toBeUndefined();
-          expect(bindChild).not.toHaveBeenCalled();
-          expect(registerRun).not.toHaveBeenCalled();
-        } else {
-          expect(creationError).toBeUndefined();
-          expect(child).toMatchObject({ sandbox: "required", status: "failed" });
-          expect(child?.lastRunError).toContain("outside the sandboxed agent workspace");
-        }
+      if (!worktree && source === "registered") {
+        expect(creationError).toMatchObject({
+          message: expect.stringContaining("outside the sandboxed agent workspace"),
+        });
+        expect(childKey).toBeUndefined();
+        expect(bindChild).not.toHaveBeenCalled();
+        expect(registerRun).not.toHaveBeenCalled();
         expect(createWorktree).not.toHaveBeenCalled();
         if (childKey) {
           expect(await managedWorktrees.findLiveByOwner("session", childKey)).toBeUndefined();
@@ -330,7 +324,11 @@ test.each([
       );
       if (source === "github") {
         expect(projectCloneMocks.materializeProjectClone).toHaveBeenCalledWith(
-          expect.objectContaining({ gitUrl: "https://github.com/example/selected.git" }),
+          expect.objectContaining({
+            gitUrl: worktree
+              ? "https://github.com/example/selected.git"
+              : "https://github.com/example/restricted.git",
+          }),
           expect.objectContaining({ signal: expect.any(AbortSignal) }),
         );
       } else {

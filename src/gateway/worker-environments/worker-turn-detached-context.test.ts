@@ -488,7 +488,7 @@ describe("worker detached model-context branch parity", () => {
   );
 
   it.each(["in-flight", "first transcript"] as const)(
-    "joins recorder admission before reading its prefix (%s)",
+    "launches with canonical recorder input (%s)",
     async (state) => {
       if (state === "in-flight") {
         seedPrevious();
