@@ -106,7 +106,7 @@ export function stagedInputFileName(name: string): string {
   return sanitizeUntrustedFileName(`input-${name}`, "input-attachment");
 }
 
-/** Canonical `media://inbound/<id>` a staged fact was copied from, if it still names one. */
+/** The staged fact's canonical `media://inbound/<id>` URL, if it names one. */
 function stagedInputMediaUri(fact: MediaFact): string | undefined {
   try {
     return fact.url ? parseInboundMediaUri(fact.url)?.normalizedSource : undefined;
