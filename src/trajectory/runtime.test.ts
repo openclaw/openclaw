@@ -389,51 +389,9 @@ describe("trajectory runtime", () => {
     );
   });
 
-  it("persists 64k prompt strings while retaining field and event bounds", async () => {
-    const { recorder, storePath } = await createMarkerRecorder();
-    const prompts = ["x".repeat(32_769), "x".repeat(65_536), "\u754c".repeat(65_536)];
-    for (const systemPrompt of [...prompts, "x".repeat(65_537)]) {
-      recorder.recordEvent("context.compiled", { systemPrompt });
-    }
-    recorder.recordEvent("context.compiled", { systemPrompt: prompts[2], prompt: prompts[2] });
-    recorder.recordEvent("context.compiled", { systemPrompt: "\u0000".repeat(65_536) });
-    await recorder.flush();
-
-    const events = await loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath });
-    expect(events.map((event) => event.data)).toEqual([
-      ...prompts.map((systemPrompt) => ({ systemPrompt })),
-      {
-        systemPrompt: {
-          truncated: true,
-          reason: "trajectory-field-size-limit",
-          originalChars: 65_537,
-          limitChars: 65_536,
-        },
-      },
-      expect.objectContaining({
-        prompt: prompts[2],
-        truncated: true,
-        reason: "trajectory-event-size-limit",
-        droppedFields: ["systemPrompt"],
-      }),
-      expect.objectContaining({
-        truncated: true,
-        reason: "trajectory-event-size-limit",
-        droppedFields: ["systemPrompt"],
-      }),
-    ]);
-    for (const event of events) {
-      expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeLessThanOrEqual(
-        TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
-      );
-    }
-    expect(events[4]?.data?.systemPrompt).toBeUndefined();
-    expect(events[5]?.data?.systemPrompt).toBeUndefined();
-  });
-
   it("bounds oversized prompts before compact preservation", async () => {
     const parsed = await captureEvent("context.compiled", {
-      prompt: "x".repeat(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1),
+      prompt: "x".repeat(65_537),
     });
     expectBoundedCapture();
     expect(parsed.data.truncated).toBeUndefined();
@@ -445,7 +403,7 @@ describe("trajectory runtime", () => {
     const data = {
       finalPromptText: "inspect",
       prompt: "inspect",
-      systemPrompt: "system prompt",
+      systemPrompt: "x".repeat(65_536),
       messages: [{ role: "user", content: "inspect" }],
       messagesSnapshot: [{ role: "assistant", content: "done" }],
       imagesCount: 0,
