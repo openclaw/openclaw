@@ -237,9 +237,9 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
       return typeof visible === "object" ? visible.isPresented() : visible;
     },
   );
-  let splitRows = false;
+  const splitColdRows = !input.props.restoring && splitChatConstruction;
+  const started = splitColdRows ? performance.now() : 0;
   const current = createMemo(() => {
-    const started = performance.now();
     const searchState = search().read();
     const { session } = presentation();
     const projection = projectChatTranscript(input.props, session, searchState);
@@ -251,14 +251,14 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
         input.props.announceTranscript !== false && !projection.searchOpen && !input.props.loading,
       );
     }
-    splitRows ||= performance.now() - started > 15;
     return { session, projection };
   });
   // Sample once before choosing the first row frame; cheap preparations need no placeholder.
-  current();
-  const initialRestoring = Boolean(input.props.restoring);
+  if (splitColdRows) {
+    current();
+  }
   const [renderReady, setRenderReady] = createSignal(
-    initialRestoring || !splitRows || !splitChatConstruction,
+    !splitColdRows || performance.now() - started <= 15,
   );
   onSettled(() => {
     if (!renderReady()) {

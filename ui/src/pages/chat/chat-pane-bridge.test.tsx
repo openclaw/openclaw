@@ -65,6 +65,7 @@ it.each([false, true])(
     onTestFinished(() => {
       retireBootComposer();
       document.documentElement.removeAttribute("data-openclaw-boot-chat");
+      document.documentElement.removeAttribute("data-openclaw-warm-frame");
       yielding.resolve();
       hidden.mockRestore();
       vi.unstubAllGlobals();
@@ -225,7 +226,7 @@ it("opens provider findings through the mounted pane's first rendered frame", as
   await waitForSolid(() => expect(dialog()?.textContent).toContain(review.explanation));
 });
 
-it.each(["ready", "unavailable"] as const)(
+it.each(["ready", "holding", "fallback", "unavailable"] as const)(
   "admits the first pane from a pending snapshot, bounded at 100ms (%s)",
   async (outcome) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -248,6 +249,7 @@ it.each(["ready", "unavailable"] as const)(
     onTestFinished(() => {
       retireBootComposer();
       document.documentElement.removeAttribute("data-openclaw-boot-chat");
+      document.documentElement.removeAttribute("data-openclaw-warm-frame");
     });
     const fixture = mountedFixture("snapshot-admission");
     const gateway = fixture.context.gateway;
@@ -296,7 +298,10 @@ it.each(["ready", "unavailable"] as const)(
     expect(view.pane.querySelector("textarea")).toBe(bootComposer);
     expect(bootComposer.value).toBe("Keep the pending draft");
     inactive.container.remove();
-    if (outcome === "ready") {
+    if (outcome !== "unavailable") {
+      if (outcome !== "ready") {
+        document.documentElement.setAttribute("data-openclaw-warm-frame", outcome);
+      }
       read.resolve({
         projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
         savedAt: 1,
@@ -316,11 +321,6 @@ it.each(["ready", "unavailable"] as const)(
       await prepared;
       await vi.advanceTimersByTimeAsync(0);
       flush();
-      expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
-      expect(view.pane.querySelector("textarea")).toBe(bootComposer);
-      yielding.resolve();
-      await yielding.promise;
-      flush();
       expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
       expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
       expect(view.pane.querySelector(".chat-pane__parent-session")?.textContent).toContain(
@@ -328,12 +328,25 @@ it.each(["ready", "unavailable"] as const)(
       );
       expect(view.pane.querySelector(".agent-chat__disabled-banner--replacement")).not.toBeNull();
       expect(view.pane.querySelector(".agent-chat__input")).toBeNull();
-      expect(view.pane.textContent).toContain("Stored conversation");
       expect(view.pane.querySelector('[data-cached-session="true"]')).not.toBeNull();
+      if (outcome === "holding") {
+        // The existing held-warm split is inside the mounted pane, not before it.
+        expect(yieldTask).toHaveBeenCalledOnce();
+        expect(view.pane.textContent).not.toContain("Stored conversation");
+        expect(view.pane.querySelector(".chat-conversation-loading")).toBeNull();
+        yielding.resolve();
+        await yielding.promise;
+        flush();
+      } else {
+        expect(yieldTask).not.toHaveBeenCalled();
+      }
+      expect(view.pane.textContent).toContain("Stored conversation");
     } else {
       await vi.advanceTimersByTimeAsync(1);
       flush();
+      expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
       expect(view.pane.querySelector("textarea")).toBe(bootComposer);
+      expect(yieldTask).toHaveBeenCalledOnce();
       yielding.resolve();
       await yielding.promise;
       flush();
