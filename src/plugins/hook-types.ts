@@ -8,6 +8,7 @@ import type {
 } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ImageContent } from "../llm/types.js";
 import type { InstallPolicyRequestKind as PluginInstallRequestKind } from "../security/install-policy.js";
 import type {
   PluginHookAgentContext,
@@ -744,6 +745,8 @@ type PluginHookBeforeInstallResult = {
 export type PluginHookBeforeAgentRunEvent = {
   /** The user's message that triggered this run. */
   prompt: string;
+  /** Prepared current-turn images, including prompt-local references. Absent on older hosts. */
+  images?: ImageContent[];
   /** Loaded session history before the current prompt is submitted. */
   messages: unknown[];
   /** Active system prompt prepared for this run. */
