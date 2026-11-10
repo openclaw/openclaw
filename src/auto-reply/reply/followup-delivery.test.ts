@@ -263,6 +263,8 @@ describe("resolveFollowupDeliveryDecision", () => {
         { assistantTranscriptOwned: true, deliverDespiteSourceReplySuppression: true },
       );
       const earlier = setReplyPayloadMetadata({ text: "Earlier" }, { precedingInputAnswer: true });
+      // Message-tool-only mode keeps plain final text private, earlier answers included.
+      const kept = sourceReplyDeliveryMode === "automatic" ? [{ text: "Earlier" }] : [];
       const decision = await decide(
         turn,
         execution,
@@ -270,12 +272,12 @@ describe("resolveFollowupDeliveryDecision", () => {
       );
       expect(decision).toMatchObject({
         kind: "deliver",
-        payloads: [{ text: "Earlier" }, { mediaUrl: media.mediaUrl, audioAsVoice: true }],
+        payloads: [...kept, { mediaUrl: media.mediaUrl, audioAsVoice: true }],
       });
       if (decision.kind === "deliver") {
-        expect(decision.payloads.map((p) => p.text)).toEqual(["Earlier", undefined]);
+        expect(decision.payloads.at(-1)?.text).toBeUndefined();
         expect(
-          getReplyPayloadMetadata(expectDefined(decision.payloads[1], "queued media payload")),
+          getReplyPayloadMetadata(expectDefined(decision.payloads.at(-1), "queued media payload")),
         ).toMatchObject({
           assistantTranscriptOwned: true,
           deliverDespiteSourceReplySuppression: true,
