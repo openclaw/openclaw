@@ -1,5 +1,5 @@
 import { createMemo } from "solid-js";
-import type { OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
+import type { OpenClawIdPeopleLink, OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import {
@@ -28,6 +28,22 @@ export function OpenClawIdIdentityMenu(props: SidebarIdentityMenuParams) {
         .catch(() => null) ?? null,
     { loadingValue: null },
   );
+  // The publication (owner-only) for this computer's key warnings: superseded or needing a code.
+  const publication = createMemo(
+    async () => {
+      const current = status();
+      if (current?.channel !== "local_operator" || !current.owner || !current.link.linked) {
+        return null;
+      }
+      return (
+        (await client()
+          ?.request<{ link: OpenClawIdPeopleLink }>("openclawId.people", {})
+          .then(({ link }) => link.publication ?? null)
+          .catch(() => null)) ?? null
+      );
+    },
+    { loadingValue: null },
+  );
   const extension = createMemo(() => {
     const current = status();
     if (!current || current.status.state === "off") {
@@ -35,7 +51,7 @@ export function OpenClawIdIdentityMenu(props: SidebarIdentityMenuParams) {
     }
     return {
       identity: openClawIdMenuIdentity(current),
-      entries: openClawIdMenuEntries(current),
+      entries: openClawIdMenuEntries(current, publication()),
       signOut: openClawIdSignOutEntries(current),
       onSelect: (value: string) =>
         selectOpenClawIdMenuValue(value, {

@@ -9,7 +9,11 @@ import {
   signOutOfOpenClawId,
 } from "../../lib/openclaw-id/account.ts";
 import { signOutOfRemoteOpenClawId } from "../../lib/openclaw-id/remote-sign-out.ts";
-import type { OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
+import type {
+  OpenClawIdPublication,
+  OpenClawIdSignedIn,
+  OpenClawIdStatusResult,
+} from "../../lib/openclaw-id/types.ts";
 import {
   openClawIdErrorToast,
   type OpenClawIdErrorContext,
@@ -29,6 +33,8 @@ const MAKE_REACHABLE = `${VALUE_PREFIX}make-reachable`;
 const DEVICES = `${VALUE_PREFIX}devices`;
 const SIGN_OUT = `${VALUE_PREFIX}sign-out`;
 const COPY_LINK = `${VALUE_PREFIX}copy-link`;
+const MOVE_KEYS = `${VALUE_PREFIX}move-keys`;
+const PUBLISH_KEYS = `${VALUE_PREFIX}publish-keys`;
 
 /** Derives the compact account header without ever displaying an account ID. */
 export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
@@ -77,12 +83,17 @@ function statusRow(
   icon: IconName,
   detail?: string | null,
   online?: boolean,
+  attention?: boolean,
 ): MenuEntry {
   return {
     kind: "content",
     id: `openclaw-id-${id}`,
     content: (
-      <div class="sidebar-openclaw-id__status">
+      <div
+        class="sidebar-openclaw-id__status"
+        data-attention={attention ? "true" : undefined}
+        role={attention ? "status" : undefined}
+      >
         <span class="nav-item__icon" aria-hidden="true">
           <Icon name={icon} />
         </span>
@@ -108,8 +119,64 @@ function makeReachableBlocker(status: OpenClawIdStatusResult): string | undefine
   return status.services.loaderDomain ? undefined : t("openclawId.needsLoaderDomain");
 }
 
-/** Status and actions for the single OpenClaw ID section; Access lives in Pages. */
-export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
+// Keys this computer cannot use, or newer published keys, each with its fix (local only).
+function keyAttentionEntries(
+  status: OpenClawIdStatusResult,
+  publication: OpenClawIdPublication | null | undefined,
+): MenuEntry[] {
+  const failed = publication?.state === "failed" ? publication.code : undefined;
+  if (status.status.state === "keys_refused") {
+    const label =
+      status.status.reason === "key_mismatch"
+        ? t("openclawId.keysMismatch")
+        : t("openclawId.keysMissing");
+    return [
+      statusRow(
+        "keys-refused",
+        label,
+        "alertTriangle",
+        t("openclawId.keysRefusedDetail"),
+        undefined,
+        true,
+      ),
+    ];
+  }
+  if (failed === "binding_superseded") {
+    return [
+      statusRow(
+        "binding-superseded",
+        t("openclawId.bindingSuperseded"),
+        "alertTriangle",
+        t("openclawId.bindingSupersededDetail"),
+        undefined,
+        true,
+      ),
+    ];
+  }
+  if (failed === "needs_link_code") {
+    return [
+      statusRow(
+        "needs-link-code",
+        t("openclawId.needsLinkCode"),
+        "alertTriangle",
+        t("openclawId.needsLinkCodeDetail"),
+        undefined,
+        true,
+      ),
+      renderSidebarMenuAction(PUBLISH_KEYS, t("openclawId.publishNewKeys"), "radio"),
+    ];
+  }
+  return [];
+}
+
+/**
+ * Status and actions for the single OpenClaw ID section; Access lives in Pages. `publication`
+ * is the owner-only publication state (`openclawId.people`), read on this computer.
+ */
+export function openClawIdMenuEntries(
+  status: OpenClawIdStatusResult | null,
+  publication?: OpenClawIdPublication | null,
+): MenuEntry[] {
   if (!status || status.status.state === "off") {
     return [];
   }
@@ -165,17 +232,23 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
           : null;
     entries.push(statusRow("encrypted", t("openclawId.encryptedConnection"), "lock", detail));
   } else if (status.link.linked && status.link.hostname && openClawIdAccount()) {
-    entries.push(
-      statusRow(
-        "reachable",
-        t("openclawId.remoteAccessOn"),
-        "radio",
-        status.link.hostname,
-        status.status.tunnel?.relayOnline === true,
-      ),
-    );
-    if (status.channel === "local_operator") {
+    const local = status.channel === "local_operator";
+    const attention = local ? keyAttentionEntries(status, publication) : [];
+    if (status.status.state !== "keys_refused") {
+      entries.push(
+        statusRow(
+          "reachable",
+          t("openclawId.remoteAccessOn"),
+          "radio",
+          status.link.hostname,
+          status.status.tunnel?.relayOnline === true,
+        ),
+      );
+    }
+    entries.push(...attention);
+    if (local) {
       entries.push(renderSidebarMenuAction(COPY_LINK, t("openclawId.copyRemoteLink"), "link"));
+      entries.push(renderSidebarMenuAction(MOVE_KEYS, t("openclawId.moveToNewKeys"), "key"));
     }
   } else {
     const blocker = makeReachableBlocker(status);
@@ -252,6 +325,11 @@ function offerMakeReachable(
   });
 }
 
+// The browser's sign-in, for actions only the operator on this computer may run.
+function localSignedIn(status: OpenClawIdStatusResult): OpenClawIdSignedIn | null {
+  return status.channel === "local_operator" ? openClawIdAccount() : null;
+}
+
 /**
  * Runs an OpenClaw ID menu command. Returns false for values it does not own.
  * Call synchronously from the menu selection so the sign-in popup keeps the
@@ -308,6 +386,26 @@ export function selectOpenClawIdMenuValue(
     );
   } else if (value === MAKE_REACHABLE && client && status?.services.loaderDomain) {
     startMakeReachable(client, status.services.loaderDomain);
+  } else if (value === MOVE_KEYS && client && status.link.hostname) {
+    const signedIn = localSignedIn(status);
+    const hostname = status.link.hostname;
+    if (signedIn) {
+      openDialog(async () =>
+        (await import("./move-keys-dialog.tsx")).showMoveKeysDialog({ client, signedIn, hostname }),
+      );
+    }
+  } else if (value === PUBLISH_KEYS && client) {
+    const signedIn = localSignedIn(status);
+    if (signedIn) {
+      openDialog(async () => {
+        const { publishWithLinkCode } = await import("../../lib/openclaw-id/rebind.ts");
+        const { publication } = await publishWithLinkCode(client, signedIn);
+        if (publication?.state === "failed") {
+          throw publication;
+        }
+        showToast({ severity: "success", message: t("openclawId.newKeysPublished") });
+      }, "linkCode");
+    }
   }
   return true;
 }

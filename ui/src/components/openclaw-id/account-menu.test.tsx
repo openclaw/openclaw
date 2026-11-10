@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { signOutOfOpenClawId } from "../../lib/openclaw-id/account.ts";
 import { OPENCLAW_ID_CALLBACK_KEY_PREFIX } from "../../lib/openclaw-id/callback-contract.ts";
-import type { OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
+import type { OpenClawIdPublication, OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
 import { showConfirmDialog } from "../confirm-dialog.ts";
 import type { MenuItem } from "../solid/menu.tsx";
 import {
@@ -36,9 +36,12 @@ function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStat
 }
 
 // Read the exact rendered content in the same owned scope as the sidebar memo.
-function menu(current: OpenClawIdStatusResult | null) {
+function menu(current: OpenClawIdStatusResult | null, publication?: OpenClawIdPublication) {
   return createRoot((dispose) => {
-    const entries = [...openClawIdMenuEntries(current), ...openClawIdSignOutEntries(current)];
+    const entries = [
+      ...openClawIdMenuEntries(current, publication),
+      ...openClawIdSignOutEntries(current),
+    ];
     const rows = entries.filter((entry): entry is MenuItem => !("kind" in entry));
     const text = entries
       .map((entry) => ("content" in entry ? (entry.content as HTMLElement)?.textContent : ""))
@@ -218,6 +221,7 @@ describe("approved OpenClaw ID account menu", () => {
       expect(openClawIdMenuIdentity(current).detail).toBe("owner@example.test · Local access");
       expect(menu(current).labels).toEqual([
         "Copy claw link",
+        "Move to new keys",
         "Your devices",
         "Sign out of OpenClaw ID",
       ]);
@@ -277,6 +281,65 @@ describe("approved OpenClaw ID account menu", () => {
     await vi.waitFor(() =>
       expect(writeText).toHaveBeenCalledWith("https://studio-e61zr.crabd.xyz"),
     );
+  });
+
+  it("warns about unusable or superseded keys on this computer, each with its fix", async () => {
+    const refused = status({
+      link: linked,
+      status: { state: "keys_refused", key: "gateway", reason: "keys_missing" },
+    });
+    await signIn(refused);
+    const keys = menu(refused);
+    expect(keys.text).toContain("Remote access is off: a key file is missing");
+    expect(keys.text).not.toContain("Remote access on");
+    expect(keys.labels).toContain("Move to new keys");
+    const superseded = menu(status({ link: linked }), {
+      state: "failed",
+      code: "binding_superseded",
+      message: "x",
+    });
+    expect(superseded.text).toContain("Newer keys are in use for this claw");
+    expect(superseded.labels).toContain("Move to new keys");
+    const pending = menu(status({ link: linked }), {
+      state: "failed",
+      code: "needs_link_code",
+      message: "x",
+    });
+    expect(pending.text).toContain("New keys aren't published yet");
+    expect(pending.labels).toContain("Publish new keys");
+    // Over the tunnel nothing here can be fixed: no warnings, no local actions.
+    const remote = menu(status({ channel: "tunnel", link: linked, connection: { kind: "none" } }), {
+      state: "failed",
+      code: "binding_superseded",
+      message: "x",
+    });
+    expect(remote.text).not.toContain("Newer keys");
+    expect(remote.labels).not.toContain("Move to new keys");
+  });
+
+  it("publishes new keys with a link code fetched from the signed-in account", async () => {
+    const current = status({ link: linked });
+    await signIn(current);
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
+      params.action === "account_link_code"
+        ? { code: "ACCOUNT-CODE" }
+        : { publication: { state: "published", ownerAccountId: "a", snapshotSeq: 3 } },
+    );
+    selectOpenClawIdMenuValue("openclaw-id:publish-keys", {
+      status: current,
+      client: { request } as unknown as GatewayBrowserClient,
+      basePath: "",
+    });
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenLastCalledWith("openclawId.authority", {
+        action: "publish",
+        enrollmentCode: "ACCOUNT-CODE",
+      }),
+    );
+    expect(request).toHaveBeenCalledWith("openclawId.authority", {
+      action: "account_link_code",
+      idToken: "test-token",
+    });
   });
 
   it("offers remote sign-out only with the loader's real service worker", () => {
