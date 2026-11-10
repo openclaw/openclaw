@@ -90,7 +90,7 @@ async function assertHistory(rpc, sessionKey, agentId, sessionId, reply) {
   assertHistoryReply(history.messages, reply, `${sessionKey} (${sessionId})`);
 }
 
-async function readCodeResult(requestLogPath, start, marker) {
+async function readCodeResult(requestLogPath, start, marker, expectFailure = false) {
   const end = (await stat(requestLogPath)).size;
   if (end <= start) {
     throw new Error("Mock provider recorded no request for the synthetic tool result");
@@ -114,7 +114,15 @@ async function readCodeResult(requestLogPath, start, marker) {
         } catch {
           continue;
         }
-        if (output.status === "completed" && output.value?.marker === marker) {
+        if (
+          expectFailure &&
+          output.status === "failed" &&
+          typeof output.error === "string" &&
+          output.error.includes(marker)
+        ) {
+          return output;
+        }
+        if (!expectFailure && output.status === "completed" && output.value?.marker === marker) {
           return output.value;
         }
       }
@@ -123,7 +131,7 @@ async function readCodeResult(requestLogPath, start, marker) {
     lines.close();
     input.destroy();
   }
-  throw new Error(`Mock provider did not observe completed Code Mode output for ${marker}`);
+  throw new Error(`Mock provider did not observe expected Code Mode output for ${marker}`);
 }
 
 /** Configure the existing mock OpenAI server; the driver owns launch and turn cadence. */
@@ -143,6 +151,8 @@ export async function configureHeapRigTurns(config, root, mockPort) {
     archivedRetained: 0,
     deleted: 0,
     children: 0,
+    keptChildren: 0,
+    codeFailures: 0,
     artifacts: 0,
     cronRuns: 0,
     cronJobsRemoved: 0,
@@ -229,9 +239,11 @@ export async function configureHeapRigTurns(config, root, mockPort) {
                 runTimeoutSeconds: 120,
                 label: `Synthetic heap rig child ${index}`,
               })});\nreturn { marker: ${JSON.stringify(marker)}, child };`
-            : options.shell
-              ? `const shell = await exec({command: "printf SYNTHETIC_SHELL_MARKER", awaitResults: true});\nif (!JSON.stringify(shell).includes("SYNTHETIC_SHELL_MARKER")) throw new Error("Synthetic shell output missing");\nreturn { marker: ${JSON.stringify(marker)}, shell };`
-              : `const values = Array.from({ length: 256 }, (_, index) => index * index);\nreturn { marker: ${JSON.stringify(marker)}, checksum: values.reduce((sum, value) => sum + value, 0) };`;
+            : options.codeFailure
+              ? `throw new Error(${JSON.stringify(marker)});`
+              : options.shell
+                ? `const shell = await exec({command: "printf SYNTHETIC_SHELL_MARKER", awaitResults: true});\nif (!JSON.stringify(shell).includes("SYNTHETIC_SHELL_MARKER")) throw new Error("Synthetic shell output missing");\nreturn { marker: ${JSON.stringify(marker)}, shell };`
+                : `const values = Array.from({ length: 256 }, (_, index) => index * index);\nreturn { marker: ${JSON.stringify(marker)}, checksum: values.reduce((sum, value) => sum + value, 0) };`;
         // The first request consumes the tool fixture. Every continuation and child
         // gets final text; exact receipt/output checks detect another request stealing it.
         await writeControl({
@@ -246,7 +258,7 @@ export async function configureHeapRigTurns(config, root, mockPort) {
         let sessionId = sessionPool.get(sessionKey);
         // Text conversations retain history; tool parents rotate generations so
         // their transcript growth stays separate from the persistent hot cohort.
-        if (sessionId && !hot) {
+        if (sessionId && !hot && !options.retainSession) {
           await retireSession(rpc, sessionKey, agentId, sessionId);
           sessionPool.delete(sessionKey);
           retired.push(sessionKey);
@@ -298,15 +310,18 @@ export async function configureHeapRigTurns(config, root, mockPort) {
         }
         const completed = await rpc("agent.wait", { runId, timeoutMs: 180_000 }, 190_000);
         const chatCompletedAt = Date.now();
-        const receipt = assertTerminal(completed, runId, reply, tool);
+        const receipt = assertTerminal(completed, runId, reply, tool && !options.codeFailure);
         await assertHistory(rpc, sessionKey, agentId, receipt.sessionId, reply);
         if (hot) {
           counts.hotTurns++;
         }
         let child;
         if (tool) {
-          const value = await readCodeResult(requestLogPath, logStart, marker);
-          if (kind === "code" && options.shell) {
+          const value = await readCodeResult(requestLogPath, logStart, marker, options.codeFailure);
+          if (options.codeFailure) {
+            counts.codeFailures++;
+          }
+          if (kind === "code" && options.shell && !options.codeFailure) {
             if (
               value.shell?.status !== "completed" ||
               value.shell.exitCode !== 0 ||
@@ -329,8 +344,12 @@ export async function configureHeapRigTurns(config, root, mockPort) {
             const childReceipt = assertTerminal(childCompleted, child.runId, reply, false);
             await assertHistory(rpc, child.childSessionKey, agentId, childReceipt.sessionId, reply);
             counts.children++;
-            await retireSession(rpc, child.childSessionKey, agentId, childReceipt.sessionId);
-            retired.push(child.childSessionKey);
+            if (options.retainSession) {
+              counts.keptChildren++;
+            } else {
+              await retireSession(rpc, child.childSessionKey, agentId, childReceipt.sessionId);
+              retired.push(child.childSessionKey);
+            }
           }
         }
         let artifactId;

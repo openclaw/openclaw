@@ -3,6 +3,8 @@
 // Gateway over IPC for control and over the ingress socket for data. Logs
 // carry `fp:` labels only, never key material.
 import {
+  TUNNEL_EXIT_KEY_MISMATCH,
+  TUNNEL_EXIT_KEY_MISSING,
   TUNNEL_EXIT_KEY_REFUSED,
   TUNNEL_EXIT_UNAVAILABLE,
   type GatewayToTunnelMessage,
@@ -10,7 +12,12 @@ import {
   type TunnelToGatewayMessage,
 } from "../tunnel-ipc.js";
 import { loadIrohBinding, type IrohBinding, type IrohEndpoint } from "./addon.js";
-import { KeyFileRefusedError, loadOrCreateEndpointKey, logFingerprint } from "./keyfile.js";
+import {
+  KeyFileRefusedError,
+  loadBoundKey,
+  loadOrCreateEndpointKey,
+  logFingerprint,
+} from "./keyfile.js";
 import { nextRelayState, type RelayState } from "./relay-state.js";
 import { IngressServer, TUNNEL_ALPN_BYTES } from "./server.js";
 
@@ -47,22 +54,44 @@ async function stop(code: number): Promise<void> {
   }
 }
 
+// Unlinked: load or create the key. Linked: load only the key the binding names.
+function loadEndpointKey(start: TunnelStartMessage) {
+  if (!start.expectedEndpointKey) {
+    return loadOrCreateEndpointKey(start.keyPath);
+  }
+  const loaded = loadBoundKey(start.keyPath, start.expectedEndpointKey.replace(/^iroh:/, ""));
+  if ("refused" in loaded) {
+    return loaded;
+  }
+  if (loaded.promoted) {
+    log("promoted the staged endpoint key the binding names");
+  }
+  return { key: loaded.key, created: false };
+}
+
 // Binds the endpoint, announces ready and serves until the endpoint closes.
 async function serve(
   binding: IrohBinding,
   start: TunnelStartMessage,
   takeOver: (handle: (message: GatewayToTunnelMessage) => void) => void,
 ) {
-  let key: Buffer;
-  let created: boolean;
+  let loaded: ReturnType<typeof loadEndpointKey>;
   try {
-    ({ key, created } = loadOrCreateEndpointKey(start.keyPath));
+    loaded = loadEndpointKey(start);
   } catch (error) {
-    // SAFETY: loadOrCreateEndpointKey throws only Error instances (fs errors and KeyFileRefusedError).
+    // SAFETY: the key file helpers throw only Error instances (fs errors and KeyFileRefusedError).
     log(`key refused: ${(error as Error).message}`);
     await stop(error instanceof KeyFileRefusedError ? TUNNEL_EXIT_KEY_REFUSED : 1);
     return;
   }
+  if ("refused" in loaded) {
+    log(`key refused: ${loaded.refused}`);
+    await stop(
+      loaded.refused === "keys_missing" ? TUNNEL_EXIT_KEY_MISSING : TUNNEL_EXIT_KEY_MISMATCH,
+    );
+    return;
+  }
+  const { key, created } = loaded;
   let endpoint: IrohEndpoint;
   try {
     endpoint = await binding.bind({

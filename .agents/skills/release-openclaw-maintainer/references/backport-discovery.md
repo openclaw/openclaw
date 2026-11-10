@@ -1,8 +1,9 @@
 # Evidence-Driven Backport Discovery
 
 Use this before selecting backports for any OpenClaw release line: regular
-beta/stable, extended-stable, or a release-repair branch. It is an audit before the candidate is
-mutated, not a title search and not permission to expand a frozen release.
+beta/stable, extended-stable, or a release-repair branch. Audit each selected fix
+before applying it; complete the full inventory before freezing the candidate.
+This is not a title search or permission to expand a frozen release.
 
 For an individual fix-status check or a verified cumulative source count, use
 [fix-inclusion tracing](fix-inclusion.md). Keep its source-to-carrier mapping in
@@ -197,7 +198,15 @@ That decision invalidates affected evidence; it never authorizes publication of
 untested changes.
 
 Before changing release refs, present the complete categorized ledger and the
-proposed set for maintainer approval. After approval, apply each backport directly
+proposed set for maintainer approval unless selection authority was explicitly
+delegated. During open preparation, a maintainer may instead approve an exact,
+dependency-closed group while independent discovery continues. Record that
+approval and the unfinished audit scope; do not call the full inventory complete
+or advance its scan cursor until every entry is accounted for. Follow the
+[owner intake procedure](release-owner.md#prepare-and-admit-hotfixes) to integrate
+ready approved groups without waiting for unrelated audit lanes.
+
+After approval, apply each backport directly
 to the canonical release branch with `git cherry-pick -x`, one at a time in
 dependency order; do not open individual or combined backport PRs. Follow
 [backports and new fixes](../SKILL.md#backports-and-new-fixes) for CI recovery
