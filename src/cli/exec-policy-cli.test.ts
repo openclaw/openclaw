@@ -508,7 +508,7 @@ describe("exec-policy CLI", () => {
     expect(output).toContain("\\nforged");
     expect(output).not.toMatch(/\\n(?:security|ask|askFallback)=/u);
     expect(output).not.toContain("/tmp/openclaw.json\nforged");
-    expect(output).not.toMatch(/\u001B\[2J|\u0007/u);
+    expect([output.includes("\u001B[2J"), output.includes("\u0007")]).toEqual([false, false]);
   });
 
   it("reports invalid input once and exits once", async () => {
