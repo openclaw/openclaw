@@ -143,7 +143,12 @@ it("serves published models while single-flight native discovery is pending", as
 
 function createPicker(
   config: OpenClawConfig,
-  pickerParams: { sessionKey?: string; view?: "all" | "configured" } = {},
+  pickerParams: {
+    sessionKey?: string;
+    view?: "all" | "configured";
+    preparedOnly?: boolean;
+    provider?: string;
+  } = {},
 ) {
   const context = createModelsListTestContext({ agentId: "pro", cfg: config, catalog: [] });
   registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
@@ -173,6 +178,58 @@ function createPicker(
     return respond;
   };
 }
+
+it("keeps headless picker discovery scoped and cached before full demand", async () => {
+  const config: OpenClawConfig = {
+    gateway: { controlUi: { enabled: false } },
+    agents: {
+      entries: { pro: {} },
+      defaults: { model: "custom/saved-model", modelPolicy: { allow: ["*"] } },
+    },
+  };
+  const native = nativeModel("custom", "native-model", "native-test");
+  const otherNative = nativeModel("other", "other-native-model", "native-test");
+  const uncredentialed = { provider: "other", id: "hosted-model", name: "Hosted model" };
+  const fullOnly = { provider: "outside", id: "full-model", name: "Full model" };
+  installHarnesses({ id: "native-test", loadModelCatalog: async () => [native, otherNative] });
+  mocks.runPreparedModelCatalogWorker.mockResolvedValue(
+    snapshot([saved, uncredentialed, fullOnly]),
+  );
+  await publish(config);
+  const owner = readSnapshot(fixture.agentInput("pro", config))!;
+  expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+
+  await owner.loadNativeModelCatalog!();
+  expect(owner.readFullModelCatalog!()?.entries).toContainEqual(expect.objectContaining(native));
+  await createPicker(config, { preparedOnly: true })();
+  expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+
+  const scopedPick = createPicker(config, { provider: "other" });
+  await scopedPick();
+  await vi.waitFor(() =>
+    expect(owner.readFullModelCatalog!()?.entries).toContainEqual(
+      expect.objectContaining(uncredentialed),
+    ),
+  );
+  await scopedPick();
+  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(["other"]);
+  expect(owner.readFullModelCatalog!()?.entries).not.toContainEqual(
+    expect.objectContaining(fullOnly),
+  );
+
+  const pick = createPicker(config);
+  await pick();
+  await vi.waitFor(() =>
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenLastCalledWith(undefined),
+  );
+  await vi.waitFor(() =>
+    expect(owner.readFullModelCatalog!()?.entries).toContainEqual(
+      expect.objectContaining(fullOnly),
+    ),
+  );
+  await pick();
+  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
+});
 
 it("defers native discovery until agent catalog demand and reacquires retired observations", async () => {
   const agentIds = ["default", "pro", "unused"];

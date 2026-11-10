@@ -232,6 +232,7 @@ export function readSessionTranscriptModelContextAsync<T>(
       if (selected) {
         return readSessionTranscriptCohort(
           selected.database,
+          captured,
           () =>
             readSessionTranscriptModelContextInWorker(
               captured,

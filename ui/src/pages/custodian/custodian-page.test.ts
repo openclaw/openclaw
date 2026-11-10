@@ -261,11 +261,11 @@ describe("custodian page", () => {
     });
     await waitForFast(() => expect(page.textContent).toContain("System check completed"));
     expect(replacementRequest.mock.calls.map(([method]) => method)).toEqual([
-      "openclaw.chat.history",
       "openclaw.chat",
+      "openclaw.chat.history",
     ]);
-    expect(replacementRequest.mock.calls[1]?.[1]).toMatchObject({ sessionId: "custodian-session" });
-    expect(replacementRequest.mock.calls[1]?.[1]).not.toHaveProperty("message");
+    expect(replacementRequest.mock.calls[0]?.[1]).toMatchObject({ sessionId: "custodian-session" });
+    expect(replacementRequest.mock.calls[0]?.[1]).not.toHaveProperty("message");
     expect(page.querySelector('[role="alert"]')).toBeNull();
     pending.resolve(chatReply("Stale old-client reply."));
     await pending.promise;

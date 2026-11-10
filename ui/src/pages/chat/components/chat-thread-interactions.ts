@@ -70,6 +70,25 @@ export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
+    actions?: Pick<
+      ChatThreadProps,
+      | "onOpenSidebar"
+      | "onOpenWorkspaceFile"
+      | "onFindWorkspaceFile"
+      | "onPermissionRetry"
+      | "onOpenImage"
+      | "onAssistantAttachmentLoaded"
+      | "onOpenSessionLink"
+      | "onOpenSubagent"
+      | "onOpenSubagents"
+      | "onRetryQueuedMessage"
+      | "onSteerNow"
+      | "onRewindMessage"
+      | "onFocusComposer"
+      | "loadFullAssistantMessage"
+      | "personActivity"
+      | "displayFacts"
+    >;
     threadMediaMessages?: ReadonlyMap<
       string,
       readonly import("./chat-thread-media-gallery.ts").ThreadMediaMessage[]
