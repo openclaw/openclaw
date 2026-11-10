@@ -97,20 +97,6 @@ final class ScreenSnapshotService {
         let displayFrameId: String
     }
 
-    typealias Capture = @MainActor (Int?, Int) async throws -> CapturedFrame
-    typealias Encode = @Sendable (CapturedFrame, OpenClawScreenSnapshotFormat, Double) throws -> ScreenSnapshotResult
-
-    private let capture: Capture
-    private let encode: Encode
-
-    init(
-        capture: Capture? = nil,
-        encode: Encode? = nil)
-    {
-        self.capture = capture ?? Self.captureFrame
-        self.encode = encode ?? Self.encodeFrame
-    }
-
     func snapshot(
         screenIndex: Int?,
         maxWidth: Int?,
@@ -121,10 +107,9 @@ final class ScreenSnapshotService {
         let format = format ?? .jpeg
         let maxWidth = maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? (format == .png ? 900 : 1600)
         let quality = min(1.0, max(0.05, quality ?? 0.72))
-        let frame = try await self.capture(screenIndex, maxWidth)
-        let encode = self.encode
+        let frame = try await Self.captureFrame(screenIndex: screenIndex, maxWidth: maxWidth)
         return try await Task.detached {
-            try encode(frame, format, quality)
+            try Self.encodeFrame(frame, format, quality)
         }.value
     }
 
