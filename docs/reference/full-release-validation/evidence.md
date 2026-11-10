@@ -153,10 +153,12 @@ The recovery owner authenticates the original admission and dispatches, each
 current successful child attempt and its complete composite receipt, the sealed
 candidate and its package bytes, and all recorded npm, SDK, plugin, and Docker
 producer receipts and payload digests. Missing payloads, incomplete job history,
-changed attempts, or lost authority fail closed. It never dispatches test or
-preparation workflows and has only Actions/content read permissions. Runtime
-setup installs only trusted P dependencies with lifecycle scripts disabled; it
-does not build or execute candidate code.
+changed attempts, or lost authority fail closed. Each recovery child verification
+has a ten-minute budget to read its complete rerun history; ordinary child reuse
+keeps its two-minute default, and job-inventory request timeouts and retry limits are unchanged.
+It never dispatches test or preparation workflows and has only Actions/content
+read permissions. Runtime setup installs only trusted P dependencies with lifecycle
+scripts disabled; it does not build or execute candidate code.
 
 The existing publication-admission owner then reads committed candidate metadata
 using current trusted P and collects new, honestly timestamped registry
@@ -168,12 +170,28 @@ npm/plugin/Docker artifacts; P owns aggregation and current publication admissio
 A retained original parent is not relabeled successful. Historical FRV validation
 and historical-plan restoration remain unchanged.
 
+The recovery producer hashes and inspects the original payloads once and seals
+that exact inventory in the aggregate. Publication readers first authenticate the
+successful recovery job, ordered uploads, and observation bytes. They then
+reconstruct the complete inventory from the original descriptors, small manifests,
+and live artifact metadata and require an exact match with the sealed inventory.
+Bulk npm, SDK, Docker, and candidate bodies are not downloaded again by every
+plugin publisher. A fresh bounded plugin-artifact listing replaces per-package
+metadata requests; it is local to that authentication, never immutable replay.
+Selected package consumers still download and verify their own original bytes,
+and current producer attempts, expiry, and operator authority remain mandatory.
+The immutable replay carries raw small evidence only; its limits are unchanged.
+
 Parsed payloads retain the archive owner's existing size and integrity limits.
 Opaque Docker and candidate image/registry archives use its streaming digest
 verification: the authenticated metadata size is the exact transfer bound, and
 every byte contributes to SHA-256 without retaining or expanding the archive.
-Metadata binding, expiry, deadlines, retries, and digest checks remain unchanged;
-missing or mismatched bytes never authorize omission or rebuilding.
+Recovery Docker archive requests may use the existing four-minute transfer budget
+to finish large bodies instead of aborting each attempt after sixty seconds.
+Metadata requests and other archive callers keep their sixty-second request cap;
+Docker transfers still share four minutes across at most three attempts. Metadata
+binding, expiry, exact size, and full-byte digest checks remain unchanged; missing
+or mismatched bytes never authorize omission or rebuilding.
 
 ## Workflow files
 

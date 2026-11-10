@@ -40,7 +40,7 @@ function toolEvents(callId, code) {
 function assertTerminal(result, runId, reply, tool) {
   const receipt = result.terminalReceipt;
   // Lifecycle receipts cap text at 4096 characters; history owns the full reply.
-  const terminalText = `${reply.slice(0, 4095).trimEnd()}…`;
+  const terminalText = reply.length > 4096 ? `${reply.slice(0, 4095).trimEnd()}…` : reply;
   if (
     result.runId !== runId ||
     result.status !== "ok" ||
@@ -209,11 +209,12 @@ export async function configureHeapRigTurns(config, root, mockPort) {
       const sessionKey = options.sessionKey ?? `agent:${agentId}:heap-rig-${sessionSlot}`;
       const runId = randomUUID();
       const marker = `SYNTHETIC_HEAP_RIG_${runId}`;
-      const reply =
-        `${marker}\n${"Synthetic analysis: inspect the request, perform the bounded task, verify the result, and report the observed outcome.\n".repeat(128)}`.slice(
-          0,
-          8191,
-        ) + ".";
+      const reply = options.shortReply
+        ? `${marker}.`
+        : `${marker}\n${"Synthetic analysis: inspect the request, perform the bounded task, verify the result, and report the observed outcome.\n".repeat(128)}`.slice(
+            0,
+            8191,
+          ) + ".";
       try {
         const logStart = (await stat(requestLogPath)).size;
         const code =
@@ -441,6 +442,9 @@ export async function configureHeapRigTurns(config, root, mockPort) {
             verificationAndCleanup: Date.now() - chatCompletedAt,
           },
           replyBytes: Buffer.byteLength(reply),
+          promptBytes: Buffer.byteLength(
+            `Synthetic heap rig ${kind} turn ${index}. Begin your report with ${marker}.`,
+          ),
           successfulToolNames: receipt.successfulToolNames,
           sessionId,
           hot,

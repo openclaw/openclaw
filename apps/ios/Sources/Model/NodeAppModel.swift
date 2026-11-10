@@ -696,6 +696,8 @@ final class NodeAppModel {
 
     /// Chat and the persistent sidebar consume the same Gateway-scoped request lifecycle.
     let chatPresentation = IOSChatViewModelOwner()
+    var agentAvatarImages: [String: UIImage] = [:]
+    var loadedAgentAvatarRequest: IOSAgentAvatarRequest?
     /// Request admission only; the connection controller owns the later handoff.
     var isGatewayPickerRequestInFlight = false
 

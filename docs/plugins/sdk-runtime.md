@@ -379,9 +379,18 @@ runtime handle.
 
 ### Reload-safe plugins
 
-By default, `openclaw plugins reload` waits for every running agent turn that
-loaded the plugin to finish. A long turn can make the reload wait out its drain
-budget and roll back.
+By default, `openclaw plugins reload` waits for running turns that resolved or
+invoked the plugin's capabilities. Loading a plugin with no used capability does
+not retain it for every turn. A long retaining turn can make an explicit reload
+wait out its drain budget and roll back.
+
+Two capability classes retain their captured instance when a turn is admitted:
+registered hooks, which may first run during finalization, and model providers,
+which may first resolve during fallback. These callbacks cannot safely switch
+generations between paired hooks or model attempts. Plugins declaring
+`generationOverlap` also keep their existing admitted consumer custody, so their
+old generation remains callable during replacement. Tool factories retain their
+instance when the turn resolves the tool, before its execution callback runs.
 
 A plugin that declares `reload.turnHandover` in `openclaw.plugin.json` lets
 the reload hand those turns over instead: each running turn stops at its next
@@ -415,7 +424,7 @@ failing.
 
 Handover happens only between model steps. A long-running tool call keeps the
 reload waiting until it returns. A turn hands over only when every plugin the
-reload replaces declares the field; one undeclared plugin keeps the whole turn
+reload replaces and the turn retains declares the field; one undeclared retained plugin keeps the whole turn
 waiting. If the new version no longer registers the turn's context engine, the
 turn ends with an error instead of switching engines mid-turn. Reload status and
 logs name the plugins that kept a turn waiting.
@@ -499,7 +508,11 @@ to close before registering its successor. Disabling or removing a plugin can
 report their cleanup as deferred; starting engine disposal closes normal engine
 callbacks while cleanup finishes.
 
-By default, replacement validates metadata and configuration first, then closes admission to
+Automatic config edits defer while a serialized plugin has retained work or calls,
+without closing admission or making the Gateway unready. The saved edit reports
+why application is deferred and retries after the work settles; restart also applies it.
+
+An explicit reload validates metadata and configuration first, then closes admission to
 the old instance and waits for in-flight work while its services and channels
 keep running. If that work does not finish in time, the reload fails once and
 resumes admission. Otherwise, replacement stops services and channels, drains

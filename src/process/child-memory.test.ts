@@ -4,16 +4,27 @@ import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import { getHostExecMemoryBudget, watchHostExecMemory } from "./child-memory.js";
+import {
+  getHostExecMemoryBudget,
+  readCgroupMemoryUsage,
+  watchHostExecMemory,
+} from "./child-memory.js";
 
 const procfs = vi.hoisted(() => ({
   readFile: vi.fn<(path: string) => Promise<string>>(),
   readdir: vi.fn<(path: string) => Promise<string[]>>(),
-  decodedBytes: 0,
 }));
 const memoryOwner = vi.hoisted(() => {
   const state: { current?: { budget?: { memoryBytes: number; swapBytes: number } } } = {};
   return state;
+});
+vi.mock("../../node-version.mjs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../node-version.mjs")>();
+  return {
+    ...actual,
+    parseNodeReleaseVersion: (version: string) =>
+      actual.parseNodeReleaseVersion(version === process.versions.node ? "24.22.1" : version),
+  };
 });
 vi.mock("../shared/global-singleton.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../shared/global-singleton.js")>();
@@ -38,22 +49,24 @@ vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
   readFile: (
     file: string,
-    encodingOrCallback: string | ((error: unknown, value?: string | Buffer) => void),
-    callback?: (error: unknown, value?: string | Buffer) => void,
+    optionsOrCallback:
+      | { buffer: Buffer }
+      | ((error: unknown, content?: Buffer) => void)
+      | undefined,
+    callback?: (error: unknown, content?: Buffer) => void,
   ) => {
-    const done = typeof encodingOrCallback === "function" ? encodingOrCallback : callback!;
-    void procfs.readFile(file).then(
-      (text) => {
-        const content = file.endsWith("/status") ? `Name:\tfixture\n${text}` : text;
-        if (typeof encodingOrCallback === "string") {
-          procfs.decodedBytes += Buffer.byteLength(content);
-          done(null, content);
-        } else {
-          done(null, Buffer.from(content));
-        }
-      },
-      (error: unknown) => done(error),
-    );
+    const done = typeof optionsOrCallback === "function" ? optionsOrCallback : callback!;
+    void procfs.readFile(file).then((text) => {
+      const content = Buffer.from(file.endsWith("/status") ? `Name:\tfixture\n${text}` : text);
+      if (!optionsOrCallback || typeof optionsOrCallback === "function") {
+        done(null, content);
+      } else if (content.length > optionsOrCallback.buffer.length) {
+        done(Object.assign(new Error("buffer too small"), { code: "ERR_INVALID_ARG_VALUE" }));
+      } else {
+        content.copy(optionsOrCallback.buffer);
+        done(null, optionsOrCallback.buffer.subarray(0, content.length));
+      }
+    }, done);
   },
 }));
 
@@ -73,7 +86,6 @@ afterEach(() => {
   memoryOwner.current!.budget = undefined;
   procfs.readFile.mockReset();
   procfs.readdir.mockReset();
-  procfs.decodedBytes = 0;
 });
 
 function watch(pid = 100) {
@@ -234,16 +246,17 @@ it.each(["throw", "reject"])(
 );
 
 it.each(["ENOENT", "ESRCH"])(
-  "counts thread-spawned descendants and enforces swap separately through %s",
+  "counts large thread children/status files and enforces swap through %s",
   async (code) => {
     mockFiles(
       {
         "/proc/100/status": "VmRSS:\t16 kB\n",
         "/proc/100/task/100/children": "",
-        "/proc/100/task/101/children": "200 400 ",
+        "/proc/100/task/101/children": `${"200 ".repeat(1024)}400`,
         "/proc/200/status": "VmRSS:\t16 kB\n",
         "/proc/200/task/200/children": "300",
-        "/proc/300/status": "VmRSS:\t16 kB\nVmSwap:\t96 kB\n",
+        "/proc/300/status": "VmRSS:\t16 kB\n",
+        "/proc/400/status": `${"Other:\t0 kB\n".repeat(400)}VmRSS:\t16 kB\nVmSwap:\t96 kB\n`,
       },
       undefined,
       code,
@@ -255,7 +268,6 @@ it.each(["ENOENT", "ESRCH"])(
     await vi.advanceTimersByTimeAsync(1000);
     expect(onLimit).toHaveBeenCalledOnce();
     expect(onDiagnostic).toHaveBeenCalledWith(expect.stringContaining("swap 1/1 MiB"));
-    expect(procfs.decodedBytes).toBe(0);
   },
 );
 
@@ -290,14 +302,25 @@ it("deduplicates overlapping roots and shares procfs reads without scanning unre
 });
 
 it("accounts disjoint durable cgroup usage alongside ordinary trees, including swapped descendants without a MainPID", async () => {
-  mockFiles({ "/proc/100/status": "VmRSS:\t80 kB\n" });
+  const directory = "/sys/fs/cgroup/unit";
+  const files = {
+    "/proc/100/status": "VmRSS:\t80 kB\n",
+    [`${directory}/memory.current`]: String(32 * 1024),
+    [`${directory}/memory.swap.current`]: "0",
+  };
+  mockFiles(files);
   const ordinary = watch();
   const onLimit = vi.fn();
-  const usage = { memoryBytes: 32 * 1024, swapBytes: 0 };
-  stops.push(watchHostExecMemory({ readUsage: async () => usage, onLimit, onDiagnostic: vi.fn() }));
+  stops.push(
+    watchHostExecMemory({
+      readUsage: () => readCgroupMemoryUsage(directory),
+      onLimit,
+      onDiagnostic: vi.fn(),
+    }),
+  );
   await vi.advanceTimersByTimeAsync(1000);
   expect(ordinary.onLimit).not.toHaveBeenCalled();
-  usage.swapBytes = 96 * 1024;
+  files[`${directory}/memory.swap.current`] = String(96 * 1024);
   await vi.advanceTimersByTimeAsync(1000);
   expect(onLimit).toHaveBeenCalledOnce();
   expect(ordinary.onLimit).not.toHaveBeenCalled();

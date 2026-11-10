@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
+  isReleasedAdaptiveClaudeGeneration,
   buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,
   modelCostsEqual,
@@ -29,7 +30,6 @@ import {
   resolveClaudeSonnet55ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaude1MContext,
-  supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -376,7 +376,9 @@ function hasConfiguredModelOverride(
 }
 
 function matchesAnthropicModernModel(modelId: string): boolean {
-  return supportsClaudeAdaptiveThinking({ id: modelId }) || isAnthropicMythosPreviewModel(modelId);
+  return (
+    isReleasedAdaptiveClaudeGeneration({ id: modelId }) || isAnthropicMythosPreviewModel(modelId)
+  );
 }
 
 function normalizeAnthropicResolvedModel(

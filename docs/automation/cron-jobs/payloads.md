@@ -151,7 +151,10 @@ source; names, schedules, and other executable inputs remain bound. A fresh
 owner capture applies only to the definition captured, even if another manager
 edits the job before the update commits. Disabling or removing a job still
 cancels its active occurrence; re-enabling it does not revive that cancelled
-occurrence.
+occurrence. A turn the occurrence already started in another session, for
+example with `sessions_send`, belongs to that session: it keeps running when the
+occurrence ends or the job is removed, and still revalidates the operator's
+role, device, and access grant.
 
 A continuation waits for its current conversation turn to finish before reading
 the current job and checking its source at launch. Trigger-supplied context does
@@ -525,7 +528,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
 
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
-    A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, display names, sidebar placement, custom categories and icons, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
+    A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, display names, sidebar placement, custom categories, icons and colors, dashboard face and presentation, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
 
     Messages sent to the job's `cron:<jobId>` session, for example with `sessions_send`, address its latest run. A message still queued when that run ends can fail, and the next run reassigns the key, so later runs start without it. Put information that later runs need in the job payload or [scratch](#job-scratch-and-quiet-results).
 

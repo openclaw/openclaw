@@ -68,6 +68,33 @@ vi.mock("../../scripts/test-projects.test-support.mts", async (importOriginal) =
 });
 
 describe("CI changed lint", () => {
+  it("keeps root-test config discovery on the central row", () => {
+    const { cwd, write } = fixture("ci-lint-row-owner-");
+    write(rootTestConfig, "{ invalid config");
+    const location = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    try {
+      const changed = detectChangedLanes(["src/utils.ts", "test/scripts/ci-changed-lint.test.ts"]);
+      const selection = {
+        files: ["src/utils.ts"],
+        rootTestFiles: ["test/scripts/ci-changed-lint.test.ts"],
+        coreStripes: [1],
+        extensionStripes: [],
+        groups: [],
+        central: false,
+      };
+      const plan = createChangedCheckPlan(changed, { lintOnly: true, lintSelection: selection });
+      expect(plan.commands.map(({ name }) => name)).toEqual(["lint core file stripe 1"]);
+      expect(() =>
+        createChangedCheckPlan(changed, {
+          lintOnly: true,
+          lintSelection: { ...selection, central: true },
+        }),
+      ).toThrow(/Invalid TypeScript config/);
+    } finally {
+      location.mockRestore();
+    }
+  });
+
   it("includes transitive and aliased type consumers without widening to their packages", async () => {
     const { cwd, write } = fixture("ci-file-lint-");
     write("pnpm-workspace.yaml", "packages:\n  - .\n  - ui\n  - packages/*\n  - extensions/*\n");
