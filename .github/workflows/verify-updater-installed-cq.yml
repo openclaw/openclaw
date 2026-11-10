@@ -1,0 +1,89 @@
+name: Verify installed updater C to Q (validation only)
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - .github/workflows/verify-updater-installed-cq.yml
+      - .github/validation/updater-installed-cq/**
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: verify-updater-installed-cq-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  installed-cq:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'openclaw/updater-hosted-proof-20261110'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - name: Create private proof directory
+        id: private
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          root=$(mktemp -d "$RUNNER_TEMP/updater-installed-cq.XXXXXX")
+          chmod 700 "$root"
+          mkdir "$root/download" "$root/evidence"
+          printf 'root=%s\n' "$root" >> "$GITHUB_OUTPUT"
+          printf '%s\n' '{"status":"setup-started","scope":"validation-only-node-installed-cq"}' > "$root/evidence/workflow.json"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        timeout-minutes: 2
+        with:
+          node-version: "26.12.1"
+      - name: Download exact candidate artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        timeout-minutes: 3
+        with:
+          name: package-under-test-42717541806-1
+          run-id: "42717541806"
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: ${{ steps.private.outputs.root }}/download
+      - name: Verify package, runtime, and bundled helper provenance
+        env:
+          PROOF_ROOT: ${{ steps.private.outputs.root }}
+        run: node .github/validation/updater-installed-cq/hosted.mjs verify
+      - name: Exercise all five installed Node cases
+        timeout-minutes: 61
+        env:
+          PROOF_ROOT: ${{ steps.private.outputs.root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          candidate=$(cat "$PROOF_ROOT/candidate-path.txt")
+          bash .github/validation/updater-installed-cq/run.sh \
+            --candidate "$candidate" --output "$PROOF_ROOT/run" \
+            --cases success,relative,absolute,failure,cancel --runtimes node
+      - name: Collect bounded synthetic diagnostics
+        if: always() && steps.private.outputs.root != ''
+        env:
+          PROOF_ROOT: ${{ steps.private.outputs.root }}
+          PROOF_JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ -f .github/validation/updater-installed-cq/hosted.mjs ]; then
+            node .github/validation/updater-installed-cq/hosted.mjs collect
+          fi
+      - name: Upload proof receipts, not installations or state
+        if: always() && steps.private.outputs.root != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        timeout-minutes: 2
+        with:
+          name: updater-installed-cq-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.private.outputs.root }}/evidence
+          if-no-files-found: error
+          retention-days: 7

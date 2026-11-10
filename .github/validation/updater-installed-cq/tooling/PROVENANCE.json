@@ -1,0 +1,42 @@
+{
+  "source": "openclaw/openclaw",
+  "commit": "dd6c99776b161d441cb827f78d2b031addce6648",
+  "purpose": "verbatim minimal closure for existing first-hop-tarball helper; no product runtime imports",
+  "files": [
+    {
+      "path": "scripts/e2e/lib/update-first-hop-package-fixtures.mjs",
+      "bytes": 19450,
+      "sha256": "4283cf3118e3d4e21e48f2a745ee4fdde5dd5d819281194c87c1410832c6b4a8"
+    },
+    {
+      "path": "scripts/e2e/lib/fixtures/common.mjs",
+      "bytes": 661,
+      "sha256": "6e7549c4e39fba09306ba821afc73531b0ffc398850bc76a1a71ded9d9bffe0b"
+    },
+    {
+      "path": "scripts/lib/npm-json-output.mts",
+      "bytes": 1266,
+      "sha256": "65a07e43e79afaae463966cd7f69635cf64d791064c13835e4beff44c1fe4cf4"
+    },
+    {
+      "path": "scripts/lib/package-dist-inventory-contract.mts",
+      "bytes": 4908,
+      "sha256": "c4fc22df2f923ce47b74ec3604f3025d77fbf3f13395c4e468a66042b0a7d74d"
+    },
+    {
+      "path": "scripts/lib/package-lifecycle-marker.mjs",
+      "bytes": 381,
+      "sha256": "32c50197ecc6f10b78f9f8ef588b868e7cdf428233e00fb912044dee5da46e1a"
+    },
+    {
+      "path": "scripts/lib/update-compat-contract.mjs",
+      "bytes": 907,
+      "sha256": "4ceef568de1f1db1ce454609b2605405773642acb0700f6e3bb7ca0a35285f41"
+    },
+    {
+      "path": "scripts/lib/record-shared.mjs",
+      "bytes": 547,
+      "sha256": "f7485a3b947b5cac2192369fbbd9a6c1e26493b734978609b5941b6dd5cbcc84"
+    }
+  ]
+}
