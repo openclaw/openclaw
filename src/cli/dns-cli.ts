@@ -471,6 +471,11 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
   // The staging name carries a random component: the destination directory can
   // be writable by other accounts, and a predictable name would let one of
   // them place a file at the staging path before the privileged steps run.
+  // Accepted edge case: an account that may write the destination directory
+  // can still substitute the staged file between the privileged steps, which
+  // is the boundary the operator's directory permissions already draw - the
+  // truncating write this replaces exposed the destination path itself, so
+  // the substitution was easier to arrange there, not harder.
   const tempPath = path.join(
     path.dirname(target),
     `.${path.basename(target)}.openclaw-${process.pid}-${randomUUID()}.tmp`,
