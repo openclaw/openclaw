@@ -14,17 +14,21 @@ const mocks = vi.hoisted(() => ({
 }));
 // mock-isolation: hold normal model/runtime owners at their public boundary; this file proves adapter policy, not inference or runtime activation.
 vi.mock("../agents/agent-command.js", () => ({ agentCommandFromSystem: mocks.turn }));
+// mock-isolation: readiness is an explicit adapter boundary; do not load real model workers.
 vi.mock("../agents/agent-command-local.js", () => ({ runLocalAgentCommand: mocks.ready }));
 // mock-isolation: canonical session and receipt storage have integration coverage at the Gateway owners.
 vi.mock("../gateway/server-methods/agents-onboarding.js", () => ({
   completeAgentOnboarding: mocks.prepare,
 }));
+// mock-isolation: exercise adapter event wiring without a live Gateway or receipt database.
 vi.mock("../gateway/server-methods/templates-add-conversation.js", () => ({
   publishTemplateInstallEvent: mocks.publish,
 }));
+// mock-isolation: the adapter is tested in an admitted local scope, not a running Gateway.
 vi.mock("../gateway/local-request-context.js", () => ({
   withLocalGatewayRequestScope: async (_params: unknown, run: () => Promise<unknown>) => run(),
 }));
+// mock-isolation: pin the local request context without activating plugin runtime globals.
 vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
   getPluginRuntimeGatewayRequestScope: () => ({ context: mocks.context }),
 }));
