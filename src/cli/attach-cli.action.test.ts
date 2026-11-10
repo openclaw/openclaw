@@ -106,6 +106,7 @@ import { callGateway } from "../gateway/call.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerAttachCli } from "./attach-cli.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 
 const activeActions = new Set<Promise<void>>();
 function runAttach(...args: string[]) {
@@ -460,5 +461,15 @@ describe("openclaw attach (action)", () => {
     expect(exitCode).toBe(1);
     expect(logs).toEqual(["ERR:attach.grant returned an unexpected response from the gateway."]);
     expect(gatewayCalls.some((call) => call.method === "attach.revoke")).toBe(false);
+  });
+
+  it("surfaces the positional/session conflict as an ExpectedCliError", async () => {
+    const error = await runAttach("agent:main:spawn", "--session", "agent:main:spawn").catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    expect((error as ExpectedCliError).message).toBe(
+      "pass one session target: use either the positional target or --session",
+    );
   });
 });
