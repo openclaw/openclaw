@@ -3,6 +3,7 @@ export type SessionProgressCardRuntime = {
   known?: boolean;
   connected?: boolean;
   hasActiveSubagentRun?: boolean;
+  hasActiveAutomationRun?: boolean;
   lastRunError?: string;
   childError?: string;
   /** Exact counts only after the session's own child roster has loaded. */

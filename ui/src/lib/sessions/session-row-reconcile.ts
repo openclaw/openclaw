@@ -415,8 +415,16 @@ export function reconcileSessionRow(
   if (
     session.updatedAt != null &&
     previous?.updatedAt != null &&
-    session.updatedAt < previous.updatedAt
+    session.updatedAt < previous.updatedAt &&
+    !(
+      session.sessionId === previous.sessionId &&
+      session.snapshotAt !== undefined &&
+      previous.snapshotAt !== undefined &&
+      session.snapshotAt > previous.snapshotAt
+    )
   ) {
+    // Quiet settlement restores conversation recency. Its newer runtime sample
+    // still owns execution state; recency is not a snapshot-version clock.
     return reject("older");
   }
   if (!existing && !isPersistedSessionRow(session)) {

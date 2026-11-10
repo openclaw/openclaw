@@ -154,6 +154,7 @@ export function registerAgentRunContext(
     existing.verboseLevel = context.verboseLevel;
   }
   existing.completionSource ??= context.completionSource;
+  existing.automation ??= context.automation;
   if (context.sessionEventDelivery === false) {
     existing.sessionEventDelivery = false;
   }

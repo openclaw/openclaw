@@ -137,6 +137,53 @@ describe("transcript projection", () => {
     vi.useRealTimers();
   });
 
+  it.each([false, true])(
+    "renders and retires automation identity with empty transcript=%s",
+    async (empty) => {
+      const key = "agent:main:automation-view";
+      const run = {
+        runId: "automation-run",
+        jobId: "watch",
+        name: "Watch release readiness",
+        startedAt: 9_000,
+        status: "running" as const,
+      };
+      const props = threadProps(
+        "automation-view",
+        key,
+        empty ? [] : [msg("assistant", "Waiting for review")],
+        {
+          selectedSession: {
+            key,
+            kind: "direct",
+            updatedAt: 1_000,
+            status: "failed",
+            hasActiveRun: true,
+            automationRuns: [run],
+          },
+        },
+      );
+      const view = drawThread(props);
+      view.draw();
+      await view.settle();
+      await waitForSolid(() =>
+        expect(view.query("[data-automation-run-id]")?.textContent).toContain(run.name),
+      );
+      expect(view.container.querySelectorAll("[data-automation-run-id]")).toHaveLength(1);
+      expect(view.query("[data-subagent-session-key]")).toBeNull();
+      expect(view.container.querySelectorAll(".chat-bubble")).toHaveLength(empty ? 0 : 1);
+      props.selectedSession = {
+        ...props.selectedSession!,
+        hasActiveRun: false,
+        automationRuns: [],
+      };
+      view.draw();
+      await view.settle();
+      await waitForSolid(() => expect(view.query("[data-automation-run-id]")).toBeNull());
+      expect(view.container.querySelectorAll(".chat-bubble")).toHaveLength(empty ? 0 : 1);
+    },
+  );
+
   it("parks hidden live text without projecting rows and catches up on return", async () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     onTestFinished(() => visibility.mockRestore());

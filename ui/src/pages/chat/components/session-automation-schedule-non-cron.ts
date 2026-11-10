@@ -1,5 +1,5 @@
 import { resolveExactDurationParts } from "../../../../../src/infra/format-time/format-duration-exact.ts";
-import type { CronJob } from "../../../api/types.ts";
+import type { CronCompactJob, CronJob } from "../../../api/types.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerCronScheduleEnglish } from "../../../i18n/locales/en-cron-schedule.ts";
 import { formatDateMs, formatTimeMs, formatUnit } from "../../../lib/format.ts";
@@ -12,6 +12,25 @@ registerEnglishCatalog(registerCronScheduleEnglish);
 
 const localDay = (date: Date) =>
   Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86_400_000;
+
+/** Disabling a schedule cannot erase an admitted execution that is still alive. */
+export function sessionAutomationState(
+  job: Pick<CronCompactJob, "enabled" | "autoDisabled" | "runningAtMs">,
+  connected: boolean,
+  schedule: () => string,
+) {
+  const running = connected && job.runningAtMs !== undefined;
+  return {
+    running: running || undefined,
+    state: running
+      ? t("common.running")
+      : job.autoDisabled
+        ? t("chat.sessionDetails.automationAttention")
+        : !job.enabled
+          ? t("chat.sessionDetails.automationPaused")
+          : schedule(),
+  };
+}
 
 /** Local calendar distance and short date, evaluated when the row renders. */
 function scheduledDay(atMs: number): { days: number; date: string } {

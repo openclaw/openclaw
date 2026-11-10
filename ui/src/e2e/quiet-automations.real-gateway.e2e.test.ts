@@ -17,7 +17,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { SessionsListResult } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -116,6 +116,7 @@ const suite = createControlUiE2eSuite({
             audit: { executionIdentity: true },
           },
           cron: { enabled: false },
+          messages: { queue: { mode: "followup", byChannel: { webchat: "followup" } } },
           plugins: { allow: [] },
           tools: { profile: "full", codeMode: false, toolSearch: false },
           agents: {
@@ -204,7 +205,7 @@ async function screenshot(page: Page, name: string, required: string) {
   expect(new URL(page.url()).hash).toBe("");
   const target = page
     .locator(
-      '.chat-summary__automation, .session-automation-mobile__list-row, .chat-details-mobile-root__entry[data-details-destination="automation"]',
+      '.chat-summary__automation, .session-automation-mobile__list-row, .chat-details-mobile-root__entry[data-details-destination="automation"], .chat-subagent-activity__row',
     )
     .filter({ hasText: required, visible: true })
     .getByText(required, { exact: true })
@@ -242,6 +243,24 @@ suite.define(() => {
           ),
         );
         const page = await context.newPage();
+        let observedExecutionKey: string | undefined;
+        const retirementEvents: unknown[] = [];
+        page.on("websocket", (socket) =>
+          socket.on("framereceived", ({ payload }) => {
+            const event = JSON.parse(String(payload));
+            if (
+              observedExecutionKey &&
+              (event.event === "sessions.changed" || event.event === "chat") &&
+              (event.payload?.sessionKey === observedExecutionKey ||
+                event.payload?.session?.key === observedExecutionKey)
+            ) {
+              retirementEvents.push(event);
+              if (retirementEvents.length > 20) {
+                retirementEvents.shift();
+              }
+            }
+          }),
+        );
         const wire = observeBackgroundWorkRpc(page, signal);
         proof.stage = "create real creator conversation and automation";
         await rpc("sessions.create", {
@@ -302,8 +321,10 @@ suite.define(() => {
           await openAutomations(page);
         }
         await row.waitFor();
+        let pendingInspections = 0;
         const run = async (outcome: QuietOutcome, inspectPending = false) => {
           proof.stage = "run " + outcome;
+          const prior = await session();
           provider.next(outcome);
           const execution = rpc<{ run?: CronRunLogEntry }>("cron.run", {
             id,
@@ -322,13 +343,68 @@ suite.define(() => {
                 updatedAt: active.updatedAt,
               });
               await save();
-              expect(active.activeRunIds ?? []).toHaveLength(0);
-              const startup = await rpc<{ inFlightRun?: unknown }>("chat.history", {
-                sessionKey: fixture.key,
-                limit: 100,
+              expect(active.hasActiveRun).toBe(true);
+              for (const field of [
+                "status",
+                "lastRunId",
+                "startedAt",
+                "endedAt",
+                "runtimeMs",
+              ] as const) {
+                expect(active[field]).toBe(prior[field]);
+              }
+              const described = await rpc<{ session: GatewaySessionRow }>("sessions.describe", {
+                key: fixture.key,
               });
-              expect(startup.inFlightRun).toBeUndefined();
-              expect(await pane.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
+              expect(described.session.status).toBe(prior.status);
+              expect(active.automationRuns).toEqual([
+                {
+                  runId: expect.any(String),
+                  jobId: id,
+                  name: fixture.name,
+                  startedAt: expect.any(Number),
+                  status: "running",
+                },
+              ]);
+              const activity = pane.locator("[data-automation-run-id]");
+              await expect.poll(() => activity.count()).toBe(1);
+              expect(await activity.textContent()).toContain(fixture.name);
+              await screenshot(
+                page,
+                "desktop-automation-executing-" + ++pendingInspections,
+                fixture.name,
+              );
+              await page.reload();
+              await waitForControlUiGatewayReady(page);
+              await expect.poll(() => activity.count()).toBe(1);
+              expect(await activity.getAttribute("data-automation-run-id")).toBe(
+                active.automationRuns![0]!.runId,
+              );
+              await openAutomations(page);
+              if (pendingInspections === 1) {
+                await closeChatDetails(page);
+                await page.setViewportSize({ width: 390, height: 844 });
+                await page.emulateMedia({ colorScheme: "light" });
+                await openAutomations(page);
+                await screenshot(page, "mobile-automation-executing", fixture.name);
+                await closeChatDetails(page);
+                await page.setViewportSize({ width: 1440, height: 1000 });
+                await page.emulateMedia({ colorScheme: "dark" });
+                await openAutomations(page);
+              }
+              const startup = await rpc<{ inFlightRun?: unknown; sessionInfo: GatewaySessionRow }>(
+                "chat.history",
+                {
+                  sessionKey: fixture.key,
+                  limit: 100,
+                },
+              );
+              expect(startup.inFlightRun).toMatchObject({
+                runId: active.automationRuns![0]!.runId,
+                text: "",
+              });
+              expect(startup.sessionInfo.status).toBe(prior.status);
+              expect(startup.sessionInfo.automationRuns).toEqual(active.automationRuns);
               expect(await pane.getByText(fixture.prompt, { exact: false }).count()).toBe(0);
             }
           } finally {
@@ -417,6 +493,11 @@ suite.define(() => {
           expect(afterQuiet.updatedAt).toBe(before.updatedAt);
           expect(afterQuiet.unread).toBe(before.unread);
           expect(afterQuiet.lastMessagePreview).toBe(before.lastMessagePreview);
+          expect(afterQuiet.automationRuns).toEqual([]);
+          expect(afterQuiet.status).toBe(before.status);
+          expect(afterQuiet.startedAt).toBe(before.startedAt);
+          expect(afterQuiet.endedAt).toBe(before.endedAt);
+          expect(afterQuiet.lastRunId).toBe(before.lastRunId);
           proof.quietDisplayAfter = {
             unread: afterQuiet.unread,
             preview: afterQuiet.lastMessagePreview,
@@ -424,6 +505,9 @@ suite.define(() => {
           proof.bubblesAfterQuiet = await pane.locator(".chat-bubble").allTextContents();
           await save();
           expect(await pane.locator(".chat-bubble").count()).toBe(messageCount);
+          expect(await pane.locator(".chat-bubble").allTextContents()).toEqual(
+            proof.bubblesBeforeQuiet,
+          );
           expect(await pane.getByText(fixture.prompt, { exact: false }).count()).toBe(0);
           expect(await pane.getByText(fixture.waiting, { exact: true }).count()).toBe(0);
         }
@@ -471,7 +555,7 @@ suite.define(() => {
           count: 2,
           recencyUnchanged: true,
           messageCountUnchanged: true,
-          noActiveProjection: true,
+          executionVisibleWhileRunning: true,
           retainedMeaningfulResult: meaningful,
         };
         await screenshot(page, "desktop-blocked-after-quiet-checks", fixture.name);
@@ -575,6 +659,185 @@ suite.define(() => {
           agentRunId: auditRun.runId,
           executionId,
         };
+        // A real queued user input and a saved plan share the same execution owner.
+        proof.stage = "queue and Task progress during automation execution";
+        await closeChatDetails(page);
+        await rpc("progressCard.put", {
+          sessionKey: fixture.key,
+          plan: [
+            { step: "Inspect release readiness", status: "in_progress" },
+            { step: "Report meaningful changes", status: "pending" },
+          ],
+        });
+        const savedPlan = await rpc<{ card: unknown }>("progressCard.get", {
+          sessionKey: fixture.key,
+        });
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await openChatDetails(page);
+        const progress = pane
+          .locator(".session-progress-card, .task-progress-details")
+          .filter({ visible: true })
+          .first();
+        await progress.waitFor();
+        if (!(await progress.evaluate((element) => element.hasAttribute("open")))) {
+          await progress.locator("summary").click();
+        }
+        provider.next("no_change");
+        const queuedExecution = rpc<{ run: CronRunLogEntry }>("cron.run", {
+          id,
+          mode: "force",
+          waitTimeoutMs: 80_000,
+        });
+        void queuedExecution.catch(() => {});
+        await provider.waitStarted(signal);
+        try {
+          await pane.locator("[data-automation-run-id]").waitFor();
+          await progress
+            .locator(".session-run-spinner")
+            .filter({ visible: true })
+            .first()
+            .waitFor();
+          await expect
+            .poll(() => progress.locator(".session-progress-card__runtime").textContent())
+            .toContain("Working");
+          await screenshot(page, "desktop-task-progress-during-automation", fixture.name);
+          const requests = provider.requests();
+          const followup = "Queue this follow-up after the readiness check.";
+          await composer.fill(followup);
+          const requestStart = wire.completed.length;
+          await pane.locator(".chat-send-btn--send").filter({ visible: true }).click();
+          const sentFollowup = await wire.waitFor(
+            (entry) => entry.request.method === "chat.send",
+            requestStart,
+          );
+          expect(sentFollowup.request.params).toMatchObject({ message: followup });
+          expect(sentFollowup.response.ok, JSON.stringify(sentFollowup.response.error)).toBe(true);
+          const queued = pane.locator(".chat-queue__item").filter({ hasText: followup });
+          await queued.waitFor();
+          const custody = await rpc<{ pendingInputs?: { queuedCount?: number } }>("chat.history", {
+            sessionKey: fixture.key,
+          });
+          expect(custody.pendingInputs?.queuedCount).toBe(1);
+          expect(provider.requests()).toBe(requests);
+          await screenshot(page, "desktop-automation-with-queued-input", fixture.name);
+          await queued.locator(".chat-queue__remove").click();
+          await expect.poll(() => queued.count()).toBe(0);
+        } finally {
+          provider.release();
+        }
+        expect((await queuedExecution).run.result?.outcome).toBe("no_change");
+        expect(await rpc("progressCard.get", { sessionKey: fixture.key })).toEqual(savedPlan);
+        await expect.poll(() => pane.locator("[data-automation-run-id]").count()).toBe(0);
+        proof.queueAndProgress = {
+          executionVisible: true,
+          inputQueued: true,
+          planNotRewritten: true,
+        };
+
+        // An explicitly forced disabled one-shot still executes; its origin never owns that work.
+        proof.stage = "isolated disabled one-shot";
+        const isolated = await rpc<CronJob>("cron.add", {
+          name: "Background readiness",
+          agentId: "main",
+          sessionKey: fixture.key,
+          enabled: false,
+          deleteAfterRun: true,
+          wakeMode: "now",
+          sessionTarget: "isolated",
+          // Force borrows a future occurrence without consuming it. This disabled,
+          // already-due occurrence exercises its actual one-shot retirement path.
+          schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+          payload: { kind: "agentTurn", message: fixture.prompt },
+          delivery: { mode: "none" },
+        });
+        expect((await session()).hasActiveRun).toBe(false);
+        provider.next("no_change");
+        const isolatedExecution = rpc<{ run: CronRunLogEntry }>("cron.run", {
+          id: isolated.id,
+          mode: "force",
+          waitTimeoutMs: 80_000,
+        });
+        void isolatedExecution.catch(() => {});
+        await provider.waitStarted(signal);
+        let executionSession: GatewaySessionRow | undefined;
+        try {
+          // The roster intentionally omits exact cron runs. Its root descriptor
+          // supplies the backing incarnation used by run-prepare's canonical key.
+          const root = (
+            await rpc<{ session: GatewaySessionRow }>("sessions.describe", {
+              key: "agent:main:cron:" + isolated.id,
+            })
+          ).session;
+          expect(root.sessionId).toBeTruthy();
+          executionSession = (
+            await rpc<{ session: GatewaySessionRow }>("sessions.describe", {
+              key: root.key + ":run:" + root.sessionId,
+            })
+          ).session;
+          proof.isolatedSelection = { root: root.key, execution: executionSession };
+          await save();
+          observedExecutionKey = executionSession?.key;
+          expect(executionSession?.key).not.toBe(fixture.key);
+          expect(executionSession?.hasActiveRun).toBe(true);
+          expect((await rpc<CronJob>("cron.get", { id: isolated.id })).enabled).toBe(false);
+          expect((await session()).hasActiveRun).toBe(false);
+          expect((await session()).automationRuns).toEqual([]);
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          expect(await pane.locator("[data-automation-run-id]").count()).toBe(0);
+          await openAutomations(page);
+          const isolatedDetails = pane
+            .locator(".chat-summary__automation")
+            .filter({ hasText: isolated.name });
+          await expect.poll(() => isolatedDetails.textContent()).toContain("Running");
+          await isolatedDetails.locator(".session-run-spinner").waitFor();
+          await screenshot(page, "origin-idle-with-isolated-automation-running", isolated.name);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, executionSession!.key));
+          await waitForControlUiGatewayReady(page);
+          await page.waitForFunction(
+            (key) => window.openclawControlUi?.snapshot().sessionKey === key,
+            executionSession!.key,
+          );
+          const isolatedHistory = await rpc<{ sessionInfo: GatewaySessionRow }>("chat.history", {
+            sessionKey: executionSession!.key,
+            limit: 100,
+          });
+          expect(isolatedHistory.sessionInfo.automationRuns).toEqual(
+            executionSession!.automationRuns,
+          );
+          await pane.locator("[data-automation-run-id]").waitFor();
+          await screenshot(page, "isolated-automation-executing", isolated.name);
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          await expect.poll(() => pane.locator("[data-automation-run-id]").count()).toBe(1);
+        } finally {
+          provider.release();
+        }
+        expect((await isolatedExecution).run.status).toBe("ok");
+        try {
+          await expect.poll(() => pane.locator("[data-automation-run-id]").count()).toBe(0);
+        } finally {
+          proof.isolatedRetirement = {
+            events: retirementEvents,
+            snapshot: await rpc("sessions.describe", { key: executionSession!.key }),
+            visible: await pane.locator("[data-automation-run-id]").count(),
+          };
+          await save();
+        }
+        expect(
+          (await rpc<{ jobs: CronJob[] }>("cron.list", { includeDisabled: true })).jobs.some(
+            (listedJob) => listedJob.id === isolated.id,
+          ),
+        ).toBe(false);
+        proof.isolatedExecution = {
+          key: executionSession!.key,
+          originIdle: true,
+          disabledScheduleDidNotHideExecution: true,
+          oneShotDeleted: true,
+        };
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, fixture.key));
+        await waitForControlUiGatewayReady(page);
         if (live) {
           proof.stage = "external live provider quiet check";
           expect(

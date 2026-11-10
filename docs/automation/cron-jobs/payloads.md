@@ -384,6 +384,14 @@ in the transcript and progress lane. Adaptive scheduling still uses `next_check`
 job. Scratch is context, not another scheduler:
 runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
 
+Quiet does not mean idle. While an agent-turn automation executes in a
+conversation, its name appears in the conversation's existing execution activity
+view, and the sidebar and Task progress reflect the active run. Reopening the
+conversation reconstructs this activity from the Gateway. Runs in a separate
+session appear only in that execution session, not in the creating conversation.
+A future schedule is not active work. After a quiet check settles, the previous
+conversation result, unread state, preview, and recency stay unchanged.
+
 With `payload.skipIfScratchEmpty: true` (`--skip-if-scratch-empty`), blank text,
 comments, headings, fence markers, and empty checklist stubs count as an empty
 checklist. Removing scratch with `--unset` is different: missing scratch does

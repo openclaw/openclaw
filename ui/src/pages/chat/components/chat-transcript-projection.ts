@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { merge } from "solid-js";
 import { currentThemeBranding } from "../../../app/theme-branding.ts";
-import { i18n } from "../../../i18n/index.ts";
+import { i18n, t } from "../../../i18n/index.ts";
 import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
@@ -37,7 +37,10 @@ import {
   createTranscriptActions,
   createTranscriptMessageOptions,
 } from "./chat-transcript-actions.ts";
-import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
+import {
+  projectTranscriptActivity,
+  createTranscriptLiveStatusSignature,
+} from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
   resolveTranscriptAvatarPlacement,
@@ -59,7 +62,6 @@ import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
   transcriptContextDependencies,
-  type TranscriptDependencyItem,
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
@@ -100,6 +102,10 @@ export function projectChatTranscript(
   const expandedAssistantMessages = transcript.expandedAssistantMessages;
   const recovery = projectTranscriptRecovery(expandedAssistantMessages, actionProps);
   const subagents = projectSubagentStatus(actionProps, searchFiltering);
+  const automationRuns = activeSession?.automationRuns ?? [];
+  const automationOnly =
+    automationRuns.length > 0 &&
+    (!props.runId || automationRuns.some((run) => run.runId === props.runId));
   const chatItemsInput = {
     paneId: props.paneId,
     sessionKey: props.sessionKey,
@@ -112,7 +118,7 @@ export function projectChatTranscript(
     guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
     get stream() {
-      return props.stream ?? null;
+      return automationOnly && !props.stream?.trim() ? null : (props.stream ?? null);
     },
     reasoning,
     showReasoning,
@@ -131,7 +137,7 @@ export function projectChatTranscript(
         : undefined,
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
-    runWorking: Boolean(props.runWorking),
+    runWorking: Boolean(props.runWorking) && !automationOnly,
     runFinalizing: props.runFinalizing,
     runActive: Boolean(props.runActive),
     subagentWait: subagents.placedWait,
@@ -217,7 +223,7 @@ export function projectChatTranscript(
   };
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
   const hasLiveContent = Boolean(
-    subagents.wait || hasTypingActors || realtimeConversation.hasEntries(),
+    subagents.wait || automationRuns.length || hasTypingActors || realtimeConversation.hasEntries(),
   );
   // An empty page is not an empty conversation. Keep the transcript mounted
   // while older history exists so the reader can request the next page.
@@ -389,34 +395,13 @@ export function projectChatTranscript(
     presented,
     bubbleActivityGroupKey,
   ]);
-  const liveStatusSignature = (item: TranscriptDependencyItem): string => {
-    if (item.kind === "reading-indicator") {
-      return workingUsageKey;
-    }
-    if (item.kind === "stream-run") {
-      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
-    }
-    if (item.kind !== "group" && item.kind !== "agent-run-frame") {
-      return "";
-    }
-    const recap = recapForGroup(item.key);
-    const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
-    const statusKey = `${recapKey}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
-    if (item.kind === "agent-run-frame") {
-      const hasWorkingIndicator = item.parts.some(
-        (part) =>
-          part.kind === "stream-run" &&
-          part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
-      );
-      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}`;
-    }
-    const continuation = continuations.get(item.key);
-    // Continuation options already participate in the shared render context.
-    const continuationKey = continuation
-      ? `${continuation.map((part) => part.key).join(" ")}${workingUsageKey}`
-      : "";
-    return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
-  };
+  const liveStatusSignature = createTranscriptLiveStatusSignature({
+    workingUsageKey,
+    recapForGroup,
+    latestAssistantItemKey,
+    continuations,
+    searchFiltering,
+  });
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();
   trackTranscriptRenderDependencies(state, [
@@ -636,6 +621,19 @@ export function projectChatTranscript(
       sessionKey: props.sessionKey,
       wait: subagents.wait,
       options: streamGroupOptions,
+    });
+  }
+  if (automationRuns.length && !searchFiltering) {
+    appendContent("automation-execution", {
+      kind: "automation",
+      label: t("chat.sessionDetails.automations"),
+      rows: automationRuns.map((run) => ({
+        key: run.runId,
+        kind: "automation",
+        label: run.name,
+        status: run.status,
+        startedAt: run.startedAt,
+      })),
     });
   }
   if (props.typingActors?.length) {

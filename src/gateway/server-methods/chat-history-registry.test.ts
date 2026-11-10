@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
@@ -9,6 +10,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as sharingPreparation from "../session-sharing-preparation.js";
@@ -20,6 +22,52 @@ import {
   withHistoryState,
 } from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
+
+it.each(["chat.history", "chat.startup"] as const)(
+  "%s reconstructs quiet execution without replacing conversation lifecycle",
+  async (method) => {
+    await withHistoryState(async () => {
+      setRuntimeConfigSnapshot({});
+      const scope = { agentId: "main", sessionKey: "agent:main:quiet-history" };
+      const previous = {
+        sessionId: "quiet-history",
+        updatedAt: 20,
+        status: "failed" as const,
+        lastRunId: "human-run",
+        startedAt: 1,
+        endedAt: 2,
+        lastRunError: "Needs review",
+      };
+      replaceSessionEntrySync(scope, previous);
+      const automation = {
+        runId: "scheduled-run",
+        jobId: "watch",
+        name: "Readiness check",
+        startedAt: 100,
+      };
+      registerAgentRunContext(automation.runId, {
+        ...scope,
+        sessionId: previous.sessionId,
+        projectSessionActive: true,
+        projectSessionLifecycle: false,
+        automation,
+      });
+      try {
+        const context = await createHistoryReadContext();
+        const info = asOptionalRecord(
+          historyPayload(await historyRpc(context, scope.sessionKey)(method)).sessionInfo,
+        );
+        expect(info?.hasActiveRun).toBe(true);
+        expect(info?.automationRuns).toEqual([{ ...automation, status: "running" }]);
+        for (const [field, value] of Object.entries(previous)) {
+          expect(info?.[field], field).toEqual(value);
+        }
+      } finally {
+        clearAgentRunContext(automation.runId);
+      }
+    });
+  },
+);
 
 it.each(["catalog publication", "session creation"] as const)(
   "checks an absent history's identity across %s during preparation",

@@ -1,6 +1,7 @@
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import { isStaleLifecycleEventForSession } from "../config/sessions/session-run-lifecycle-projection.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { projectSessionActiveStatus } from "../shared/session-run-state.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import { deriveGatewaySessionLifecycleProjectionPatch } from "./session-lifecycle-projection.js";
 import type { GatewaySessionRow } from "./session-utils.js";
@@ -14,7 +15,7 @@ export function buildGatewaySessionSnapshot(params: {
   label?: string;
   displayName?: string;
   parentSessionKey?: string;
-  activeRunState?: { active: boolean; runIds?: string[]; status?: "queued" } | null;
+  activeRunState?: import("./server-methods/shared-types.js").VisibleActiveSessionRunState | null;
   status?: GatewaySessionRow["status"];
 }): Record<string, unknown> {
   const { event, sessionRow: storedRow } = params;
@@ -51,9 +52,7 @@ export function buildGatewaySessionSnapshot(params: {
   }
   // Accepted terminal events outrank retained cleanup liveness; otherwise the
   // active owner, not a stale persisted row, supplies current run status.
-  const activeStatus = params.activeRunState?.active
-    ? (params.activeRunState.status ?? "running")
-    : undefined;
+  const activeStatus = projectSessionActiveStatus(params.activeRunState, sessionRow.status);
   const status = params.status ?? patch.status ?? activeStatus;
   // Picker metadata belongs to catalog-backed list/patch responses; emitting a
   // reconstructed subset here would replace richer client state. Null tombstones
@@ -188,6 +187,7 @@ export function buildGatewaySessionSnapshot(params: {
           hasActiveRun: params.activeRunState.active,
           // Presence means an exact set; null clears IDs when only liveness is known.
           activeRunIds: params.activeRunState.runIds ?? null,
+          automationRuns: params.activeRunState.automationRuns ?? [],
         }),
     startedAt: sessionRow.startedAt,
     endedAt: sessionRow.endedAt ?? null,

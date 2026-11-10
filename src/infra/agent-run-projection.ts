@@ -104,6 +104,7 @@ export function projectedAgentRunInputKey(context: Readonly<AgentRunContext>): s
     context.sessionKey ?? null,
     context.projectSessionActive ?? null,
     context.projectSessionLifecycle ?? null,
+    context.automation ?? null,
     context.isControlUiVisible ?? null,
     (context.capacityWaits?.size ?? 0) > 0,
     context.activeModel?.provider ?? null,
@@ -121,6 +122,15 @@ export function buildAgentRunProjectionIndex(params: {
   const sessionIds = new Map<string, ProjectedAgentRunState>();
   const ownerlessSessionKeys = new Map<string, ProjectedAgentRunState>();
   const ownerlessSessionIds = new Map<string, ProjectedAgentRunState>();
+  const automationRuns = new Map<
+    string,
+    Array<
+      import("../shared/session-run-state.js").SessionAutomationRun & {
+        sessionId?: string;
+        preserveStatus?: true;
+      }
+    >
+  >();
   const add = (
     index: Map<string, ProjectedAgentRunState>,
     key: string,
@@ -168,6 +178,17 @@ export function buildAgentRunProjectionIndex(params: {
       : context.projectSessionActive === true
         ? "queued"
         : "capacity-wait";
+    if (context.automation && context.sessionKey && agentId) {
+      const key = projectedRunIdentity(agentId, context.sessionKey);
+      const runs = automationRuns.get(key) ?? [];
+      runs.push({
+        ...context.automation,
+        sessionId: context.sessionId,
+        status: queued ? "queued" : "running",
+        ...(context.projectSessionLifecycle === false ? { preserveStatus: true as const } : {}),
+      });
+      automationRuns.set(key, runs);
+    }
     if (context.sessionKey !== undefined && agentId) {
       add(sessionKeys, projectedRunIdentity(agentId, context.sessionKey), status);
     } else if (context.sessionKey !== undefined) {
@@ -185,5 +206,12 @@ export function buildAgentRunProjectionIndex(params: {
       modelsBySessionId.set(key, null);
     }
   }
-  return { modelsBySessionId, sessionKeys, sessionIds, ownerlessSessionKeys, ownerlessSessionIds };
+  return {
+    modelsBySessionId,
+    sessionKeys,
+    sessionIds,
+    ownerlessSessionKeys,
+    ownerlessSessionIds,
+    automationRuns,
+  };
 }

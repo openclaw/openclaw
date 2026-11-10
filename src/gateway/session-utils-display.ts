@@ -25,6 +25,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
+import { projectSessionActiveStatus } from "../shared/session-run-state.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import type {
   SessionListActiveRunProjector,
@@ -270,12 +271,18 @@ export function resolveGatewaySessionGoal(
 }
 
 export function projectGatewaySessionActiveRun(
-  active: ReturnType<SessionListActiveRunProjector> | undefined,
+  active:
+    | (ReturnType<SessionListActiveRunProjector> & {
+        preserveStatus?: true;
+        automationRuns?: GatewaySessionRow["automationRuns"];
+      })
+    | undefined,
   status: GatewaySessionRow["status"],
-): Pick<GatewaySessionRow, "status" | "hasActiveRun"> {
+): Pick<GatewaySessionRow, "status" | "hasActiveRun" | "automationRuns"> {
   return {
     hasActiveRun: active?.active,
-    status: active?.active ? (active.status ?? "running") : status,
+    status: projectSessionActiveStatus(active, status),
+    automationRuns: active?.automationRuns ?? [],
   };
 }
 

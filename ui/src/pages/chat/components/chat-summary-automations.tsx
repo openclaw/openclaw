@@ -36,7 +36,10 @@ import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts"
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
-import { sessionAutomationNextRun } from "./session-automation-schedule-non-cron.ts";
+import {
+  sessionAutomationNextRun,
+  sessionAutomationState,
+} from "./session-automation-schedule-non-cron.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -395,18 +398,20 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       ? inventory
           .jobs()
           .slice(0, props.desktop && !props.desktop.expanded ? 10 : shown())
-          .map((job) => ({
-            id: job.id,
-            name: job.name,
-            disabled: !job.enabled || undefined,
-            autoDisabled: job.autoDisabled ? true : undefined,
-            running:
-              job.runningAtMs === undefined
-                ? undefined
-                : (inventory.connected() && job.enabled && !job.autoDisabled) || undefined,
-            state: jobState(job),
-            nextRunAtMs: job.enabled && !job.autoDisabled ? job.nextRunAtMs : null,
-          }))
+          .map((job) => {
+            const execution = sessionAutomationState(job, inventory.connected(), () =>
+              job.schedule ? formatSchedule(job.schedule) : "",
+            );
+            return {
+              id: job.id,
+              name: job.name,
+              disabled: !job.enabled || undefined,
+              autoDisabled: job.autoDisabled ? true : undefined,
+              running: execution.running,
+              state: execution.state,
+              nextRunAtMs: job.enabled && !job.autoDisabled ? job.nextRunAtMs : null,
+            };
+          })
       : (cached()?.rows ?? []),
   );
   const hasCachedRows = () => inventory.jobs().length > shown();
@@ -507,18 +512,6 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     }
   }
 
-  function jobState(job: CronCompactJob) {
-    if (job.autoDisabled) {
-      return t("chat.sessionDetails.automationAttention");
-    }
-    if (!job.enabled) {
-      return t("chat.sessionDetails.automationPaused");
-    }
-    if (inventory.connected() && job.runningAtMs !== undefined) {
-      return t("common.running");
-    }
-    return job.schedule ? formatSchedule(job.schedule) : "";
-  }
   const errorNotice = () =>
     inventory.connected() && (
       <div class="chat-summary__automation-error">

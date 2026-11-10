@@ -48,6 +48,7 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-a
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { projectGatewaySessionActiveRun } from "../session-utils-display.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
@@ -410,13 +411,13 @@ export async function handleChatHistoryRequest({
         includeTerminalPersistence: true,
       });
       if (sessionInfo) {
-        Object.assign(sessionInfo, currentSharing);
-        sessionInfo.hasActiveRun = activeRunState.active;
+        Object.assign(
+          sessionInfo,
+          currentSharing,
+          projectGatewaySessionActiveRun(activeRunState, sessionInfo.status),
+        );
         if (activeRunState.runIds !== undefined) {
           sessionInfo.activeRunIds = activeRunState.runIds;
-        }
-        if (activeRunState.active) {
-          sessionInfo.status = activeRunState.status ?? "running";
         }
       }
       // A native controller turn may have no visible chat RPC source. Omit

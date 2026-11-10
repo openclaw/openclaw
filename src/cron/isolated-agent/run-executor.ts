@@ -35,13 +35,20 @@ async function executeCronRunOwned(params: CronRunExecutionParams): Promise<Cron
     normalizeVerboseLevel(params.cronSession.sessionEntry.verboseLevel) ??
     normalizeVerboseLevel(params.agentVerboseDefault) ??
     "off";
+  const runStartedAt = params.runStartedAt ?? Date.now();
   registerAgentRunContext(params.runId, {
     sessionEventDelivery: params.sourceDelivery.normalFinal === "private" ? false : undefined,
     sessionId: params.cronSession.sessionEntry.sessionId,
     agentId: params.agentId,
     verboseLevel: resolvedVerboseLevel,
+    projectSessionActive: true,
+    automation: {
+      runId: params.runId,
+      jobId: params.job.id,
+      name: params.job.name,
+      startedAt: runStartedAt,
+    },
   });
-  const runStartedAt = params.runStartedAt ?? Date.now();
   const completedPromptRuns: CronCompletedPromptRun[] = [];
   const runPrompt = createCronPromptExecutor({
     ...params,

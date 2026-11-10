@@ -343,6 +343,8 @@ export function projectProgressCardRuntime(
       session?.hasActiveSubagentRun === true ||
       Boolean(children && children.running + children.queued + children.waiting > 0),
     lastRunError: session?.lastRunError,
+    hasActiveAutomationRun:
+      session?.hasActiveRun === true && Boolean(session.automationRuns?.length),
     childError,
     children,
   };

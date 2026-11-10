@@ -443,7 +443,9 @@ export function prepareProjectedSessionPresentation(
       // A changed child fact retires timestamped views even when the aggregate stays equal.
       facts[22] = childActivity.revision;
       facts[23] = backgroundProcessCount;
-      facts.length = 24;
+      facts[24] = JSON.stringify(run?.automationRuns);
+      facts[25] = run?.preserveStatus;
+      facts.length = 26;
       if (run?.runIds) {
         for (const id of run.runIds) {
           facts.push(id);

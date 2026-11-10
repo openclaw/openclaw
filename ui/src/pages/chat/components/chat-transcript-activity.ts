@@ -5,11 +5,51 @@ import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { getChatItemsGeneration, type buildCachedChatItems } from "../chat-thread.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
+import type { TranscriptDependencyItem } from "./chat-transcript-render-guard.ts";
 
 const workingIndicators = createTranscriptMemo<
   Extract<ChatItem, { kind: "reading-indicator" }> | undefined
 >();
 const activityGroups = createTranscriptMemo<{ key: string; running: boolean } | undefined>();
+
+/** Only live status owners invalidate a settled transcript row. */
+export function createTranscriptLiveStatusSignature(params: {
+  workingUsageKey: string;
+  recapForGroup: (key: string) => { runtimeMs: number; outputTokens?: number | null } | undefined;
+  latestAssistantItemKey: string | null;
+  continuations: ReadonlyMap<string, readonly { key: string }[]>;
+  searchFiltering: boolean;
+}) {
+  const { workingUsageKey, recapForGroup, latestAssistantItemKey, continuations, searchFiltering } =
+    params;
+  return (item: TranscriptDependencyItem): string => {
+    if (item.kind === "reading-indicator") {
+      return workingUsageKey;
+    }
+    if (item.kind === "stream-run") {
+      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
+    }
+    if (item.kind !== "group" && item.kind !== "agent-run-frame") {
+      return "";
+    }
+    const recap = recapForGroup(item.key);
+    const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
+    const statusKey = `${recapKey}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
+    if (item.kind === "agent-run-frame") {
+      const hasWorkingIndicator = item.parts.some(
+        (part) =>
+          part.kind === "stream-run" &&
+          part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
+      );
+      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}`;
+    }
+    const continuation = continuations.get(item.key);
+    const continuationKey = continuation
+      ? `${continuation.map((part) => part.key).join(" ")}${workingUsageKey}`
+      : "";
+    return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
+  };
+}
 
 export function projectTranscriptActivity(
   chatItems: ReturnType<typeof buildCachedChatItems>,

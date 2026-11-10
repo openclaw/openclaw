@@ -735,6 +735,8 @@ export type SessionRuntimeScope = {
 
 export type VisibleActiveSessionRunState = {
   active: boolean;
+  automationRuns?: import("../../shared/session-run-state.js").SessionAutomationRun[];
+  preserveStatus?: true;
   /** Complete exact active set. Omitted when another active owner exposes only liveness. */
   runIds?: string[];
   status?: "queued";
