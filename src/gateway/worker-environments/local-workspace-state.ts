@@ -16,6 +16,7 @@ import {
   prepareLocalWorkspaceCheckpoint,
   selectLocalWorkspaceCheckpoint,
   stageLocalWorkspaceCheckpoint,
+  createLocalWorkspaceCheckpointRejection,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
@@ -25,6 +26,7 @@ import {
   parseLocalWorkspaceSourcePaths,
   prepareLocalWorkspaceBuildInputs,
   selectLocalWorkspaceCanonicalPaths,
+  readLocalWorkspaceGitExclusions,
 } from "./local-workspace-inventory.js";
 import type {
   LocalWorkspaceManifestAction,
@@ -35,6 +37,7 @@ import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-work
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
+  loadStagedWorkspaceManifest,
   captureWorkspaceManifestDocument,
   workspaceManifestPaths,
 } from "./workspace-manifest-worker.js";
@@ -54,9 +57,8 @@ import {
   hasWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
-  withStagedWorkerWorkspaceResult,
+  withStagedWorkerWorkspaceManifest,
   deleteStagedWorkerWorkspaceResult,
-  readStagedWorkerWorkspaceResult,
 } from "./workspace-result-staging.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -98,6 +100,14 @@ export function projectionOperations(
   ) => {
     row = await store.update(current(), patch, owner.workerAuthority, manifest);
   };
+  const rejection = createLocalWorkspaceCheckpointRejection({
+    current,
+    update,
+    removedAt: owner.worktree.removedAt,
+    reject: async (selected, value) => {
+      row = await store.reject(selected, value, owner.workerAuthority);
+    },
+  });
   const repairBaseline = async () => {
     const repair = await store.manifest(current(), {
       kind: "repair",
@@ -168,7 +178,9 @@ export function projectionOperations(
     const document = selected.baseline_ref ? await baselineDocument() : undefined;
     return await selectLocalWorkspaceCanonicalPaths({
       root: owner.worktree.path,
-      admittedPaths: selected.source_paths_json,
+      admittedPaths: preparedInputPaths
+        ? undefined
+        : parseLocalWorkspaceSourcePaths(selected.source_paths_json),
       preparedPaths: preparedInputPaths,
       signal,
       assertCurrent,
@@ -178,17 +190,19 @@ export function projectionOperations(
     });
   };
   const capture = async (target: Direction, preserveDirectories?: ReadonlySet<string>) => {
-    const selected = current();
     const root = sourcePath(target);
     await assertLocalWorkspaceDirectory(root);
-    current();
-    // Never inspect guest Git metadata on the host. Canonical inventory uses only
-    // the trusted managed worktree; ignored host files cannot enter the projection.
-    const includePaths = target === "projection" ? await canonicalPaths() : undefined;
+    // The trusted host index owns source admission; never inspect guest Git metadata.
+    const paths = await canonicalPaths();
     const snapshot = await captureWorkspaceManifestDocument({
       root,
-      baseCommit: selected.base_commit,
-      includePaths,
+      baseCommit: current().base_commit,
+      includePaths: target === "projection" ? paths : undefined,
+      // Archived projections are checked against their retained receipt without a live index.
+      gitIgnore:
+        target === "canonical" && owner.worktree.removedAt === undefined
+          ? await readLocalWorkspaceGitExclusions(owner.worktree.path, root, paths)
+          : undefined,
       buildCacheInputs: new Set(await buildCacheInputs()),
       preserveDirectories,
       signal,
@@ -197,9 +211,6 @@ export function projectionOperations(
     return snapshot;
   };
   const scan = async (target: Direction): Promise<LocalWorkspaceManifestCheckpoint> => {
-    if (owner.worktree.snapshotRef) {
-      await buildCacheInputs();
-    }
     await assertLocalWorkspaceDirectory(sourcePath(target));
     const snapshot = await readManifest({
       kind: "scan",
@@ -260,6 +271,14 @@ export function projectionOperations(
   const settle = async (
     retainAccepted = false,
     preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
+  ) =>
+    rejection.settle(
+      () => settlePending(retainAccepted, preparedSnapshot),
+      preparedSnapshot?.currentManifestRef,
+    );
+  const settlePending = async (
+    retainAccepted: boolean,
+    preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
   ) => {
     await recover();
     const conversionSource = current();
@@ -300,7 +319,7 @@ export function projectionOperations(
         );
       }
       let snapshot = preparedSnapshot;
-      if (!snapshot && selected.checkpoint_json) {
+      if (!snapshot && (selected.checkpoint_json || owner.worktree.removedAt === undefined)) {
         // No Git receipt owns these bytes yet. After interruption, recapture the
         // still-owned source into the same reservation before staging its delta.
         snapshot = await scan(target);
@@ -346,7 +365,6 @@ export function projectionOperations(
         },
         { target, refresh, snapshot, current, signal },
       );
-      current();
     }
     const checkpoint = current().checkpoint_json
       ? (JSON.parse(current().checkpoint_json!) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
@@ -356,7 +374,7 @@ export function projectionOperations(
     }
     const refreshBaseline = refresh ? await baselineDocument() : undefined;
     let conflictPaths: string[] | undefined;
-    await withStagedWorkerWorkspaceResult(
+    await withStagedWorkerWorkspaceManifest(
       {
         root: owner.worktree.path,
         stagedResultRef: selected.pending_ref,
@@ -455,18 +473,13 @@ export function projectionOperations(
       await cleanupAccepted();
     }
   };
-  const synchronize = async (target: Direction) => {
-    await settle();
-    const snapshot = await scan(target);
-    if (snapshot.resultingRoot !== snapshot.previousRoot) {
-      await update({
-        pending_ref: workerWorkspaceResultRef(randomUUID()),
-        pending_target: target,
-        checkpoint_json: JSON.stringify(snapshot),
-      });
-      await settle(false, snapshot);
-    }
-  };
+  const synchronize = (target: Direction, options?: { captureRejected?: true }) =>
+    rejection.synchronize({
+      target,
+      captureRejected: options?.captureRejected,
+      settle,
+      scan,
+    });
   const prepare = async (dependencies?: {
     sandbox: SandboxConfig;
     allocation: WorktreeAllocationGuard;
@@ -534,6 +547,7 @@ export function projectionOperations(
     current,
     workerAuthority,
     canonicalPaths,
+    capture,
     buildCacheInputs,
     baselineDocument,
     prepare,
@@ -547,7 +561,7 @@ export function projectionOperations(
       }
       await settle();
       // The host snapshot admits selected source and retained cache inputs, including unchanged files.
-      const snapshot = await readStagedWorkerWorkspaceResult(owner.worktree.path, stagedResultRef);
+      const snapshot = await loadStagedWorkspaceManifest(owner.worktree.path, stagedResultRef);
       const incoming = buildCacheInputPaths(snapshot.current.entries.map((entry) => entry.path));
       const selected = current();
       const admitted = parseLocalWorkspaceSourcePaths(selected.source_paths_json);
@@ -572,9 +586,10 @@ export function projectionOperations(
       if (!selected.pending_target) {
         // A failed restore may have applied the overlay before its checkout was
         // rolled back. Retain and replay the same accepted receipt on retry.
-        const receipt = await readStagedWorkerWorkspaceResult(
+        const receipt = await loadStagedWorkspaceManifest(
           owner.worktree.repoRoot,
           selected.pending_ref,
+          undefined,
           await buildCacheInputs(),
         );
         current();
@@ -602,27 +617,20 @@ export function projectionOperations(
           "Workspace integration is pending; finish the original github_publish prepare_pr or refresh_base action before archiving this worktree. Saved files and merge state were preserved.",
         );
       }
-      const baseline = await baselineDocument();
-      const manifest = parseWorkerWorkspaceManifest(
-        baseline.rawManifest,
-        baseline.manifestRef,
-        await buildCacheInputs(),
-      );
-      const accepted = await capture("canonical", new Set(manifest.directories));
-      if (accepted.manifestRef !== baseline.manifestRef) {
-        throw new Error("Local workspace changed before archive capture");
-      }
-      const projection = current().projection_path;
-      const archiveBase = await captureLocalWorkspaceArchiveBaseline({
-        root: owner.worktree.repoRoot,
+      await assertLocalWorkspaceDirectory(sourcePath("canonical"));
+      const archive = await readManifest({
+        kind: "archive",
+        canonicalRoot: owner.worktree.path,
+        archiveRoot: owner.worktree.repoRoot,
         snapshotCommit,
-        manifest,
-        signal,
-        assertCurrent,
       });
-      if (archiveBase.manifestRef === accepted.manifestRef) {
+      if (archive.kind !== "archive") {
+        throw new Error("Local workspace archive preparation is missing");
+      }
+      if (!archive.overlay) {
         return;
       }
+      const { base: archiveBase, accepted } = archive.overlay;
       const resultRef = workerWorkspaceResultRef(randomUUID());
       // Keep accepted directory membership until the receipt owns it. Recovery
       // must not mistake derived children for deletion after interrupted staging.
@@ -631,21 +639,23 @@ export function projectionOperations(
         pending_target: "canonical",
         checkpoint_json: null,
       });
-      await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
-        root: owner.worktree.repoRoot,
-        stagingRoot: projection,
-        stagedResultRef: resultRef,
-        baseManifestRaw: archiveBase.rawManifest,
-        baseManifestRef: archiveBase.manifestRef,
-        currentManifestRaw: accepted.rawManifest,
-        currentManifestRef: accepted.manifestRef,
-        buildCacheInputs: await buildCacheInputs(),
-        assertCurrent,
-      });
+      await rejection.settle(async () => {
+        await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+          root: owner.worktree.repoRoot,
+          stagingRoot: current().projection_path,
+          stagedResultRef: resultRef,
+          baseManifestRaw: archiveBase.rawManifest,
+          baseManifestRef: archiveBase.manifestRef,
+          currentManifestRaw: accepted.rawManifest,
+          currentManifestRef: accepted.manifestRef,
+          buildCacheInputs: await buildCacheInputs(),
+          assertCurrent,
+        });
+      }, current().baseline_ref ?? undefined);
       current();
     },
     expire: async (retireSnapshot?: (assertCurrent: () => void) => Promise<void>) => {
-      const selected = current();
+      const selected = rejection.assertNotRejected();
       if (
         selected.journal_json ||
         (selected.pending_target && selected.pending_target !== "canonical")
@@ -661,9 +671,10 @@ export function projectionOperations(
           throw new Error("Archive receipt still owns its restore data");
         }
         if (selected.pending_target) {
-          const receipt = await readStagedWorkerWorkspaceResult(
+          const receipt = await loadStagedWorkspaceManifest(
             owner.worktree.repoRoot,
             selected.pending_ref,
+            undefined,
             await buildCacheInputs(),
           );
           current();

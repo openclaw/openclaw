@@ -203,6 +203,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
       forceMaintenance: params.forceMaintenance,
       modelRunPrune,
       nowMs: plannedAt,
+      deferArchiving: readPreservation().archivingDeferred === true,
       readPreserveKeys,
       log: false,
       readAgeCandidates: (minimumAgeMs, modelRunPruneAfterMs) => {
@@ -341,12 +342,18 @@ export function prepareSessionEntryMaintenanceInDatabase(
         [params.activeSessionKey ?? "", ...(params.activeSessionKeys ?? [])],
         baseKeys,
       );
+      const currentSnapshot = refreshCandidates
+        ? refreshCandidates(selectedKeys)
+        : readPreservation();
       const currentPreserveKeys = resolveSessionMaintenancePreserveKeys({
-        snapshot: refreshCandidates ? refreshCandidates(selectedKeys) : readPreservation(),
+        snapshot: currentSnapshot,
         store: selectedEntries,
         baseKeys: currentBaseKeys,
       });
-      if (selectedKeys.some((key) => currentPreserveKeys.has(normalizeStoreSessionKey(key)))) {
+      if (
+        (currentSnapshot.archivingDeferred === true && archivedKeys.size > 0) ||
+        selectedKeys.some((key) => currentPreserveKeys.has(normalizeStoreSessionKey(key)))
+      ) {
         throw new SqliteReclamationInputsChangedError(
           "SQLite maintenance candidates became protected before commit",
         );

@@ -75,12 +75,13 @@ it("renders complete catalog content in capability order", () => {
     iconUrls: { [imageUrl]: "blob:package-icon" },
   });
   expect(query(".plugin-catalog-detail__icon .plugins-tile--white")).not.toBeNull();
-  expect(query(".plugin-capabilities button")).toBeNull();
+  expect(query(".plugin-capabilities button, .plugin-capabilities h2 svg")).toBeNull();
   expect([...all(".plugin-capabilities h2")].map((heading) => heading.textContent)).toEqual([
     "Capabilities",
+    "Extensions",
     "Skills",
     "Tools",
-    "MCP Server",
+    "MCP server",
   ]);
   expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
 });
@@ -215,3 +216,23 @@ it.each([
   expect(all(".is-filled")).toHaveLength(count);
   expect(attr("a", "href")).toBe(url);
 });
+
+it.each(["clean", "review", "custom-status"])(
+  "localizes known audit badges but preserves %s protocol values",
+  (status) => {
+    const translate = vi.spyOn(i18n, "t").mockReturnValue("localized audit label");
+    onTestFinished(() => translate.mockRestore());
+    const result = createDiscoveryDetail();
+    result.detail.security = { status, verdict: status, auditUrl: "https://example.com/audit" };
+    const { query } = render(() => metadata(result));
+    expect(query(".plugin-catalog-detail__security-score strong")?.textContent).toBe(
+      status === "custom-status" ? status : "localized audit label",
+    );
+    if (status !== "custom-status") {
+      expect(translate).toHaveBeenCalledWith(
+        status === "clean" ? "pluginsPage.auditClean" : "pluginsPage.auditReview",
+        undefined,
+      );
+    }
+  },
+);

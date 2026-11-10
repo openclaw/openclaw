@@ -140,6 +140,7 @@ export function createPluginStateSyncKeyedStoreForTests<T>(
 }
 
 export {
+  createPluginStateRuntimeStores as createPluginStateRuntimeStoresForTests,
   getPluginStateCapacity as getPluginStateCapacityForTests,
   importPluginStateEntriesForDoctor as importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,

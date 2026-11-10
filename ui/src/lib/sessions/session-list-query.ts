@@ -94,7 +94,7 @@ export function canApplySessionListSnapshot(
       continue;
     }
     // The owner-count adapter consumes the aggregate, not the single sampled row.
-    const existing =
+    let existing =
       result.sessions.find((row) =>
         matchesExistingSession(row, info.key, info.agentId ?? options.agentId ?? null),
       ) ?? (countsOnly ? observedRow?.(info.key, info.agentId) : undefined);
@@ -204,6 +204,14 @@ export function canApplySessionListSnapshot(
       ) {
         covered = true;
         continue;
+      }
+    }
+    // A known nonowner can prove unchanged exclusion, but still needs every
+    // ownership/lineage check below: owner changes also invalidate picker facets.
+    if (!existing && options.ownerId && complete) {
+      const observed = observedRow?.(info.key, info.agentId);
+      if (observed?.owner?.actor.id && observed.owner.actor.id !== options.ownerId.trim()) {
+        existing = observed;
       }
     }
     const next = reconcileParsedSessionChangedRow(existing, parsedSnapshot, {
@@ -465,6 +473,7 @@ export type ManagedSessionList = ObservedSessionList & {
   /** Raw page identities, scoped to this window, for completeness despite hidden rows. */
   receivedKeys: Set<string>;
   startupRetryAttempt: number;
+  deniedConnectionEpoch: number | null;
   /** Invalidation retires remaining pages without cancelling the correlated RPC. */
   readGeneration: number;
   readRevision: number;

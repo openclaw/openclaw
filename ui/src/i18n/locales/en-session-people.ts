@@ -5,7 +5,7 @@ import { en } from "./en.ts";
 const enSessionPeople = {
   sessionsView: {
     searchPeople: "Search people and agents…",
-    noPeopleMatch: "No matching people or agents",
+    noPeopleMatch: "No people or agents match your search.",
   },
 } satisfies TranslationMap;
 

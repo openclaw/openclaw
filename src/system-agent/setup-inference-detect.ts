@@ -30,6 +30,7 @@ import {
 import {
   type SetupInferenceCandidate,
   type SetupInferenceDetection,
+  type SetupInferenceUnavailableCandidate,
   invalidSetupConfigError,
   setupInferenceLog,
   resolveCandidatePresentation,
@@ -239,6 +240,7 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
           const ref = parseProviderModelRef(candidate.modelRef);
           return ref !== null && detectionRequiredProviders.has(normalizeProviderId(ref.provider));
         };
+        const idleProviders: SetupInferenceUnavailableCandidate[] = [];
         // Provider services, saved sign-ins, and CLI version probes are independent.
         // Overlap them so cold detection waits for the slowest probe instead of their sum.
         const appGuided = (async (): Promise<SetupInferenceCandidate[]> => {
@@ -270,6 +272,16 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
                 const candidate = await method.appGuidedSetup.detect({ ...context, signal });
                 signal.throwIfAborted();
                 if (!candidate) {
+                  // A running service with no eligible model is not "no AI access".
+                  if (await method.appGuidedSetup.detectAvailability?.({ ...context, signal })) {
+                    idleProviders.push({
+                      id: choice.choiceId,
+                      brandId: choice.providerId,
+                      label: choice.choiceLabel,
+                      detail: "server is running",
+                      reason: `No eligible model is loaded. Load one and run setup again, or choose ${choice.choiceLabel} from the provider list.`,
+                    });
+                  }
                   return null;
                 }
                 const ref = parseProviderModelRef(candidate.modelRef);
@@ -440,6 +452,11 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
         return {
           ...initialDetection,
           candidates: recommendSetupInferenceCandidate(offeredCandidates),
+          unavailableCandidates: idleProviders,
+          recommendedInstalls: initialDetection.recommendedInstalls.filter(
+            (install) =>
+              !idleProviders.some(({ brandId }) => brandId === (install.brandId ?? install.id)),
+          ),
           ...(configuredModel ? { configuredModel } : {}),
           setupComplete: Boolean(configuredModel),
         };

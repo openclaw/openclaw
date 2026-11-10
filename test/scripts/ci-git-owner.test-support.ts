@@ -225,6 +225,8 @@ export async function runCiGitStep(options: {
   if (!step?.run) {
     throw new Error("Missing executable action step");
   }
+  const selectedSourceBootstrap =
+    isWorkflow("linux-app-release") && step.name === "Checkout selected tag";
   let env: Record<string, string>;
   let performanceFixture: ReturnType<typeof preparePerformanceFixture> | undefined;
   let publisherFixture: ReturnType<typeof prepareGeneratedPublisherFixture> | undefined;
@@ -242,6 +244,7 @@ export async function runCiGitStep(options: {
         performanceFixture = preparePerformanceFixture(root, options.performance);
       }
       env = stepEnvironment(step, {
+        ...(step.name === "Prepare Git owner" ? { CHECKOUT_KIND: "prepare" } : {}),
         PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
         CONTENTS_TOKEN: "fixture-contents",
         HEAD_BRANCH: "automation/locale",
@@ -298,9 +301,9 @@ export async function runCiGitStep(options: {
           write(path.join(publish, ".previous-checkout"), "stale\n");
         }
       }
-      if (externalOwner) {
-        // Workflow bodies follow actions/checkout; selected-source bootstrap must
-        // still create its own directory, while later selected steps inherit one.
+      if (externalOwner && !selectedSourceBootstrap) {
+        // Workflow bodies normally follow actions/checkout. Selected-source bootstrap
+        // creates the checkout itself; later selected steps inherit one.
         for (const directory of [
           workspace,
           ...(!publisher && step["working-directory"]
@@ -492,7 +495,8 @@ ${run}`;
       }
       if (options.prepare) {
         const prepare = readCiCheckoutStep("security-fast", "Prepare Git owner");
-        const prepareEnv = stepEnvironment(prepare, {});
+        // Policy fixtures need only the supervisor, without a candidate checkout.
+        const prepareEnv = stepEnvironment(prepare, { CHECKOUT_KIND: "prepare" });
         write("prepare.sh", renderGitTestClock(prepare.run, clock));
         // Run the actual prepare body in its own shell: its exec must not replace the caller.
         run = `CHECKOUT_KIND=${prepareEnv.CHECKOUT_KIND} bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"\n${run}`;

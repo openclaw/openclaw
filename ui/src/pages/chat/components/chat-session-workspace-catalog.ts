@@ -16,6 +16,8 @@ export type WorkspaceCatalogFile = {
   activity?: "modified" | "read" | "mixed";
   artifactId?: string;
   mimeType?: string;
+  /** Last modification reported by the Gateway; absent for missing files and artifacts. */
+  updatedAtMs?: number;
 };
 export type WorkspaceCatalogRow = WorkspaceCatalogFile & { directory: boolean };
 
@@ -108,6 +110,7 @@ export function projectWorkspaceCatalog(
       origin: "session",
       activity: file.kind,
       mimeType: file.mimeType,
+      updatedAtMs: file.updatedAtMs,
     };
     if (path === undefined || absolutePath(path)) {
       session.set(entry.key, {

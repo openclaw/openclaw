@@ -2,11 +2,10 @@ import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, Match, onSettled, Switch, untrack } from "solid-js";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   LearnMoreLink,
-  SettingsDefaultDescription,
   SettingsRow,
   SettingsSection,
   SettingsSegmented,
@@ -92,15 +91,9 @@ function CuratedField(props: {
       ? t(value ? "common.enabled" : "common.disabled")
       : String(value);
   };
-  const description = (
-    <>
-      {t(props.row?.descriptionKey ?? props.spec.helpKey)}{" "}
-      <SettingsDefaultDescription value={defaultValue()} overridden={field().overridden} />
-    </>
-  );
   const row = {
     title: <>{t(props.row?.titleKey ?? props.spec.labelKey)}</>,
-    description,
+    description: <>{t(props.row?.descriptionKey ?? props.spec.helpKey)}</>,
   };
   const checked = () => {
     const value = field().value;
@@ -250,15 +243,13 @@ function CuratedDisclosureRow(props: {
           titleKey: props.spec.titleKey,
           descriptionKey: props.spec.descriptionKey,
           actions: (
-            <button
-              type="button"
-              class="btn btn--icon btn--ghost curated-settings__disclosure"
+            <IconButton
+              class="curated-settings__disclosure"
+              icon="chevronRight"
+              label={t(props.spec.titleKey)}
               aria-expanded={open() ? "true" : "false"}
-              aria-label={t(props.spec.titleKey)}
               onClick={() => setOpen((value) => !value)}
-            >
-              <Icon name="chevronRight" />
-            </button>
+            />
           ),
         }}
       />

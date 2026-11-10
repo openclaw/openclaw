@@ -33,6 +33,7 @@ import {
   requiresGoogleToolCallId,
   convertGoogleTools,
   type GoogleStreamChunk as GoogleSseChunk,
+  applyProviderPayloadHook,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
@@ -513,10 +514,8 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           : context;
         const videoSlots: GoogleVideoSlots = new Map();
         let params = buildGoogleGenerativeAiParams(model, providerContext, options, videoSlots);
-        const nextParams = await options?.onPayload?.(params, canonicalModel);
-        if (nextParams !== undefined) {
-          params = nextParams as GoogleGenerateContentRequest;
-        }
+        const nextParams = await applyProviderPayloadHook(options, params, canonicalModel);
+        params = nextParams as GoogleGenerateContentRequest;
         const trustedVideoSlots: Record<string, unknown>[] = [];
         materializeGoogleVideoSlots(
           params,

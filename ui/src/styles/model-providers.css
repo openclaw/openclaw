@@ -1,6 +1,5 @@
-/* Model Providers settings page leftovers; provider usage details reuse
-   provider-usage-* styles from usage.css and .provider-brand-icon from
-   components.css. Structural surfaces come from settings.css. */
+/* Provider usage panels own provider-usage.css; structural surfaces come from
+   settings.css and shared brand icons from components.css. */
 
 /* Discovery sits on the section's heading line, so nothing moves when it comes and goes. */
 .settings-section__header:has(.model-providers__catalog-feedback) {
@@ -407,7 +406,7 @@
   white-space: normal;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
   .model-providers__defaults .settings-row {
     flex-direction: column;
     align-items: stretch;

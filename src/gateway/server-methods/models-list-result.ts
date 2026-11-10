@@ -56,7 +56,7 @@ import { captureRuntimeConfig } from "../../config/runtime-source-projection.js"
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withCurrentReadAuthority } from "../../shared/current-read-authority.js";
-import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
+import { loadDeferredCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
 import { prepareChatAccountSelection } from "./chat-account-selection.js";
@@ -64,6 +64,7 @@ import type { ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 import { resolveSessionCatalogProfiles } from "./chat-metadata-session-projection.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { createModelsListProviderFilter, listDecisionModels } from "./models-list-capabilities.js";
+import { readModelsListCatalog } from "./models-list-catalog.js";
 import type { BuildModelsListResultParams } from "./models-list-context.js";
 import {
   buildPublicModelProjection,
@@ -145,7 +146,7 @@ export async function prepareModelsListResult({
   }
   const ownerSnapshot =
     source.kind === "gateway" && !usedPreloadedCatalog
-      ? await readPreparedCatalog(source.context, initialAgentId)
+      ? await readModelsListCatalog(source.context, initialAgentId, authority)
       : undefined;
   await withCurrentReadAuthority(authority, () => {});
   if (!publishedOwner && !usedPreloadedCatalog && !ownerSnapshot) {

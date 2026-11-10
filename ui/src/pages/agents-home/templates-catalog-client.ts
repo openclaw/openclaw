@@ -7,6 +7,7 @@ import type {
   ClawHubTemplateCatalogDetail,
   ClawHubTemplateCatalogEntry,
   ClawHubTemplateCatalogPreview,
+  ClawHubTemplateCatalogOverview,
 } from "../../../../src/templates/clawhub-source.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
@@ -45,9 +46,28 @@ export async function searchTemplates(
   return result.entries.filter(isPublicEntry);
 }
 
+export async function readTemplatesOverview(
+  client: GatewayBrowserClient,
+  limit: number,
+): Promise<ClawHubTemplateCatalogOverview | undefined> {
+  const result = await client.request<{ overview?: ClawHubTemplateCatalogOverview }>(
+    "templates.catalog.search",
+    { overview: true, limit },
+  );
+  return result.overview
+    ? {
+        featured: result.overview.featured.filter(isPublicEntry),
+        sections: result.overview.sections.map((section) => ({
+          category: section.category,
+          entries: section.entries.filter(isPublicEntry),
+        })),
+      }
+    : undefined;
+}
+
 export async function readTemplateDetail(
   client: GatewayBrowserClient,
-  source: TemplateCatalogSource,
+  source: { packageName: string; version?: string },
 ): Promise<TemplateCatalogDetail> {
   const result = await client.request<{ detail: TemplateCatalogDetail }>(
     "templates.catalog.detail",
@@ -57,7 +77,7 @@ export async function readTemplateDetail(
   if (
     !isPublicEntry(detail) ||
     detail.packageName !== source.packageName ||
-    detail.version !== source.version ||
+    (source.version !== undefined && detail.version !== source.version) ||
     !detail.contents ||
     !Array.isArray(detail.contents.instructions) ||
     !Array.isArray(detail.contents.skills) ||

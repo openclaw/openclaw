@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
@@ -20,6 +28,7 @@ import {
 } from "./full-release-publication-contract.mjs";
 import {
   classifyReleaseGhTransportError,
+  evidenceReadRetryDelay,
   compareReleaseJobsByName,
   composeReleaseChildAttemptEvidence,
   composeReleaseAttemptJobs,
@@ -72,6 +81,7 @@ import {
 import {
   revalidateQualificationAdmissionAuthority,
   verifyQualificationAdmission,
+  runQualificationAdmissionGh,
 } from "./release-qualification-admission.mjs";
 import {
   qualificationAdmissionContract,
@@ -155,25 +165,6 @@ const HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS = new Map([
   ["qa", ["releaseChecks"]],
 ]);
 
-function evidenceReadRetryDelay(args, error, attempt) {
-  // Only these argument shapes are GETs; fields, input, methods, and GraphQL
-  // can mutate state and must never acquire retries through this read wrapper.
-  const isGet =
-    args[0] === "api" &&
-    /^(?:repos\/|rate_limit$)/u.test(args[1] ?? "") &&
-    (args.length === 2 || (args.length === 3 && args[2] === "--allow-escape-sequences"));
-  const diagnostic = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
-  if (
-    !isGet ||
-    attempt >= 3 ||
-    /HTTP [1-4][0-9]{2}\b/u.test(diagnostic) ||
-    classifyReleaseGhTransportError(error) !== "transient"
-  ) {
-    throw error;
-  }
-  return 2_000 * 2 ** attempt;
-}
-
 export function runReleaseCiGh(args, params = {}) {
   const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
   const timeoutMs = params.timeoutMs ?? GH_COMMAND_TIMEOUT_MS;
@@ -254,7 +245,21 @@ export function artifactDownloadTimeoutMs(sizeInBytes) {
   );
 }
 
-function downloadArtifactZip(artifactId, destination, sizeInBytes, repository = DEFAULT_REPO) {
+function downloadArtifactZip(
+  artifactId,
+  destination,
+  sizeInBytes,
+  repository = DEFAULT_REPO,
+  immutableReads = null,
+) {
+  if (immutableReads) {
+    const bytes = immutableReads.bytes("actions/artifacts/" + artifactId + "/zip", () => {
+      downloadArtifactZip(artifactId, destination, sizeInBytes, repository);
+      return readFileSync(destination);
+    });
+    writeFileSync(destination, bytes);
+    return;
+  }
   const timeout = sizeInBytes ? artifactDownloadTimeoutMs(sizeInBytes) : GH_COMMAND_TIMEOUT_MS;
   for (let attempt = 1; attempt <= ARTIFACT_DOWNLOAD_ATTEMPTS; attempt += 1) {
     const output = openSync(destination, "w");
@@ -336,7 +341,7 @@ function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
   });
 }
 
-function readExecutionPlanEvidence(runId, repository) {
+function readExecutionPlanEvidence(runId, repository, immutableReads) {
   const name = `full-release-execution-plan-${runId}`;
   const artifacts = [];
   let total;
@@ -391,7 +396,13 @@ function readExecutionPlanEvidence(runId, repository) {
   const directory = mkdtempSync(join(tmpdir(), "openclaw-publication-plan-"));
   try {
     const path = join(directory, "plan.zip");
-    downloadArtifactZip(String(artifact.id), path, artifact.size_in_bytes, repository);
+    downloadArtifactZip(
+      String(artifact.id),
+      path,
+      artifact.size_in_bytes,
+      repository,
+      immutableReads,
+    );
     const archive = readFileSync(path);
     if (
       archive.length !== artifact.size_in_bytes ||
@@ -836,7 +847,12 @@ function findExactChildRun(child, repository = DEFAULT_REPO) {
 // readReleaseJobListing selects.
 const MAX_RUN_JOBS = 1000;
 
-function findRunJobsAll(path, repository = DEFAULT_REPO, requireComplete = false) {
+function findRunJobsAll(
+  path,
+  repository = DEFAULT_REPO,
+  requireComplete = false,
+  immutableReads = null,
+) {
   return readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
     const jobs = [];
     let total;
@@ -845,9 +861,11 @@ function findRunJobsAll(path, repository = DEFAULT_REPO, requireComplete = false
         page: String(page),
         per_page: String(perPage),
       });
-      const response = await githubRestJsonAsync(`${path}${query.toString()}`, repository, {
-        smallerPageFallback,
-      });
+      const route = path + query.toString();
+      const load = () => ghAsync(githubRestArgs(route, repository), { smallerPageFallback });
+      const response = JSON.parse(
+        await (immutableReads ? immutableReads.text(route, load) : load()),
+      );
       const pageJobs = response.jobs ?? [];
       if (
         requireComplete &&
@@ -871,8 +889,9 @@ function findRunJobsAll(path, repository = DEFAULT_REPO, requireComplete = false
     ) {
       throw new Error("publication original jobs enumeration is incomplete or duplicated");
     }
+    immutableReads?.selectJobPageSize(path, perPage);
     return jobs;
-  });
+  }, immutableReads?.jobPageSizes(path));
 }
 
 function parentJobLogArgs(jobId, repository = DEFAULT_REPO, allowEscapeSequences = true) {
@@ -894,7 +913,12 @@ function isUnknownAllowEscapeSequencesFlag(error) {
   );
 }
 
-async function parentJobLog(jobId, repository = DEFAULT_REPO) {
+async function parentJobLog(jobId, repository = DEFAULT_REPO, immutableReads = null) {
+  if (immutableReads) {
+    return immutableReads.text("actions/jobs/" + jobId + "/logs", () =>
+      parentJobLog(jobId, repository),
+    );
+  }
   try {
     return await ghAsync(parentJobLogArgs(jobId, repository));
   } catch (error) {
@@ -1261,6 +1285,21 @@ export function validateParentManifest(value, expected) {
     throw new Error(
       "npm stable coverage policy requires release context, blocking performance, and stable soak",
     );
+  }
+  for (const exemption of qualificationCoverage?.exemptions ?? []) {
+    const expectedDisposition = {
+      disposition: exemption.disposition,
+      runId: "",
+      supportingEvidence: exemption.supportingEvidence,
+    };
+    if (
+      !isDeepStrictEqual(value.childRuns?.[exemption.childRole], expectedDisposition) ||
+      value.childEvidence?.[exemption.childRole] !== undefined
+    ) {
+      throw new Error(
+        "Exempt qualification child must be recorded as waived-not-run, not candidate evidence",
+      );
+    }
   }
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
   if (validationInputs?.laneWaiver || value.publishInputs?.stableSoakWaiver) {
@@ -1977,7 +2016,13 @@ export function readManifestArtifactArchive(archivePath, expectedDigest) {
   return JSON.parse(manifestBytes.toString("utf8"));
 }
 
-function downloadParentManifestEvidence(runId, runAttempt, repository, manifestPath) {
+function downloadParentManifestEvidence(
+  runId,
+  runAttempt,
+  repository,
+  manifestPath,
+  immutableReads,
+) {
   const targetRepository = repository ?? DEFAULT_REPO;
   const artifacts = [];
   for (let page = 1; page <= 10; page += 1) {
@@ -2005,7 +2050,13 @@ function downloadParentManifestEvidence(runId, runAttempt, repository, manifestP
   const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-ci-summary-"));
   try {
     const archivePath = join(downloadDir, "manifest.zip");
-    downloadArtifactZip(String(artifact.id), archivePath, artifact.size_in_bytes, targetRepository);
+    downloadArtifactZip(
+      String(artifact.id),
+      archivePath,
+      artifact.size_in_bytes,
+      targetRepository,
+      immutableReads,
+    );
     const manifest = readManifestArtifactArchive(archivePath, artifact.digest);
     validateManifestArtifactCompatibility(artifact, manifest, runId, runAttempt);
     if (manifestPath) {
@@ -2065,22 +2116,33 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
   }
 }
 
-export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
+export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutableReads } = {}) {
   const normalizedRepository = normalizeRepository(repository);
   return {
     validateChildReuse(selection, request) {
-      return validateReusableReleaseChild(selection, request);
+      return validateReusableReleaseChild(selection, request, { immutableReads });
     },
-    getWorkflowSource(sha) {
+    getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
+      if (
+        ![
+          ".github/workflows/full-release-validation.yml",
+          ".github/workflows/plugin-npm-release.yml",
+          ".github/workflows/ci.yml",
+          ".github/workflows/plugin-prerelease.yml",
+          ".github/workflows/openclaw-release-checks.yml",
+          ".github/workflows/full-release-receipt-recovery.yml",
+        ].includes(sourceWorkflowPath)
+      ) {
+        throw new Error("Unsupported immutable release workflow path");
+      }
       const exactSha = normalizeSha(sha, "source admission workflow SHA");
-      const payload = githubRestJson(
-        `contents/.github/workflows/full-release-validation.yml?ref=${exactSha}`,
-        normalizedRepository,
-      );
+      const route = "contents/" + sourceWorkflowPath + "?ref=" + exactSha;
+      const load = () => runReleaseCiGh(githubRestArgs(route, normalizedRepository));
+      const payload = JSON.parse(immutableReads ? immutableReads.text(route, load) : load());
       if (
         payload?.type !== "file" ||
         payload.encoding !== "base64" ||
-        payload.path !== ".github/workflows/full-release-validation.yml" ||
+        payload.path !== sourceWorkflowPath ||
         !Number.isSafeInteger(payload.size) ||
         payload.size < 1 ||
         payload.size > 1024 * 1024 ||
@@ -2103,7 +2165,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
       return githubRestJson(`compare/${base}...${head}`, normalizedRepository);
     },
     getJobLog(jobId) {
-      return parentJobLog(jobId, normalizedRepository);
+      return parentJobLog(jobId, normalizedRepository, immutableReads);
     },
     getParentJobs(runId) {
       return findRunJobsAll(`actions/runs/${runId}/jobs?filter=all&`, normalizedRepository);
@@ -2113,13 +2175,32 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
         `actions/runs/${runId}/attempts/${runAttempt}/jobs?`,
         normalizedRepository,
         requireComplete,
+        immutableReads,
       );
     },
     getRunAttempt(runId, runAttempt) {
       return githubRestJson(`actions/runs/${runId}/attempts/${runAttempt}`, normalizedRepository);
     },
     verifyQualificationAdmission(options) {
-      return verifyQualificationAdmission(options);
+      if (immutableReads) {
+        const route = "actions/runs/" + options.descriptor.runId;
+        const current = githubRestJson(route, normalizedRepository);
+        if (current.run_attempt !== options.descriptor.runAttempt) {
+          throw new Error("Qualification admission producer attempt changed");
+        }
+        immutableReads.observeRun(route, current);
+      }
+      const runGh = (args) => {
+        const route = args[1].replace("repos/" + normalizedRepository + "/", "");
+        const load = () => runQualificationAdmissionGh(args);
+        return route.endsWith("/zip")
+          ? immutableReads.bytes(route, load)
+          : immutableReads.text(route, load);
+      };
+      return verifyQualificationAdmission({
+        ...options,
+        ...(immutableReads ? { runGh, downloadArchive: runGh } : {}),
+      });
     },
     revalidateQualificationAdmissionAuthority(options) {
       return revalidateQualificationAdmissionAuthority(options);
@@ -2138,8 +2219,11 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
         .join("/");
       return githubRestJson(`git/ref/${refPath}`, normalizedRepository);
     },
-    getRun(runId) {
-      return githubRestJsonAsync(`actions/runs/${runId}`, normalizedRepository);
+    async getRun(runId) {
+      const route = "actions/runs/" + runId;
+      const run = await githubRestJsonAsync(route, normalizedRepository);
+      immutableReads?.observeRun(route, run);
+      return run;
     },
     getRunView(runId) {
       return jsonGh([
@@ -2153,7 +2237,13 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
       ]);
     },
     loadManifest(runId, runAttempt, manifestPath) {
-      return downloadParentManifestEvidence(runId, runAttempt, normalizedRepository, manifestPath);
+      return downloadParentManifestEvidence(
+        runId,
+        runAttempt,
+        normalizedRepository,
+        manifestPath,
+        immutableReads,
+      );
     },
     loadExecutionPlan(runId) {
       return tryDownloadExecutionPlan(runId, normalizedRepository);
@@ -2162,6 +2252,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
       return readExecutionPlanEvidence(
         normalizeRequiredRunId(runId, "publication parent run ID"),
         normalizedRepository,
+        immutableReads,
       );
     },
   };
@@ -2169,13 +2260,14 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
 
 async function loadValidatedParentEvidence({
   client,
+  preloadedRun,
   expectedRunAttempts,
   manifestPath,
   repository,
   runId,
 }) {
   const parentView = client.getRunView(runId);
-  const parentRun = await client.getRun(runId);
+  const parentRun = preloadedRun ?? (await client.getRun(runId));
   const parentRunAttempt = normalizePositiveInteger(
     parentRun.run_attempt,
     `full release parent ${runId} run attempt`,
@@ -2373,6 +2465,7 @@ async function validateStrictChildRun({
     jobs,
     key: child.manifestKey,
     runId,
+    runAttempt: effectiveRunAttempt,
     status: run.status,
   };
   const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
@@ -2579,8 +2672,64 @@ export async function validateReleaseRunEvidence(
   );
   const evidenceClient = client ?? createReleaseEvidenceClient(normalizedRepository);
   const verifier = resolveVerifierIdentity(verifierSourceSha, verifierSourceContent);
+  const selectedRun = await evidenceClient.getRun(normalizedRunId);
+  if (workflowPath(selectedRun) === ".github/workflows/full-release-receipt-recovery.yml") {
+    if (
+      qualificationReuse ||
+      reuseRequest ||
+      hasRequestedEvidenceReuse({
+        expectedChangedPaths,
+        expectedEvidencePolicy,
+        expectedEvidenceSha,
+        expectedRootRunId,
+        expectedSelectedRunId,
+      })
+    ) {
+      throw new Error("Receipt recovery is an explicit aggregate, not historical parent reuse");
+    }
+    const retained = evidenceClient.loadManifest(
+      normalizedRunId,
+      selectedRun.run_attempt,
+      manifestPath,
+    );
+    if (!retained) {
+      throw new Error("Receipt recovery aggregate artifact is missing");
+    }
+    validateManifestArtifactBinding(
+      retained.artifact,
+      retained.manifest,
+      selectedRun,
+      normalizedRunId,
+    );
+    if (expectedTargetSha !== undefined && retained.manifest.targetSha !== expectedTargetSha) {
+      throw new Error("Receipt recovery target differs from the consumer");
+    }
+    const lineage = evidenceClient.compareCommitLineage(selectedRun.head_sha, verifier.sourceSha);
+    if (
+      !["ahead", "identical"].includes(lineage.status) ||
+      lineage.merge_base_commit?.sha !== selectedRun.head_sha
+    ) {
+      throw new Error("Receipt recovery producer is not on the selected verifier lineage");
+    }
+    if (
+      trustedIdentity.type === "tag" &&
+      evidenceClient.getRef(trustedIdentity.fullRef)?.object?.sha !== trustedIdentity.sha
+    ) {
+      throw new Error("Protected publication tooling tag changed");
+    }
+    const { authenticateReceiptRecovery } = await import("./full-release-receipt-recovery.mjs");
+    return authenticateReceiptRecovery({
+      manifest: retained.manifest,
+      artifact: retained.artifact,
+      run: selectedRun,
+      client: evidenceClient,
+      verifier,
+      expectedRunAttempts: remainingExpectedRunAttempts,
+    });
+  }
   const currentEvidence = await loadValidatedParentEvidence({
     client: evidenceClient,
+    preloadedRun: selectedRun,
     expectedRunAttempts: remainingExpectedRunAttempts,
     manifestPath,
     repository: normalizedRepository,

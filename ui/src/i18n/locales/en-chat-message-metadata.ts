@@ -16,7 +16,7 @@ const enChatMessageMetadata = {
         file: "File",
         selection: "Selection",
         restoreFailed:
-          "Attached context could not be restored. Edit this message to review and resend it without context.",
+          "Couldn’t restore the attached context. Edit this message to review and resend it without context.",
       },
       sourcePreviews: {
         label: "Sources",
@@ -42,7 +42,9 @@ const enChatMessageMetadata = {
       actions: "Message actions",
       selectionActions: "Selection actions",
       askInSideChat: "Ask in side chat",
-      addToChat: "Add to message",
+      askInNewSession: "Ask in new session",
+      newSessionOption: "New session",
+      addToChat: "Add to chat",
       annotationEditor: "Comment",
       annotationComment: "Add an optional comment…",
       saveAnnotation: "Save comment",
@@ -77,7 +79,7 @@ const enChatMessageMetadata = {
       forwardedAutomation: "Automation",
       forwardedFromAgent: "Forwarded from {agentId}",
       forwardedMessage: "Forwarded message",
-      fullContentLoadExhausted: "Could not load the full message.",
+      fullContentLoadExhausted: "Couldn’t load the full message. Try again.",
       voiceNote: "Voice note",
       voiceTranscript: "Voice transcript",
       readAloud: "Read aloud",
@@ -102,7 +104,7 @@ const enChatMessageMetadata = {
       },
       automationRecovery: {
         label: "System · automation recovery",
-        summary: "An automation failed — asked the agent to investigate and continue if needed.",
+        summary: "Automation failed.",
       },
       gatewayRestarted: {
         label: "System · Gateway restarted",

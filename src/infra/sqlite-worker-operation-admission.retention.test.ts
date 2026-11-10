@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import { createSqliteDatabaseAdmissionCursor } from "./sqlite-database-admission.js";
 import {
   bindSqliteWorkerDatabaseAdmissionCursor,
@@ -17,7 +17,7 @@ const admitImmediately: Parameters<typeof createAdmission>[0] = (_request, relea
 async function collect() {
   for (let pass = 0; pass < 4; pass++) {
     await nextTurn();
-    queryObjects(WeakRef);
+    forceFullGc();
   }
 }
 

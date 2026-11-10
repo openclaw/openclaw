@@ -335,10 +335,23 @@ describe("canonical anonymous HTTP entry", () => {
   it("rejects HEAD and malformed query work before reading any session", async () => {
     const instance = server();
     expect((await request(instance, route, undefined, "HEAD")).res.statusCode).toBe(405);
-    for (const suffix of ["?offset=-1", "?offset=0&offset=1", "?token=ignored", "?probe=1"]) {
+    for (const suffix of ["?offset=-1", "?offset=0&offset=1", "?dashboard=collapsed"]) {
       expect((await request(instance, route + suffix)).res.statusCode).toBe(404);
     }
     expect(resolveSession).not.toHaveBeenCalled();
     expect(reader).not.toHaveBeenCalled();
+  });
+  it("redirects away query parameters it does not know, keeping recognized ones", async () => {
+    const instance = server();
+    for (const [suffix, location] of [
+      ["?homescreen=1", route],
+      ["?token=ignored&probe=1", route],
+      ["?draft=Follow+up&homescreen=1&offset=100", `${route}?draft=Follow+up&offset=100`],
+    ]) {
+      const response = await request(instance, route + suffix);
+      expect(response.res.statusCode).toBe(302);
+      expect(response.setHeader).toHaveBeenCalledWith("Location", location);
+    }
+    expect(resolveSession).not.toHaveBeenCalled();
   });
 });

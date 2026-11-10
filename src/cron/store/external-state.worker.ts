@@ -48,16 +48,17 @@ export function mutateCronExternalStateInWorker(
               Object.assign(job.state, change.statePatch);
               setCronSourceIdentity(job, sourceIdentity);
               if (change.kind === "failure") {
-                const { nowMs, cronConfig } = policy;
+                const { nowMs, cronConfig, defaultAgentId } = policy;
                 const state: CronJobPolicyContext = {
                   deps: {
                     nowMs: () => nowMs,
                     cronConfig,
+                    defaultAgentId,
                     log: createCronMutationLogger(outcome.logs),
                   },
                   preparedFailureAlert: {
                     jobId: input.jobId,
-                    value: resolveFailureAlert({ deps: { cronConfig } }, job),
+                    value: resolveFailureAlert({ deps: { cronConfig, defaultAgentId } }, job),
                   },
                 };
                 job.state.consecutiveErrors = Math.max(job.state.consecutiveErrors ?? 0, 4);
