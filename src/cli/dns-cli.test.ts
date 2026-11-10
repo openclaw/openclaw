@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { createContext, runInContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
@@ -132,7 +133,7 @@ function runInspectionScript(
     return nodeRequire(id);
   };
   try {
-    new Function("process", "require", script)(fakeProcess, fakeRequire);
+    runInContext(script, createContext({ process: fakeProcess, require: fakeRequire }));
     return { stdout, stderr, status: 0 };
   } catch (error) {
     return {
