@@ -6,14 +6,139 @@ import type { SessionExactEntriesWorkerResult } from "../config/sessions/session
 import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
-import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
+import {
+  withSessionHistoryWorkerDatabase,
+  withSessionHistoryWorkerDatabases,
+} from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import type { SessionTranscriptReadScope } from "./session-transcript-readers.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+
+/** A cleanup pass discovers older sources only when current history does not own a reference. */
+export function prepareManagedImageRetentionRead(params: {
+  stateDir: string;
+  assertCurrent: () => void;
+}) {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  let snapshot:
+    | ReturnType<ReturnType<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>["read"]>
+    | undefined;
+  let assertRegistryCurrent = params.assertCurrent;
+  return {
+    assertCurrent: () => assertRegistryCurrent(),
+    async read(
+      target: { agentId: string; sessionKey: string },
+      consume: (
+        scope: SessionTranscriptReadScope,
+        assertCurrent: () => void,
+      ) => Promise<Set<string> | null>,
+    ): Promise<Set<string> | null> {
+      params.assertCurrent();
+      const registry = await (snapshot ??= prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+        env,
+        includeIncompatibleSchemaVersions: true,
+      }).read());
+      assertRegistryCurrent = () => {
+        params.assertCurrent();
+        registry.assertCurrent();
+      };
+      assertRegistryCurrent();
+      if (registry.result.status !== "available") {
+        return null;
+      }
+      const matches = new Set<string>();
+      const visited = new Set<string>();
+      for (const database of registry.result.entries) {
+        // Old or unverifiable sources cannot establish destructive absence.
+        if (database.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+          return null;
+        }
+        try {
+          const candidate = captureSessionStoreReadCandidate(database.path);
+          const key = JSON.stringify([database.agentId, candidate.physicalPath]);
+          if (visited.has(key)) {
+            continue;
+          }
+          visited.add(key);
+          const found = await withSessionHistoryWorkerDatabase(
+            {
+              agentId: database.agentId,
+              path: candidate.physicalPath,
+              requestedPaths: [candidate.path],
+              env,
+            },
+            async (reader) => {
+              const exact = await reader.readExactEntries({
+                sessionKeys: [target.sessionKey],
+                projection: "sharing",
+                env,
+              });
+              // A missing physical database also returns no entries, without this proof.
+              if (!exact.sharing || exact.sharing.placeholders.length > 0) {
+                return null;
+              }
+              const identity = exact.sharing.databaseIdentity;
+              const assertCurrent = () => {
+                assertRegistryCurrent();
+                reader.assertCurrent();
+                if (
+                  captureSessionStoreReadCandidate(candidate.path).physicalPath !==
+                  candidate.physicalPath
+                ) {
+                  throw new Error("Managed media retained session store changed during read");
+                }
+                assertExistingDatabaseIdentity(candidate.physicalPath, identity);
+              };
+              assertCurrent();
+              const scope = {
+                ...target,
+                databaseAgentId: database.agentId,
+                storePath: candidate.physicalPath,
+                env,
+              };
+              let entry = exact.entries[0]?.entry;
+              if (!entry) {
+                const read = await reader.readEntryResult({ scope });
+                assertCurrent();
+                if (!read.ok) {
+                  return null;
+                }
+                entry = read.value;
+              }
+              if (!entry) {
+                return new Set<string>();
+              }
+              const refs = await consume(
+                { ...scope, sessionEntry: entry, sessionId: entry.sessionId },
+                assertCurrent,
+              );
+              assertCurrent();
+              return refs;
+            },
+          );
+          assertRegistryCurrent();
+          if (found === null) {
+            return null;
+          }
+          for (const match of found) {
+            matches.add(match);
+          }
+        } catch {
+          assertRegistryCurrent();
+          return null;
+        }
+      }
+      assertRegistryCurrent();
+      return matches;
+    },
+  };
+}
 
 /** Serving keeps discovery and physical readers alive through response publication. */
 export async function withManagedImageSessionRead<T>(
