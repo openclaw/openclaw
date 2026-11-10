@@ -11,12 +11,24 @@ import type {
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
-import { describeRebind, displayKey, signRebind, type RebindPreparation } from "./id-cli-rebind.js";
+import {
+  describeRebind,
+  displayKey,
+  signRebind,
+  type RebindPreparation,
+  type RebindSignRefusal,
+} from "./id-cli-rebind.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { promptYesNo } from "./prompt.js";
 
 type IdCliOpts = GatewayRpcOpts & { json?: boolean };
-type RebindOpts = IdCliOpts & { kitStdin?: boolean; yes?: boolean; cancel?: boolean };
+type RebindOpts = IdCliOpts & {
+  kitStdin?: boolean;
+  yes?: boolean;
+  cancel?: boolean;
+  code?: string;
+  bindingSeq?: string;
+};
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 // How long `rebind` waits to see Discovery accept the new keys before it reports progress.
@@ -70,6 +82,49 @@ export function describeKeysState(status: KeysStatus["status"]): string {
     : "Remote access is off: this claw's connection keys are missing from this computer, so your devices can't reach it. Move it to new keys with your recovery kit: openclaw id rebind";
 }
 
+function parseBindingSeq(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const seq = Number(value);
+  if (!Number.isSafeInteger(seq) || seq < 1) {
+    throw new Error("--binding-seq must be a positive whole number.");
+  }
+  return seq;
+}
+
+// The owner account's one-time link code: it reads Discovery's binding and publishes the move.
+async function readLinkCode(opts: RebindOpts): Promise<string> {
+  if (opts.code?.trim()) {
+    return opts.code.trim();
+  }
+  if (opts.kitStdin) {
+    throw new Error("--kit-stdin needs --code <link-code> from your OpenClaw ID account.");
+  }
+  const code = await password({
+    message: "Link code from your OpenClaw ID account (Add a claw page, claws.<domain>/link)",
+    mask: "",
+  });
+  if (typeof code === "symbol" || !code.trim()) {
+    throw new Error("Cancelled.");
+  }
+  return code.trim();
+}
+
+/** Why nothing was signed, and what to do. */
+export function describeSignRefusal(refusal: RebindSignRefusal, hostname: string): string {
+  switch (refusal.code) {
+    case "wrong_kit":
+      return `This recovery kit is for another claw (${refusal.kitRoot}). Use the kit made for ${sanitizeTerminalText(hostname)}.`;
+    case "published_unverifiable":
+      return `${refusal.detail}. Nothing was signed. If you trust this computer's copy, pass --binding-seq with a number above every binding you know of.`;
+    case "published_unavailable":
+      return `Couldn't read the binding Discovery publishes (${sanitizeTerminalText(refusal.detail)}). Try again, or pass --binding-seq ${refusal.atLeast} or higher.`;
+    case "binding_seq_too_low":
+      return `--binding-seq must be at least ${refusal.atLeast}.`;
+  }
+}
+
 async function readKit(fromStdin: boolean): Promise<string> {
   if (fromStdin) {
     const bytes = await readByteStreamWithLimit(process.stdin, { maxBytes: KIT_MAX_BYTES });
@@ -107,7 +162,11 @@ async function runStatus(opts: IdCliOpts) {
       `Gateway key: ${await displayKey(link.binding.kGw)}`,
     );
   }
-  if (link?.publication?.state) {
+  if (link?.publication?.code === "needs_link_code") {
+    lines.push(
+      "Publication: the new keys wait for a link code from your OpenClaw ID account: openclaw id publish --code <link-code>",
+    );
+  } else if (link?.publication?.state) {
     lines.push(
       `Publication: ${link.publication.state}${link.publication.code ? ` (${link.publication.code})` : ""}`,
     );
@@ -136,16 +195,16 @@ async function runRebind(opts: RebindOpts) {
   if (opts.yes && !opts.kitStdin) {
     throw new Error("--yes needs --kit-stdin: type the recovery kit at the prompt otherwise.");
   }
+  const bindingSeq = parseBindingSeq(opts.bindingSeq);
+  const code = await readLinkCode(opts);
   // SAFETY: rebind_prepare answers with the preparation shape (id-cli-rebind.ts).
-  const prep = (await authority(opts, { action: "rebind_prepare" })) as RebindPreparation;
-  const signed = await signRebind(prep, await readKit(opts.kitStdin === true));
+  const prep = (await authority(opts, { action: "rebind_prepare", code })) as RebindPreparation;
+  const signed = await signRebind(prep, await readKit(opts.kitStdin === true), { bindingSeq });
   if (!signed.ok) {
-    throw new Error(
-      `This recovery kit is for another claw (${signed.kitRoot}). Use the kit made for ${sanitizeTerminalText(prep.hostname)}.`,
-    );
+    throw new Error(describeSignRefusal(signed, prep.hostname));
   }
   if (!opts.yes) {
-    process.stdout.write(`${await describeRebind(prep)}\n`);
+    process.stdout.write(`${await describeRebind(prep, signed.binding)}\n`);
     if (!(await promptYesNo("Move to new keys?"))) {
       write(
         opts,
@@ -155,7 +214,7 @@ async function runRebind(opts: RebindOpts) {
       return;
     }
   }
-  const raw = await authority(opts, { action: "rebind_commit", binding: signed.binding });
+  const raw = await authority(opts, { action: "rebind_commit", binding: signed.binding, code });
   // SAFETY: rebind_commit answers { ok, bindingSeq }.
   const committed = raw as { bindingSeq: number };
   const published = await waitForPublication(opts, committed.bindingSeq);
@@ -186,6 +245,11 @@ export function registerIdCli(program: Command) {
       .command("rebind")
       .description("Move this claw to new keys with its recovery kit (on this machine only)")
       .option("--kit-stdin", "Read the recovery kit from stdin instead of a hidden prompt", false)
+      .option("--code <link-code>", "One-time link code from your OpenClaw ID account")
+      .option(
+        "--binding-seq <n>",
+        "Binding number to sign when Discovery can't be read (above every known binding)",
+      )
       .option("--yes", "Skip the confirmation (needs --kit-stdin)", false)
       .option("--cancel", "Delete keys staged by an unfinished move", false),
   ).action(async (opts: RebindOpts) => await runRebind(opts));

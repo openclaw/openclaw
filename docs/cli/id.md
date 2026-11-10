@@ -45,7 +45,7 @@ no new key is created on its own: restore the original files under
 
 ```bash
 openclaw id rebind
-openclaw id rebind --kit-stdin --yes < kit.txt
+openclaw id rebind --code <link-code> --kit-stdin --yes < kit.txt
 openclaw id rebind --cancel
 ```
 
@@ -54,11 +54,18 @@ Use it when a key file was lost or may have leaked, after a move to a new comput
 the key files, or to rotate keys. In the Control UI on this computer the same action is
 **Move to new keys**.
 
-1. The Gateway prepares two new keys next to the current ones.
-2. You type the recovery kit at a hidden prompt (or pipe it with `--kit-stdin`). The kit is
+1. You give a link code from your OpenClaw ID account (the **Add a claw** page at
+   `https://claws.<loaderDomain>/link`), at the prompt or with `--code`. Discovery moves a claw
+   to new keys only with a code from the owner's account.
+2. The Gateway prepares two new keys next to the current ones and reads the claw's published
+   binding from Discovery with the code.
+3. You type the recovery kit at a hidden prompt (or pipe it with `--kit-stdin`). The kit is
    never accepted as an argument. The CLI derives the owner root key from it, checks that the
-   kit belongs to this claw, shows the old and new key fingerprints and asks you to confirm.
-3. The owner root key signs a new server binding for the new keys. The Gateway stores it,
+   kit belongs to this claw, verifies Discovery's binding with it, shows the old and new key
+   fingerprints and asks you to confirm.
+4. The owner root key signs a new server binding for the new keys, numbered above both this
+   computer's binding and Discovery's (so a computer restored from an older backup moves
+   ahead too). The Gateway stores it,
    restarts remote access on the new keys and publishes them to Discovery.
 
 Your owner devices, people, nodes, invites and device sign-ins all stay. Connected devices
@@ -68,7 +75,15 @@ to new keys.
 A kit for another claw is refused: "This recovery kit is for another claw (`XXXXX-XXXXX-…`).
 Use the kit made for `<hostname>`." Without the kit, the claw cannot be moved.
 
-`--yes` skips the confirmation and needs `--kit-stdin`. `--cancel` deletes the keys staged
+If Discovery can't be read, or what it publishes does not verify under your kit, nothing is
+signed. You can then pass `--binding-seq <n>` with a number above every binding you know of;
+a number at or below a verified binding is refused.
+
+If the Gateway restarts before Discovery confirmed the new keys, or the code expires (codes
+last ten minutes), `openclaw id status` says the new keys wait for a link code; run
+`openclaw id publish --code <link-code>`.
+
+`--yes` skips the confirmation and needs `--kit-stdin` and `--code`. `--cancel` deletes the keys staged
 by a move you did not finish; running `rebind` again reuses them. If the Gateway stops after
 the move was stored but before it switched keys, it finishes the switch at its next start.
 

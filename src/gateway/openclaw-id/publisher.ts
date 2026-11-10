@@ -58,6 +58,16 @@ export function isRetryableDiscoveryError(error: unknown): boolean {
   return status >= 500 || RETRYABLE_STATUSES.has(status);
 }
 
+// A re-bind waits for a (new) one-time code from the owner account: `openclaw id publish --code`.
+function needsLinkCode(): Extract<PublishOutcome, { state: "failed" }> {
+  return {
+    state: "failed",
+    code: "needs_link_code",
+    message: "publishing the new keys needs a link code from your OpenClaw ID account",
+    retryable: false,
+  };
+}
+
 // The failed outcome for an error thrown by a Discovery call.
 function failure(error: unknown): Extract<PublishOutcome, { state: "failed" }> {
   return {
@@ -103,6 +113,7 @@ export async function publishClaw(params: {
   relayUrl: string;
   client: DiscoveryClient;
   signer: StatementSigner;
+  /** The owner account's one-time code: registers a new claw, or publishes a re-bind. */
   enrollmentCode?: string;
 }): Promise<PublishOutcome> {
   const now = Math.floor(Date.now() / 1000);
@@ -137,12 +148,20 @@ export async function publishClaw(params: {
       ownerAccountId = (await params.client.registerClaw(params.enrollmentCode, descriptor))
         .owner_account_id;
     } else if (rebindPending) {
-      await params.client.publishDescriptor(descriptor, snapshot);
+      // Discovery moves the claw to a new K_gw only with the owner account's code (discovery.md).
+      if (!params.enrollmentCode) {
+        return needsLinkCode();
+      }
+      await params.client.publishDescriptor(descriptor, { snapshot, code: params.enrollmentCode });
       return { state: "published", ownerAccountId, snapshotSeq: state.seq, snapshotIssuedAt: now };
     } else {
       await params.client.publishDescriptor(descriptor);
     }
   } catch (error) {
+    // SAFETY: error is a thrown value; an optional code property is compared with ===.
+    if (rebindPending && (error as { code?: unknown }).code === "code_invalid") {
+      return needsLinkCode();
+    }
     descriptorFailure = failure(error);
     // Without this binding at Discovery, a snapshot signed for it would be refused.
     if (!ownerAccountId || params.record.discovery.published_binding_seq !== bindingSeq) {

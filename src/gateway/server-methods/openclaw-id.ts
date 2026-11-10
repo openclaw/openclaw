@@ -225,7 +225,9 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
   // - register_node_invite: an owner-signed NodeInviteCap and its base64url proof key;
   // - rebind_prepare / rebind_commit / rebind_cancel: "Move to new keys", direct loopback
   //   only. prepare stages the next K_srv and K_gw and returns the binding the owner root
-  //   signs; commit takes that R-signed binding; cancel deletes uncommitted staged keys;
+  //   signs, with Discovery's published descriptor when `code` (the owner account's link code)
+  //   reads it; commit takes that R-signed binding and the code that publishes it; cancel
+  //   deletes uncommitted staged keys;
   // - account_*: the Control UI's OpenClaw ID sign-in (see handleAccount).
   "openclawId.authority": async (opts) => {
     if (!isOpenClawIdEnabled(opts.context.getRuntimeConfig().gateway?.openclawId)) {
@@ -348,7 +350,7 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
             ? "commit"
             : "cancel",
         channel,
-        params.binding,
+        { binding: params.binding, code: optionalCode(params.code) },
       );
       if ("ok" in result && !result.ok) {
         refuse(opts, result);

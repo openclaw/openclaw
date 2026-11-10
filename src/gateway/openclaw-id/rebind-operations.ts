@@ -4,6 +4,7 @@
 // membership write never interleave. Only the stored binding changes: owner devices,
 // members, nodes, invites and the membership seq all stay.
 import {
+  parseStatement,
   ROOT_EPOCH,
   type Channel,
   type Ed25519PublicKey,
@@ -29,8 +30,8 @@ export type RebindPreparation = BoundKeys & {
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 /**
- * The binding_seq a re-bind signs for: one above the stored binding. This is the one place
- * that chooses it (a restored backup or a cap on retired-key seqs would change it here).
+ * The lowest binding_seq a re-bind may sign: one above the stored binding. The owner's CLI
+ * signs above Discovery's verified published binding when that is higher (a restored backup).
  */
 export function nextBindingSeq(
   record: StoredClaw & { binding: NonNullable<StoredClaw["binding"]> },
@@ -98,9 +99,9 @@ export function createRebindOperations(owner: {
     },
 
     /**
-     * Replaces the stored binding with an R-signed one that names exactly the staged keys at
-     * the next binding_seq. Only over direct loopback. A reset or another re-bind committed
-     * since prepare fails here (wrong signer, or a binding_seq that is no longer next).
+     * Replaces the stored binding with an R-signed one that names exactly the staged keys at a
+     * binding_seq above the stored one. Only over direct loopback. A reset or another re-bind
+     * committed since prepare fails here (wrong signer, or `rollback`).
      */
     commitRebind(
       input: unknown,
@@ -123,7 +124,14 @@ export function createRebindOperations(owner: {
         if (!replacesBoth(record, staged)) {
           return { ok: false, code: "target_mismatch", detail: "a re-bind replaces both keys" };
         }
-        const bindingSeq = nextBindingSeq(record);
+        const parsed = parseStatement(input, "ServerBinding");
+        if (!parsed.ok) {
+          return { ok: false, code: "malformed", detail: parsed.detail };
+        }
+        const bindingSeq = parsed.statement.body.binding_seq;
+        if (bindingSeq < nextBindingSeq(record)) {
+          return { ok: false, code: "rollback", detail: "binding_seq is not above the stored one" };
+        }
         const binding = await verifyBinding(
           record.authority,
           input,

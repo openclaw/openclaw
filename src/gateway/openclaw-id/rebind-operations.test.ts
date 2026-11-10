@@ -105,6 +105,22 @@ describe("re-bind at the authority", () => {
     });
   });
 
+  it("accepts a binding_seq above the next one (a restored machine) and refuses one at the stored seq", async () => {
+    const claw = await linkedClaw();
+    const keys = await staged();
+    const prep = (await claw.authority.prepareRebind(keys)) as RebindPreparation;
+    const atStored = await signPrepared({ ...prep, binding_seq: 1 }, claw.root);
+    expect(await claw.authority.commitRebind(atStored, "local_operator", keys)).toMatchObject({
+      ok: false,
+      code: "rollback",
+    });
+    const ahead = await signPrepared({ ...prep, binding_seq: 8 }, claw.root);
+    expect(await claw.authority.commitRebind(ahead, "local_operator", keys)).toMatchObject({
+      ok: true,
+      bindingSeq: 8,
+    });
+  });
+
   it("refuses a prepare that keeps a bound key", async () => {
     const claw = await linkedClaw();
     expect(

@@ -110,13 +110,19 @@ export function createDiscoveryClient(params: {
      */
     publishDescriptor: (
       descriptor: ClawDescriptor,
-      snapshot?: SignedStatement<"MembershipSnapshot">,
+      rebind?: { snapshot: SignedStatement<"MembershipSnapshot">; code: string },
     ) =>
       call<void>(
         "publishDescriptor",
         { claw_id: descriptor.claw_id },
-        snapshot ? { descriptor, snapshot } : { descriptor },
+        rebind ? { descriptor, ...rebind } : { descriptor },
       ),
+    /**
+     * The descriptor Discovery publishes for this claw, read with the owner account's one-time
+     * code (not spent). Untrusted: the owner verifies it with the root before using it.
+     */
+    getPublishedDescriptor: (clawId: string, code: string) =>
+      call<{ descriptor: unknown }>("getPublishedDescriptor", { claw_id: clawId }, { code }),
     publishSnapshot: (clawId: string, snapshot: SignedStatement<"MembershipSnapshot">) =>
       call<void>("publishSnapshot", { claw_id: clawId }, { snapshot }),
     /** Long-polls the Gateway mailbox after `cursor`. */
