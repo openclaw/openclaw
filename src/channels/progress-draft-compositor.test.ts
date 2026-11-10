@@ -157,6 +157,28 @@ describe("consecutive tool runs", () => {
     expect(labels().slice(-2)).toEqual(["Bash", "Bash"]);
   });
 
+  it("keeps one run across an interleaved model wait", async () => {
+    const { progress, tool, labels } = setup();
+    const wait = (phase: "update" | "end") =>
+      progress.pushItemEvent({
+        itemId: "model-wait",
+        kind: "model-wait",
+        phase,
+        ...(phase === "update" ? { progressText: "Waiting for the model" } : {}),
+      });
+    await tool("1");
+    await tool("2");
+    await wait("update");
+    await wait("end");
+    await tool("3");
+    await wait("update");
+    await wait("end");
+    await tool("4");
+    // A wait renders no tool row, so the run keeps accumulating instead of
+    // restarting as repeated "Bash ×2" rows.
+    expect(labels()).toEqual(["Bash ×4"]);
+  });
+
   it("does not count unkeyed calls, detailed rows or colliding truncated titles", async () => {
     const { progress, tool, labels } = setup();
     await tool("1");

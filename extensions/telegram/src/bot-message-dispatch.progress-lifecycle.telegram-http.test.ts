@@ -108,6 +108,43 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     };
   }
 
+  it("keeps one counted tool row across model-wait updates and clears through HTTP", async () => {
+    await dispatch(
+      async (options) => {
+        for (const id of ["1", "2", "3", "4"]) {
+          await tool(options, id);
+          await options?.onItemEvent?.({
+            itemId: `tool:${id}`,
+            kind: "tool",
+            name: "exec",
+            phase: "end",
+            status: "completed",
+          });
+          for (const phase of ["update", "end"] as const) {
+            await options?.onItemEvent?.({
+              itemId: "model-wait",
+              kind: "model-wait",
+              phase,
+              ...(phase === "update" ? { progressText: "Waiting for the model" } : {}),
+            });
+          }
+        }
+        await eventually(() =>
+          calls.some((call) => String(call.fields.text).includes("Exec ×4")),
+        ).toBe(true);
+      },
+      {
+        finalReply: { text: "Completed four commands." },
+        telegramCfg: {
+          streaming: { mode: "progress", progress: { toolProgress: true, commandText: "status" } },
+        },
+      },
+    );
+    const preview = calls.find((call) => String(call.fields.text).includes("Exec ×4"));
+    expect(String(preview?.fields.text).match(/Exec/g)).toHaveLength(1);
+    expect(texts()).toContain("Completed four commands.");
+  });
+
   it("reports an owner rejection silently without claiming a network failure", async () => {
     await dispatch(async () => {}, {
       mode: "off",
