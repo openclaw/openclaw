@@ -29,6 +29,12 @@ import type { createServiceGatewayKey } from "./service-gateway-key.js";
 import { ed25519PublicKeyHex, loadKeyFile, stagedKeyPath } from "./tunnel-child/keyfile.js";
 import { discardStagedEndpointKey, stageEndpointKey } from "./tunnel-runtime.js";
 
+const cancelled = () =>
+  refusal(
+    "rebind_cancelled",
+    "OpenClaw ID stopped or was disabled; start again while it is enabled",
+  );
+
 const refusal = (code: string, detail: string): AuthorityRefusal => ({ ok: false, code, detail });
 
 const notLocal = () =>
@@ -114,6 +120,7 @@ export function createServiceRebind(deps: Deps) {
   const prepare = async (
     channel: Channel | undefined,
     code: string | undefined,
+    isCurrent: () => boolean,
   ): Promise<(RebindPreparation & { published: PublishedLookup }) | AuthorityRefusal> => {
     const owner = await linkedOwner(channel);
     if ("ok" in owner) {
@@ -123,8 +130,17 @@ export function createServiceRebind(deps: Deps) {
     if (unsettled) {
       return unsettled;
     }
-    const prep = await owner.prepareRebind(await stageKeys(deps.getStateDir()));
-    return "ok" in prep ? prep : { ...prep, published: await published(prep.claw_id, code) };
+    if (!isCurrent()) {
+      return cancelled();
+    }
+    const keys = await stageKeys(deps.getStateDir());
+    if (!isCurrent()) {
+      return cancelled();
+    }
+    const prep = await owner.prepareRebind(keys);
+    const result =
+      "ok" in prep ? prep : { ...prep, published: await published(prep.claw_id, code) };
+    return isCurrent() ? result : cancelled();
   };
 
   // Stores the R-signed binding for the staged keys, then moves remote access to them.
@@ -132,6 +148,7 @@ export function createServiceRebind(deps: Deps) {
     channel: Channel | undefined,
     binding: unknown,
     code: string | undefined,
+    isCurrent: () => boolean,
   ): Promise<{ ok: true; bindingSeq: number } | AuthorityRefusal> => {
     const owner = await linkedOwner(channel);
     if ("ok" in owner) {
@@ -141,7 +158,14 @@ export function createServiceRebind(deps: Deps) {
     if (unsettled) {
       return unsettled;
     }
-    const result = await owner.commitRebind(binding, channel, await stageKeys(deps.getStateDir()));
+    if (!isCurrent()) {
+      return cancelled();
+    }
+    const keys = await stageKeys(deps.getStateDir());
+    if (!isCurrent()) {
+      return cancelled();
+    }
+    const result = await owner.commitRebind(binding, channel, keys, isCurrent);
     if (!result.ok) {
       return result;
     }
@@ -175,15 +199,22 @@ export function createServiceRebind(deps: Deps) {
   let lane: Promise<unknown> = Promise.resolve();
   return {
     /** Runs one re-bind step after the previous one finished. */
-    run(action: RebindAction, channel: Channel | undefined, input: RebindInput) {
+    run(
+      action: RebindAction,
+      channel: Channel | undefined,
+      input: RebindInput,
+      isCurrent: () => boolean,
+    ) {
       const step = (): Promise<
         RebindPreparation | AuthorityRefusal | { ok: true; bindingSeq?: number }
       > =>
-        action === "prepare"
-          ? prepare(channel, input.code)
-          : action === "commit"
-            ? commit(channel, input.binding, input.code)
-            : cancel(channel);
+        !isCurrent()
+          ? Promise.resolve(cancelled())
+          : action === "prepare"
+            ? prepare(channel, input.code, isCurrent)
+            : action === "commit"
+              ? commit(channel, input.binding, input.code, isCurrent)
+              : cancel(channel);
       const result = lane.then(step, step);
       lane = result.catch(() => {});
       return result;

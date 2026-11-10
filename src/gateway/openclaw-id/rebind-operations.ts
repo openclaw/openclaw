@@ -107,6 +107,8 @@ export function createRebindOperations(owner: {
       input: unknown,
       channel: Channel | undefined,
       staged: { kSrv: IrohEndpointKey; kGw: Ed25519PublicKey },
+      /** Service-owned lifetime, checked after verification in this serialized write lane. */
+      isCurrent?: () => boolean,
     ): Promise<(AuthorityAccepted & { bindingSeq: number }) | AuthorityRefusal> {
       return serialize(async () => {
         if (channel !== "local_operator") {
@@ -141,6 +143,9 @@ export function createRebindOperations(owner: {
         );
         if (!binding.ok) {
           return binding;
+        }
+        if (isCurrent && !isCurrent()) {
+          return { ok: false, code: "rebind_cancelled", detail: "the re-bind lifetime ended" };
         }
         await commit({ ...record, binding: binding.statement });
         // Members' rows at Discovery follow the snapshot published for the new binding.
