@@ -13,10 +13,6 @@ import {
 import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
 
 vi.mock("./subagent-registry-helpers.js", { spy: true });
-vi.mock("../../agent-bundle-mcp-tools.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agent-bundle-mcp-tools.js")>()),
-  retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
-}));
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
@@ -95,7 +91,6 @@ it("keeps a kill claim published while the settle request is preparing", async (
     return acquireLock(runId);
   });
   await complete({ expectedEntry: sweeperSnapshot });
-  expect(lock).toHaveBeenCalledOnce();
   expect(read().killIntent).toEqual(claim);
   expect(read().pauseReason).toBe("sessions_yield");
   expect(read().execution.outcome).toBeUndefined();

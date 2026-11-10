@@ -34,7 +34,7 @@ concurrency:
 jobs:
   delete:
     if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && inputs.confirm
-    runs-on: ${{ inputs.architecture == 'arm64' && 'blacksmith-16vcpu-ubuntu-2404-arm' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.architecture == 'arm64' && 'blacksmith-16vcpu-ubuntu-2404-arm' || 'blacksmith-2vcpu-ubuntu-2404' }}
     timeout-minutes: 10
     steps:
       - name: Checkout protected manifest

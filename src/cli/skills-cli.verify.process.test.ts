@@ -1,9 +1,9 @@
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withLoopbackTestServer } from "../commands/loopback-server.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
@@ -47,13 +47,7 @@ it("drains complete scanner reports before a failed verification exits", async (
     response.writeHead(200, { "content-type": "application/json" });
     response.end(body);
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("HTTP fixture did not bind a TCP port");
-    }
+  await withLoopbackTestServer(server, async (port) => {
     const result = await runCliProcessChild({
       nodeArgs: [
         ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
@@ -73,7 +67,7 @@ it("drains complete scanner reports before a failed verification exits", async (
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_STATE_DIR: path.join(root, "state"),
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
+        OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${port}`,
         NO_COLOR: "1",
       },
     });
@@ -83,10 +77,5 @@ it("drains complete scanner reports before a failed verification exits", async (
     expect(requests).toEqual([
       "/api/v1/skills/weather/verify?version=2.0.0&ownerHandle=demo-owner",
     ]);
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+  });
 });

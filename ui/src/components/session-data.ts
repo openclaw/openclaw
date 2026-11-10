@@ -25,7 +25,7 @@ import {
   sessionCatalogListClient,
 } from "./app-sidebar-session-catalog-live.ts";
 import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts";
-import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
+import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status-state.ts";
 import {
   applySessionCatalogContinuation,
   archiveSessionCatalog as archiveSessionCatalogData,
@@ -44,8 +44,7 @@ import {
 } from "./session-data-catalog.ts";
 import {
   hasSidebarListFilter,
-  clearSidebarSessionError,
-  publishSidebarSessionError,
+  clearSidebarSessionListError,
   publishScopedSessionError,
   publishSidebarSessionList,
   refreshSidebarSessionList,
@@ -78,6 +77,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   activeSessionLineageRoot: GatewaySessionRow | null = null;
   activeSessionLineageSelectedRow: GatewaySessionRow | null = null;
   sessionMutationError: string | null = null;
+  sessionListError: string | null = null;
   presencePayload: PresencePayload | undefined;
   presenceInstanceId?: string;
   readonly ownerCounts = new SidebarOwnerSessionCounts(() => this.requestSessionDataUpdate());
@@ -99,6 +99,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   private agentSelectionSource: ApplicationContext["agentSelection"] | undefined;
   private agentSelectionIntentRevision: number | undefined;
   private sessionsSource: SessionCapability | null = null;
+  private observedCanonicalListError: string | null | undefined;
   private filteredSessionScope: string | null = null;
   private unsubscribeFilteredSessions: (() => void) | null = null;
   childSessionScope = {};
@@ -244,6 +245,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     if (!this.active) {
       return;
     }
+    this.synchronizeOwnerSessionCounts();
     const roster =
       this.inputs.sidebarAgentsMode === "roster" && this.sessionLineageVisible
         ? rosterActivityStore(this.context)
@@ -282,7 +284,6 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   refreshPresentation(): void {
     if (this.active && this.inputs.isConnected) {
       this.synchronizeSessionScope();
-      this.synchronizeOwnerSessionCounts();
       this.lineage.synchronize();
       this.synchronizePresentedSessions();
     }
@@ -339,9 +340,13 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   }
 
   private synchronizeOwnerSessionCounts(): void {
-    const hasProfiles = projectPresencePayload(this.presencePayload).users.some(
-      (user) => user.identity?.type === "profile",
-    );
+    const hasProfiles =
+      this.inputs.navigationVisible &&
+      !this.inputs.navigationCollapsed &&
+      this.inputs.navigationView === "online" &&
+      projectPresencePayload(this.presencePayload).users.some(
+        (user) => user.identity?.type === "profile",
+      );
     this.ownerCounts.synchronize(
       this.inputs.connected && hasProfiles ? this.context.sessions : undefined,
       this.context.gateway.snapshot.selfUser?.id ?? null,
@@ -446,6 +451,10 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
   private readonly updateSessions = (sessions: SessionCapability) => {
     const snapshot = sessions.state;
+    const listError = sessions.canonicalListError;
+    const listErrorChanged = listError !== this.observedCanonicalListError;
+    // Observe hidden failures too, so a later filter change cannot replay them.
+    this.observedCanonicalListError = listError;
     if (sessions.presentation.resultCached) {
       return;
     }
@@ -467,6 +476,9 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.clearSessionCache();
     }
     publishSidebarSessionList(this, { ...snapshot, ...presentation });
+    if (listErrorChanged) {
+      this.sessionListError = listError;
+    }
     this.requestSessionDataUpdate();
   };
 
@@ -478,6 +490,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.retireFilteredSessions();
       this.clearSessionCache();
       this.sessionsSource = sessions;
+      this.observedCanonicalListError = undefined;
     }
     this.updateSessions(sessions);
     if (this.context.gateway.snapshot.phase === "connected") {
@@ -691,7 +704,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.requestSessionDataUpdate();
   }
 
-  dismissSessionMutationError = clearSidebarSessionError.bind(null, this);
+  dismissSessionListError = clearSidebarSessionListError.bind(null, this);
 
   resetSessionList(): void {
     this.retireFilteredSessions();
@@ -717,7 +730,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
   private invalidateSessionMutations(): void {
     this.mutations.retireScope();
-    publishSidebarSessionError(this, null, "action");
+    this.sessionMutationError = null;
     this.requestSessionDataUpdate();
   }
 
@@ -731,7 +744,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       selectedAgentId: this.inputs.selectedAgentIdForSessions(),
     });
     if (scope) {
-      this.dismissSessionMutationError();
+      this.sessionMutationError = null;
     }
     return scope;
   }

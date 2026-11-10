@@ -1,9 +1,4 @@
-import {
-  containsSecretSentinel,
-  resolveSecretSentinel,
-  SECRET_SENTINEL_PATTERN,
-  swapSecretSentinelsInText,
-} from "../secrets/sentinel.js";
+import { containsSecretSentinel, swapSecretSentinelsInText } from "../secrets/sentinel.js";
 
 function headersContainSecretSentinel(headers: HeadersInit | undefined): boolean {
   if (!headers) {
@@ -22,23 +17,6 @@ function headersContainSecretSentinel(headers: HeadersInit | undefined): boolean
   return false;
 }
 
-function swapSecretSentinelsInUrl(url: string): { text: string; unknown: string[] } {
-  if (!containsSecretSentinel(url)) {
-    return { text: url, unknown: [] };
-  }
-  const unknown = new Set<string>();
-  const text = url.replace(new RegExp(SECRET_SENTINEL_PATTERN.source, "g"), (sentinel) => {
-    const value = resolveSecretSentinel(sentinel);
-    if (value === undefined) {
-      unknown.add(sentinel);
-      return sentinel;
-    }
-    // Sentinels are URL-safe placeholders. Encode the real bytes so query/path structure is stable.
-    return encodeURIComponent(value);
-  });
-  return { text, unknown: [...unknown] };
-}
-
 export function swapSecretSentinelsForEgress(params: { url: string; headers?: HeadersInit }): {
   url: string;
   headers?: Headers;
@@ -46,7 +24,8 @@ export function swapSecretSentinelsForEgress(params: { url: string; headers?: He
   if (!containsSecretSentinel(params.url) && !headersContainSecretSentinel(params.headers)) {
     return { url: params.url };
   }
-  const urlSwap = swapSecretSentinelsInUrl(params.url);
+  // Sentinels are URL-safe placeholders. Encode the real bytes so query/path structure is stable.
+  const urlSwap = swapSecretSentinelsInText(params.url, encodeURIComponent);
   const headers = params.headers ? new Headers(params.headers) : undefined;
   const unknown = new Set(urlSwap.unknown);
   if (headers) {

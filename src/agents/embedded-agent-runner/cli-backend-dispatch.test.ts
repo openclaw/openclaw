@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -17,6 +16,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { loadCliSessionHistoryMessages } from "../cli-runner/session-history.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { SessionManager } from "../sessions/index.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
@@ -29,7 +29,6 @@ const resolveRuntimeCliBackends = vi.hoisted(() => vi.fn());
 const resolveCliRuntimeExecutionProvider = vi.hoisted(() => vi.fn());
 const runCliAgent = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
-const retireSessionMcpRuntimeForSessionKey = vi.hoisted(() => vi.fn());
 const tempDirs = useSessionStoreTempDirs(afterAll, "cli-dispatch-history-");
 
 // mock-isolation: Dispatch eligibility uses fixture auth modes without host credential discovery.
@@ -48,9 +47,9 @@ vi.mock("../../plugins/cli-backends.runtime.js", () => ({
 vi.mock("../cli-runner.runtime.js", () => ({
   runCliAgent,
 }));
-vi.mock("../agent-bundle-mcp-tools.js", () => ({
+vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agent-bundle-mcp-tools.js")>()),
   retireSessionMcpRuntime,
-  retireSessionMcpRuntimeForSessionKey,
 }));
 const transcriptRecorder = vi.hoisted(() => ({
   noteToolEvent: vi.fn(),
@@ -130,7 +129,6 @@ beforeEach(() => {
   resolveRuntimeCliBackends.mockReset();
   runCliAgent.mockReset();
   retireSessionMcpRuntime.mockReset();
-  retireSessionMcpRuntimeForSessionKey.mockReset();
   resolveCliRuntimeExecutionProvider.mockReset();
   ensureAuthProfileStore.mockReturnValue({ profiles: {} });
   resolveAuthProfileOrder.mockReturnValue([]);
@@ -140,7 +138,6 @@ beforeEach(() => {
     { id: "google-gemini-cli" },
   ]);
   resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);
-  retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
   retireSessionMcpRuntime.mockResolvedValue(true);
   runCliAgent.mockResolvedValue(cliRunResult());
   transcriptRecorder.noteToolEvent.mockReset();
@@ -419,22 +416,18 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   });
 
   it("settles execution-start work before dispatching the CLI run", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    const onExecutionStarted = vi.fn(async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const executionGate = createEnteredGate();
+    const onExecutionStarted = vi.fn(executionGate.wait);
     const operation = runDispatch({ onExecutionStarted, lifecycleGeneration: "gen-1" });
     try {
-      await entered.promise;
+      await executionGate.entered;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
       expect(runCliAgent).not.toHaveBeenCalled();
       expect(transcriptRecorder.finalize).not.toHaveBeenCalled();
     } finally {
-      release.resolve();
+      executionGate.release();
       await operation;
     }
     expect(runCliAgent).toHaveBeenCalledOnce();
@@ -547,7 +540,6 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ cleanupBundleMcpOnRunEnd }));
     expect(runCliAgent.mock.calls[0]?.[0]?.cleanupBundleMcpOnRunEnd).toBe(cleanupBundleMcpOnRunEnd);
     expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
-    expect(retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   });
 
   it("mirrors the run into the transcript recorder", async () => {

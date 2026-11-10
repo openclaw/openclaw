@@ -1,13 +1,10 @@
 import assert from "node:assert/strict";
-import { queryObjects } from "node:v8";
-import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
+import { beforeAll, expect, it, onTestFinished } from "vitest";
 import { bindGatewayControlUiIngressHost } from "../gateway/remote-control-ui-ingress-host.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../test-utils/retention.js";
 import type {
   GatewayControlUiIngressOpenOptionsV2,
   GatewayControlUiIngressV2,
@@ -23,11 +20,13 @@ import { startPluginServices, type PluginServicesHandle } from "./services.test-
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
 
-let state: OpenClawTestState;
 beforeAll(async () => {
-  state = await createOpenClawTestState({ label: "ingress-capability", layout: "state-only" });
+  const state = await createOpenClawTestState({
+    label: "ingress-capability",
+    layout: "state-only",
+  });
+  return () => state.cleanup();
 });
-afterAll(() => state?.cleanup());
 
 async function fixture(recordOptions: Partial<PluginRecord> = {}) {
   const registry = createEmptyPluginRegistry();
@@ -110,7 +109,11 @@ it.each([
 });
 
 it.each(["stop", "revoke"])("revokes retained ingress authority on %s", async (action) => {
+  const references: WeakRef<object>[] = [];
   class RetiringCaller {
+    constructor() {
+      references.push(new WeakRef(this));
+    }
     stop(service: PluginServicesHandle) {
       return service.stop();
     }
@@ -123,7 +126,7 @@ it.each(["stop", "revoke"])("revokes retained ingress authority on %s", async (a
   if (action === "stop") {
     await new RetiringCaller().stop(service);
     // Collect before error matchers materialize the abort reason's stack.
-    expect(queryObjects(RetiringCaller)).toBe(0);
+    await expectCollected(...references);
   } else {
     revokePluginRecord(registry, record);
   }

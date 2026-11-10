@@ -1,13 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-  baseStatusExpectedUpdateChannelLabel,
-  baseStatusOverviewSurface,
-  getStatusOverviewRowValue,
-} from "../status.test-support.ts";
+import { baseStatusOverviewSurface, getStatusOverviewRowValue } from "../status.test-support.ts";
+import { createMacosAppInstallOwner } from "../test-runtime-config-helpers.js";
 import {
   buildStatusOverviewSurfaceRows,
   buildStatusUpdateSurface,
-  buildGatewayStatusJsonPayload,
   redactStatusSecrets,
 } from "./format.js";
 
@@ -17,11 +13,8 @@ function row(item: string, overrides: Parameters<typeof getStatusOverviewRowValu
 
 const offlineGateway = {
   gatewayMode: "local" as const,
-  gatewayConnection: { url: "ws://127.0.0.1:18789" },
-  remoteUrlMissing: false,
   gatewayReachable: false,
   gatewayProbe: null,
-  gatewayProbeAuth: null,
   gatewaySelf: null,
 };
 
@@ -49,7 +42,13 @@ describe("status-all format", () => {
     row("Gateway self", { gatewaySelf: null }).toBe(undefined);
   });
 
-  it("builds gateway summary parts for fallback remote targets", () => {
+  it("builds local and fallback remote gateway summaries", () => {
+    row("Gateway", {
+      gatewayMode: "local",
+      gatewayConnection: { url: "ws://127.0.0.1:18789" },
+      gatewayProbe: { connectLatencyMs: 12 },
+      gatewaySelf: { host: "gateway-host" },
+    }).toBe("local · ws://127.0.0.1:18789 · reachable 12ms · auth token · gateway-host");
     row("Gateway", {
       ...offlineGateway,
       gatewayMode: "remote",
@@ -65,39 +64,41 @@ describe("status-all format", () => {
   });
 
   it("formats dashboard values consistently", () => {
-    expect(
-      getStatusOverviewRowValue("Dashboard", {
-        advertisedControlUiLinks: { httpUrl: "https://openclaw.local", wsUrl: "" },
-      }),
-    ).toBe("https://openclaw.local");
-    expect(
-      getStatusOverviewRowValue("Dashboard", {
-        advertisedControlUiLinks: { httpUrl: "", wsUrl: "" },
-      }),
-    ).toBe("disabled");
-    expect(
-      getStatusOverviewRowValue("Dashboard", {
-        cfg: { gateway: { controlUi: { enabled: false } } },
-      }),
-    ).toBe("disabled");
+    row("Dashboard", {
+      advertisedControlUiLinks: { httpUrl: "https://openclaw.local", wsUrl: "" },
+    }).toBe("https://openclaw.local");
+    row("Dashboard", { advertisedControlUiLinks: { httpUrl: "", wsUrl: "" } }).toBe("disabled");
   });
 
   it("builds shared update surface values", () => {
-    const newerRegistryVersion = "9999.0.0";
-
     expect(
       buildStatusUpdateSurface({
         updateConfigChannel: "stable",
         update: {
           ...baseStatusOverviewSurface.update,
-          registry: { latestVersion: newerRegistryVersion },
+          registry: { latestVersion: "9999.0.0" },
         },
       }),
-    ).toEqual({
-      channelLabel: baseStatusExpectedUpdateChannelLabel,
-      gitLabel: "main · tag v1.2.3",
-      updateLine: `git main · ↔ origin/main · behind 2 · npm update ${newerRegistryVersion}`,
+    ).toMatchObject({
+      updateLine: "git main · ↔ origin/main · behind 2 · npm update 9999.0.0",
       updateAvailable: true,
+    });
+  });
+
+  it("shows the app owner and its update hint without offering a package update", () => {
+    expect(
+      buildStatusUpdateSurface({
+        update: {
+          root: "/Applications/OpenClaw.app/Contents/Resources/openclaw",
+          installKind: "host",
+          packageManager: "unknown",
+          installOwner: createMacosAppInstallOwner(),
+        },
+      }),
+    ).toMatchObject({
+      updateLine: "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+      updateAvailable: false,
+      gitLabel: null,
     });
   });
 
@@ -112,7 +113,7 @@ describe("status-all format", () => {
     row("Dashboard", { cfg: { gateway } }).toBe(expected);
   });
 
-  it("formats tailscale values for terse and detailed views", () => {
+  it("formats available addresses and missing MagicDNS with the backend state", () => {
     row("Tailscale exposure", {}).toBe("serve · box.tail.ts.net · https://box.tail.ts.net");
     row("Tailscale exposure", {
       tailscaleMode: "funnel",
@@ -120,134 +121,57 @@ describe("status-all format", () => {
       tailscaleHttpsUrl: null,
       includeBackendStateWhenOn: true,
     }).toBe("funnel · unknown · magicdns unknown");
-    row("Tailscale exposure", {
-      tailscaleMode: "off",
-      includeDnsNameWhenOff: true,
-    }).toBe("off · box.tail.ts.net");
   });
 
-  it("formats service values across short and detailed runtime surfaces", () => {
-    expect(
-      getStatusOverviewRowValue("Gateway service", {
-        gatewayService: {
-          label: "LaunchAgent",
-          installed: false,
-          loadedText: "loaded",
-        },
-      }),
-    ).toBe("LaunchAgent not installed");
-    expect(
-      getStatusOverviewRowValue("Gateway service", {
-        gatewayService: {
-          label: "LaunchAgent",
-          installed: true,
-          managedByOpenClaw: true,
-          loadedText: "loaded",
-          runtimeShort: "running",
-        },
-      }),
-    ).toBe("LaunchAgent installed · loaded · running");
-    expect(
-      getStatusOverviewRowValue("Gateway service", {
-        gatewayService: {
-          label: "systemd",
-          installed: true,
-          loadedText: "not loaded",
-          runtime: { status: "failed", pid: 42 },
-        },
-      }),
-    ).toBe("systemd not loaded · failed (pid 42)");
+  it("formats absent and failed service runtimes", () => {
+    row("Gateway service", {
+      gatewayService: { label: "LaunchAgent", installed: false, loadedText: "not loaded" },
+    }).toBe("LaunchAgent not installed");
+    row("Gateway service", {
+      gatewayService: {
+        label: "systemd",
+        installed: true,
+        loadedText: "not loaded",
+        runtime: { status: "failed", pid: 42 },
+      },
+    }).toBe("systemd not loaded · failed (pid 42)");
   });
 
-  it.each([
-    {
-      installed: false,
-      loadedText: "unknown",
-      expected: "LaunchAgent unknown (inspection failed: permission denied)",
-    },
-    {
-      installed: null,
-      loadedText: "unknown",
-      expected: "LaunchAgent unknown (inspection failed: permission denied)",
-    },
-    {
-      installed: true,
-      managedByOpenClaw: true,
-      loadedText: "unknown",
-      runtimeShort: "running (pid 42)",
-      expected:
-        "LaunchAgent installed · unknown (inspection failed: permission denied) · running (pid 42)",
-    },
-    {
-      installed: true,
-      managedByOpenClaw: false,
-      loadedText: "running (externally managed)",
-      runtime: { status: "running", pid: 42 },
-      expected:
-        "LaunchAgent running (externally managed) (inspection failed: permission denied) · running (pid 42)",
-    },
-  ])("keeps inspection errors visible: $expected", ({ expected, ...service }) => {
-    expect(
-      getStatusOverviewRowValue("Gateway service", {
-        gatewayService: {
-          ...service,
-          label: "LaunchAgent",
-          loadState: { status: "unknown", detail: "permission denied" },
-        },
-      }),
-    ).toBe(expected);
+  const inspectionFailure = " (inspection failed: permission denied)";
+  it.each`
+    service                                                                                                              | expected
+    ${{ installed: false }}                                                                                              | ${"LaunchAgent unknown" + inspectionFailure}
+    ${{ installed: null }}                                                                                               | ${"LaunchAgent unknown" + inspectionFailure}
+    ${{ managedByOpenClaw: true, runtimeShort: "running (pid 42)" }}                                                     | ${"LaunchAgent installed · unknown" + inspectionFailure + " · running (pid 42)"}
+    ${{ managedByOpenClaw: false, loadedText: "running (externally managed)", runtime: { status: "running", pid: 42 } }} | ${"LaunchAgent running (externally managed)" + inspectionFailure + " · running (pid 42)"}
+  `("keeps inspection errors visible: $expected", ({ service, expected }) => {
+    row("Gateway service", {
+      gatewayService: {
+        label: "LaunchAgent",
+        installed: true,
+        loadedText: "unknown",
+        ...service,
+        loadState: { status: "unknown", detail: "permission denied" },
+      },
+    }).toBe(expected);
   });
 
-  it("builds gateway json payloads consistently", () => {
-    expect(
-      buildGatewayStatusJsonPayload({
-        gatewayMode: "remote",
-        gatewayConnection: {
-          url: "wss://gateway.example.com",
-          urlSource: "config",
-        },
-        remoteUrlMissing: false,
-        gatewayReachable: true,
-        gatewayProbe: { connectLatencyMs: 123, error: null },
-        gatewaySelf: { host: "gateway", version: "1.2.3" },
-        gatewayProbeAuthWarning: "warn",
-      }),
-    ).toEqual({
-      mode: "remote",
-      url: "wss://gateway.example.com",
-      urlSource: "config",
-      misconfigured: false,
-      reachable: true,
-      connectLatencyMs: 123,
-      self: { host: "gateway", version: "1.2.3" },
-      error: null,
-      authWarning: "warn",
-    });
-  });
-
-  it("redacts credential-bearing Gateway URLs from text and JSON status", () => {
-    const gatewayConnection = {
-      url: "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed",
-      urlSource: "cli --url",
-    };
-
-    const params = {
+  it("redacts credential-bearing Gateway URLs from text status", () => {
+    const summary = getStatusOverviewRowValue("Gateway", {
       ...offlineGateway,
-      gatewayMode: "remote" as const,
-      gatewayConnection,
+      gatewayMode: "remote",
+      gatewayConnection: {
+        url: "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed",
+        urlSource: "cli --url",
+      },
       gatewayProbe: { error: "unreachable" },
       gatewaySelf: baseStatusOverviewSurface.gatewaySelf,
-    } as const;
-    const summary = getStatusOverviewRowValue("Gateway", params);
-    const json = buildGatewayStatusJsonPayload({ ...params, gatewaySelf: null });
-    const output = JSON.stringify({ summary, json });
-
+    });
     expect(summary).toContain("gateway.example/ws");
-    expect(output).toContain("gateway.example/ws");
-    expect(output).not.toMatch(/password|secret|api-key|signed/);
+    expect(JSON.stringify({ summary })).not.toMatch(/password|secret|api-key|signed/);
   });
 
-  it("reports startup phase without an unreachable error in text and JSON", () => {
+  it("reports startup phase without an unreachable error in text", () => {
     const params = {
       ...offlineGateway,
       gatewayProbe: { startupPhase: "plugins", error: null },
@@ -256,124 +180,48 @@ describe("status-all format", () => {
       "still starting (phase plugins)",
     );
     expect(getStatusOverviewRowValue("Gateway", params)).not.toContain("unreachable");
-    expect(buildGatewayStatusJsonPayload(params)).toMatchObject({
-      readiness: "still-starting",
-      startupPhase: "plugins",
-      error: null,
-    });
   });
 
-  it("builds shared gateway surface values for node and gateway views", () => {
+  it("prefers node-only gateway values", () => {
+    row("Gateway", {
+      ...offlineGateway,
+      nodeOnlyGateway: { gatewayValue: "node → remote.example:18789 · no local gateway" },
+    }).toBe("node → remote.example:18789 · no local gateway");
+  });
+
+  it("builds decorated overview rows with ordered prefix, middle and suffix rows", () => {
     expect(
       buildStatusOverviewSurfaceRows({
         ...baseStatusOverviewSurface,
+        tailscaleMode: "off",
+        tailscaleHttpsUrl: null,
+        prefixRows: [{ Item: "OS", Value: "macOS · node 22" }],
+        middleRows: [{ Item: "Security", Value: "Run: openclaw security audit --deep" }],
+        suffixRows: [{ Item: "Secrets", Value: "none" }],
         agentsValue: "2 total",
-        cfg: { gateway: { bind: "loopback" } },
-        gatewayMode: "remote",
-        remoteUrlMissing: false,
-        gatewayConnection: {
-          url: "wss://gateway.example.com",
-          urlSource: "config",
-        },
-        gatewayReachable: true,
-        gatewayProbe: { connectLatencyMs: 123, error: null },
-        gatewayProbeAuth: { token: "tok" },
-        gatewaySelf: { host: "gateway", version: "1.2.3" },
-        gatewayService: {
-          label: "LaunchAgent",
-          installed: true,
-          managedByOpenClaw: true,
-          loadedText: "loaded",
-          runtimeShort: "running",
-        },
-        nodeService: {
-          label: "node",
-          installed: true,
-          loadedText: "loaded",
-          runtime: { status: "running", pid: 42 },
-        },
+        updateValue: "available · custom update",
+        gatewayAuthWarningValue: "warn(warn-text)",
+        includeDnsNameWhenOff: true,
         decorateOk: (value) => `ok(${value})`,
-        decorateWarn: (value) => `warn(${value})`,
-      }).filter((entry) =>
-        ["Dashboard", "Gateway", "Gateway self", "Gateway service", "Node service"].includes(
-          entry.Item,
-        ),
-      ),
+        decorateTailscaleOff: (value) => `muted(${value})`,
+      }),
     ).toEqual([
+      { Item: "OS", Value: "macOS · node 22" },
       { Item: "Dashboard", Value: "http://127.0.0.1:18789/" },
+      { Item: "Tailscale exposure", Value: "muted(off · box.tail.ts.net)" },
+      { Item: "Channel", Value: "stable (config)" },
+      { Item: "Git", Value: "main · tag v1.2.3" },
+      { Item: "Update", Value: "available · custom update" },
       {
         Item: "Gateway",
         Value:
-          "remote · wss://gateway.example.com (config) · ok(reachable 123ms) · auth token · gateway app 1.2.3",
+          "remote · wss://gateway.example.com (config) · ok(reachable 42ms) · auth token · gateway app 1.2.3",
       },
+      { Item: "Gateway auth warning", Value: "warn(warn-text)" },
+      { Item: "Security", Value: "Run: openclaw security audit --deep" },
       { Item: "Gateway self", Value: "gateway app 1.2.3" },
       { Item: "Gateway service", Value: "LaunchAgent installed · loaded · running" },
       { Item: "Node service", Value: "node loaded · running (pid 42)" },
-    ]);
-  });
-
-  it("prefers node-only gateway values when present", () => {
-    expect(
-      buildStatusOverviewSurfaceRows({
-        ...baseStatusOverviewSurface,
-        ...offlineGateway,
-        agentsValue: "2 total",
-        cfg: { gateway: { controlUi: { enabled: false } } },
-        gatewayService: { label: "LaunchAgent", installed: false, loadedText: "not loaded" },
-        nodeService: {
-          label: "node",
-          installed: true,
-          loadedText: "loaded",
-          runtimeShort: "running",
-        },
-        nodeOnlyGateway: { gatewayValue: "node → remote.example:18789 · no local gateway" },
-      }).filter((entry) =>
-        ["Dashboard", "Gateway", "Gateway self", "Gateway service", "Node service"].includes(
-          entry.Item,
-        ),
-      ),
-    ).toEqual([
-      { Item: "Dashboard", Value: "disabled" },
-      { Item: "Gateway", Value: "node → remote.example:18789 · no local gateway" },
-      { Item: "Gateway service", Value: "LaunchAgent not installed" },
-      { Item: "Node service", Value: "node loaded · running" },
-    ]);
-  });
-
-  it("builds overview rows with shared ordering", () => {
-    expect(
-      buildStatusOverviewSurfaceRows({
-        ...baseStatusOverviewSurface,
-        prefixRows: [{ Item: "Version", Value: "1.0.0" }],
-        advertisedControlUiLinks: { httpUrl: "https://openclaw.local", wsUrl: "" },
-        gatewayMode: "local",
-        gatewayConnection: { url: "ws://127.0.0.1:18789" },
-        gatewayProbe: { connectLatencyMs: 12 },
-        gatewaySelf: { host: "gateway-host" },
-        gatewayService: { label: "launchd", installed: true, loadedText: "loaded" },
-        nodeService: { label: "node", installed: true, loadedText: "loaded" },
-        updateValue: "up to date",
-        gatewayAuthWarningValue: "warning",
-        middleRows: [{ Item: "Security", Value: "Run: openclaw security audit --deep" }],
-        agentsValue: "2 total",
-        suffixRows: [{ Item: "Secrets", Value: "none" }],
-      }),
-    ).toEqual([
-      { Item: "Version", Value: "1.0.0" },
-      { Item: "Dashboard", Value: "https://openclaw.local" },
-      { Item: "Tailscale exposure", Value: "serve · box.tail.ts.net · https://box.tail.ts.net" },
-      { Item: "Channel", Value: baseStatusExpectedUpdateChannelLabel },
-      { Item: "Git", Value: "main · tag v1.2.3" },
-      { Item: "Update", Value: "up to date" },
-      {
-        Item: "Gateway",
-        Value: "local · ws://127.0.0.1:18789 · reachable 12ms · auth token · gateway-host",
-      },
-      { Item: "Gateway auth warning", Value: "warning" },
-      { Item: "Security", Value: "Run: openclaw security audit --deep" },
-      { Item: "Gateway self", Value: "gateway-host" },
-      { Item: "Gateway service", Value: "launchd loaded" },
-      { Item: "Node service", Value: "node loaded" },
       { Item: "Agents", Value: "2 total" },
       { Item: "Secrets", Value: "none" },
     ]);

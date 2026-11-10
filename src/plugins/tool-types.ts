@@ -50,6 +50,11 @@ export type OpenClawPluginToolModelExecution = {
   ) => Promise<T>;
 };
 
+/** Narrows a tool auth lookup to one stored credential type, such as subscription OAuth. */
+export type OpenClawPluginToolAuthQuery = {
+  credentialType?: "api_key" | "oauth" | "token";
+};
+
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 type OpenClawPluginToolContextBase = {
   config?: OpenClawConfig;
@@ -76,6 +81,12 @@ type OpenClawPluginToolContextBase = {
    * policy; it never grants owner identity.
    */
   inputProvenance?: InputProvenance;
+  /**
+   * Present when this tool runs inside a hidden background fork of another session.
+   * `ownerPluginId` names the plugin that started the fork with
+   * `api.runtime.subagent.runForkedTurn`; it is absent for core-owned forks. Host-stamped.
+   */
+  backgroundRun?: { sourceSessionKey: string; ownerPluginId?: string };
   /** Out-of-band plugin-owned bindings attached by the current run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Host-prepared repository identities for project-aware tool behavior. */
@@ -91,13 +102,26 @@ type OpenClawPluginToolContextBase = {
   browser?: {
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
+    /** Prepared local exec parity; not standalone authority or permission for remote browsers. */
+    allowLocalLoopback?: boolean;
+    assertLocalLoopbackCurrent?: () => void;
   };
   messageChannel?: string;
   agentAccountId?: string;
-  /** Trusted provider auth availability from the active auth profile store. */
-  hasAuthForProvider?: (providerId: string) => boolean;
-  /** Resolves an API key from the active auth profile store when available. */
-  resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
+  /**
+   * Trusted provider auth availability from the active auth profile store. With
+   * `credentialType`, only ordered stored profiles of that type count.
+   */
+  hasAuthForProvider?: (providerId: string, query?: OpenClawPluginToolAuthQuery) => boolean;
+  /**
+   * Resolves an API key from the active auth profile store when available. With
+   * `credentialType`, only ordered stored profiles of that type are used; there is
+   * no environment or other-type fallback.
+   */
+  resolveApiKeyForProvider?: (
+    providerId: string,
+    query?: OpenClawPluginToolAuthQuery,
+  ) => Promise<string | undefined>;
   /** Trusted ambient delivery route for the active agent/session. */
   deliveryContext?: DeliveryContext;
   /** Host-bound current-route delivery. Retained copies fail after the owning turn closes. */
@@ -114,7 +138,11 @@ type OpenClawPluginToolContextBase = {
   memoryFlush?: { flushId: string };
   /** Rejects a retained audience after any captured session incarnation changes. */
   assertMemoryAudienceCurrent?: () => void;
-  /** Live host-bound authority. Recheck inside the final synchronous effect/write guard. */
+  /**
+   * Live host-bound authority. Recheck inside the final synchronous effect/write guard.
+   * Resolves the invoking call from the async context it runs in; callbacks from event sources
+   * shared across calls must run it through `AsyncLocalStorage.snapshot()` taken at call start.
+   */
   assertInvocationCurrent?: () => void;
   /**
    * Host-bound client-input policy. Pure synchronous guard for final storage admission;
@@ -164,6 +192,11 @@ export type OpenClawPluginToolOptions = {
   optional?: boolean;
   /** False: independent; execute: pure factory with workspace use; true/omitted: factory may use it. */
   workspaceAccess?: boolean | "execute";
+  /**
+   * System-prompt guidance for these tools. Agent harnesses show it only while one of the
+   * named tools is callable in the run, so a denied tool adds no prompt bytes.
+   */
+  promptGuidance?: string;
 };
 
 export type OpenClawPluginHookOptions = {

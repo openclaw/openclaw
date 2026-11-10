@@ -6,13 +6,16 @@ import { testing as cliBackendsTesting } from "../agents/cli-backends.test-suppo
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { applyModelAllowlist } from "../flows/model-picker-allowlist.js";
 import {
-  applyModelAllowlist,
+  applyModelFallbacksFromSelection,
   promptDefaultModel,
   promptModelAllowlist,
 } from "../flows/model-picker.js";
+import { createEmptyPluginSetupRegistry } from "../plugins/setup-registry.test-support.js";
 import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn());
 const modelCatalogRouteVariants = vi.hoisted(() => ({
@@ -165,23 +168,13 @@ function agentConfig(
   return { agents: { defaults } };
 }
 
-function configuredTextModel(id: string, name: string) {
-  return {
-    id,
-    name,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
-}
-
-function nvidiaConfig(models: ReturnType<typeof configuredTextModel>[]): OpenClawConfig {
+function nvidiaConfig(ids: string[]): OpenClawConfig {
   const nvidia = {
     api: "openai-completions" as const,
     baseUrl: "https://integrate.api.nvidia.com/v1",
-    models,
+    models: ids.map((id) =>
+      createTestModelDefinition(id, { contextWindow: 128_000, maxTokens: 8192 }),
+    ),
   };
   return { agents: { defaults: {} }, models: { providers: { nvidia } } };
 }
@@ -232,26 +225,9 @@ beforeEach(() => {
   modelCatalogRouteVariants.value = undefined;
   providerAuthRoute.value = undefined;
   providerAuthEvaluations.clear();
-  const cliBackends = (
-    [
-      ["claude-cli", "anthropic", "claude"],
-      ["google-gemini-cli", "google", "gemini"],
-    ] as const
-  ).map(([id, provider, command]) => ({
-    id,
-    modelProvider: provider,
-    pluginId: provider,
-    config: { command },
-  }));
   cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => cliBackends,
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: cliBackends.map(({ pluginId, ...backend }) => ({ pluginId, backend })),
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
+    resolveRuntimeCliBackends: () => [],
+    resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
   });
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
   setScopedCatalog([]);
@@ -480,6 +456,7 @@ it("includes stale configured preferred provider models in the scoped cleanup", 
   expect(requireOption(options, staleModel).hint).toBe("configured (not in catalog)");
   expect(multiselect.mock.calls[0]?.[0]?.initialValues).toEqual([activeModel, staleModel]);
   expect(result).toEqual({ models: [activeModel], scopeKeys: [activeModel, staleModel] });
+  // Unmigrated legacy map: its restriction carries into the explicit policy.
   const next = applyModelAllowlist(config, result.models ?? [], { scopeKeys: result.scopeKeys });
   expect(next.agents?.defaults?.models).toEqual(modelsBefore);
   expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
@@ -509,15 +486,8 @@ it.each([true, false])(
         : [deprecated],
     );
     const configured = live
-      ? [
-          configuredTextModel("nvidia/native", "Bundled Native"),
-          configuredTextModel("z-ai/glm5", "Configured GLM5 fallback"),
-          configuredTextModel("private/custom-nvidia", "Private NVIDIA model"),
-        ]
-      : [
-          configuredTextModel("custom-nvidia-model", "Custom NVIDIA model"),
-          configuredTextModel("z-ai/glm5", "Configured GLM5 fallback"),
-        ];
+      ? ["nvidia/native", "z-ai/glm5", "private/custom-nvidia"]
+      : ["custom-nvidia-model", "z-ai/glm5"];
     const { result, values } = await pickAllowlist({
       config: nvidiaConfig(configured),
       preferredProvider: "nvidia",
@@ -536,3 +506,112 @@ it.each([true, false])(
     }
   },
 );
+
+it.each([
+  {
+    name: "kept wildcard",
+    saved: ["a/x", "p/*"],
+    picks: ["p/one", "p/two"],
+    allow: ["a/x", "p/*"],
+  },
+  {
+    name: "no new wildcard",
+    saved: ["a/x", "p/one"],
+    picks: ["p/one", "p/two"],
+    allow: ["a/x", "p/one", "p/two"],
+  },
+  { name: "narrowed wildcard", saved: ["a/x", "p/*"], picks: ["p/one"], allow: ["a/x", "p/one"] },
+])("writes the configure selection into an existing allowlist: $name", (testCase) => {
+  const { saved, picks, allow } = testCase;
+  const models = { "a/x": { alias: "X" } };
+  const config: OpenClawConfig = {
+    meta: { migrations: { modelPolicyAllowlist: true } },
+    agents: { defaults: { models, modelPolicy: { allow: saved } } },
+  };
+  const next = applyModelAllowlist(config, picks, { scopeKeys: ["p/one", "p/two"] });
+  expect(next.agents?.defaults?.modelPolicy?.allow).toEqual(allow);
+  // The models map is metadata; picks are not mirrored into it.
+  expect(next.agents?.defaults?.models).toEqual(models);
+});
+
+it("does not create an allowlist when none exists", () => {
+  const config: OpenClawConfig = { meta: { migrations: { modelPolicyAllowlist: true } } };
+  expect(applyModelAllowlist(config, ["p/one"], { scopeKeys: ["p/one", "p/two"] })).toBe(config);
+});
+
+it("offers fallback-only selection when no allowlist exists", async () => {
+  setScopedCatalog([catalogModel("nvidia", "rec", "Recommended")]);
+  const { multiselect } = await pickAllowlist({
+    config: agentConfig({ models: { "nvidia/rec": { alias: "rec" } } }),
+    preferredProvider: "nvidia",
+    providerScopedCatalog: true,
+    restrictsPicker: false,
+  });
+  const prompt = multiselect.mock.calls[0]?.[0];
+  expect(prompt?.message).toBe("Fallback models (multi-select)");
+  // Model metadata is not a fallback; only the primary and fallbacks are preselected.
+  expect(prompt?.initialValues).toBeUndefined();
+});
+
+it("saves new fallback-only picks outside the primary's provider", () => {
+  const config = agentConfig({ model: { primary: "openai/gpt-5.5" } });
+  const next = applyModelFallbacksFromSelection(config, ["nvidia/kimi"], {
+    scopeKeys: ["nvidia/kimi", "nvidia/rec"],
+    fallbacksOnly: true,
+  });
+  expect(next.agents?.defaults?.model).toEqual({
+    primary: "openai/gpt-5.5",
+    fallbacks: ["nvidia/kimi"],
+  });
+});
+
+it.each([
+  { allow: ["openai/gpt-5.5", "nvidia/rec", "nvidia/kimi"], seeded: ["nvidia/rec", "nvidia/kimi"] },
+  { allow: ["openai/gpt-5.5", "nvidia/*"], seeded: ["nvidia/rec", "nvidia/kimi", "nvidia/other"] },
+])("seeds a configure re-run from the saved allowlist: $allow", async ({ allow, seeded }) => {
+  setScopedCatalog([
+    catalogModel("nvidia", "rec", "Recommended"),
+    catalogModel("nvidia", "kimi", "Kimi"),
+    catalogModel("nvidia", "other", "Other"),
+  ]);
+  const { multiselect } = await pickAllowlist({
+    config: {
+      meta: { migrations: { modelPolicyAllowlist: true } },
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" }, modelPolicy: { allow } } },
+    },
+    preferredProvider: "nvidia",
+    providerScopedCatalog: true,
+  });
+  expect(multiselect.mock.calls[0]?.[0]?.initialValues).toEqual(seeded);
+});
+
+it.each([
+  { restrictsPicker: true, initial: "openai/*, anthropic/claude-sonnet-4-6" },
+  { restrictsPicker: false, initial: "anthropic/claude-sonnet-4-6" },
+])("keeps saved entries in the no-catalog text prompt: $restrictsPicker", async (testCase) => {
+  loadModelCatalog.mockResolvedValue([]);
+  const text = vi.fn(async ({ initialValue }: { initialValue?: string }) => initialValue ?? "");
+  const config: OpenClawConfig = {
+    meta: { migrations: { modelPolicyAllowlist: true } },
+    agents: {
+      defaults: {
+        model: { primary: "openai/gpt-5.5", fallbacks: ["anthropic/claude-sonnet-4-6"] },
+        models: { "openai/gpt-6-astra": {} },
+        modelPolicy: { allow: ["openai/*", "anthropic/claude-sonnet-4-6"] },
+      },
+    },
+  };
+  const result = await promptModelAllowlist({
+    config,
+    prompter: makePrompter({ text: text as unknown as WizardPrompter["text"] }),
+    restrictsPicker: testCase.restrictsPicker,
+  });
+  expect(text.mock.calls[0]?.[0]?.initialValue).toBe(testCase.initial);
+  if (testCase.restrictsPicker) {
+    const next = applyModelAllowlist(config, result.models ?? []);
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "openai/*",
+      "anthropic/claude-sonnet-4-6",
+    ]);
+  }
+});

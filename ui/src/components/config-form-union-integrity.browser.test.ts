@@ -1,18 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  expectElement,
   renderAnalyzedFormFixture,
   renderTextInputFixture,
   renderNodeFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
-}
 
 describe("config form primitive union integrity", () => {
   it.each(
@@ -65,9 +58,9 @@ describe("config form primitive union integrity", () => {
       });
       const renderValue = (token: unknown) =>
         renderNodeFixture(container, {
-          schema: analysis.schema!,
-          value: { credentials: { token } },
-          path: [],
+          schema: analysis.schema!.properties!.credentials!,
+          value: { token },
+          path: ["credentials"],
           hints: { "credentials.token": { sensitive: true } },
           unsupported: new Set(analysis.unsupportedPaths),
           disabled: false,

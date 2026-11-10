@@ -5,7 +5,6 @@ export type MobileDetailsRoute =
   | {
       kind:
         | "task-progress"
-        | "context"
         | "pull-requests"
         | "goal"
         | "publication"
@@ -45,6 +44,8 @@ export type ChatMobileHost = {
   /** Existing connection, agent and session identity from the pane owner. */
   scopeKey: string;
   open: boolean;
+  /** Closed, but still sliding out: content stays presented while hidden and inert. */
+  exiting: boolean;
   suspended: boolean;
   mode: "dock" | "expanded";
   height: number | undefined;
@@ -57,7 +58,7 @@ export type ChatMobileHost = {
   close: () => void;
   back: () => void;
   toggleExpanded: (visibleDockHeight: number) => void;
-  resize: (height: number, mode?: "dock" | "expanded", reservedHeight?: number) => void;
+  resize: (height: number, mode: "dock" | "expanded", reservedHeight: number) => void;
   /** Undefined means the viewport owner has not observed a value. */
   keyboardVisible: boolean | undefined;
   onComposerEditingChange: (editing: boolean) => void;

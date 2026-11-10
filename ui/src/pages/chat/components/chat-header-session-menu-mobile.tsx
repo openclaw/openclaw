@@ -8,12 +8,13 @@ import {
   type MenuItem,
   type MenuItemBindings,
 } from "../../../components/solid/menu.tsx";
-import { registerSessionOrganizationEnglish } from "../../../i18n/locales/en-session-organization.ts";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
+import { registerSessionMenuEnglish } from "../../../i18n/locales/en-session-menu.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 
-registerSessionOrganizationEnglish();
+registerSessionMenuEnglish();
 
 export type HeaderSessionMenuPage = {
   key: "session-assign" | "session-group" | "session-advanced" | "session-appearance";
@@ -34,6 +35,7 @@ export type HeaderSessionMenuMobileHost = {
 };
 
 const plainLabel = (label: string) => label.replace(/(?:…|\.{3})$/u, "");
+const normalizeSearch = (value: string) => value.toLocaleLowerCase().normalize("NFC");
 const isItem = (entry: MenuEntry): entry is MenuItem =>
   entry.kind !== "content" && entry.kind !== "group";
 
@@ -94,11 +96,9 @@ function PageEntries(props: {
             {entry.type === "checkbox" ? <Icon name="eye" /> : entry.icon}
             <span>{plainLabel(entry.label)}</span>
             {entry.type === "checkbox" ? (
-              <span
-                class="session-actions-page__switch"
-                data-checked={entry.checked ? "true" : "false"}
-                aria-hidden="true"
-              />
+              <span class="session-actions-page__switch">
+                <SwitchIndicator checked={Boolean(entry.checked)} size="md" />
+              </span>
             ) : entry.checked ? (
               <Icon name="check" />
             ) : entry.id.startsWith("compact:open-") ? (
@@ -116,7 +116,6 @@ export function createMobileHeaderSessionMenu(options: {
   currentOwner: () => SessionCreatedActor | null;
   category: () => string | null | undefined;
   viewOptions: () => MenuEntry[];
-  palette: () => MenuItem;
   host: () => HeaderSessionMenuMobileHost | undefined;
   source: () => HTMLElement | undefined;
   closeMenu: () => void;
@@ -131,7 +130,7 @@ export function createMobileHeaderSessionMenu(options: {
     keyboardSource?: HTMLElement;
   };
   const [pageRequests, setPageRequests] = createSignal<PageRequest[]>([]);
-  const body = (name: "assign-owner" | "group" | "advanced" | "icon" | "open-in") =>
+  const body = (name: "assign-owner" | "group" | "advanced" | "icon") =>
     options.view
       .compact(name)
       .filter((entry) => !entry.id.startsWith("compact:back") && entry.id !== "back-divider");
@@ -185,8 +184,7 @@ export function createMobileHeaderSessionMenu(options: {
       return [
         ...groups.filter(
           (entry) =>
-            isItem(entry) &&
-            entry.label.toLocaleLowerCase().includes(query().trim().toLocaleLowerCase()),
+            isItem(entry) && normalizeSearch(entry.label).includes(normalizeSearch(query().trim())),
         ),
         ...rows.filter((entry) => !groups.includes(entry)),
       ];
@@ -261,7 +259,6 @@ export function createMobileHeaderSessionMenu(options: {
                       .filter(
                         (entry) =>
                           !entry.id.includes("copy") &&
-                          !entry.id.includes("open-in") &&
                           !entry.id.startsWith("communication") &&
                           entry.id !== "delete-divider",
                       )
@@ -297,12 +294,6 @@ export function createMobileHeaderSessionMenu(options: {
                     )}
                     select={select}
                   />
-                </div>
-              </section>
-              <section>
-                <h3>{t("sessionsView.openInEditorMenu")}</h3>
-                <div class="session-actions-page__group">
-                  <PageEntries entries={body("open-in")} select={select} />
                 </div>
               </section>
             </>

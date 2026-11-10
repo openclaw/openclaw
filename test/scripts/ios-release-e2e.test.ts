@@ -31,6 +31,7 @@ const nativeMocks = vi.hoisted(() => ({
   install: vi.fn(),
   gateway: vi.fn(),
   rpc: vi.fn(),
+  headroom: vi.fn(),
 }));
 const commandsWith = (argument: string) =>
   nativeMocks.command.mock.calls
@@ -109,6 +110,10 @@ vi.mock("../../scripts/lib/ios-release-e2e-build.js", () => ({
 }));
 vi.mock("../../scripts/lib/ios-release-gateway.js", () => ({
   prepareIOSReleaseGateway: nativeMocks.install,
+}));
+vi.mock("../../scripts/lib/ios-simulator-headroom.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/ios-simulator-headroom.js")>()),
+  waitForIOSSimulatorHeadroom: nativeMocks.headroom,
 }));
 vi.mock("../helpers/openclaw-test-instance.js", () => ({
   createOpenClawTestInstance: nativeMocks.gateway,
@@ -443,82 +448,167 @@ describe("release qualification workflow authority", () => {
   const workflow = parse(readFileSync(".github/workflows/ios-release-e2e.yml", "utf8"));
   const release = parse(readFileSync(".github/workflows/ios-store-release.yml", "utf8"));
   const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
-  const selectionArtifact = {
-    id: 456,
-    name: "ios-release-gateway-selection-123",
-    expired: false,
-    workflow_run: { id: 123, head_sha: "a".repeat(40) },
-  };
-  const pin = (run: Partial<typeof selectionArtifact.workflow_run>) => ({
-    ...selectionArtifact,
-    workflow_run: { ...selectionArtifact.workflow_run, ...run },
-  });
-  const reuseSelection = { create: "false", "artifact-id": "456" };
-  const invalidPin = "expired or belongs to another source/run";
-  async function findGatewaySelection(
-    attempt: number,
-    artifacts: (typeof selectionArtifact)[],
-    outputs: Map<string, string>,
-    apiFailure?: Error,
-  ) {
-    const { runInNewContext } = await import("node:vm");
-    const step = workflow.jobs.qualify.steps.find(
-      (candidate: { id?: string }) => candidate.id === "gateway-selection",
-    );
-    const listWorkflowRunArtifacts = vi.fn();
-    const paginate = apiFailure
-      ? vi.fn().mockRejectedValue(apiFailure)
-      : vi.fn().mockResolvedValue(artifacts);
-    const execution: unknown = runInNewContext(`(async () => { ${step.with.script} })()`, {
-      github: { rest: { actions: { listWorkflowRunArtifacts } }, paginate },
-      context: { repo: { owner: "openclaw", repo: "openclaw" }, runId: 123 },
-      core: { setOutput: (name: string, value: string) => outputs.set(name, value) },
-      process: {
-        env: {
-          GITHUB_RUN_ATTEMPT: String(attempt),
-          TARGET_SHA: selectionArtifact.workflow_run.head_sha,
+  const gatewayPreparation = parse(
+    readFileSync(".github/actions/prepare-mobile-release-gateway/action.yml", "utf8"),
+  );
+  describe.each(["ios", "android"])("%s stable Gateway selection", (platform) => {
+    const selectionArtifact = {
+      id: 456,
+      name: `${platform}-release-gateway-selection-123`,
+      expired: false,
+      workflow_run: { id: 123, head_sha: "a".repeat(40) },
+    };
+    const pin = (run: Partial<typeof selectionArtifact.workflow_run>) => ({
+      ...selectionArtifact,
+      workflow_run: { ...selectionArtifact.workflow_run, ...run },
+    });
+    const reuseSelection = { create: "false", "artifact-id": "456" };
+    const invalidPin = "expired or belongs to another source/run";
+    async function findGatewaySelection(
+      attempt: number,
+      artifacts: (typeof selectionArtifact)[],
+      outputs: Map<string, string>,
+      apiFailure?: Error,
+    ) {
+      const { runInNewContext } = await import("node:vm");
+      const step = gatewayPreparation.runs.steps.find(
+        (candidate: { id?: string }) => candidate.id === "gateway-selection",
+      );
+      const listWorkflowRunArtifacts = vi.fn();
+      const paginate = apiFailure
+        ? vi.fn().mockRejectedValue(apiFailure)
+        : vi.fn().mockResolvedValue(artifacts);
+      const execution: unknown = runInNewContext(`(async () => { ${step.with.script} })()`, {
+        github: { rest: { actions: { listWorkflowRunArtifacts } }, paginate },
+        context: { repo: { owner: "openclaw", repo: "openclaw" }, runId: 123 },
+        core: { setOutput: (name: string, value: string) => outputs.set(name, value) },
+        process: {
+          env: {
+            GITHUB_RUN_ATTEMPT: String(attempt),
+            TARGET_SHA: selectionArtifact.workflow_run.head_sha,
+            SELECTION_ARTIFACT_NAME: selectionArtifact.name,
+          },
         },
-      },
+      });
+      await execution;
+      expect(paginate).toHaveBeenCalledWith(listWorkflowRunArtifacts, {
+        owner: "openclaw",
+        repo: "openclaw",
+        run_id: 123,
+        name: selectionArtifact.name,
+        per_page: 100,
+      });
+    }
+    it.each([
+      ["new workflow run", 1, [], { create: "true", "artifact-id": "" }],
+      ["existing first-attempt selection", 1, [selectionArtifact], reuseSelection],
+      ["workflow rerun", 2, [selectionArtifact], reuseSelection],
+    ])("preserves the Gateway selection for %s", async (_name, attempt, artifacts, expected) => {
+      const outputs = new Map<string, string>();
+      await findGatewaySelection(attempt, artifacts, outputs);
+      expect(Object.fromEntries(outputs)).toEqual(expected);
     });
-    await execution;
-    expect(paginate).toHaveBeenCalledWith(listWorkflowRunArtifacts, {
-      owner: "openclaw",
-      repo: "openclaw",
-      run_id: 123,
-      name: selectionArtifact.name,
-      per_page: 100,
+    it.each([
+      ["missing rerun pin", [], "no saved stable Gateway selection"],
+      ["expired pin", [{ ...selectionArtifact, expired: true }], invalidPin],
+      [
+        "duplicate pins",
+        [selectionArtifact, selectionArtifact],
+        "Multiple stable Gateway selections",
+      ],
+      ["different source", [pin({ head_sha: "b".repeat(40) })], invalidPin],
+      ["different run", [pin({ id: 124 })], invalidPin],
+    ])("rejects %s without authorizing a new selection", async (_name, artifacts, error) => {
+      const outputs = new Map<string, string>();
+      await expect(findGatewaySelection(2, artifacts, outputs)).rejects.toThrow(error);
+      expect(outputs.size).toBe(0);
     });
-  }
-  it.each([
-    ["new workflow run", 1, [], { create: "true", "artifact-id": "" }],
-    ["existing first-attempt selection", 1, [selectionArtifact], reuseSelection],
-    ["workflow rerun", 2, [selectionArtifact], reuseSelection],
-  ])("preserves the Gateway selection for %s", async (_name, attempt, artifacts, expected) => {
-    const outputs = new Map<string, string>();
-    await findGatewaySelection(attempt, artifacts, outputs);
-    expect(Object.fromEntries(outputs)).toEqual(expected);
+    it("fails artifact lookup errors without treating the pin as missing", async () => {
+      const outputs = new Map<string, string>();
+      await expect(
+        findGatewaySelection(1, [], outputs, new Error("artifact API unavailable")),
+      ).rejects.toThrow("artifact API unavailable");
+      expect(outputs.size).toBe(0);
+    });
   });
-  it.each([
-    ["missing rerun pin", [], "no saved stable Gateway selection"],
-    ["expired pin", [{ ...selectionArtifact, expired: true }], invalidPin],
-    [
-      "duplicate pins",
-      [selectionArtifact, selectionArtifact],
-      "Multiple stable Gateway selections",
-    ],
-    ["different source", [pin({ head_sha: "b".repeat(40) })], invalidPin],
-    ["different run", [pin({ id: 124 })], invalidPin],
-  ])("rejects %s without authorizing a new selection", async (_name, artifacts, error) => {
-    const outputs = new Map<string, string>();
-    await expect(findGatewaySelection(2, artifacts, outputs)).rejects.toThrow(error);
-    expect(outputs.size).toBe(0);
-  });
-  it("fails artifact lookup errors without treating the pin as missing", async () => {
-    const outputs = new Map<string, string>();
-    await expect(
-      findGatewaySelection(1, [], outputs, new Error("artifact API unavailable")),
-    ).rejects.toThrow("artifact API unavailable");
-    expect(outputs.size).toBe(0);
+  it("preserves platform selection identity and the installation-clock boundary", () => {
+    const steps = gatewayPreparation.runs.steps;
+    expect(gatewayPreparation.runs.using).toBe("composite");
+    expect(gatewayPreparation.inputs["artifact-name"].required).toBe(true);
+    expect(gatewayPreparation.inputs["record-install-clock"].default).toBe("false");
+    expect(gatewayPreparation.outputs["install-start-epoch"].value).toBe(
+      "${{ steps.install-start.outputs.epoch }}",
+    );
+    const [find, restore, clock, setup, prepare, save] = steps;
+    expect(find.uses).toBe("actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3");
+    expect(find.env.SELECTION_ARTIFACT_NAME).toBe("${{ inputs.artifact-name }}");
+    expect(restore.uses).toBe("actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333");
+    expect(restore.if).toBe("steps.gateway-selection.outputs.artifact-id != ''");
+    expect(restore.with).toEqual({
+      "artifact-ids": "${{ steps.gateway-selection.outputs.artifact-id }}",
+      "github-token": "${{ github.token }}",
+      "run-id": "${{ github.run_id }}",
+      path: "${{ env.GATEWAY_SELECTION_DIR }}",
+      "digest-mismatch": "error",
+    });
+    expect(clock).toMatchObject({
+      id: "install-start",
+      if: "inputs.record-install-clock == 'true'",
+      shell: "bash",
+    });
+    expect(setup).toMatchObject({
+      uses: "./.github/actions/setup-node-env",
+      with: { "node-version": "24.22.1", "install-bun": "false", "cache-mode": "off" },
+    });
+    expect(prepare.env).toEqual({
+      GH_TOKEN: "${{ github.token }}",
+      RESTORED_SELECTION: "${{ steps.gateway-selection.outputs.artifact-id != '' }}",
+    });
+    expect(prepare.shell).toBe("bash");
+    for (const filename of ["selection.json", "package.json", "package-lock.json"]) {
+      expect(prepare.run).toContain(`test -f "$GATEWAY_SELECTION_DIR/${filename}"`);
+    }
+    expect(prepare.run).toContain(
+      '--target-sha "$TARGET_SHA" --selection-dir "$GATEWAY_SELECTION_DIR"',
+    );
+    expect(save.uses).toBe("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
+    expect(save.if).toBe("steps.gateway-selection.outputs.create == 'true'");
+    expect(save.with).toEqual({
+      name: "${{ inputs.artifact-name }}",
+      path:
+        ["selection.json", "package.json", "package-lock.json"]
+          .map((filename) => `\${{ env.GATEWAY_SELECTION_DIR }}/${filename}`)
+          .join("\n") + "\n",
+      "if-no-files-found": "error",
+      "retention-days": 30,
+    });
+    for (const platform of ["ios", "android"]) {
+      const selected = parse(readFileSync(`.github/workflows/${platform}-release-e2e.yml`, "utf8"));
+      const call = requiredWorkflowStep(
+        selected.jobs.qualify.steps,
+        "Prepare stable Gateway selection",
+      );
+      expect(call.id).toBe("gateway-preparation");
+      expect(call.uses).toBe("./.github/actions/prepare-mobile-release-gateway");
+      expect(call.with).toEqual({
+        "artifact-name": `${platform}-release-gateway-selection-\${{ github.run_id }}`,
+        ...(platform === "ios" ? { "record-install-clock": "true" } : {}),
+      });
+    }
+    const finish = requiredWorkflowStep(
+      workflow.jobs.qualify.steps,
+      "Complete sanitized timing proof",
+    );
+    expect(finish.env.INSTALL_START).toBe(
+      "${{ steps.gateway-preparation.outputs.install-start-epoch }}",
+    );
+    expect(finish.env.INSTALL_END).toBe("${{ steps.install-end.outputs.epoch }}");
+    expect(
+      requiredWorkflowStep(
+        workflow.jobs.qualify.steps,
+        "Finish shared toolchain installation clock",
+      ).if,
+    ).toBeUndefined();
   });
   it.each([
     ["manual current revision", {}, true],
@@ -733,6 +823,15 @@ process.exitCode = 23;
           : ["ios:screenshots"],
       );
       if (flow === "screenshots") {
+        const hostPreparation = requiredWorkflowStep(
+          release.jobs.screenshots.steps,
+          "Reserve host CPU for screenshots",
+        );
+        expect(
+          evaluateWorkflow(hostPreparation.if ?? "${{ true }}", {
+            inputs: { startup_probe: startupProbe },
+          }),
+        ).toBe(!startupProbe);
         expect(observed.snapshots).toBe("1");
         expect(observed.startupProbe).toBe(startupProbe ? "1" : "0");
         expect(observed.deviceFamily).toBe(startupProbe ? "iphone" : "");
@@ -791,6 +890,8 @@ it.each([
   "build-unjoined",
   "build-exit",
   "boot-timeout",
+  "headroom-timeout",
+  "cancel-during-headroom",
   "gateway-start-failure",
   "setup-status-timeout",
   "setup-status-failure",
@@ -1221,7 +1322,7 @@ it.each([
       selectedTest = testArgument.slice("-only-testing:".length);
       const reader = selectedTest === IOS_RELEASE_TESTS[1];
       lifecycle.push(reader ? "reader-test" : "live-test");
-      if (!reader) {
+      if (!reader && scenario !== "test-exit") {
         stdout.write("IOS_RELEASE_CHECKPOINT paired\nIOS_RELEASE_CHECKPOINT private-credential\n");
       }
       if (reader) {
@@ -1308,7 +1409,7 @@ it.each([
             : "IOS_RELEASE_CHAT_FAILURE relaunch reply draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false";
         stdout.write(
           "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' started.\n" +
-            `/private/checkout/OpenClawSnapshotUITests.swift:1913: error: private ${failureMessage}\n` +
+            `/private/checkout/OpenClawSnapshotUITests+Chat.swift:1913: error: private ${failureMessage}\n` +
             "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' failed (99 seconds).\n",
         );
         await Promise.resolve();
@@ -1329,11 +1430,20 @@ it.each([
         throw commandFailure("ETIMEDOUT", "unknown");
       }
       if (scenario === "test-exit") {
+        stdout.write("IOS_RELEASE_CHECKPOINT paired\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT first\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT second\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT private-credential\n");
+        nativeCommandActive = true;
         stdout.write(
-          "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
+          "/private/checkout/OpenClawSnapshotUITests+Helpers.swift:401: error: private assertion details\n" +
+            "/private/checkout/OpenClawSnapshotUITests+Helpers.swift:401: error: repeated private details\n" +
+            "/private/checkout/OpenClawSnapshotUITests+Private.swift:42: error: private details\n" +
             "private teardown details\n".repeat(256),
         );
         stderr.write("TEST FAILED: private setup code and private path\n");
+        await Promise.resolve();
+        nativeCommandActive = false;
         return 65;
       }
       if (!reader) {
@@ -1373,6 +1483,21 @@ it.each([
   const progressSnapshots: string[] = [];
   let rejectedSlowProgress = false;
   const abort = new AbortController();
+  nativeMocks.headroom.mockImplementation(async () => {
+    if (scenario === "cancel-during-headroom") {
+      abort.abort();
+      throw Object.assign(new Error("cancelled"), { code: "ABORT_ERR" });
+    }
+    if (scenario !== "headroom-timeout") {
+      lifecycle.push("headroom-ready");
+    }
+    return {
+      status: scenario === "headroom-timeout" ? "timeout" : "ready",
+      elapsedMs: scenario === "headroom-timeout" ? 300_000 : 10_000,
+      samples: scenario === "headroom-timeout" ? 150 : 5,
+      idlePercent: scenario === "headroom-timeout" ? 0 : 80,
+    };
+  });
   const admission = createNativeDependencies({
     mode: "stock",
     targetSha: "1".repeat(40),
@@ -1717,7 +1842,11 @@ it.each([
         [
           diagnostic("native-test", "timeout", {
             errorCode: "ETIMEDOUT",
-            context: containing(["xctest-started", "xctest-failed", "xctest-line:1904"]),
+            context: containing([
+              "xctest-started",
+              "xctest-failed",
+              "xctest-location:OpenClawSnapshotUITests.swift:1904",
+            ]),
           }),
         ],
         ["failed"],
@@ -1729,6 +1858,8 @@ it.each([
     });
     const preparationFailures: Record<string, ReturnType<typeof preparationFailure>> = {
       "boot-timeout": preparationFailure("simulator-ready", "timeout"),
+      "headroom-timeout": preparationFailure("simulator-headroom", "timeout"),
+      "cancel-during-headroom": preparationFailure("simulator-headroom", "cancelled"),
       "gateway-start-failure": preparationFailure("gateway-start", "failed"),
       "setup-status-timeout": preparationFailure("setup-status", "timeout", {
         context: [
@@ -1865,9 +1996,25 @@ it.each([
           operation: "native-test",
           code: "exit",
           exitCode: 65,
-          context: containing(["test-failed", "xctest-line:1904"]),
+          context: containing([
+            "test-failed",
+            "xctest-location:OpenClawSnapshotUITests+Helpers.swift:401",
+            expect.stringMatching(/^failure-evidence-at-ms:\d+$/),
+          ]),
         },
       ]);
+      const context = report.trials[0]?.diagnostics[0]?.context ?? [];
+      expect(context.filter((fact) => fact.startsWith("xctest-location:"))).toEqual([
+        "xctest-location:OpenClawSnapshotUITests+Helpers.swift:401",
+      ]);
+      expect(proof.phases).toEqual(
+        containing([matching({ operation: "native-test", checkpoint: "second" })]),
+      );
+      expect(progressSnapshots.some((snapshot) => snapshot.includes('"checkpoint":"first"'))).toBe(
+        true,
+      );
+      expect(historyReadBeforeCommandExit).toBe(true);
+      expect(JSON.stringify(report)).not.toMatch(/private|OPENCLAW_E2E_|metadata/);
       return;
     }
     if (scenario === "source-late-dirty" || scenario === "source-late-head-change") {
@@ -1895,7 +2042,8 @@ it.each([
       ["gateway-start", "boot-ready"],
       ["gateway-start", "setup-status"],
       ["setup-status-ready", "simulator-create"],
-      ["boot-ready", "setup-code"],
+      ["boot-ready", "headroom-ready"],
+      ["headroom-ready", "setup-code"],
       ["setup-code", "live-test"],
       ["gateway-cleanup", "reader-test"],
       ["mock-cleanup", "reader-test"],
@@ -1963,6 +2111,8 @@ it.each([
       containing([
         "-configuration",
         "Debug",
+        "ARCHS=arm64",
+        "COMPILER_INDEX_STORE_ENABLE=NO",
         "CODE_SIGNING_ALLOWED=YES",
         "CODE_SIGN_IDENTITY=-",
         "CODE_SIGN_STYLE=Manual",

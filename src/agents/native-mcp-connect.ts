@@ -1,8 +1,18 @@
 import { SdkError, SdkErrorCode, type Transport } from "@modelcontextprotocol/client";
-import type { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
+import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
+
+type NativeMcpProbe = {
+  canRestartLegacy(error: unknown): boolean;
+  detach(): void;
+};
 
 /** Observe the one disposable legacy probe without changing SDK negotiation policy. */
-export function observeNativeMcpProbe(transport: OpenClawStdioClientTransport) {
+export function observeNativeMcpProbe(transport: OpenClawStdioClientTransport): NativeMcpProbe;
+export function observeNativeMcpProbe(transport: Transport): NativeMcpProbe | undefined;
+export function observeNativeMcpProbe(transport: Transport): NativeMcpProbe | undefined {
+  if (!(transport instanceof OpenClawStdioClientTransport)) {
+    return undefined;
+  }
   let closeRequested = false;
   let spontaneousExit = false;
   let failedIo = false;

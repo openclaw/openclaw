@@ -4,8 +4,11 @@ import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.h
 import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
 import { buildToolLifecycleErrorResult, prepareToolResult } from "./embedded-agent-tool-results.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { markToolExecutionNotStarted, type ToolEffectReceipt } from "./tool-effect-receipt.js";
-import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
+import {
+  consumeToolExecutionNotStarted as consumeTrustedToolNoStartError,
+  markToolExecutionNotStarted,
+  type ToolEffectReceipt,
+} from "./tool-effect-receipt.js";
 
 type ToolTerminal = {
   result: unknown;

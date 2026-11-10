@@ -431,11 +431,11 @@ export async function promptAndConfigureLmstudioInteractive(params: {
     ? (params.config.models?.providers?.[PROVIDER_ID]?.baseUrl ?? defaultBaseUrl)
     : await promptText({
         message: `${LMSTUDIO_PROVIDER_LABEL} base URL`,
-        initialValue: defaultBaseUrl,
+        // Prefilling the default makes typed input append to it; hint it and use it for blank input.
         placeholder: defaultBaseUrl,
         validate: validateLmstudioSetupUrl,
       });
-  const baseUrl = resolveLmstudioInferenceBase(baseUrlRaw ?? defaultBaseUrl);
+  const baseUrl = resolveLmstudioInferenceBase(baseUrlRaw?.trim() || defaultBaseUrl);
   let credentialInput: SecretInput | undefined = params.suppliedApiKey;
   let credentialMode: SecretInputMode | undefined;
   const implicitRefMode = params.allowSecretRefPrompt === false && !params.secretInputMode;

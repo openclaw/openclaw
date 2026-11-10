@@ -3,17 +3,18 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
-  createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
   getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import {
   chatPaneHeaderSessionMenu,
   mountChatPaneHeader,
+  selectNativeMenu,
   renderPaneHeaderInto,
 } from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
@@ -25,6 +26,45 @@ import {
   setSidebarOpen,
   isSidebarSlotVisible,
 } from "./sidebar-layout.ts";
+
+it("refreshes a plugin Layout-menu icon without changing its label or layout", () => {
+  const { pane, state } = createTestChatPane({
+    client: createGatewayBrowserClientFixture(),
+    sessions: createSessionCapabilityFixture(),
+  });
+  const definition: SidebarPanelDefinition = {
+    slot: "plugin:fixture/activity",
+    label: "Activity",
+    icon: "activity",
+    available: true,
+    content: null,
+    loading: { variant: "files", label: "Loading activity" },
+    empty: { description: "No activity" },
+  };
+  const workspace = createPaneHeaderWorkspaceFixture(state);
+  const row = { key: state.sessionKey, kind: "direct" as const, updatedAt: 0 };
+  const controls = { openPanelSlot: vi.fn(), closePanelSlot: vi.fn() };
+  const renderIcon = () =>
+    pane
+      .renderPaneHeader(
+        workspace,
+        row,
+        false,
+        undefined,
+        false,
+        null,
+        state.sidebarLayout,
+        [definition],
+        undefined,
+        undefined,
+        controls,
+      )
+      .header.panelMenuActions?.find((action) => action.id === "panel-plugin:fixture/activity")
+      ?.icon;
+  expect(renderIcon()).toBe("activity");
+  definition.icon = "terminal";
+  expect(renderIcon()).toBe("terminal");
+});
 
 it("opens Discussion in the current presentation after a retained desktop header becomes mobile", async () => {
   const { pane, state } = createTestChatPane({
@@ -181,18 +221,8 @@ it("retains focused session menu controls through header refresh and restores fo
   const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
   await menu.updateComplete;
   const trigger = menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!;
-  trigger.click();
-  await waitForSolid(() =>
-    expect(menu.querySelector(".chat-header-session-menu__panel")?.matches(":popover-open")).toBe(
-      true,
-    ),
-  );
-  menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')!.click();
-  await waitForSolid(() =>
-    expect(menu.querySelector('[data-value="submenu:open-in"]')).not.toBeNull(),
-  );
+  await selectNativeMenu(menu, "submenu:open-in");
   const openIn = menu.querySelector<HTMLButtonElement>('[data-value="submenu:open-in"]')!;
-  openIn.click();
   await waitForSolid(() => expect(menu.querySelector('[data-value="split-right"]')).not.toBeNull());
   const split = menu.querySelector<HTMLButtonElement>('[data-value="split-right"]')!;
   split.focus();
@@ -228,7 +258,7 @@ it("renders a native external link in the main panel header", () => {
   const mounted = mountChatPaneHeader([], {
     sidebarLayout: promoteSidebarPanel(openSlot({ columns: [] }, "workspace"), "workspace"),
     panelDefinitions,
-    panelActionDestinations: { main: true, side: false, dashboard: false },
+    panelActionDestinations: { main: true, side: false },
   });
   onTestFinished(mounted.unmount);
   const link = mounted.container.querySelector<HTMLAnchorElement>('a[aria-label="Open panel"]')!;

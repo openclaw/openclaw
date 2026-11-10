@@ -74,3 +74,18 @@ it("exports the optional native contract through the public plugin API", () => {
     { kind: "at"; at: string } | { kind: "every"; everyMs: number }
   >();
 });
+
+it("exports optional narrow-only plugin-local profiles without changing native authority inputs", () => {
+  type Register = NonNullable<OpenClawPluginApi["agent"]["registerSubagentProfile"]>;
+  expectTypeOf<OpenClawPluginApi["agent"]["registerSubagentProfile"]>().toEqualTypeOf<
+    Register | undefined
+  >();
+  expectTypeOf<Parameters<Register>[0]>().toEqualTypeOf<{
+    id: string;
+    description: string;
+    instructionsFile: string;
+    outputSchema?: Record<string, unknown>;
+    tools?: { deny: string[] };
+  }>();
+  expectTypeOf<Parameters<Native["spawn"]>[0]["profile"]>().toEqualTypeOf<string | undefined>();
+});

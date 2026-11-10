@@ -6,9 +6,16 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import { build, createLogger, type InlineConfig } from "vite";
+import { JSDOM } from "jsdom";
+import { build, createLogger, type InlineConfig, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
+import {
+  listDirectoryTreeStrict,
+  listDirectoryTreeStrictSync,
+} from "../../../src/infra/directory-walk.js";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
+import { controlUiPluginDistributionsPlugin } from "../../config/control-ui-plugin-distributions.ts";
 import controlUiViteConfig from "../../vite.config.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 
@@ -23,6 +30,8 @@ let root: string;
 let outDir: string;
 const info = vi.fn<(message: string) => void>();
 const writeRoot = (file: string, source: string) => fs.writeFile(path.join(root, file), source);
+const writeFiles = (files: Record<string, string>) =>
+  Promise.all(Object.entries(files).map(([file, source]) => writeRoot(file, source)));
 const readOutput = (file: string) => fs.readFile(path.join(outDir, file), "utf8");
 const readAsset = (file: string) => readOutput(`assets/${file}`);
 const assetNames = () => fs.readdir(path.join(outDir, "assets"));
@@ -86,16 +95,22 @@ async function buildOutput(config: InlineConfig) {
 
 function createConfig(level: "info" | "silent" = "silent"): InlineConfig {
   info.mockReset();
-  return {
-    ...controlUiViteConfig({
-      outDir,
-      buildInfo: normalizeControlUiBuildInfo({
-        version: "1.0.0",
-        commit: "a".repeat(40),
-        dirty: false,
-        release: process.env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim() === "1",
-      }),
+  const config = controlUiViteConfig({
+    outDir,
+    buildInfo: normalizeControlUiBuildInfo({
+      version: "1.0.0",
+      commit: "a".repeat(40),
+      dirty: false,
+      release: process.env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim() === "1",
     }),
+  });
+  return {
+    ...config,
+    plugins: (config.plugins as Plugin[]).map((plugin) =>
+      plugin.name === "control-ui-plugin-distributions"
+        ? controlUiPluginDistributionsPlugin(root, new Set())
+        : plugin,
+    ),
     configFile: false,
     root,
     publicDir: false,
@@ -110,13 +125,13 @@ function createConfig(level: "info" | "silent" = "silent"): InlineConfig {
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "control-ui-vite-build-")));
   outDir = path.join(root, "dist");
-  await writeRoot(
-    "index.html",
-    '<script>globalThis.fixtureBooted = true;</script><button>Load</button><script type="module" src="./main.js"></script>',
-  );
-  await writeRoot("main.js", 'globalThis.load = () => import("./lazy.js");');
-  await writeRoot("lazy.js", 'import "./lazy.css"; export const message = "Lazy content loaded";');
-  await writeRoot("lazy.css", "body { color: green; }");
+  await writeFiles({
+    "index.html":
+      '<script>globalThis.fixtureBooted = true;</script><button>Load</button><script type="module" src="./main.js"></script>',
+    "main.js": 'globalThis.load = () => import("./lazy.js");',
+    "lazy.js": 'import "./lazy.css"; export const message = "Lazy content loaded";',
+    "lazy.css": "body { color: green; }",
+  });
 });
 
 afterEach(async () => {
@@ -125,22 +140,47 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+it("keeps inline recovery executable and its DOM intact after document compaction", async () => {
+  const source = `<style>/* fallback */ h1 { color: rgb(255, 0, 0); }</style>
+    <h1>Still loading</h1><button>Retry</button>
+    <p><span>Keep</span>
+      <span>spacing</span></p><pre>  code\n  next</pre><textarea>  draft\n  next</textarea>
+    <script data-cfasync="false">/* recovery */
+      document.querySelector("button").addEventListener("click", function () {
+        document.querySelector("h1").textContent = "Retrying";
+      });
+    </script>
+    <script nomodule>window.unsupported = function () { return "Update your browser"; };</script>`;
+  await writeRoot("index.html", source + '<script type="module" src="./main.js"></script>');
+  const { html: compact } = await buildOutput(createConfig());
+  const dom = new JSDOM(compact, { runScripts: "dangerously" });
+  const { document } = dom.window;
+  expect(document.querySelector("h1")?.outerHTML).toBe("<h1>Still loading</h1>");
+  expect(dom.window.getComputedStyle(document.querySelector("h1")!).color).toBe("rgb(255, 0, 0)");
+  document.querySelector("button")!.click();
+  expect(document.querySelector("h1")?.textContent).toBe("Retrying");
+  expect(document.querySelector("script[nomodule]")?.textContent).not.toMatch(
+    /[=]>|\b(?:let|const)\b/u,
+  );
+  expect(compact).not.toContain("/* recovery */");
+  expect(document.querySelector("p")?.textContent).toBe("Keep spacing");
+  expect(document.querySelector("pre")?.textContent).toBe("  code\n  next");
+  expect(document.querySelector("textarea")?.value).toBe("  draft\n  next");
+  dom.window.close();
+});
+
 it("omits already imported JavaScript from lazy preload tables, retaining lazy JS and CSS", async () => {
   const config = createConfig();
-  await writeRoot(
-    "main.js",
-    'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js"); globalThis.loadPlain = () => import("./plain.js");',
-  );
-  await writeRoot("shared.js", 'export const shared = "shared";');
-  await writeRoot("lazy-only.js", 'export const lazy = "lazy-only";');
-  await writeRoot(
-    "plain.js",
-    'import { lazy } from "./lazy-only.js"; export const message = "No stylesheet wait" + lazy;',
-  );
-  await writeRoot(
-    "lazy.js",
-    'import { shared } from "./shared.js"; import { lazy } from "./lazy-only.js"; import "./lazy.css"; export const message = shared + lazy;',
-  );
+  await writeFiles({
+    "main.js":
+      'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js"); globalThis.loadPlain = () => import("./plain.js");',
+    "shared.js": 'export const shared = "shared";',
+    "lazy-only.js": 'export const lazy = "lazy-only";',
+    "plain.js":
+      'import { lazy } from "./lazy-only.js"; export const message = "No stylesheet wait" + lazy;',
+    "lazy.js":
+      'import { shared } from "./shared.js"; import { lazy } from "./lazy-only.js"; import "./lazy.css"; export const message = shared + lazy;',
+  });
   setOutput(config, {
     codeSplitting: {
       groups: ["shared", "lazy-only"].map((name) => ({
@@ -153,7 +193,6 @@ it("omits already imported JavaScript from lazy preload tables, retaining lazy J
   const entryName = names.find((name) => /^index-.*\.js$/u.test(name))!;
   const entry = await readAsset(entryName);
   const table = /^const __vite__mapDeps=.*$/mu.exec(entry)?.[0];
-  expect(table).toBeDefined();
   const sharedName = names.find((name) => /^shared-.*\.js$/u.test(name))!;
   const lazyName = names.find((name) => /^lazy-only-.*\.js$/u.test(name))!;
   const plainName = names.find((name) => /^plain-.*\.js$/u.test(name))!;
@@ -164,6 +203,148 @@ it("omits already imported JavaScript from lazy preload tables, retaining lazy J
   expect(table).toContain(lazyName);
   expect(table).toMatch(/lazy-[^"/]+\.css/u);
   expect(html).toContain(sharedName);
+});
+
+it("fetches deep composer code with the root import without evaluating or route-preloading it", async () => {
+  const config = createConfig();
+  const content = uiPath("pages/chat/components/chat-composer-plus-menu-content.tsx");
+  const subview = uiPath("pages/chat/components/chat-composer-plus-menu-subview.tsx");
+  const shared = uiPath("pages/chat/components/chat-composer-plus-menu-frame.tsx");
+  addModules(
+    config,
+    new Map([
+      [
+        content,
+        'globalThis.rootMenuReady = true; export const openDeep = () => import("./chat-composer-plus-menu-subview.tsx");',
+      ],
+      [
+        subview,
+        'import { frame } from "./chat-composer-plus-menu-frame.tsx"; globalThis.deepMenuReady = true; export const render = () => frame;',
+      ],
+      [shared, 'export const frame = "deep frame";'],
+    ]),
+    { "fixture:menu": content },
+  );
+  await writeRoot("main.js", 'globalThis.openMenu = () => import("fixture:menu");');
+  setOutput(config, {
+    codeSplitting: {
+      groups: [{ name: "deep-frame", test: (id: string) => id === shared }],
+    },
+  });
+  const { output, html } = await buildOutput(config);
+  const chunkWith = (id: string) =>
+    output.find((chunk) => chunk.type === "chunk" && id in chunk.modules);
+  const rootChunk = chunkWith(content);
+  const deepChunk = chunkWith(subview);
+  const frameChunk = chunkWith(shared);
+  const entry = output.find((chunk) => chunk.type === "chunk" && chunk.isEntry);
+  assert.ok(
+    rootChunk?.type === "chunk" &&
+      deepChunk?.type === "chunk" &&
+      frameChunk?.type === "chunk" &&
+      entry?.type === "chunk",
+  );
+  const table = /^const __vite__mapDeps=.*$/mu.exec(entry.code)?.[0];
+  expect(table).toContain(deepChunk.fileName.split("/").at(-1));
+  expect(table).toContain(frameChunk.fileName.split("/").at(-1));
+  expect(rootChunk.dynamicImports).toContain(deepChunk.fileName);
+  expect(rootChunk.imports).not.toContain(deepChunk.fileName);
+  expect(entry.imports).not.toContain(deepChunk.fileName);
+  expect(html).not.toContain(deepChunk.fileName);
+  expect(html).not.toContain(frameChunk.fileName);
+});
+
+it("fetches a locale's co-registered error catalogs in one lazy request", async () => {
+  const config = createConfig();
+  const prefix = "\0virtual:openclaw-control-ui-locale-namespace/";
+  const errors = ["runtimeErrors", "notificationErrors", "nativeDeviceEditError"];
+  const ids = errors.map((namespace) => `${prefix}de/${namespace}`);
+  const otherLocale = `${prefix}ar/runtimeErrors`;
+  const otherNamespace = `${prefix}de/profilePage`;
+  const modules = new Map(
+    [...ids, otherLocale, otherNamespace].map((id) => [
+      id,
+      `export default ${JSON.stringify({ [id.split("/").at(-1)!]: id })};`,
+    ]),
+  );
+  addModules(
+    config,
+    modules,
+    Object.fromEntries([...modules.keys()].map((id) => [id.slice(1), id])),
+  );
+  await writeRoot(
+    "main.js",
+    [...modules.keys()]
+      .map((id, index) => `globalThis.load${index} = () => import(${JSON.stringify(id.slice(1))});`)
+      .join("\n"),
+  );
+  setOutput(config, { codeSplitting: controlUiCodeSplitting });
+  const { output, html } = await buildOutput(config);
+  const chunks = output.filter((chunk) => chunk.type === "chunk");
+  const errorsChunk = chunks.find((chunk) => Object.hasOwn(chunk.modules, ids[0]!))!;
+  expect(ids.every((id) => id in errorsChunk.modules)).toBe(true);
+  expect(otherLocale in errorsChunk.modules).toBe(false);
+  expect(otherNamespace in errorsChunk.modules).toBe(false);
+  const entry = chunks.find((chunk) => chunk.isEntry)!;
+  expect(entry.dynamicImports.filter((file) => file === errorsChunk.fileName)).toHaveLength(1);
+  expect(entry.imports).not.toContain(errorsChunk.fileName);
+  expect(html).not.toContain(errorsChunk.fileName);
+});
+
+it("preloads only the selected locale's Chat catalogs before body parsing", async () => {
+  const config = createConfig();
+  await writeRoot(
+    "main.js",
+    `globalThis.locales = [${["de", "ar"].map((locale) => `() => import(${JSON.stringify(fileURLToPath(new URL(`../i18n/locales/${locale}.ts`, import.meta.url)))})`).join(",")}];`,
+  );
+  await writeRoot(
+    "index.html",
+    `<html><head><script>globalThis.beforeBody = { body: document.body, hints: [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.getAttribute("href")) };</script></head><body><script type="module" src="./main.js"></script></body></html>`,
+  );
+  const { html, output } = await buildOutput(config);
+  const emitted = new Set(output.map((asset) => asset.fileName));
+  for (const [base, route, saved, language, expected] of [
+    ["", "/chat/main/session", "de", "en-US", "de"],
+    ["/control", "/chat/main/session", "ar", "en-US", "ar"],
+    ["/control", "/chat", null, "de-DE", "de"],
+    ["", "/chat", "en", "de-DE", null],
+    ["", "/new", "de", "de-DE", null],
+    ["", "/settings/appearance", "de", "de-DE", null],
+    ["", "/chatty", "de", "de-DE", null],
+  ] as const) {
+    const page = new JSDOM(
+      html.replace("<html>", `<html data-openclaw-control-ui-base-path="${base}">`),
+      {
+        url: `https://gateway.example${base}${route}`,
+        runScripts: "dangerously",
+        beforeParse(window) {
+          Object.defineProperty(window.navigator, "language", { value: language });
+          if (saved) {
+            window.localStorage.setItem("openclaw.i18n.locale", saved);
+          }
+        },
+      },
+    );
+    try {
+      const beforeBody = Reflect.get(page.window, "beforeBody");
+      expect(beforeBody.body).toBeNull();
+      const hints = beforeBody.hints.filter((href: string) => !href.includes("/index-"));
+      expect(hints).toHaveLength(expected ? 14 : 0);
+      for (const href of hints) {
+        expect(href.startsWith(`${base}/assets/`)).toBe(true);
+        const file = href.slice(base.length + 1);
+        expect(emitted.has(file)).toBe(true);
+        expect(
+          file.startsWith(`assets/${expected}-`) ||
+            file.startsWith(`assets/locale-namespace-${expected}-`) ||
+            file.startsWith(`assets/locale-errors-${expected}-`) ||
+            file.startsWith("assets/lazy-catalog-"),
+        ).toBe(true);
+      }
+    } finally {
+      page.window.close();
+    }
+  }
 });
 
 it("keeps page styles separate from measured JavaScript boot groups", async () => {
@@ -188,6 +369,7 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
     "main.js",
     'import "./initial.css"; globalThis.loadFirst = () => import("fixture:first"); globalThis.loadSecond = () => import("fixture:second"); globalThis.loadLazy = () => import("fixture:lazy");',
   );
+  await writeRoot("index.html", '<head></head><script type="module" src="./main.js"></script>');
   addModules(config, modules, {
     "fixture:first": first,
     "fixture:second": second,
@@ -217,18 +399,66 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
   const secondStyle = styles.find(({ source }) => source.includes(".second-page"))!;
   expect(new Set([initial.name, firstStyle.name, secondStyle.name]).size).toBe(3);
   expect(html).toContain(initial.name);
-  expect(html).not.toContain(firstStyle.name);
-  expect(html).not.toContain(secondStyle.name);
+  expect(html).toMatch(/<link[^>]*rel="preload"[^>]*as="style"[^>]*>/u);
+  expect(html).toMatch(/<link[^>]*id="openclaw-boot-styles"[^>]*media="print"[^>]*>/u);
+  const page = new JSDOM(html);
+  for (const style of [firstStyle, secondStyle]) {
+    expect(page.window.document.querySelector(`link[href$="${style.name}"]`)).toBeNull();
+  }
   const scripts = (await readAssets(names, ".js")).map(({ source }) => source).join("\n");
-  expect(scripts).toContain(firstStyle.name);
-  expect(scripts).toContain(secondStyle.name);
+  const importMap: { imports: Record<string, string> } = JSON.parse(
+    page.window.document.querySelector('script[type="importmap"]')!.textContent!,
+  );
+  page.window.close();
+  for (const style of [firstStyle, secondStyle]) {
+    const reference = Object.entries(importMap.imports).find(
+      ([, target]) => target === `./assets/${style.name}`,
+    )?.[0];
+    expect(scripts).toContain(reference ? path.posix.basename(reference) : style.name);
+  }
+});
+
+it("compresses small route boot modules while leaving deferred modules lazy", async () => {
+  const entry = uiPath("pages/chat/route-entry.ts");
+  const source = 'export const message = "Route content loaded".repeat(20);';
+  const config = createConfig();
+  await writeRoot(
+    "main.js",
+    `globalThis.load = () => import(${JSON.stringify(entry)}); globalThis.loadLazy = () => import("./lazy.js");`,
+  );
+  addModules(config, new Map([[entry, source]]));
+  const built = await buildOutput(config);
+  const chunk = built.output.find(
+    (item) => item.type === "chunk" && Object.hasOwn(item.modules, entry),
+  );
+  assert.ok(chunk?.type === "chunk");
+  expect(Buffer.byteLength(chunk.code)).toBeLessThan(4096);
+  expect(built.html).toContain(chunk.fileName);
+  expect(selectControlUiRoutePreloads(built.html, null)).not.toContain(chunk.fileName);
+  for (const [extension, decode] of [
+    ["gz", gunzipSync],
+    ["br", brotliDecompressSync],
+  ] as const) {
+    expect(decode(await fs.readFile(path.join(outDir, `${chunk.fileName}.${extension}`)))).toEqual(
+      Buffer.from(chunk.code),
+    );
+  }
+  const lazy = built.output.find(
+    (item) => item.type === "chunk" && item.facadeModuleId === path.join(root, "lazy.js"),
+  );
+  assert.ok(lazy?.type === "chunk");
+  expect(built.html).not.toContain(lazy.fileName);
+  await missingOutput(`${lazy.fileName}.gz`);
+  await missingOutput(`${lazy.fileName}.br`);
 });
 
 it.each(["login", "attachment"] as const)(
   "prepares %s assets offline without preloading the wrong modules",
   async (kind) => {
     const attachment = kind === "attachment";
-    const entry = uiPath(attachment ? "components/app-sidebar.tsx" : "components/login-gate.ts");
+    const entry = uiPath(
+      attachment ? "components/app-sidebar.tsx" : "components/login-gate-solid.tsx",
+    );
     const dependency = attachment
       ? path.join(root, "resize.js")
       : uiPath("components/login-offline-fixture.ts");
@@ -294,6 +524,43 @@ it.each(["unresolved import", "blocked output"])(
   },
 );
 
+it("keeps the WebKit text-size lock that stops iPhone Safari from boosting small text", async () => {
+  await writeRoot("lazy.css", "html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }");
+
+  const { names } = await buildOutput(createConfig());
+
+  const styles = (await readAssets(names, ".css")).map(({ source }) => source).join("\n");
+  expect(styles).toContain("-webkit-text-size-adjust:100%");
+});
+
+it("finalizes raw browser-fixture assets when precompression is omitted", async () => {
+  const config = createConfig();
+  await writeRoot(
+    "main.js",
+    'import catalog from "virtual:openclaw-control-ui-locale/fr"; globalThis.catalog = catalog;',
+  );
+  config.plugins = config.plugins?.filter(
+    (plugin) => !(plugin && "name" in plugin && plugin.name === "control-ui-precompressed-assets"),
+  );
+
+  const { names, html, worker } = await buildOutput(config);
+
+  expect(names.some((name) => name.endsWith(".br") || name.endsWith(".gz"))).toBe(false);
+  const entry = names.find((name) => /^index-.*\.js$/u.test(name));
+  expect(entry).toBeDefined();
+  expect(html).toContain(entry);
+  const identity = readBuiltIdentity(html);
+  expect(worker).toContain(`const EMBEDDED_CACHE_VERSION = "${identity.buildId}";`);
+  expect(offlineAssets(worker)).toContain(`assets/${entry}`);
+  expect(JSON.parse(await readOutput(".build-inputs.json"))).toEqual(
+    expect.arrayContaining([
+      "src/config/schema.hints.ts",
+      "src/gateway/control-ui-csp.ts",
+      "ui/src/app-route-paths.ts",
+    ]),
+  );
+});
+
 it("reports completed compression work before build completion at a bounded cadence", async () => {
   const config = createConfig("info");
   let clockMs = 0;
@@ -311,16 +578,15 @@ it("reports completed compression work before build completion at a bounded cade
     if (!message.includes("Control UI precompression")) {
       return;
     }
-    const emitted = fsSync.readdirSync(path.join(outDir, "assets"), {
-      encoding: "utf8",
-      recursive: true,
-    });
+    const emitted = listDirectoryTreeStrictSync(path.join(outDir, "assets")).map(
+      (walkEntry) => walkEntry.relativePath,
+    );
     activity.push({
       message,
       elapsed: clockMs,
-      assets: emitted.filter(
-        (name) => name.endsWith(".br") && emitted.includes(name.replace(/\.br$/u, ".gz")),
-      ).length,
+      assets: new Set(
+        emitted.filter((name) => /\.(br|gz)$/u.test(name)).map((name) => name.slice(0, -3)),
+      ).size,
       sidecars: emitted.filter((name) => /\.(br|gz)$/u.test(name)).length,
     });
     // The logger observes real disk writes while build() is still finalizing.
@@ -332,7 +598,11 @@ it("reports completed compression work before build completion at a bounded cade
       name: "compression-progress-fixture",
       generateBundle() {
         for (let index = 0; index < 4; index++) {
-          this.emitFile({ type: "asset", fileName: `assets/x/${index}.txt`, source: "fixture" });
+          this.emitFile({
+            type: "asset",
+            fileName: `assets/x/${index}.txt`,
+            source: "fixture".repeat(3 * 1024),
+          });
         }
       },
     },
@@ -340,20 +610,25 @@ it("reports completed compression work before build completion at a bounded cade
 
   await build(config);
 
-  const emitted = await fs.readdir(path.join(outDir, "assets"), {
-    encoding: "utf8",
-    recursive: true,
-  });
-  const completed = emitted.filter((name) => name.endsWith(".gz")).length;
+  const emitted = (await listDirectoryTreeStrict(path.join(outDir, "assets"))).map(
+    (walkEntry) => walkEntry.relativePath,
+  );
+  const sidecars = emitted.filter((name) => /\.(br|gz)$/u.test(name));
+  const completed = new Set(sidecars.map((name) => name.slice(0, -3))).size;
   expect(completed).toBeGreaterThan(4);
-  expect(activity).toMatchObject([
-    ...Array.from({ length: Math.floor(completed / 2) + 1 }, (_, index) => ({
-      elapsed: index * 10_000,
-      assets: index * 2,
-      sidecars: index * 4,
-    })),
-    { elapsed: completed * 5_000, assets: completed, sidecars: completed * 2 },
-  ]);
+  expect(activity[0]).toMatchObject({ elapsed: 0, assets: 0, sidecars: 0 });
+  expect(activity.at(-1)).toMatchObject({
+    elapsed: sidecars.length * 2_500,
+    assets: completed,
+    sidecars: sidecars.length,
+  });
+  expect(activity.length).toBeGreaterThan(2);
+  for (let index = 1; index < activity.length - 1; index++) {
+    const elapsed = activity[index]!.elapsed - activity[index - 1]!.elapsed;
+    expect(elapsed).toBeGreaterThanOrEqual(10_000);
+    // One completed asset can cross the reporting interval by one sidecar write.
+    expect(elapsed).toBeLessThanOrEqual(12_500);
+  }
   expect(activity[0]?.message).toMatch(/starting/u);
   for (const entry of activity.slice(1)) {
     expect(entry.message).toContain(`${entry.assets} assets (${entry.sidecars} sidecars)`);
@@ -393,23 +668,20 @@ it.each([
     await expect(fs.stat(configuredOutDir)).rejects.toMatchObject({ code: "ENOENT" });
   }
 
-  expect(emitted.some((name) => name.endsWith(".map"))).toBe(true);
-
+  const entry = emitted.find((name) => /^index-.*\.js$/u.test(name))!;
+  const entryBytes = await readBytes(entry);
+  for (const encoding of ["br", "gz"]) {
+    const compressed = await readBytes(`${entry}.${encoding}`);
+    expect(encoding === "br" ? brotliDecompressSync(compressed) : gunzipSync(compressed)).toEqual(
+      entryBytes,
+    );
+  }
   const scripts = emitted.filter((name) => name.endsWith(".js"));
-  expect(scripts.length).toBeGreaterThan(1);
   expect(scripts.some((name) => emitted.includes(`${name}.map`))).toBe(true);
-  expect(emitted.some((name) => name.endsWith(".css"))).toBe(true);
-  for (const name of emitted.filter((fileName) => /\.(js|css)$/u.test(fileName))) {
-    const source = await readBytes(name);
-    const brotli = await readBytes(`${name}.br`);
-    const gzip = await readBytes(`${name}.gz`);
-    expect(brotliDecompressSync(brotli)).toEqual(source);
-    expect(gunzipSync(gzip)).toEqual(source);
-    if (name.endsWith(".js")) {
-      expect(source.toString("utf8").includes("sourceMappingURL="), name).toBe(
-        !release && emitted.includes(`${name}.map`),
-      );
-    }
+  for (const name of scripts) {
+    expect((await readAsset(name)).includes("sourceMappingURL="), name).toBe(
+      !release && emitted.includes(`${name}.map`),
+    );
   }
   const embeddedBuildId = /const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(worker)?.[1];
   const buildInfo = readBuiltIdentity(html);
@@ -422,7 +694,8 @@ it.each([
   }
   const cacheId = /data-openclaw-control-ui-build-id="([^"]+)"/u.exec(html)?.[1];
   expect(cacheId?.startsWith(`${buildInfo.buildId}-`)).toBe(true);
-  expect(cacheId?.slice(buildInfo.buildId.length + 1)).toMatch(/^[a-f0-9]{64}$/u);
+  const publicAssetVersion = cacheId?.slice(buildInfo.buildId.length + 1);
+  expect(publicAssetVersion).toMatch(/^[a-f0-9]{64}$/u);
   const fonts = await fs.readdir(path.join(outDir, "fonts"));
   for (const fontCss of fonts.filter((name) => name.endsWith(".css"))) {
     const source = await fs.readFile(path.join(outDir, "fonts", fontCss), "utf8");
@@ -431,9 +704,9 @@ it.each([
     for (const [, reference] of references) {
       const fontUrl = new URL(
         reference!,
-        `https://control.example/ui/fonts/${fontCss}?v=${cacheId}`,
+        `https://control.example/ui/fonts/${fontCss}?v=${publicAssetVersion}`,
       );
-      expect(fontUrl.searchParams.get("v")).toBe(cacheId);
+      expect(fontUrl.searchParams.get("v")).toBe(publicAssetVersion);
       expect(fontUrl.pathname).toMatch(/^\/ui\/fonts\/[^/]+\.woff2$/u);
       await expect(
         fs.stat(path.join(outDir, fontUrl.pathname.slice("/ui/".length))),
@@ -446,7 +719,7 @@ it.each([
   expect(webManifest.start_url).toBe("./");
   for (const icon of webManifest.icons) {
     const iconUrl = new URL(icon.src, "https://control.example/ui/manifest.webmanifest");
-    expect(iconUrl.searchParams.get("v")).toBe(cacheId);
+    expect(iconUrl.searchParams.get("v")).toBe(publicAssetVersion);
     await expect(
       fs.stat(path.join(outDir, iconUrl.pathname.slice("/ui/".length))),
     ).resolves.toBeDefined();

@@ -3,8 +3,8 @@ import { resolveSlackUserAllowlist } from "./resolve-users.js";
 
 const { createClient, list } = vi.hoisted(() => ({ createClient: vi.fn(), list: vi.fn() }));
 
-// mock-isolation: user lookup uses the fixture client instead of real Slack network clients.
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   createSlackLookupClient: createClient,
 }));
 
@@ -21,45 +21,43 @@ function member(
 }
 
 beforeEach(() => {
-  list.mockReset();
+  list.mockReset().mockResolvedValue({
+    members: [
+      member("U1", "bot-user", { is_bot: true }),
+      member("U_DELETED", "deleted-person", { deleted: true }),
+      member("U_APP", "app-user", { is_app_user: true }),
+      member("U2", "person"),
+      member("U3", "another-person"),
+    ],
+  });
   createClient.mockReset().mockReturnValue({
     users: { list },
   });
 });
 
-it("uses the bounded lookup client when no client is injected", async () => {
-  list.mockResolvedValue({ members: [] });
-
-  const result = await resolve(["@missing-user"]);
-
-  expect(result).toEqual([{ input: "@missing-user", resolved: false }]);
-  expect(createClient).toHaveBeenCalledExactlyOnceWith("lookup-fixture");
-  expect(list).toHaveBeenCalledOnce();
-});
-
-it.each(["person@example.com", "@Person"])(
-  "resolves %s by preferring active humans and retaining directory order on ties",
-  async (input) => {
-    list.mockResolvedValue({
-      members: [
-        member("U1", "bot-user", { is_bot: true, deleted: false }),
-        member("U_DELETED", "deleted-person", { deleted: true }),
-        member("U_APP", "app-user", { is_app_user: true }),
-        member("U2", "person", { is_bot: false, deleted: false }),
-        member("U3", "another-person"),
-      ],
-    });
-    const res = await resolve([input]);
-    expect(res[0]).toEqual({
-      deleted: false,
-      email: "person@example.com",
-      id: "U2",
-      input,
-      isBot: false,
-      name: "Person",
-      note: "multiple matches; chose best",
-      resolved: true,
-    });
+it.each([
+  ["@missing-user", false],
+  [" \t\n ", false],
+  ["person@example.com", true],
+  ["@Person", true],
+] as const)(
+  "resolves %j using the best active human or leaves it unresolved",
+  async (input, resolved) => {
+    expect(await resolve([input])).toEqual([
+      resolved
+        ? {
+            deleted: false,
+            email: "person@example.com",
+            id: "U2",
+            input,
+            isBot: false,
+            name: "Person",
+            note: "multiple matches; chose best",
+            resolved: true,
+          }
+        : { input, resolved: false },
+    ]);
+    expect(createClient).toHaveBeenCalledExactlyOnceWith("lookup-fixture");
   },
 );
 

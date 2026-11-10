@@ -8,24 +8,14 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
 } from "../../components/panel-refresh-status-state.ts";
-import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { downloadTextFile } from "../../lib/download.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
-import { t } from "../../lib/reactive/i18n.ts";
-import { useStreamAutoFollow } from "../../lib/reactive/stream-auto-follow.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
-import {
-  DEFAULT_LOG_LEVEL_FILTERS,
-  parseLogLine,
-  type LogEntry,
-  type LogLevel,
-} from "./log-lines.ts";
-import { LogsView, type LogsReadCompletion } from "./view.tsx";
+import { DEFAULT_LOG_LEVEL_FILTERS, parseLogLine, type LogLevel } from "./log-lines.ts";
+import { LogsView, type LogRow, type LogsReadCompletion } from "./view.tsx";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -50,7 +40,7 @@ function LogsPage() {
   const context = useApplication();
   const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
-  const [entries, setEntries] = createStore<LogEntry[]>([], { shallow: true });
+  const [entries, setEntries] = createStore<LogRow[]>([], { shallow: true });
   const [filterText, setFilterText] = createSignal("");
   const [levelFilters, setLevelFilters] = createStore<Record<LogLevel, boolean>>({
     ...DEFAULT_LOG_LEVEL_FILTERS,
@@ -70,6 +60,8 @@ function LogsPage() {
     | null = null;
   let disposed = false;
   let stream: HTMLElement | undefined;
+  let scrollToEnd: (() => void) | undefined;
+  let nextRowId = 0;
 
   const cancelRequest = () => {
     request?.controller.abort();
@@ -87,7 +79,6 @@ function LogsPage() {
       setFile(null);
       setEntries(() => []);
       setTruncated(false);
-      follow.reset();
     },
     invalidateRequests: cancelRequest,
     onSnapshot: () => {
@@ -103,7 +94,7 @@ function LogsPage() {
       // file read and redaction pass per reconnect.
       void loadLogs({ reset: !quiet || cursor === null, quiet }).then((current) => {
         if (current && !quiet) {
-          follow.schedule(true);
+          scrollToEnd?.();
         }
       });
     },
@@ -147,7 +138,7 @@ function LogsPage() {
           return false;
         }
       }
-      const nextEntries = payload.lines.map(parseLogLine);
+      const nextEntries = payload.lines.map((line) => ({ ...parseLogLine(line), id: nextRowId++ }));
       const reset = resetCursor || sourceChanged || payload.reset || previousCursor === null;
       // Truncation belongs to the displayed history until a complete tail replaces it.
       setTruncated(
@@ -167,7 +158,6 @@ function LogsPage() {
       setFile(payload.file);
       accepted = completePanelRefresh();
       setStatus(accepted);
-      follow.schedule();
       return true;
     } catch (error) {
       if (!isCurrent()) {
@@ -193,11 +183,6 @@ function LogsPage() {
     }
   }
 
-  const follow = useStreamAutoFollow({
-    container: () => stream,
-    enabled: autoFollow,
-    identity: () => gateway.epoch,
-  });
   onSettled(() => {
     const resetContentScroll = () => {
       const content = stream?.closest<HTMLElement>(".content");
@@ -220,49 +205,44 @@ function LogsPage() {
   return (
     <openclaw-logs-page>
       <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{t("tabs.logs")}</h1>
-          </div>
-        </section>
-        <SettingsWorkspace fillHeight>
-          <LogsView
-            completion={completion()}
-            refreshDisabled={!gateway.connected}
-            status={status()}
-            file={file()}
-            entries={entries}
-            filterText={filterText()}
-            levelFilters={levelFilters}
-            autoFollow={autoFollow()}
-            truncated={truncated()}
-            onStreamRef={(element) => (stream = element)}
-            onFilterTextChange={setFilterText}
-            onLevelToggle={(level, enabled) =>
-              setLevelFilters((draft) => {
-                draft[level] = enabled;
-              })
+        <LogsView
+          completion={completion()}
+          refreshDisabled={!gateway.connected}
+          status={status()}
+          file={file()}
+          entries={entries}
+          filterText={filterText()}
+          levelFilters={levelFilters}
+          autoFollow={autoFollow()}
+          truncated={truncated()}
+          onStreamRef={(element, scroll) => {
+            stream = element;
+            scrollToEnd = scroll;
+          }}
+          onFilterTextChange={setFilterText}
+          onLevelToggle={(level, enabled) =>
+            setLevelFilters((draft) => {
+              draft[level] = enabled;
+            })
+          }
+          onToggleAutoFollow={(enabled) => {
+            setAutoFollow(enabled);
+            if (enabled) {
+              scrollToEnd?.();
             }
-            onToggleAutoFollow={(enabled) => {
-              setAutoFollow(enabled);
-              if (enabled) {
-                follow.schedule(true);
+          }}
+          onRefresh={() =>
+            void loadLogs({ reset: true }).then((current) => {
+              if (current) {
+                scrollToEnd?.();
               }
-            }}
-            onRefresh={() =>
-              void loadLogs({ reset: true }).then((current) => {
-                if (current) {
-                  follow.schedule(true);
-                }
-              })
-            }
-            onExport={(lines, label) => {
-              const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-              downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
-            }}
-            onScroll={follow.handleScroll}
-          />
-        </SettingsWorkspace>
+            })
+          }
+          onExport={(lines, label) => {
+            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+            downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
+          }}
+        />
       </ShellLayoutBoundary>
     </openclaw-logs-page>
   );

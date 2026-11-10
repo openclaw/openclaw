@@ -1,9 +1,9 @@
-import { vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { createMockSubsystemLogger } from "../../test/helpers/mock-subsystem-logger.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
@@ -14,6 +14,7 @@ import type {
 } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { resolveSessionRequestTargets } from "./session-request-targets.js";
 
 export function createContext(
@@ -26,7 +27,7 @@ export function createContext(
     trackExecution: trackAsyncWork,
     dedupe: new Map(),
     getRuntimeConfig,
-    logGateway: { error: vi.fn(), warn: vi.fn() },
+    logGateway: createMockSubsystemLogger("gateway"),
   } as unknown as GatewayRequestContext;
   if (methods.length) {
     const registry = createGatewayMethodRegistry(
@@ -62,24 +63,14 @@ export function createOperatorClient(
   return {
     connId: `conn-${profileId}`,
     authenticatedUserId: `${profileId}@example.com`,
-    authenticatedUserProfile: {
-      profileId,
-      displayName: profileId,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile(profileId, profileId),
     connect: {
       ...(params.caps ? { caps: params.caps } : {}),
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      role: "operator",
-      scopes: params.scopes,
-      client: {
-        id: GATEWAY_CLIENT_IDS.TEST,
-        version: "1",
-        platform: "test",
-        mode: GATEWAY_CLIENT_MODES.TEST,
-      },
+      ...gatewayConnect(
+        params.scopes,
+        { id: GATEWAY_CLIENT_IDS.TEST, version: "1", mode: GATEWAY_CLIENT_MODES.TEST },
+        PROTOCOL_VERSION,
+      ),
     },
   };
 }

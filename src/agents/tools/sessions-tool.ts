@@ -8,10 +8,8 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { appendSessionTranscriptReport } from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withSessionTranscriptWriteAssertion,
-} from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
@@ -108,14 +106,7 @@ async function resolvePatchTarget(
   opts: SessionsToolOptions,
   sessionKey: string | undefined,
   callGateway: AgentToolGatewayRequestCaller,
-): Promise<{
-  agentId: string;
-  cfg: OpenClawConfig;
-  isRequesterSession: boolean;
-  key: string;
-  requesterAgentId: string;
-  requesterSessionKey: string;
-}> {
+) {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
   const requesterAgentId = resolveSessionAgentId({

@@ -3,24 +3,26 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
-import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { showToast } from "../../lib/toast.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
-import "../../styles/new-session.css";
-import "../../styles/chat/composer.css";
 import {
   appendChatAttachmentFiles,
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
 } from "../chat/components/chat-attachments.ts";
+import "../../styles/new-session.css";
+import "../../styles/chat/composer.css";
+import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { NewSessionDraft } from "./draft.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
+import { PaletteDraftSlot, PaletteReleasedStarts } from "./palette-session-starts.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
 import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
 import type { SubmissionPresentation } from "./submission-action.ts";
@@ -40,9 +42,16 @@ export class PaletteSessionDraft {
     this.callbacks.changed();
   }
   setSubmissionError(error: unknown) {
-    this.draft?.submission.setError(error instanceof Error ? error.message : String(error));
+    this.draft?.submission.setError(formatUiError(error));
   }
-  private draft: NewSessionDraft | undefined;
+  private slot: PaletteDraftSlot | undefined;
+  private get draft(): NewSessionDraft | undefined {
+    return this.slot?.draft;
+  }
+  private readonly starts = new PaletteReleasedStarts(() => {
+    const gateway = this.read().context?.gateway;
+    return gateway ? gatewayPresentationScope(gateway) : undefined;
+  });
   private attachmentIntent = false;
   private readonly changed = () => {
     const draft = this.draft?.submission.attachmentDraft;
@@ -62,9 +71,8 @@ export class PaletteSessionDraft {
     return this.attachmentIntent;
   }
 
-  private data: NewSessionRouteData | undefined;
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
-  private agentPickerOpen = false;
+  private readAgentIdentityTargets: () => readonly string[] = () => [];
   private readonly preferences: PaletteSessionPreferences;
   private closeSettings: (() => void) | undefined;
   private readonly registerSettingsClose = (close: () => void) => {
@@ -73,7 +81,6 @@ export class PaletteSessionDraft {
       this.closeSettings = undefined;
     };
   };
-  private rejectedOpen: (() => void) | undefined;
   private coldSubmit: { readSignal?: AbortSignal; failureCount: number } | undefined;
   private owner: { gateway: ApplicationContext["gateway"]; url: string; scope: string } | undefined;
   private readonly connectMachine: ConnectMachineSetupState;
@@ -142,7 +149,6 @@ export class PaletteSessionDraft {
     const submission = this.draft?.submission;
     return (
       submission?.error ??
-      submission?.blockedSubmitNotice() ??
       (submission?.submissionOutcomeUnknown ? submission.submitDisabledReason() : null) ??
       (this.preferences.failed ? t("commandPalette.settingsSaveFailed") : null)
     );
@@ -156,7 +162,6 @@ export class PaletteSessionDraft {
       return;
     }
     if (value !== this.message || (mentions !== undefined && mentions !== this.mentions)) {
-      this.rejectedOpen = undefined;
       this.draft.submission.clearError();
     }
     this.draft.submission.setMessage(value, mentions);
@@ -176,6 +181,8 @@ export class PaletteSessionDraft {
         this.read().context?.gateway.snapshot.hello?.policy,
       ),
       disabled: this.messageLocked,
+      // Transcript excerpts have no anchor here to reopen the comment editor against.
+      commentsEditable: false,
       getAttachments: () => attachmentDraft.attachments,
       readSignal,
       onPendingReadsChange: (delta) => attachmentDraft.reads.updatePending(readSignal, delta),
@@ -188,7 +195,6 @@ export class PaletteSessionDraft {
         ) {
           return;
         }
-        this.rejectedOpen = undefined;
         this.draft?.submission.clearError();
         attachmentDraft.replace(attachments);
       },
@@ -199,7 +205,7 @@ export class PaletteSessionDraft {
     this.synchronizePresentationScope();
     const props = this.attachmentProps();
     if (this.read().open && !this.messageLocked && props) {
-      handleChatAttachmentPaste(event, props, { imagesOnly: true });
+      handleChatAttachmentPaste(event, props);
     }
   };
 
@@ -232,6 +238,26 @@ export class PaletteSessionDraft {
     });
   }
 
+  removeComment({ id, action }: ChatCommentAction) {
+    const props = this.attachmentProps();
+    if (action === "edit" || !props) {
+      return;
+    }
+    props.onAttachmentsChange?.(
+      (props.getAttachments?.() ?? []).filter((item) =>
+        action === "delete-all" ? !item.selectionAnnotation : item.id !== id,
+      ),
+    );
+  }
+
+  adoptAttachments(attachments: readonly ChatAttachment[]) {
+    const props = this.attachmentProps();
+    if (!this.read().open || this.messageLocked || !props) {
+      return;
+    }
+    props.onAttachmentsChange?.([...(props.getAttachments?.() ?? []), ...attachments]);
+  }
+
   adoptAttachmentFiles(files: readonly File[], submitRequested = false) {
     const props = this.attachmentProps();
     if (!this.read().open || this.messageLocked || !props) {
@@ -261,53 +287,82 @@ export class PaletteSessionDraft {
     }
     const context = this.read().context;
     const agentId = context?.agentSelection.state.selectedId ?? "";
-    this.data = {
+    const data = {
       agentId,
       requestedAgentId: agentId,
       catalogId: "",
       catalogLabel: "",
       startTerminal: false,
     };
-    if (!this.draft) {
-      this.draft = new NewSessionDraft(
-        () => ({
-          context: this.read().context,
-          data: this.data,
-          // A closed launcher still owns its submitted transaction until acceptance or failure.
-          isConnected: this.element.isConnected,
-        }),
-        {
-          changed: this.changed,
-          updateComplete: this.callbacks.updateComplete,
-          onMessageChange: (message) => this.callbacks.onMessageChange?.(message),
-          activeElement: () => this.element.ownerDocument.activeElement,
-          preferenceScope: "palette",
-          readPalettePreference: () => this.preferences.selection,
-          closeTransientUi: () => {
-            this.draft?.browser.close();
+    if (this.slot) {
+      this.slot.data = data;
+    } else {
+      this.slot = this.createSlot(data);
+    }
+    const { draft } = this.slot;
+    draft.connect();
+    this.coldSubmit = undefined;
+    draft.place.resetDraft();
+    draft.submission.resetDraft();
+    draft.place.agentsHydrated = draft.agentsReady();
+    this.preferences.begin();
+    draft.place.adoptAgentDefaults();
+    this.callbacks.changed();
+  }
+
+  /** Launcher callbacks act only while this slot is the visible draft; released starts keep their own. */
+  private createSlot(data: NewSessionRouteData): PaletteDraftSlot {
+    return new PaletteDraftSlot(data, (slot) => this.createDraft(slot));
+  }
+
+  private createDraft(slot: PaletteDraftSlot): NewSessionDraft {
+    const owns = () => this.slot === slot;
+    return new NewSessionDraft(
+      () => ({
+        context: this.read().context,
+        data: slot.data,
+        // A closed launcher still owns its submitted transaction until acceptance or failure.
+        isConnected: this.element.isConnected,
+      }),
+      {
+        changed: () => {
+          this.changed();
+          this.starts.observe(slot);
+        },
+        updateComplete: this.callbacks.updateComplete,
+        onMessageChange: (message) => {
+          if (owns()) {
+            this.callbacks.onMessageChange?.(message);
+          }
+        },
+        activeElement: () => this.element.ownerDocument.activeElement,
+        preferenceScope: "palette",
+        readPalettePreference: () => this.preferences.selection,
+        closeTransientUi: () => {
+          slot.draft.browser.close();
+          if (owns()) {
             this.closeSettings?.();
             closeMenusWithin(this.element);
-          },
-          onInvalidate: () => {
+          }
+        },
+        onInvalidate: () => {
+          if (owns()) {
             this.retireSubmissionPresentation();
             this.preferences.retirePresentation();
             this.connectMachine.close();
-          },
-          onRecoveryReady: (url, scope) => this.bindOwner(url, scope),
-          onAccepted: (result) => this.accepted(result),
-          retainRejectedPrompt: true,
+          }
         },
-      );
-    }
-    this.draft.connect();
-    this.rejectedOpen = undefined;
-    this.coldSubmit = undefined;
-    this.draft.place.resetDraft();
-    this.draft.submission.resetDraft();
-    this.draft.place.agentsHydrated = this.draft.agentsReady();
-    this.preferences.begin();
-    this.draft.place.adoptAgentDefaults();
-    this.callbacks.changed();
+        onRecoveryReady: (url, scope) => {
+          if (owns()) {
+            this.bindOwner(url, scope);
+          }
+        },
+        onAccepted: (result) => {
+          slot.accepted = true;
+          this.accepted(result);
+        },
+      },
+    );
   }
 
   close() {
@@ -329,10 +384,27 @@ export class PaletteSessionDraft {
 
   private async submitOwnedDraft(): Promise<void> {
     this.synchronizePresentationScope();
-    if (!this.read().open || this.coldSubmit || !this.hasPrompt || !this.draft) {
+    const slot = this.slot;
+    if (!this.read().open || this.coldSubmit || this.submitting || !this.hasPrompt || !slot) {
       return;
     }
-    await this.draft.submission.submit(undefined, true);
+    const submission = slot.draft.submission.submit(undefined, true);
+    // Local admission is synchronous. Once past it, the start owns its draft and the
+    // launcher is free for the next prompt; acceptance or failure arrives as a notice.
+    if (slot.draft.submission.submitting) {
+      this.release(slot);
+    }
+    await submission;
+  }
+
+  private release(slot: PaletteDraftSlot) {
+    if (this.read().open) {
+      this.callbacks.onClose();
+    }
+    this.slot = undefined;
+    this.starts.adopt(slot);
+    this.callbacks.onMessageChange?.("");
+    this.changed();
   }
 
   submitCold(
@@ -350,6 +422,7 @@ export class PaletteSessionDraft {
   synchronize() {
     this.synchronizePresentationScope();
     this.draft?.synchronize();
+    this.starts.synchronize();
   }
 
   private synchronizePresentationScope() {
@@ -363,7 +436,7 @@ export class PaletteSessionDraft {
     // Retire the submission through its existing owner before replacing text.
     // A pending prompt must not reappear when a different connection opens Cmd+K.
     this.close();
-    this.rejectedOpen = undefined;
+    this.starts.discard();
     this.owner = undefined;
     this.draft?.gateway.invalidateDiscovery(true, "gateway-changed");
     this.draft?.submission.releasePendingPlacementOwner();
@@ -373,6 +446,7 @@ export class PaletteSessionDraft {
   }
 
   settled() {
+    this.starts.settled();
     const draft = this.draft;
     if (!draft) {
       return;
@@ -382,7 +456,7 @@ export class PaletteSessionDraft {
     }
     this.preferences.synchronize();
     draft.synchronizeSelections();
-    draft.submission.resumeInterruptedSubmission();
+    draft.submission.synchronizeSubmission();
     const attachmentDraft = draft.submission.attachmentDraft;
     const pending = this.coldSubmit;
     if (
@@ -403,16 +477,15 @@ export class PaletteSessionDraft {
       }
     }
     if (this.read().open) {
-      void this.read().context?.agentIdentity.ensure(
-        this.agentPickerOpen
-          ? draft.place.agents().map((agent) => agent.id)
-          : [draft.place.agentId],
-      );
+      void this.read().context?.agentIdentity.ensure([
+        ...new Set([draft.place.agentId, ...this.readAgentIdentityTargets()]),
+      ]);
     }
   }
 
   disconnect() {
     this.close();
+    this.starts.discard();
     this.draft?.submission.attachmentDraft.reset();
     this.attachmentIntent = false;
     this.draft?.disconnect();
@@ -430,10 +503,10 @@ export class PaletteSessionDraft {
         draft,
         context: this.read().context,
         preferences: this.preferences,
-        onAgentPickerOpen: (open: boolean) => {
-          this.agentPickerOpen = open;
-          this.callbacks.changed();
+        identityTargetsRef: (read: () => readonly string[]) => {
+          this.readAgentIdentityTargets = read;
         },
+        onIdentityTargetsChange: () => this.callbacks.changed(),
         onChange: () => this.preferences.changed(),
         onConnectMachine: () => {
           if (draft.place.isAdmin()) {
@@ -447,20 +520,17 @@ export class PaletteSessionDraft {
   }
 
   private restoreSettings(preference: PaletteSessionPreference | null) {
-    if (!this.draft || !this.data || this.messageLocked) {
+    const slot = this.slot;
+    if (!slot || this.messageLocked) {
       return;
     }
     const defaultAgent = this.read().context?.agentSelection.state.selectedId ?? "";
     const agentId = preference?.agentId ?? defaultAgent;
-    this.data = { ...this.data, agentId, requestedAgentId: agentId };
-    this.draft.place.resetDraft();
-    this.draft.place.agentsHydrated = this.draft.agentsReady();
-    this.draft.place.adoptAgentDefaults();
-    this.draft.place.restorePreferenceSelections();
-  }
-
-  get recoveryAction() {
-    return this.rejectedOpen;
+    slot.data = { ...slot.data, agentId, requestedAgentId: agentId };
+    slot.draft.place.resetDraft();
+    slot.draft.place.agentsHydrated = slot.draft.agentsReady();
+    slot.draft.place.adoptAgentDefaults();
+    slot.draft.place.restorePreferenceSelections();
   }
 
   auxiliaryView() {
@@ -482,7 +552,6 @@ export class PaletteSessionDraft {
       this.owner &&
       (this.owner.gateway !== gateway || this.owner.url !== url || this.owner.scope !== scope)
     ) {
-      this.rejectedOpen = undefined;
       this.draft?.submission.restoreMessage("");
     }
     this.owner = { gateway, url, scope };
@@ -494,37 +563,30 @@ export class PaletteSessionDraft {
       return;
     }
     const isCurrentOwner = captureSessionNoticeOwner(context);
-    const row = context.sessions.state.result?.sessions.find(
-      (candidate) => candidate.key === result.key,
-    );
-    const status =
+    const message =
       result.initialRun.status === "rejected"
-        ? result.initialRun.error
+        ? t("palette.sessionCreatedWithError", { error: formatUiError(result.initialRun.error) })
         : t(
             result.initialRun.status === "started"
-              ? "sessionsView.statusRunning"
-              : "sessionsView.statusIdle",
+              ? "palette.sessionStarted"
+              : "palette.sessionCreated",
           );
     const openSession = () => {
       if (this.read().context !== context || !isCurrentOwner()) {
         return;
       }
       openSessionNoticeTarget(context, result.key, result.agentId);
-      if (result.initialRun.status === "rejected") {
+      // The destination owns a rejected first turn and its retry; dismiss the launcher over it.
+      if (this.read().open) {
         this.callbacks.onClose();
       }
     };
     showToast({
-      fifo: true,
-      message: `${resolveSessionDisplayName(result.key, row)}: ${status}`,
+      message,
+      dedupeKey: `session-create:${result.agentId}:${result.key}`,
+      severity: result.initialRun.status === "rejected" ? "error" : "success",
       actionLabel: t("sessionsView.openSession"),
       onAction: openSession,
     });
-    if (result.initialRun.status === "rejected") {
-      this.rejectedOpen = openSession;
-      this.callbacks.changed();
-    } else {
-      this.callbacks.onClose();
-    }
   }
 }

@@ -22,12 +22,13 @@ it.each(["idle", "online"] as const)(
       return 1;
     });
     const imported = { Renderer: () => <button type="button">Loaded action</button> };
+    const firstImport = Promise.withResolvers<typeof imported>();
     const importModule = vi
       .fn<() => Promise<typeof imported>>()
-      .mockRejectedValueOnce(new Error("offline chunk"))
+      .mockReturnValueOnce(firstImport.promise)
       .mockResolvedValue(imported);
-    const loader = createSidebarRendererLoader(importModule);
-    const Renderer = lazy(loader.load, { export: "Renderer" });
+    const Renderer = lazy(importModule, { export: "Renderer" });
+    const loader = createSidebarRendererLoader(Renderer.preload);
     const Boundary = loader.Boundary;
     const view = mountSolid(() => {
       const [open, setOpen] = createSignal(true);
@@ -51,7 +52,10 @@ it.each(["idle", "online"] as const)(
     const draft = view.getByRole<HTMLInputElement>("textbox");
     draft.value = "retained draft";
 
-    await expect(loader.load()).rejects.toThrow("offline chunk");
+    const firstLoad = expect(loader.load()).rejects.toThrow("offline chunk");
+    await vi.dynamicImportSettled();
+    firstImport.reject(new Error("offline chunk"));
+    await firstLoad;
     flush();
     expect(view.queryByRole("button", { name: "Loaded action" })).toBeNull();
     expect(view.getByRole("button", { name: "Close" })).toBeTruthy();

@@ -1,7 +1,7 @@
 import {
   attachInternalToolResultProvenance,
   getInternalToolResultProvenance,
-} from "../runtime/internal-hooks.js";
+} from "../../../packages/agent-core/src/internal-hooks.js";
 
 const coreTtsMediaByProvenance = new WeakMap<object, readonly string[]>();
 // Attempt attestation stays on the exact result and operational run instance.

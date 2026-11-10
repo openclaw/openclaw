@@ -29,8 +29,9 @@ server rechecks the current policy on every read and write.
 
 Open **Settings → Profile → Personal instructions**, choose an agent in the
 Settings sidebar’s existing agent selector, and save your preferences. You can create or edit your own personal `USER.md` with an
-authenticated profile and `operator.read`; administrator or general write access
-is not required. The editor always uses the signed-in person, not the owner of
+authenticated profile and `operator.read` or `operator.sessions.read` (including
+their implied write/admin scopes); broader Gateway read access, administrator
+access, and general write access are not required. The editor always uses the signed-in person, not the owner of
 the currently open chat. It cannot edit another person’s file or shared defaults.
 
 You can also ask an agent in any authenticated Gateway chat session to update
@@ -60,6 +61,8 @@ Git worktree. For manual host-side editing, obtain the durable profile ID from t
 Gateway's authenticated profile/People data; do not use a display name, GitHub
 login, email, or a profile ID pasted into a message. This uses existing session
 ownership and creation records; no schema or configuration change is needed.
+Worktree sessions load that same saved personal file, not a copy committed in the
+worktree. Shared bootstrap files still come from the session's selected workspace.
 
 Each session selects **one personal `USER.md`**: the assigned human owner's file
 first, otherwise the authenticated human creator's file. An agent or system
@@ -84,11 +87,13 @@ does not merge files or create a dossier.
 Missing files or missing qualifying human identity use shared defaults only. A
 human assignment without a profile ID does not fall back to the creator. Display
 labels, channel sender IDs, unknown-source creator IDs, and agent owners cannot
-select a personal file. Internal events and delegated tasks do not automatically
-inherit a personal profile. Subagent bootstrap still contains only its existing
-allowed project instructions. The shared local owner profile represents all
-connections using that identity, not separate people; use per-person sign-in on
-a team Gateway.
+select a personal file. Internal turns continuing the same session use that
+session's selection, including subagent completions, `sessions_send`, goal
+continuation, and cron and restart wakes in that session. Isolated cron sessions
+keep shared defaults only. Subagent sessions still load only their allowed project
+instructions, so delegated tasks never receive a personal `USER.md` file. The shared
+local owner profile represents all connections using that identity, not separate
+people; use per-person sign-in on a team Gateway.
 
 Personal files use the existing guarded reads and memory provenance checks.
 Symlink aliases are not accepted. Each personal file must fit wholly within the
@@ -110,9 +115,9 @@ conversation history. Do not store secrets in these files.
 
 ## Gateway profile and GitHub credit
 
-Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified. The Profile header follows your live user identity, including names cleared from another browser, even when several agents are configured. Unidentified connections retain the default-agent preview.
+Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified. Without an upload, profile images use the verified GitHub photo, then the existing Gravatar fallback. The avatar route returns images, not linked email addresses, and browsers make no avatar-provider requests. Person identity displays use one rule across account cards, sidebar people, chat, mentions, sharing, and owner selectors: a saved display name, then the verified GitHub login, and otherwise a shortened “Person” label instead of a raw profile UUID. This is presentation only; editing a name still reads and writes the saved value. The Profile header follows your live user identity, including names cleared from another browser, even when several agents are configured. Unidentified connections retain the default-agent preview.
 
-Authenticated users can read their own profile with `operator.read`, `operator.sessions.read`, or their implied write/admin scopes, even when the shared People roster is unavailable. Refresh and reconnect read the current authenticated profile. Those same grants allow members to edit their own display name, avatar, and Git co-author credit preference without general write or administrator access. Session-only users can download their own avatar, but cannot use this access to browse other people’s profile images or the People roster. The server checks the authenticated profile on every edit; selecting another profile ID does not grant access. Server-wide upload restrictions still apply.
+Authenticated users can read their own profile with `operator.read`, `operator.sessions.read`, or their implied write/admin scopes, even when the shared People roster is unavailable. Refresh and reconnect read the current authenticated profile. Those same grants allow members to edit their own display name, avatar, and Git co-author credit preference without general write or administrator access. Session-only users can load avatar images by exact profile ID, so people shown in shared sessions and owner filters do not require broader directory access. This does not grant the People roster, emails, roles, or account metadata. The server checks the authenticated profile on every edit; selecting another profile ID does not grant access. Server-wide upload restrictions still apply.
 
 ### Member and administrator controls
 
@@ -176,6 +181,40 @@ The snapshot survives session resets and disappears with the child session. Inco
 When a task session has someone to credit, its system prompt lists the exact trailers once. It tells the agent to add them to commits it makes from the session. The Codex runtime receives the same block in its developer instructions. Main keeps stable, identity-free guidance instead; the current request’s verified trailers appear in per-turn runtime context and travel separately to child creation. Changing the requester does not rebuild main’s system or developer instructions. Nothing is added when there is nobody to credit, and incognito sessions never carry credit. For task sessions, the Gateway publication broker applies the same credit directly in its generated commits and pull requests. Direct publication from canonical main has no task contributor snapshot and adds no automatic human credit; publishing from the delegated task session preserves its verified contributor snapshot. When the Gateway exposes an external HTTPS session URL, pull requests end with a link to that exact team session. The trailers are not exported through the process or shell environment. Direct Git commands remain ordinary shell execution. OpenClaw does not replace `git` or install repository hooks. The agent following that system-prompt instruction is therefore the enforcement boundary.
 
 Turning **Git co-author credit** off stops attribution for future runs. Gateway-managed publication also checks contributor identity and consent before each pending commit, push, or pull request write. If eligibility changes during publication, it stops before the next write and asks you to review recorded effects before requesting publication again. It does not rewrite commits that already contain the public trailer.
+
+## Optional OpenClaw pull request attribution
+
+Open **Settings → Profile → Identity** and enable **Add OpenClaw attribution to
+pull requests** to mark new PRs requested from your profile. This preference is
+off by default and is separate from **Git co-author credit**. It does not require
+a verified GitHub account or change commit authorship.
+
+When enabled, new pull request descriptions include this footer:
+
+> 🦞 Made with [OpenClaw](https://openclaw.ai)
+
+The Gateway publisher applies your preference when creating a PR. It does not
+add branding when reviewing, editing, or publishing more changes to an existing
+PR, and it does not restore a footer removed on GitHub. The preference does not
+share a session or add a conversation link; session sharing remains separate.
+
+For one PR without attribution, ask the agent to omit the marker. For managed
+publication, include `<!-- openclaw:attribution=off -->` in that PR’s description.
+Turning the profile preference off affects future PRs, not already published
+ones. Incognito sessions do not automatically add attribution.
+
+For PRs created through ordinary GitHub CLI or shell commands, the agent receives
+attribution instructions only when the current verified requester has enabled
+the preference. Default/off and incognito requests add no attribution prompt
+block. Enabled instructions apply only to that request, not later requests or
+other participants in the same conversation. A later request without an enabled
+block must not inherit attribution from earlier instructions. This path remains
+best-effort instruction following, not a Git hook or wrapper; the Gateway can
+apply the footer directly only to its managed publication flow.
+
+Upgrading does not rewrite instructions already retained in a conversation. If
+an older session contains enabled attribution guidance from before request
+scoping was introduced, start a new session to discard that guidance.
 
 ## Merging duplicate profiles
 
@@ -253,6 +292,21 @@ Use the exact configured account ID and immutable sender ID. An identical sender
 
 Links follow explicit profile merges and the surviving profile's current role. Linking does not rename or merge people, rewrite transcript attribution, assign session ownership, or change session visibility. Permission resolution separately checks the trusted incoming sender and the linked person's current authority.
 
+An authenticated personal requester can use a linked channel identity to steer
+their exact active session across the Control UI and channels, even when the
+channel has fewer permissions or collaborative steering is disabled. The active
+execution retains its requester, prepared permissions, tool bindings, approval
+destination, and reply routing. A new execution uses the submitting person's
+current applicable policy. Normal channel admission and session access still
+apply. The shared Owner profile cannot establish this cross-surface identity.
+Shared-credential WebUI access instead supports a separate continuation rule
+with channel participants in the exact same active session. When collaborative
+steering is disabled, both sides need current owner authority: administrative
+WebUI access and a configured channel owner or linked administrative person
+with any required access grant. This neither links the accounts nor attributes
+the shared credential to a particular human.
+See [Steering scope](/concepts/queue-steering#scope).
+
 Every linked sender whose current effective operator role includes `operator.admin` receives channel-owner authority automatically while any role-required person-access grant remains active. The role name does not matter, and no extra `gateway.auth.identityScopes` grant is needed. When operator roles are not configured, a matching administrative identity-scope grant supplies this authority instead. A configured nonadmin role prevents that fallback. Removing the link, demoting the person, or removing the role's administrative scope revokes inherited authority. Authority is rechecked before pending privileged actions take effect; already accepted operations finish their required cleanup. Explicit `commands.ownerAllowFrom` entries remain independent. See [Operator scopes](/gateway/operator-scopes).
 
 Managed updates retain the original person-access grant through staging and a
@@ -272,7 +326,10 @@ Link the sender to their existing profile with `users.linkChannelIdentity`. For
 Slack, use `channelId: "slack"`, the configured account ID, and the exact
 native user ID (for example, `senderId: "U0123456789"`). Direct Socket Mode and
 signature-verified HTTP delivery authenticate that sender; relay delivery does
-not. Discord's verified native senders use the same profile resolution.
+not. Discord's verified native senders use the same profile resolution. X uses
+`channelId: "x"`, the configured account ID, and the immutable API `author_id`;
+its authenticated polling and Activity streams establish the native sender, not
+a matching handle or allowlist entry.
 
 The next verified message turn includes the primary profile ID and current display
 label as host-generated fields in the per-turn conversation info. The system
@@ -287,8 +344,11 @@ agent turn, the `sessions` tool exposes `assign_owner` for these senders;
 settings, reset/delete, and global group controls still require owner authority.
 Operators with `operator.write` also retain the separate archive, restore, and
 stop controls for sessions they created or are assigned to, subject to session access checks.
-When a newly spawned visible session starts agent-owned, the agent can assign it
-to the trusted requester profile and verify the stored owner with `sessions_list`.
+New visible sessions default to the trusted requester when the parent has no
+different human owner; this includes agent-owned and channel-originated parents.
+Without a trusted requester, they remain agent-owned. The agent can assign an
+existing session to the trusted requester profile and verify the stored owner
+with `sessions_list`.
 This changes responsibility, not creator attribution or access. Unlinked or
 asserted senders receive no requester profile: link the verified sender first
 rather than guessing from a name or pasted ID. An owner-authorized agent can use
@@ -301,7 +361,7 @@ Unlinking takes effect on subsequent turns without a restart.
 
 ## GitHub connections
 
-Open **Settings → Profile → GitHub connections** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Viewing these connections does not require selecting an agent or configuring a default agent. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
+Open **Settings → Profile → GitHub accounts** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Viewing these connections does not require selecting an agent or configuring a default agent. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
 
 My GitHub requires an authenticated, durable Gateway profile, including the local owner profile. An identified operator with `operator.read` can manage only their own connection, even without administrative or general write access. Shared-secret devices using the owner profile share that connection. Use per-person sign-in for a team. System and per-agent connection changes still require `operator.admin`.
 
@@ -309,13 +369,42 @@ My GitHub requires an authenticated, durable Gateway profile, including the loca
 2. Open the displayed `github.com/login/device` link yourself and approve the one-time code. The Gateway verifies the account and keeps the credentials out of browser responses and agent context.
 3. Check the connected account before using it. Personal connections use device authorization. The existing PAT alternative remains available for admin-managed shared connections.
 
+### Inspect publication readiness
+
+When `github_publish` is available under the current tool policy, use
+`action: "readiness"` to inspect the current publishing session. Optionally supply
+`publishingSessionKey` for a child of the current conversation and `requestId` for
+one existing shared publication request. This read accepts no workspace, repository,
+account, or new-request selector. The corresponding Gateway method is
+`sessions.github.readiness`.
+
+The result separates current read admission, source custody, bounded GitHub target
+support, and shared request observation. It does not establish write permission,
+credentials, an exact remote destination, CI, review, or merge readiness. A cached
+target is labeled as cached. An ordinary working directory is not a managed
+publication binding; select an existing bound session or separately authorize a
+supported binding operation.
+
+Observation does not refresh credentials, adopt or stage source, create a request,
+retry publication, or settle an existing effect. It preserves cold database files
+and sidecars. An authorized exact terminal receipt can remain observable even when
+the current source is unavailable. A missing or unavailable exact receipt does not
+prove that publication never ran: keep the original request identity and inspect
+it rather than submitting again. Personal receipts remain private, and revoked
+session or connection access fails the read instead of returning an unknown result.
+Account discovery through `sessions.github.options` is unchanged.
+
 ### Publish with your account
 
 New publications create an open PR by default. Ask the agent to publish a draft to use `draft: true` on `github_publish`; omitting `draft` or setting it to `false` creates an open PR. This choice applies only when creating a PR. Publishing more changes to an existing PR preserves its current draft or open state.
 
-The account arrow beside **Publish PR** appears only when both shared and personal accounts are available. Its compact menu shows account names and the selected account; the effective shared account remains the default. With only a shared account, use **Publish PR** directly. With only **My GitHub**, the **Publish as @account** button explicitly selects that account and requests publication in one click; discovery alone never selects personal credentials. If the same account is connected through both routes, the menu labels them separately. Personal publication requires an idle session with a reconciled worktree or accepted repository checkpoint.
+The account arrow beside **Publish PR** appears only when both shared and personal accounts are available. Its compact menu shows account names and the selected account; the effective shared account remains the default. With only a shared account, use **Publish PR** directly. With only **My GitHub**, the **Publish as @account** button explicitly selects that account and requests publication in one click; discovery alone never selects personal credentials. If the same account is connected through both routes, the menu labels them separately. On mobile, account rows show each account's GitHub avatar, or its initials when the image cannot load. Personal publication requires an idle session with a reconciled worktree or accepted repository checkpoint.
 
 An existing `gh` login in the Gateway's runtime environment is supported; connecting **My GitHub** is optional and does not replace that login. A login on your browser's computer does not automatically authenticate a remote Gateway. When no publication account is selectable, the row distinguishes missing credentials, failed or rate-limited account verification, and an unsupported session workspace. Follow the displayed recovery guidance instead of reconnecting for a verification or workspace failure. Session-scoped shared publication requires a session-owned worktree or repository workspace with a supported GitHub origin; ordinary agent `git` and `gh` commands remain separate from this publication eligibility check.
+
+A local chat can publish a committed task checkout with `github_publish` and `workspacePath`. If the conversation has no publication workspace and omits `workspacePath`, the error asks the agent to retry with the known checkout's absolute path. OpenClaw creates a linked publication task with its own managed checkout and resumes the requesting conversation at its original workspace. The source checkout stays unchanged, including when publication fails. Later work in another repository does not inherit that publication checkout. Retries use the original task and accepted snapshot; status, PR metadata actions, and completion receipts remain available from the requesting conversation, including after a Gateway restart. If that task is deleted, retry reports the missing source; use the original request ID to inspect its receipt. A deliberately prepared PR keeps its own default target.
+
+The requesting turn retains its original permission ceiling and current-access checks; task creation grants no extra tool, host-path, or GitHub permissions. Selecting a new checkout uses the existing workspace-path permissions. Publishing a checkout already owned by the conversation does not require `operator.admin`, even outside the agent's default workspace. Omit `workspacePath` or use its managed checkout path for that flow. In a writable sandbox-backed conversation, explicitly select an existing PR with `prepare_pr`; this keeps deliberate PR-workspace selection separate from one publication's custody. For conversations adopted by an earlier version, see [managed workspace recovery](/concepts/managed-worktrees#session-worktrees).
 
 The composer shows either unpublished branch changes or PR rows. New changes replace earlier PR history, including changes made after merging on the same branch. The account arrow appears only while publication is idle and the account selection is unlocked. Publication recovery stays inside an unpublished branch row. When PR rows are visible, recovery appears separately because a session publication attempt does not necessarily belong to any listed PR. Failed attempts use a collapsed **Publication attempt failed** disclosure; expand it to inspect the original account, error, and recovery actions. When OpenClaw verifies that a failed shared attempt’s accepted changes are already published in the matching PR, it stops offering that obsolete failure as recovery—even after reloading or starting later work. The historical receipt remains unchanged and can still be read explicitly. Unpublished or unverified changes retain their failure; refreshing a receipt never retries publication. Pending status and confirmation details remain expanded. Successful publication shows a compact PR link until GitHub metadata supplies the normal PR row; it does not add a separate publication card.
 
@@ -327,6 +416,8 @@ Shared publication progress comes from Gateway-owned receipts. **Check status** 
 
 Queued shared publication also retains the person who requested it, their original permission ceiling, and any access grant required when the request was accepted. Expired or revoked guest access prevents further GitHub writes, including after a restart. A new invitation or later staff role does not authorize the old guest request. Saved work, existing PRs, and separately authorized requests remain intact. The Gateway can still record a GitHub result accepted before access ended; an unavailable readback keeps that original outcome pending for reconciliation.
 
+Restart recovery does not hold Gateway readiness while waiting for GitHub. Independent local worktrees recover with bounded concurrency; requests within each worktree remain ordered, and an unconfirmed request keeps later recovery requests for that worktree waiting. Completed receipts are read from durable state without confirming them again with GitHub.
+
 For requests backed by an access grant, moving one of the person's original email aliases to another profile also ends publication authority. Restoring the alias does not revive the old request. Display changes and aliases added after the request, including their later removal, do not cancel it.
 
 Older unfinished shared requests without this requester binding require a new authorized publication request. Inspect their recorded or unconfirmed GitHub effects first. Published receipts remain readable, and a plugin that is still starting defers recovery until its original grant can be checked.
@@ -337,7 +428,7 @@ Shared publication also supports `operator.sessions.write` for the session creat
 
 Personal publication and confirmation require `operator.write` and current access to change the session. Connecting your account alone does not grant either permission.
 
-Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, and repository previews and discovery keep their existing credential behavior. OpenClaw cloud workers use the shared execution identity, never your personal connection. For a repository-only session, finish the current turn and wait for its accepted Git-normalized checkpoint. Personal publication is available while the worker is idle or after Stop, without a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud worker…** before personal publication. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.
+Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, and repository previews and discovery keep their existing credential behavior. OpenClaw cloud workers use the shared execution identity, never your personal connection. For a repository-only session, finish the current turn and wait for its accepted Git-normalized checkpoint. Personal publication is available while the worker is idle or after Stop, without a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud device…** before personal publication. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.
 
 The Gateway binds personal publication to your authenticated profile, the selected account, and the accepted worktree snapshot or repository checkpoint. Another participant's message cannot switch that account or authorize later work using your connection. If the account becomes unavailable or the workspace changes, publication stops with a recovery action instead of falling back to System or native credentials.
 

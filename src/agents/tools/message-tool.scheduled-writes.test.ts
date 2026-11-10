@@ -1,13 +1,17 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
+import { resolveBundledChannelMessageToolDiscoveryAdapter } from "../../channels/plugins/message-tool-api.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as turns from "../../gateway/message-action-turn-capability.js";
 import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import * as plugins from "../../plugins/runtime.js";
 import * as fixtures from "../../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createMessageTool, createMessageToolAsync } from "./message-tool-execution.js";
 import { resolvedMessageSecrets } from "./message-tool-execution.test-support.js";
 
@@ -15,6 +19,12 @@ const target = "channel:100000000000000001";
 const identity = { agentId: "main", runId: "scheduled-message-run" };
 const sessionKey = "agent:main:cron:scheduled-message:run:fixture";
 const grants: string[] = [];
+const sessionDirs = useSessionStoreTempDirs(afterAll, "message-definition-binding-");
+const catalog = (channels: PreparedMessageToolCatalog["channels"]): PreparedMessageToolCatalog => ({
+  version: 1,
+  channels,
+  getChannel: (id) => channels.find((channel) => channel.id === id),
+});
 let registry: ReturnType<typeof plugins.captureActivePluginRegistrySnapshot>;
 beforeEach(() => {
   registry = plugins.captureActivePluginRegistrySnapshot();
@@ -64,41 +74,130 @@ function authority(message: string) {
   };
 }
 
+it.each([true, false])(
+  "keeps scheduled-session schema independent of authority: %s",
+  async (scheduled) => {
+    const channels: PreparedMessageToolCatalog["channels"] = ["signal", "discord"].map((id) => ({
+      id,
+      reconcilesUnknownSend: false,
+      actions: {
+        describeMessageTool: () => ({ actions: id === "signal" ? ["send"] : ["send", "poll"] }),
+      },
+    }));
+    const config: OpenClawConfig = {
+      bindings: [{ agentId: "main", match: { channel: "signal" } }],
+      channels: { signal: { enabled: true }, discord: { enabled: true } },
+    };
+    const capability = scheduled
+      ? grant({ policy: { version: 1, mode: "trusted" }, assertCurrent() {} })
+      : undefined;
+    const tool = await createMessageToolAsync({
+      ...toolOptions(config, capability),
+      currentChannelProvider: scheduled ? "signal" : undefined,
+      preparedMessageToolCatalog: catalog(channels),
+    });
+    expect(tool.parameters).toHaveProperty("properties.action.enum", [
+      "broadcast",
+      "poll",
+      "react",
+      "send",
+    ]);
+    for (const property of ["pollQuestion", "pollOption", "pollMulti"]) {
+      expect(tool.parameters).toHaveProperty(`properties.${property}`);
+    }
+  },
+);
+
 it.each([
-  [true, "signal", ["poll", "send"]],
-  [true, undefined, ["broadcast", "poll", "send"]],
-  [false, "signal", ["send"]],
-  [false, undefined, ["broadcast", "send"]],
-] as const)("scopes schema to scheduled=%s, provider=%s", async (scheduled, provider, actions) => {
-  const channels: PreparedMessageToolCatalog["channels"] = ["signal", "discord"].map((id) => ({
-    id,
-    reconcilesUnknownSend: false,
-    actions: {
-      describeMessageTool: () => ({ actions: id === "signal" ? ["send"] : ["send", "poll"] }),
-    },
-  }));
-  const config: OpenClawConfig = {
-    bindings: [{ agentId: "main", match: { channel: "signal" } }],
-    channels: { signal: { enabled: true }, discord: { enabled: true } },
-  };
-  const capability = scheduled
-    ? grant({ policy: { version: 1, mode: "trusted" }, assertCurrent() {} })
-    : undefined;
-  const tool = await createMessageToolAsync({
-    ...toolOptions(config, capability),
-    currentChannelProvider: provider,
-    preparedMessageToolCatalog: {
-      version: 1,
-      channels,
-      getChannel: (id) => channels.find((channel) => channel.id === id),
-    },
-  });
-  expect(tool.parameters).toHaveProperty("properties.action.enum", actions);
-  for (const property of ["pollQuestion", "pollOption", "pollMulti"]) {
-    const assertion = expect(tool.parameters);
-    (scheduled ? assertion : assertion.not).toHaveProperty(`properties.${property}`);
-  }
-});
+  ["delivery", "async"],
+  ["delivery", "sync"],
+  ["scheduled", "async"],
+  ["scheduled", "sync"],
+] as const)(
+  "preserves iMessage non-default %s account capabilities across recovery sources (%s)",
+  async (binding, factory) => {
+    const createTool = factory === "sync" ? createMessageTool : createMessageToolAsync;
+    const storePath = `${sessionDirs.make()}/sessions.json`;
+    const key = binding === "scheduled" ? sessionKey : "agent:main:imessage:direct:peer";
+    const config: OpenClawConfig = {
+      session: { store: storePath },
+      channels: {
+        imessage: {
+          cliPath: "imsg",
+          defaultAccount: "default",
+          accounts: { default: { actions: { edit: false } }, ops: { actions: { edit: true } } },
+        },
+      },
+    };
+    const policy = {
+      version: 1 as const,
+      mode: "account" as const,
+      ownerSessionKey: "agent:main:main",
+      ownerAccountId: "ops",
+    };
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: key, storePath },
+      {
+        sessionId: "bound-session",
+        updatedAt: 1,
+        ...(binding === "delivery"
+          ? {
+              delivery: normalizeSessionDeliveryState({
+                context: { channel: "imessage", to: "peer", accountId: "ops" },
+              }),
+            }
+          : {
+              cronRunContinuation: {
+                lifecycleRevision: "revision",
+                phase: "running" as const,
+                scheduledToolPolicy: policy,
+                scheduledToolCallerOrigin: { kind: "local" as const },
+              },
+            }),
+      },
+    );
+    const channels = [
+      {
+        id: "imessage",
+        reconcilesUnknownSend: false,
+        actions: resolveBundledChannelMessageToolDiscoveryAdapter("imessage"),
+      },
+    ];
+    const options = {
+      config,
+      agentId: "main",
+      agentSessionKey: key,
+      sessionId: "bound-session",
+      preparedMessageToolCatalog: catalog(channels),
+    };
+    const normal = await createTool({
+      ...options,
+      currentChannelProvider: "imessage",
+      agentAccountId: "ops",
+      ...(binding === "scheduled"
+        ? {
+            messageActionTurnCapability: grant({
+              policy: { ...policy, ownerOrigin: { kind: "local" as const } },
+              assertCurrent() {},
+            }),
+          }
+        : {}),
+    });
+    expect(normal.parameters).toHaveProperty(
+      "properties.action.enum",
+      expect.arrayContaining(["edit"]),
+    );
+    const recovered = await createTool({
+      ...options,
+      currentChannelProvider: "webchat",
+      agentAccountId: "default",
+      currentMessageId: "recovery",
+      requesterSenderId: "different-sender",
+    });
+    expect(recovered.parameters).toEqual(normal.parameters);
+    expect(recovered.description).toBe(normal.description);
+  },
+);
 
 it("separates generic sends, source reads, and simulated writes", async () => {
   const message = authority("message authority expired");

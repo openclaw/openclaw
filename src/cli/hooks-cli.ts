@@ -8,6 +8,7 @@ import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentWorkspaceDir,
@@ -30,14 +31,11 @@ import { withPluginDiagnosticsReport } from "../plugins/status.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { summarizeStringEntries } from "../shared/string-sample.js";
-import { shortenHomePath } from "../utils.js";
+import { displayPath } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
-import {
-  ExpectedCliError,
-  formatCliJsonFailure,
-  rethrowExpectedCliError,
-} from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
@@ -71,7 +69,7 @@ function formatHookStatus(hook: HookStatusEntry, detailed = false): string {
         ? "missing requirements"
         : "missing";
   return theme.error(
-    `✗ ${detailed ? `${reason.charAt(0).toUpperCase()}${reason.slice(1)}` : reason}`,
+    terminalText`✗ ${detailed ? `${reason.charAt(0).toUpperCase()}${reason.slice(1)}` : reason}`,
   );
 }
 
@@ -143,14 +141,14 @@ function formatHooksList(report: HookStatusReport, opts: HooksListOptions): stri
     sourceColumn: { key: "Source", header: "Source", minWidth: 12, flex: true },
     verbose: opts.verbose,
     rows: hooks.map((hook) => {
-      const emoji = hook.emoji ?? decorativeEmoji("🔗");
-      const name = theme.command(hook.name);
+      const emoji = terminalText`${hook.emoji ?? decorativeEmoji("🔗")}`;
+      const name = theme.command(terminalText`${hook.name}`);
       return {
         Status: formatHookStatus(hook),
         Hook: emoji ? `${emoji} ${name}` : name,
-        Description: theme.muted(hook.description),
-        Source: hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source,
-        Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
+        Description: theme.muted(terminalText`${hook.description}`),
+        Source: terminalText`${hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source}`,
+        Missing: opts.verbose ? theme.warn(terminalText`${formatHookMissingSummary(hook)}`) : "",
       };
     }),
   });
@@ -166,7 +164,7 @@ function formatHookInfo(
       const failure = formatCliJsonFailure(`Hook "${hookName}" not found.`);
       return JSON.stringify({ ...failure, hook: hookName }, null, 2);
     }
-    return `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`;
+    return terminalText`Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`;
   }
 
   if (opts.json) {
@@ -181,27 +179,27 @@ function formatHookInfo(
     );
   }
 
-  const emoji = hook.emoji ?? decorativeEmoji("🔗");
+  const emoji = terminalText`${hook.emoji ?? decorativeEmoji("🔗")}`;
   const lines = [
-    `${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${formatHookStatus(hook, true)}`,
+    `${emoji ? `${emoji} ` : ""}${theme.heading(terminalText`${hook.name}`)} ${formatHookStatus(hook, true)}`,
     "",
-    hook.description,
+    terminalText`${hook.description}`,
     "",
     theme.heading("Details:"),
-    `${theme.muted("  Source:")} ${hook.source}${hook.managedByPlugin ? ` (${hook.pluginId ?? "unknown"})` : ""}`,
-    `${theme.muted("  Path:")} ${shortenHomePath(hook.filePath)}`,
-    `${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`,
+    `${theme.muted("  Source:")} ${terminalText`${hook.source}${hook.managedByPlugin ? ` (${hook.pluginId ?? "unknown"})` : ""}`}`,
+    `${theme.muted("  Path:")} ${displayPath(hook.filePath)}`,
+    `${theme.muted("  Handler:")} ${displayPath(hook.handlerPath)}`,
   ];
   if (hook.homepage) {
-    lines.push(`${theme.muted("  Homepage:")} ${hook.homepage}`);
+    lines.push(`${theme.muted("  Homepage:")} ${terminalText`${hook.homepage}`}`);
   }
   if (hook.events.length > 0) {
-    lines.push(`${theme.muted("  Events:")} ${hook.events.join(", ")}`);
+    lines.push(`${theme.muted("  Events:")} ${terminalText`${hook.events.join(", ")}`}`);
   }
   if (hook.unknownEvents.length > 0) {
     lines.push(
       theme.warn(
-        `  ⚠ Event${hook.unknownEvents.length === 1 ? "" : "s"} not emitted by core (likely typo): ${hook.unknownEvents.join(", ")}`,
+        terminalText`  ⚠ Event${hook.unknownEvents.length === 1 ? "" : "s"} not emitted by core (likely typo): ${hook.unknownEvents.join(", ")}`,
       ),
     );
   }
@@ -209,7 +207,7 @@ function formatHookInfo(
     lines.push(theme.muted("  Managed by plugin; enable/disable via hooks CLI not available."));
   }
   if (hook.blockedReason) {
-    lines.push(`${theme.muted("  Blocked reason:")} ${hook.blockedReason}`);
+    lines.push(`${theme.muted("  Blocked reason:")} ${terminalText`${hook.blockedReason}`}`);
   }
 
   lines.push(...formatCliRequirements(hook, HOOK_REQUIREMENT_GROUPS, hook.configChecks));
@@ -257,7 +255,7 @@ function formatHooksCheck(report: HookStatusReport, opts: HooksReportOptions): s
         reasons.unshift(hook.blockedReason);
       }
       const emoji = hook.emoji ?? decorativeEmoji("🔗");
-      lines.push(`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);
+      lines.push(terminalText`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);
     }
   }
 
@@ -379,18 +377,26 @@ function writeHooksOutput(value: string, json: boolean | undefined): void {
   defaultRuntime.log(value);
 }
 
+function hooksCliFailure(message: string): ExpectedCliError {
+  // Owner remedies span lines (Config:/Fix:); keep the breaks, strip controls per line.
+  const humanOutput = `${theme.error("Error:")} ${message
+    .split("\n")
+    .map((line) => terminalText`${line}`)
+    .join("\n")}`;
+  return new ExpectedCliError({ message, humanOutput, machineOutput: message });
+}
+
 async function runOneShotHooksCliAction(
   action: () => Promise<number | void>,
   failureOwner: "command" | "root" = "command",
 ): Promise<void> {
   const result = await action().catch((err: unknown) => {
     rethrowExpectedCliError(err);
-    const message = formatErrorMessage(err);
-    const humanOutput = `${theme.error("Error:")} ${message}`;
+    const failure = hooksCliFailure(formatErrorMessage(err));
     if (failureOwner === "root") {
-      throw new ExpectedCliError({ message, humanOutput, machineOutput: message });
+      throw failure;
     }
-    defaultRuntime.error(humanOutput);
+    defaultRuntime.error(failure.humanOutput);
     defaultRuntime.exit(1);
     throw new Error("unreachable");
   });
@@ -411,15 +417,17 @@ export function registerHooksCli(program: Command): void {
     Boolean(opts?.json || hooks.opts<{ json?: boolean }>().json);
   hooks.hook("preAction", (_thisCommand, actionCommand) => {
     const parentAgent = hooks.opts<{ agent?: string }>().agent;
+    // preAction runs outside runOneShotHooksCliAction; plain errors would reach the
+    // root renderer as a generic failure and hide these messages.
     if (parentAgent !== undefined && !parentAgent.trim()) {
-      throw new Error("--agent must not be blank");
+      throw hooksCliFailure("--agent must not be blank");
     }
     if (
       parentAgent &&
       actionCommand !== hooks &&
       !new Set(["list", "info", "check", "enable", "disable"]).has(actionCommand.name())
     ) {
-      throw new Error(
+      throw hooksCliFailure(
         `openclaw hooks ${actionCommand.name()} does not support --agent; the option only selects an owner for read-only hook reports.`,
       );
     }
@@ -539,8 +547,8 @@ export function registerHooksCli(program: Command): void {
                 ? `${theme.success("✓")} Enabled hook:`
                 : theme.warn(decorativePrefix("⏸", "Disabled hook:"));
               const formattedName = selectedHook.emoji
-                ? `${selectedHook.emoji} ${theme.command(selectedHook.name)}`
-                : decorativePrefix("🔗", theme.command(selectedHook.name));
+                ? `${terminalText`${selectedHook.emoji} `}${theme.command(terminalText`${selectedHook.name}`)}`
+                : decorativePrefix("🔗", theme.command(terminalText`${selectedHook.name}`));
               defaultRuntime.log(`${prefix} ${formattedName}`);
             },
           });

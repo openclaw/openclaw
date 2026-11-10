@@ -19,14 +19,17 @@ import type {
   QuestionResourceActionResult,
 } from "../../../../../packages/gateway-protocol/src/question-resource.js";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { assertUploadsEnabled } from "../../../lib/uploads.ts";
 import { admitAttachmentFiles, resolveChatAttachmentLimits } from "./chat-attachment-admission.ts";
+
+registerEnglishCatalog(registerChatQuestionsEnglish);
 
 type ResourceProps = {
   question?: Question;
@@ -40,7 +43,7 @@ type ResourceProps = {
 
 type OperationScope = { live: boolean; abort: AbortController | undefined };
 
-const ResourcePreview = lazy(() => import("../../../components/mcp-app-view-registration.ts"), {
+const ResourcePreview = lazy(() => import("../../../components/mcp-app-view.tsx"), {
   export: "McpAppView",
 });
 

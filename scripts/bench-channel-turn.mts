@@ -7,7 +7,6 @@ import {
   mkdtempSync,
   readFileSync,
   writeFileSync,
-  writeSync,
   renameSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,11 +49,12 @@ const { values } = parseArgs({
     "tool-start-file": { type: "string" },
     "tool-interval-ms": { type: "string", default: "100" },
     "tool-gc-log": { type: "string" },
+    "tool-args-chars": { type: "string", default: "0" },
   },
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-channel-turn.mts [--entry dist/entry.js]\nRuns one cold and ten warmed QA-channel turns with an isolated local mock provider.\nOr use --tool-invocations [--tool-argument-bytes 65536] [--tool-progress-events 500] [--tool-calls 200] [--tool-samples 5] [--tool-interval-ms 100] --tool-gc-log <stdout-log> with --expose-gc --trace-gc-nvp, redirecting stdout to that log, for real tool-owner allocation, promotion, GC and latency measurements without a Gateway.",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-channel-turn.mts [--entry dist/entry.js] [--tool-args-chars N]\nRuns one cold and ten warmed QA-channel turns with an isolated local mock provider.\nWith --tool-args-chars, each turn first streams a Chat Completions write call carrying N content characters.\nOr use --tool-invocations [--tool-argument-bytes 65536] [--tool-progress-events 500] [--tool-calls 200] [--tool-samples 5] [--tool-interval-ms 100] --tool-gc-log <stdout-log> with --expose-gc --trace-gc-nvp, redirecting stdout to that log, for real tool-owner allocation, promotion, GC and latency measurements without a Gateway.",
   );
   process.exit(0);
 }
@@ -62,6 +62,16 @@ if (values["tool-invocations"]) {
   await measureToolInvocations();
   process.exit(0);
 }
+const toolArgsChars = Number(values["tool-args-chars"]);
+if (!Number.isSafeInteger(toolArgsChars) || toolArgsChars < 0) {
+  console.error("--tool-args-chars must be a non-negative integer");
+  process.exit(2);
+}
+// Brace-dense TypeScript, like a coding agent writing a source file.
+const toolCallSource = readFileSync(new URL(import.meta.url), "utf8");
+const toolCallContent = toolCallSource
+  .repeat(Math.ceil(toolArgsChars / toolCallSource.length))
+  .slice(0, toolArgsChars);
 const output = mkdtempSync(path.join(tmpdir(), "sqlmeasure-channel-"));
 const fixture = path.join(output, "fixture");
 mkdirSync(fixture);
@@ -80,6 +90,7 @@ type TurnEvidence = TurnIdentity & {
 const evidence: {
   output: string;
   harnessVersion: string;
+  toolArgsChars: number;
   phases: { phase: string; start: number; end: number }[];
   turns: TurnEvidence[];
   children: { name: string; pid: number }[];
@@ -93,6 +104,7 @@ const evidence: {
 } = {
   output,
   harnessVersion: "2.0.0-channel.1",
+  toolArgsChars,
   phases: [],
   turns: [],
   children: [],
@@ -180,7 +192,21 @@ try {
   bus = await startQaBusServer({ state });
   const cfg: OpenClawConfig = structuredClone(BASE_GATEWAY_BENCH_CONFIG);
   cfg.tools = { codeMode: false };
-  applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
+  applyMockOpenAiModelConfig(cfg, {
+    mockPort,
+    modelRef: toolArgsChars > 0 ? "mock-completions/gpt-4.1" : "openai/gpt-4.1",
+  });
+  const mockProvider = cfg.models?.providers?.openai;
+  if (toolArgsChars > 0 && mockProvider) {
+    // Malformed tool-call argument repair wraps Chat Completions streams, not Responses.
+    mockProvider.api = "openai-completions";
+    for (const model of mockProvider.models) {
+      model.api = "openai-completions";
+    }
+    cfg.models = { ...cfg.models, providers: { "mock-completions": mockProvider } };
+    // One session per turn keeps large tool-call histories below the context window.
+    cfg.session = { dmScope: "per-peer" };
+  }
   cfg.agents = {
     ...cfg.agents,
     defaults: { ...cfg.agents?.defaults, skipBootstrap: true },
@@ -279,7 +305,20 @@ try {
     publish("trace-map.json", traces);
     publish("channel-turns.json", messages);
     const reply = `Synthetic channel measurement response ${i}. The Gateway receives this streamed answer from the local mock provider and delivers it to the isolated QA bus.`;
-    publish("mock-control.json", { text: reply, chunkDelayMs: 5 });
+    publish("mock-control.json", {
+      text: reply,
+      chunkDelayMs: 5,
+      ...(toolArgsChars > 0
+        ? {
+            toolCall: {
+              name: "write",
+              arguments: { path: `turn-${i}.ts`, content: toolCallContent },
+              argumentChunkChars: 4,
+            },
+          }
+        : {}),
+    });
+    const peer = toolArgsChars > 0 ? `sqlmeasure-peer-${i}` : "sqlmeasure-peer";
     const start = Date.now();
     const cursor = state.getSnapshot().cursor;
     const firstOutbound = state
@@ -293,8 +332,8 @@ try {
     state.addInboundMessage(
       {
         accountId: "default",
-        conversation: { kind: "direct", id: "sqlmeasure-peer" },
-        senderId: "sqlmeasure-user",
+        conversation: { kind: "direct", id: peer },
+        senderId: toolArgsChars > 0 ? `sqlmeasure-user-${i}` : "sqlmeasure-user",
         senderName: "SQL measurement",
         text: `Please give a short synthetic status report for measurement turn ${i}.`,
         timestamp: 1800000000000 + i,
@@ -310,9 +349,9 @@ try {
     });
     const finalOutboundMs = Date.now() - start;
     const firstOutboundMs = await firstOutbound;
-    // The poll acknowledgement follows dispatch, preview cleanup and receipt settlement.
+    // Exact completion follows dispatch, preview cleanup and receipt settlement.
     const deadline = Date.now() + 180000;
-    while (state.getAcknowledgedPollCursor("default") < inboundCursor) {
+    while (!state.hasCompletedInboundEvent("default", inboundCursor)) {
       if (gateway.exitCode !== null || gateway.signalCode !== null) {
         throw new Error("Gateway exited during turn");
       }
@@ -343,7 +382,7 @@ try {
     }
     evidence.turns.push({
       phase,
-      key: "qa-channel:sqlmeasure-peer",
+      key: `qa-channel:${peer}`,
       turnId,
       messageId,
       firstOutboundMs,
@@ -441,7 +480,7 @@ async function measureToolInvocations() {
     { createToolTerminalObserver },
     { setToolTerminalPresentation },
     { startGatewayBenchDiagnostics },
-    { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace },
+    { writeGatewayGcTraceMarker, readGatewayGcTrace },
   ] = await Promise.all([
     import("node:inspector/promises"),
     import("typebox"),
@@ -598,12 +637,6 @@ async function measureToolInvocations() {
   };
   const inspector = new Session();
   inspector.connect();
-  const markGc = (samplePhase: string, profilePath?: string) => {
-    writeSync(
-      1,
-      `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase: samplePhase, pid: process.pid, profilePath })}\n`,
-    );
-  };
   const originalClone = globalThis.structuredClone;
   let clones = 0;
   let argumentClones = 0;
@@ -649,7 +682,7 @@ async function measureToolInvocations() {
       return originalClone(value, options);
     };
     const stopDiagnostics = startGatewayBenchDiagnostics();
-    markGc("heap-start", profilePath);
+    writeGatewayGcTraceMarker("heap-start", profilePath);
     const windowStart = performance.now();
     let diagnostics: ReturnType<typeof stopDiagnostics>;
     try {
@@ -676,7 +709,7 @@ async function measureToolInvocations() {
       await immediate();
     } finally {
       diagnostics = stopDiagnostics();
-      markGc("heap-stop", profilePath);
+      writeGatewayGcTraceMarker("heap-stop", profilePath);
       globalThis.structuredClone = originalClone;
     }
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -723,9 +756,9 @@ async function measureToolInvocations() {
   };
   try {
     // Identify the main isolate once; this forced collection is outside every capture.
-    markGc("identify-start");
+    writeGatewayGcTraceMarker("identify-start");
     globalThis.gc();
-    markGc("identify-stop");
+    writeGatewayGcTraceMarker("identify-stop");
     const cold = await sample("cold", 1, 0);
     for (let index = 0; index < 3; index++) {
       await invoke();

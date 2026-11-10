@@ -12,7 +12,6 @@ import {
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
-import { COMMAND_PALETTE_ELEMENT, ensureCustomElementDefined } from "./lazy-custom-element.ts";
 import { handleNavDrawerKeydown } from "./navigation-surface.ts";
 
 let navigate: ReturnType<typeof vi.fn>;
@@ -43,6 +42,7 @@ function nativeSessionContext(
 function navigationShell(context: Partial<ApplicationContext> = {}) {
   const shell = createShellOwner();
   shell.runtime = { context: { navigate, ...context } } as ApplicationRuntime;
+  shell.routeState = { routeId: "chat" };
   return shell;
 }
 
@@ -85,6 +85,7 @@ it("focuses the navigation drawer without a tooltip claiming Escape", async () =
   onTestFinished(() => runtime.stop());
   const shell = createShellOwner();
   shell.runtime = runtime;
+  shell.routeState = { routeId: "chat" };
   const drawer = document.createElement("nav");
   drawer.className = "shell-nav";
   shell.navDrawerElement = drawer;
@@ -201,6 +202,23 @@ it.each(["none", "keyboardShortcuts", "approvalOverlay"] as const)(
   },
 );
 
+it.each([
+  ["ai-agents", "/settings/ai-agents", "agents", "/settings/agents"],
+  ["lobsterdex", "/settings/lobsterdex", "appearance", "/settings/appearance"],
+  ["plugin-settings", "/settings/plugins/fixture", "plugin-settings", "/settings/plugins"],
+] as const)("goes up one level when Escape is pressed on %s", (routeId, pathname, parent, path) => {
+  const shell = settingsShell();
+  shell.routeState = { routeId, location: { pathname, search: "", hash: "" } };
+
+  document.dispatchEvent(keydown({ key: "Escape" }));
+
+  expect(navigate).toHaveBeenCalledExactlyOnceWith(parent, {
+    pathname: path,
+    search: "",
+    hash: "",
+  });
+});
+
 it("keeps the raw config editor unchanged when Escape is pressed", () => {
   settingsShell();
   const rawField = append(document.createElement("label"));
@@ -287,10 +305,7 @@ it.each(["operator.write", "operator.sessions.write"])(
     const shortcut = keydown({ key: "k", metaKey: true });
     document.dispatchEvent(shortcut);
     // Join the cold import before the shared runner retires this module graph.
-    await ensureCustomElementDefined(
-      COMMAND_PALETTE_ELEMENT.tagName,
-      COMMAND_PALETTE_ELEMENT.loadModule,
-    );
+    await vi.dynamicImportSettled();
     expect(shortcut.defaultPrevented).toBe(true);
     expect(togglePalette).toHaveBeenCalledOnce();
   },

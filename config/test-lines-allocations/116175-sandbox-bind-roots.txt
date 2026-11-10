@@ -1,0 +1,3 @@
+# Named-root admission, canonical-path rejection, and agent/browser revocation.
+# Container/data preservation, restricted workspace authority, and Docker isolation.
+605

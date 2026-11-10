@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   evaluateStoredCredentialEligibility,
@@ -44,11 +45,7 @@ describe("evaluateStoredCredentialEligibility", () => {
     "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
   ])("marks pasted OpenClaw onboarding command %p as a malformed api key", (key) => {
     const result = evaluateStoredCredentialEligibility({
-      credential: {
-        type: "api_key",
-        provider: "zai",
-        key,
-      },
+      credential: createApiKeyCredential("zai", key),
       now,
     });
     expect(result).toEqual({ eligible: false, reasonCode: "malformed_api_key" });

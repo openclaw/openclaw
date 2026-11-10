@@ -1,0 +1,56 @@
+# Verify and report
+
+## 1. Structural check: one call, exceptions only
+
+Run `knowledge_verify` over every published ID (up to 100 per call). Supply
+expectations from your plan, never copied from saved output:
+
+- `expectedRevision`/`expectedHash` from receipts.
+- `owner`, `due_at`, `occurred_at`, `source_page`, `from`, `to`, `label`
+  compare exactly; `null` asserts absence; omitted skips.
+- `expectedEntities`/`expectedDependencies`: required members (extras allowed).
+- `expectedLinks: [{id, href?}]`: authored links to intended IDs. List both pages
+  when both directions are required.
+
+It returns exceptions only. Follow `nextOffset` with the same records and
+snapshot; restart if the snapshot changes. Passed checks need no structural
+readback.
+
+## 2. Investigate exceptions only
+
+- `knowledge_record({id, view: "content"})`: each intended link in `links`
+  must be `status: "resolved"` with the expected `id`. `linksTruncated: true`
+  means the check is incomplete.
+- `knowledge_connections` with `links`/`backlinks` for missing neighbors.
+  Follow `nextOffset`; restart if `snapshot` changes.
+
+## 3. Semantic review: read only what needs judgment
+
+Structure passing does not prove meaning. Review:
+
+- Prose you wrote: does it say what the source says, with readable citations?
+- Quotes and attributions: read the cited lines with
+  `knowledge_evidence_read({id, path, sha256, startLine, endLine})`; follow
+  `nextCursor`. `evidence.verified` checks bytes, not truth or speaker identity.
+
+Keep reads bounded: `view: "summary"` for identity checks; `includeEvidence:
+true` with small `evidenceLimit`/`maxEvidenceChars` only when reviewing
+provenance. Don't fetch every body or original just to confirm publication; review prose
+from the drafts you published, and read a saved body only when a check fails or
+an existing page's merged result needs judgment.
+Responses cap at 24 KiB; follow returned offsets and check `omitted`.
+
+Retrieval: confirm one exact lookup and one distinctive keyword search. An
+unavailable index (`total: null`) is not an empty vault.
+
+## 4. Report
+
+- Created, updated and reused records; retained sources; checks run; failures;
+  unresolved identities; conflicts; partial work. One receipt never means a
+  multi-page workflow is complete.
+- In Control UI chat, link titles to
+  `/plugin?plugin=knowledge&id=overview&p.agent=AGENT&p.vault=VAULT&p.record=RECORD`
+  using `agent` and `vault` from `knowledge_status` (never `writtenByAgentId`)
+  and the observed record ID, URL-encoded. Keep a known base path. If you can't
+  establish the location, give the title and ID without a link. Never invent an
+  origin, port or ID.

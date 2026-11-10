@@ -1,7 +1,7 @@
 /**
  * Converts inline provider model config into runtime model definitions.
  */
-import { normalizeResolvedPricing } from "@openclaw/llm-core";
+import { normalizeResolvedPricing, omitNullRequestHeaders } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { MODEL_APIS } from "../../config/model-config-vocabulary.js";
 import { resolveMergedModelProviderModels } from "../../config/model-provider-config.js";
@@ -126,7 +126,7 @@ export function buildInlineProviderModels(
       models: entry?.models,
       normalizeModelId: (modelId) => modelId.trim(),
     });
-    return Array.from(models.values()).map((model) => {
+    return Array.from(models.values(), (model) => {
       const api = normalizeResolvedTransportApi(model.api ?? entry?.api);
       const configuredBaseUrl = model.baseUrl ?? entry?.baseUrl;
       const baseUrl =
@@ -164,7 +164,7 @@ export function buildInlineProviderModels(
               provider: trimmed,
               baseUrl: requestConfig.baseUrl ?? baseUrl,
               api: requestConfig.api ?? model.api,
-              headers: requestConfig.headers,
+              headers: omitNullRequestHeaders(requestConfig.headers),
             },
             providerRequest,
           ),

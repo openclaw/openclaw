@@ -9,6 +9,7 @@ import * as processExec from "../process/exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
+import { writeFixtureTree } from "./fixture-tree.test-support.js";
 import { verifyGitUpdateRecovery } from "./update-git-runtime.js";
 import {
   createGitUpdateFixture,
@@ -19,7 +20,6 @@ import {
   resolveCandidateNodeRuntimeForTest,
   runtimeImports,
   writeGitFixtureManifest,
-  writeFixtureTree,
   type GitUpdateFixture,
   expectHead,
   expectMissing,
@@ -195,45 +195,126 @@ describe("Git candidate activation", () => {
   });
   registerGitActivationDoctorOutcomeTests(fixture);
 
-  it("keeps build and exposure source selection in the admitted candidate", async () => {
-    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", root);
-    const otherTools = path.join(directory, "other-tools");
-    const inheritedPath = `${otherTools}${path.delimiter}${process.env.PATH ?? ""}`;
-    vi.stubEnv("PATH", inheritedPath);
-    const nodeRuntime = await resolveCandidateNodeRuntimeForTest();
-    await advanceRemote();
-    let built = false;
-    let exposed = false;
-    observeCommands(async (argv, options) => {
-      if (argv[0] === "pnpm" && argv[1] === "build") {
-        built = true;
-        expect(options.env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(options.cwd);
-        expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(otherTools);
-        const selectedNode = await runCommandWithTimeout(["node", "-p", "process.execPath"], {
-          cwd: options.cwd,
-          env: options.env,
-          timeoutMs: 5000,
-        });
-        expect(selectedNode.code, selectedNode.stderr).toBe(0);
-        expect(selectedNode.stdout.trim()).toBe(await fs.realpath(nodeRuntime.path));
+  it.each([undefined, "0"])(
+    "keeps candidate build policy and source selection (%s)",
+    async (skipDts) => {
+      vi.stubEnv("OPENCLAW_RUN_NODE_SKIP_DTS_BUILD", skipDts);
+      vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", root);
+      const otherTools = path.join(directory, "other-tools");
+      const inheritedPath = `${otherTools}${path.delimiter}${process.env.PATH ?? ""}`;
+      vi.stubEnv("PATH", inheritedPath);
+      const nodeRuntime = await resolveCandidateNodeRuntimeForTest();
+      await advanceRemote();
+      let built = false;
+      let exposed = false;
+      observeCommands(async (argv, options) => {
+        if (argv[0] === "pnpm" && argv[1] === "build") {
+          built = true;
+          expect(options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts ?? "1");
+          expect(options.env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(options.cwd);
+          expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(otherTools);
+          const selectedNode = await runCommandWithTimeout(["node", "-p", "process.execPath"], {
+            cwd: options.cwd,
+            env: options.env,
+            timeoutMs: 5000,
+          });
+          expect(selectedNode.code, selectedNode.stderr).toBe(0);
+          expect(selectedNode.stdout.trim()).toBe(await fs.realpath(nodeRuntime.path));
+        }
+      });
+      const result = await update({
+        prepareGitExposure: async (candidateRoot, _sha, env) => {
+          exposed = true;
+          expect(env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(candidateRoot);
+          const exposedNode = resolveExecutableFromPathEnv("node", env?.PATH ?? "", env, {
+            cwd: candidateRoot,
+            useCache: false,
+          });
+          expect(exposedNode).toBeDefined();
+          expect(await fs.realpath(exposedNode!)).toBe(await fs.realpath(nodeRuntime.path));
+        },
+      });
+      expect(result.status).toBe("ok");
+      expect(built && exposed).toBe(true);
+      expect(process.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+      expect(process.env.PATH).toBe(inheritedPath);
+      expect(process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts);
+    },
+  );
+
+  it.each(["exact", "fallback", "latest"] as const)(
+    "qualifies attempted Git candidates before preparation (%s)",
+    async (mode) => {
+      const compatible = await advanceRemote();
+      await writeGitFixtureManifest(remote, {
+        ...packageMetadata,
+        engines: { node: ">=999.0.0" },
+      });
+      await git(remote, "add", "package.json");
+      const incompatible = await commitFiles({ "next.txt": "incompatible\n" }, remote);
+      let selected = compatible;
+      if (mode === "latest") {
+        await writeGitFixtureManifest(remote, packageMetadata);
+        await git(remote, "add", "package.json");
+        selected = await commitFiles({ "newest.txt": "compatible\n" }, remote);
       }
-    });
-    const result = await update({
-      prepareGitExposure: async (candidateRoot, _sha, env) => {
-        exposed = true;
-        expect(env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(candidateRoot);
-        const exposedNode = resolveExecutableFromPathEnv("node", env?.PATH ?? "", env, {
-          cwd: candidateRoot,
-          useCache: false,
+      const checkouts: string[] = [];
+      observeCommands((argv) => {
+        if (argv.includes("checkout") || argv.includes("worktree")) {
+          checkouts.push(argv.join(" "));
+        }
+      });
+      const beforeGitStaging = vi.fn<NonNullable<UpdateRunnerOptions["beforeGitStaging"]>>(
+        async () => {
+          if (mode === "exact") {
+            throw new Error("incompatible target reached staging");
+          }
+          return {
+            step: { name: "staging", command: "staging", cwd: root, durationMs: 0, exitCode: 0 },
+            failureReason: "snapshot-capacity-insufficient",
+          };
+        },
+      );
+      const result = await update({
+        ...(mode === "exact" ? { devTarget: { mode: "detached", ref: incompatible } } : {}),
+        beforeGitStaging,
+      });
+      expect(checkouts.every((command) => !command.includes(incompatible))).toBe(true);
+      if (mode === "exact") {
+        expect(result).toMatchObject({
+          status: "error",
+          reason: "preflight-node-runtime-incompatible",
         });
-        expect(exposedNode).toBeDefined();
-        expect(await fs.realpath(exposedNode!)).toBe(await fs.realpath(nodeRuntime.path));
-      },
-    });
-    expect(result.status).toBe("ok");
-    expect(built && exposed).toBe(true);
-    expect(process.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
-    expect(process.env.PATH).toBe(inheritedPath);
+        expect(beforeGitStaging).not.toHaveBeenCalled();
+        expect(state.events).toEqual([]);
+        await expectOriginalServing();
+      } else {
+        expect(result.status, result.reason).toBe("ok");
+        await expectInstalled(selected);
+        if (mode === "latest") {
+          expect(result.steps.some((step) => step.name === "preflight-node-runtime")).toBe(false);
+        }
+      }
+    },
+  );
+
+  it("uses the rebased Node requirement when local commits relax it", async () => {
+    await writeGitFixtureManifest(remote, { ...packageMetadata, engines: { node: ">=999.0.0" } });
+    await git(remote, "add", "package.json");
+    await git(remote, "commit", "-m", "upstream engine");
+    await git(root, "fetch", "origin");
+    await git(root, "merge", "--ff-only", "origin/main");
+    await writeGitFixtureManifest(root, { ...packageMetadata, engines: { node: ">=24.0.0" } });
+    await git(root, "add", "package.json");
+    await git(root, "commit", "-m", "local engine");
+    state.beforeSha = await git(root, "rev-parse", "HEAD");
+    await state.writeRuntime();
+    await advanceRemote();
+    const result = await update();
+    expect(result.status, result.reason).toBe("ok");
+    expect(JSON.parse(await readText(path.join(root, "package.json"))).engines.node).toBe(
+      ">=24.0.0",
+    );
   });
 
   it("rejects after all bounded rebased dev candidates require an incompatible Node runtime", async () => {
@@ -784,17 +865,19 @@ describe("Git candidate activation", () => {
     await expectNoRuntimeStagingPaths();
   });
 
-  it.each(["validation", "runtime staging"])(
+  it.each(["validation", "runtime staging", "runtime staging and cleanup"])(
     "leaves the old runtime serving when candidate %s fails",
     async (failurePoint) => {
       await advanceRemote();
       const failure = new Error("candidate canary failed");
+      const cleanupFailure = new Error("runtime staging cleanup denied");
+      let retainedStaging: string | undefined;
       const onStepComplete = vi.fn();
       const cause: unknown = await update({
         progress: {
           onStepComplete,
           onStepStart: ({ name }) => {
-            if (failurePoint === "runtime staging" && name === "preflight-cleanup") {
+            if (failurePoint !== "validation" && name === "preflight-cleanup") {
               expect(onStepComplete).toHaveBeenCalledWith(
                 expect.objectContaining({
                   name: "preflight-runtime-stage",
@@ -809,12 +892,34 @@ describe("Git candidate activation", () => {
           if (failurePoint === "validation") {
             throw failure;
           }
-          vi.spyOn(fs, "cp").mockRejectedValueOnce(failure);
+          vi.spyOn(fs, "cp").mockImplementationOnce(async (_source, destination) => {
+            if (failurePoint === "runtime staging and cleanup") {
+              retainedStaging = path.dirname(String(destination));
+              const remove = fs.rm.bind(fs);
+              vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+                if (target === retainedStaging) {
+                  throw cleanupFailure;
+                }
+                return remove(target, options);
+              });
+            }
+            throw failure;
+          });
         },
       }).catch((error: unknown) => error);
       if (failurePoint === "validation") {
         expect(cause).toBe(failure);
       } else {
+        const staging = onStepComplete.mock.calls.find(
+          ([step]) => step.name === "preflight-runtime-stage",
+        )?.[0];
+        expect(staging.failureFacts[0].message).toContain(failure.message);
+        if (failurePoint === "runtime staging and cleanup") {
+          expect(cause).toMatchObject({
+            cause: { errors: [failure, { errors: [cleanupFailure] }] },
+          });
+          expect(staging.failureFacts[0].message).toContain(cleanupFailure.message);
+        }
         const { resolveMutableUpdateFailure } =
           await import("../cli/update-cli/update-command-result.js");
         const { result } = await resolveMutableUpdateFailure({
@@ -828,6 +933,13 @@ describe("Git candidate activation", () => {
           serviceRestartSafe: true,
           buildId: state.beforeSha,
         });
+      }
+      if (retainedStaging) {
+        expect(state.stopped).toBe(false);
+        await expectInstalled(state.beforeSha);
+        expect((await fs.lstat(retainedStaging)).isDirectory()).toBe(true);
+        vi.restoreAllMocks();
+        await fs.rm(retainedStaging, { recursive: true, force: true });
       }
       await expectOriginalServing();
     },

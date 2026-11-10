@@ -28,7 +28,6 @@ const mocks = vi.hoisted(() => {
       success: true,
       audioPath: "/tmp/openclaw/tts-config-test.opus",
       provider: "microsoft",
-      voiceCompatible: true,
     })),
   };
 });

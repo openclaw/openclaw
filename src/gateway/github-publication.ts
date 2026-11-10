@@ -8,7 +8,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
-import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
+import {
+  decodeGitHubPublicationRequester,
+  type GitHubPublicationOrigin,
+} from "../state/github-publication-requester.js";
+import {
+  prepareGitHubPublicationSessionLifecycle,
+  readGitHubPublicationSessionLifecycleInWorker,
+} from "../state/github-publication-session-lifecycles.js";
 import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createPersonalGitHubPublicationCoordinator } from "./github-personal-publication.js";
@@ -36,6 +43,8 @@ import {
 import {
   readGitHubPublicationRequestInWorker,
   reconcileGitHubPublication,
+  observeGitHubPublication,
+  type GitHubPublicationRecoveryBackoff,
 } from "./github-publication-recovery.js";
 import { insertGitHubPublicationRequestAsync } from "./github-publication-request-async.js";
 import {
@@ -48,6 +57,7 @@ import {
   createGitHubPublicationExecutionStoreAsync,
   deferGitHubPublicationRequestsAsync,
   readGitHubPublicationRequestAsync,
+  readRepositoryGitHubPublicationAsync,
   runGitHubPublicationMaintenanceAsync,
 } from "./github-publication-store-async.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
@@ -67,7 +77,9 @@ export type GitHubPublicationTranscriptReport = {
   sessionKey: string;
   agentId: string;
   result: SessionGitHubPublicationResult;
-  /** Run whose tool call requested this publication, when it is known to this process. */
+  /** Task custody remains source-bound; the initiating transcript is recorded durably. */
+  origin?: GitHubPublicationOrigin;
+  /** Initiating run, recovered from task origin when present. */
   runId?: string;
 };
 
@@ -101,9 +113,14 @@ export type GitHubPublicationCoordinator = ReturnType<typeof createGitHubPublica
 
 export function createGitHubPublicationCoordinator(params: {
   placements: WorkerSessionPlacementStore;
+  environments?: Parameters<typeof createRepositoryGitHubPublicationCoordinator>[0]["environments"];
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent?: () => void;
   signal?: AbortSignal;
+  recovery?: {
+    shared: GitHubPublicationRecoveryBackoff;
+    repository: GitHubPublicationRecoveryBackoff;
+  };
 }) {
   const instanceId = params.placements.workspaceResultInstanceId();
   const scope = createGitHubPublicationWorkerScope(captureOpenClawStateWorkerContext());
@@ -232,6 +249,7 @@ export function createGitHubPublicationCoordinator(params: {
     validateExecution: () => boolean,
     assertInvocationCurrent?: () => void,
     invocationSignal?: AbortSignal,
+    recoveryResult?: SessionGitHubPublicationResult,
   ): Promise<SessionGitHubPublicationResult> => {
     if (initial.status === "published" || initial.status === "failed") {
       return Promise.resolve(publicationResult(initial));
@@ -315,7 +333,21 @@ export function createGitHubPublicationCoordinator(params: {
             assertOwned();
             return await executeGitHubPublication({
               initial: claimed,
+              recoveryResult:
+                recoveryResult ??
+                (claimed.head_commit
+                  ? () =>
+                      observeGitHubPublication({
+                        initial: claimed,
+                        validateCustody,
+                        beforeRetry: true,
+                      })
+                  : undefined),
               requester: getRequester,
+              requesterProfileId: () => {
+                const actor = getRequester().snapshot.actor;
+                return actor.kind === "operator" ? actor.profileId : undefined;
+              },
               validateCustody,
               assertWorkflowChangesAllowed: () =>
                 assertGitHubPublicationWorkflowChangesAllowed(getRequester()),
@@ -445,6 +477,7 @@ export function createGitHubPublicationCoordinator(params: {
 
   const repository = createRepositoryGitHubPublicationCoordinator({
     ...params,
+    recovery: params.recovery?.repository,
     assertCurrent,
     signal,
   });
@@ -459,6 +492,7 @@ export function createGitHubPublicationCoordinator(params: {
   const requestingRuns = new Map<string, string>();
   const methods = createGitHubPublicationCoordinatorMethods({
     placements: params.placements,
+    recovery: params.recovery,
     assertCurrent,
     requestForClaimV2: requestForClaim,
     getCommittedRuntimeConfig: params.getCommittedRuntimeConfig,
@@ -467,6 +501,24 @@ export function createGitHubPublicationCoordinator(params: {
     processRow,
     recordRequestingRun: (requestId, runId) => requestingRuns.set(requestId, runId),
   });
+  const readReportBinding = async (report: GitHubPublicationTranscriptReport) => {
+    const requestId = report.result.requestId;
+    const row = await readRepositoryGitHubPublicationAsync(requestId);
+    assertCurrent();
+    if (row) {
+      return {
+        lifecycle_revision: row.session_lifecycle_revision,
+        requester_authority_json:
+          row.owner_profile_id === null ? row.requester_authority_json : null,
+      };
+    }
+    const lifecycle = await prepareGitHubPublicationSessionLifecycle({
+      publicationKind: report.result.publisher?.source === "personal" ? "personal" : "shared",
+      requestId,
+    });
+    assertCurrent();
+    return lifecycle.readCurrent();
+  };
   return {
     ...methods,
     ...personal,
@@ -586,14 +638,23 @@ export function createGitHubPublicationCoordinator(params: {
     async processClaim(claim: WorkerSessionTurnClaim) {
       return [...(await methods.processClaim(claim)), ...(await repository.processClaim(claim))];
     },
-    async resumeSessionRequests(isStopping?: () => boolean) {
+    async resumeSessionRequests(
+      isStopping?: () => boolean,
+      isPendingEmpty?: (kind: "shared" | "repository") => boolean,
+    ) {
       const failures: unknown[] = [];
       for (const coordinator of [methods, repository]) {
         if (isStopping?.()) {
           break;
         }
+        if (coordinator === repository && isPendingEmpty?.("repository")) {
+          continue;
+        }
         try {
-          await coordinator.resumeSessionRequests(isStopping);
+          await coordinator.resumeSessionRequests(
+            isStopping,
+            () => isPendingEmpty?.("shared") ?? false,
+          );
         } catch (error) {
           failures.push(error);
         }
@@ -611,26 +672,34 @@ export function createGitHubPublicationCoordinator(params: {
     deferOrphanedRequests(): void {
       return refuseLegacyPublication("deferOrphanedRequests", "deferOrphanedRequestsAsync");
     },
-    async deferOrphanedRequestsAsync(): Promise<void> {
-      await methods.deferOrphanedRequestsAsync();
-      await repository.deferOrphanedRequestsAsync();
+    async deferOrphanedRequestsAsync(
+      isPendingEmpty?: (kind: "shared" | "repository") => boolean,
+    ): Promise<void> {
+      if (!isPendingEmpty?.("shared")) {
+        await methods.deferOrphanedRequestsAsync();
+      }
+      if (!isPendingEmpty?.("repository")) {
+        await repository.deferOrphanedRequestsAsync();
+      }
     },
     /** @deprecated Use listUnreportedResultsAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     listUnreportedResults(): GitHubPublicationTranscriptReport[] {
       return refuseLegacyPublication("listUnreportedResults", "listUnreportedResultsAsync");
     },
-    async listUnreportedResultsAsync() {
+    async listUnreportedResultsAsync(): Promise<GitHubPublicationTranscriptReport[]> {
       const publications: GitHubPublicationTranscriptReport[] = [
         ...(await methods.listUnreportedResultsAsync()),
         ...(await repository.listUnreportedResultsAsync()),
       ];
-      for (const publication of publications) {
-        const runId = requestingRuns.get(publication.result.requestId);
-        if (runId) {
-          publication.runId = runId;
-        }
-      }
-      return publications;
+      return await Promise.all(
+        publications.map(async (publication) => {
+          const binding = await readReportBinding(publication);
+          const authority = binding?.requester_authority_json;
+          const origin = decodeGitHubPublicationRequester(authority)?.origin;
+          const runId = origin?.runId ?? requestingRuns.get(publication.result.requestId);
+          return Object.assign(publication, origin ? { origin } : {}, runId ? { runId } : {});
+        }),
+      );
     },
     /** @deprecated Use readAsync and await completion. */
     read(_requestId: string): SessionGitHubPublicationResult | undefined {
@@ -638,6 +707,13 @@ export function createGitHubPublicationCoordinator(params: {
     },
     async readAsync(requestId: string) {
       return (await repository.readAsync(requestId)) ?? methods.readAsync(requestId);
+    },
+    async readReportLifecycleAsync(report: GitHubPublicationTranscriptReport) {
+      const binding = await readReportBinding(report);
+      if (!binding) {
+        throw new Error("GitHub publication transcript lifecycle is unavailable.");
+      }
+      return binding.lifecycle_revision;
     },
     /** @deprecated Use markReportedAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     markReported(_requestId: string): void {

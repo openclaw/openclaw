@@ -18,6 +18,7 @@ import {
   composeSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
@@ -44,6 +45,17 @@ import { createCliRunCurrentAssertion, resolveCliExecutionTarget } from "./execu
 import type { PreparedCliRunContext } from "./types.js";
 
 /**
+ * Another writer or lifecycle owns the session history. Local session state, not a provider
+ * failure: model fallback must stop instead of replaying the turn on another candidate.
+ */
+class CliHistoryOwnerChangedError extends Error {
+  constructor() {
+    super("CLI history owner changed before preparation");
+    this.name = "CliHistoryOwnerChangedError";
+  }
+}
+
+/**
  * Execution layers the run's skill env overrides onto the process environment right before it
  * builds the child environment. Apply the same snapshot here, synchronously, so preparation
  * resolves the login the child will actually run under.
@@ -60,7 +72,7 @@ function resolvePreparedChildEnv(
         })
       : undefined;
   try {
-    return resolveCliChildEnv(preparedBackend).env;
+    return resolveCliChildEnv(preparedBackend, params).env;
   } finally {
     restoreSkillEnv?.();
   }
@@ -272,7 +284,7 @@ async function prepareCliHistoryBoundaryOnce(
           snapshot.activeWriterRunId !== writerRunId &&
           hasLiveAgentRunContext(snapshot.activeWriterRunId)
         ) {
-          throw new Error("CLI history owner changed before preparation");
+          throw new CliHistoryOwnerChangedError();
         }
         assertSource();
       }),
@@ -288,7 +300,7 @@ async function prepareCliHistoryBoundaryOnce(
         (params.expectedLifecycleRevision !== undefined &&
           current.lifecycleRevision !== params.expectedLifecycleRevision)
       ) {
-        throw new Error("CLI history owner changed before preparation");
+        throw new CliHistoryOwnerChangedError();
       }
       return { activeWriterRunId: writerRunId, cliHistoryBoundary: boundary };
     },
@@ -543,14 +555,16 @@ async function planCliHistoryBoundary(
   ) {
     let truncated = false;
     const branch = (
-      await SessionManager.openBoundedAsync(target, {
-        signal: params.abortSignal,
-        maxBytes: 1024 * 1024,
-        maxEvents: 100,
-        onTruncated: () => {
-          truncated = true;
-        },
-      })
+      await withSessionTranscriptHydrationCaller("cli-context", () =>
+        SessionManager.openBoundedAsync(target, {
+          signal: params.abortSignal,
+          maxBytes: 1024 * 1024,
+          maxEvents: 100,
+          onTruncated: () => {
+            truncated = true;
+          },
+        }),
+      )
     ).getBranch();
     assertCurrent();
     // Bookkeeping is not a conversation. Retained reset rows, summaries, custom

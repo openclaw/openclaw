@@ -145,6 +145,34 @@ describe("MCP relay transport and authority", () => {
     );
   });
 
+  it.each(["result", "error"])("withholds a revoked %s at publication", async (kind) => {
+    const operations = vi.fn(async () => ({}));
+    const f = await fixture(operations);
+    await createGrant(f);
+    await f.ready();
+    operations.mockImplementationOnce(async () => {
+      await f.state.revoke("gr_one");
+      if (kind === "error") {
+        throw new Error("private provider error");
+      }
+      return { text: "private provider result" };
+    });
+    expect(await f.request({ id: "revoked", op: "status", grantId: "gr_one", params: {} })).toEqual(
+      denied("revoked", "grant_revoked"),
+    );
+  });
+
+  it("normalizes private operation failures at the wire boundary", async () => {
+    const f = await fixture(async () => {
+      throw new Error("private provider error");
+    });
+    await createGrant(f);
+    await f.ready();
+    const response = await f.request({ id: "failed", op: "status", grantId: "gr_one", params: {} });
+    expect(response).toEqual(denied("failed", "internal"));
+    expect(JSON.stringify(response)).not.toContain("private provider error");
+  });
+
   it("requires the current principal-bound ingress capability at startup", async () => {
     await expect(fixture(undefined, { controlUiIngress: undefined })).rejects.toThrow(
       "Update OpenClaw to enable principal-bound MCP and Control UI access.",
@@ -351,10 +379,12 @@ describe("MCP relay transport and authority", () => {
       ok: true,
       result: {},
     });
+    const issuanceId = f.state.getGrant("accepted")?.issuanceId;
+    expect(issuanceId).toMatch(/^[a-f0-9-]{36}$/u);
     const restarted = f.storage.open();
     await restarted.initialize();
     await expect(restarted.grants()).resolves.toEqual([
-      grantFixture({ grantId: "accepted", createdAt: 1_000 }),
+      grantFixture({ grantId: "accepted", createdAt: 1_000, issuanceId }),
     ]);
   });
 

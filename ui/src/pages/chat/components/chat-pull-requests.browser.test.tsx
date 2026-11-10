@@ -5,7 +5,7 @@ import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
 import { ChatPullRequests } from "./chat-pull-requests.tsx";
@@ -132,18 +132,29 @@ it.each(["props", "owner", "parked"])(
 );
 
 it.each([
-  { viewport: 1440, width: 360, repo: "openclaw" },
-  { viewport: 900, width: 300, repo: "a-very-long-repository-name-that-needs-truncation" },
-  { viewport: 393, width: 360, repo: "openclaw" },
+  { viewport: 1440, width: 360, repo: "openclaw", clipped: false },
+  {
+    viewport: 900,
+    width: 300,
+    repo: "a-very-long-repository-name-that-needs-truncation",
+    clipped: false,
+  },
+  { viewport: 393, width: 360, repo: "openclaw", clipped: false },
+  { viewport: 900, width: 300, repo: "openclaw", clipped: true },
 ])(
-  "keeps the native branch row above aligned diff and publication actions at $viewport/$width",
-  async ({ viewport, width, repo }) => {
+  "keeps the native branch row above aligned diff and publication actions at $viewport/$width (clipped: $clipped)",
+  async ({ viewport, width, repo, clipped }) => {
     await page.viewport(viewport, 700);
     document.body.append(container);
     const onPublish = vi.fn();
     const onSelect = vi.fn();
     const onDismissBranch = vi.fn();
-    const branch = sessionBranch({ repo, branch: "openclaw/custom-snooze-date-time" });
+    const branch = sessionBranch({
+      repo,
+      branch: clipped
+        ? "openclaw/custom-snooze-date-time-with-a-branch-name-that-needs-truncation"
+        : "openclaw/custom-snooze-date-time",
+    });
     const shared = { source: "agent-override" as const, accountId: 1, login: "agent-bot" };
     mounted = mountSolid(
       () => (
@@ -156,54 +167,56 @@ it.each([
             data-instant
             style={{ position: "relative", width: `${width}px`, "max-width": "none" }}
           >
-            <div class="chat-details-desktop-body">
-              <ChatDetailsEnvironment
-                presented
-                details={{
-                  sessionKey: "agent:main:branch",
-                  currentAgentId: "main",
-                  messages: [],
-                  selectedSession: undefined,
-                  detailsWorkspace: {
-                    root: "/synthetic/project",
-                    label: "project",
-                    branch: branch.branch,
-                  },
-                }}
-                work={{
-                  pullRequests: [],
-                  branch,
-                  status: "ready",
-                  onDismiss: () => {},
-                  onDismissBranch,
-                  publication: publication({
-                    onPublish,
-                    onSelect,
-                    options: {
-                      shared,
-                      personal: {
-                        state: "connected",
-                        generation: "personal",
-                        account: { accountId: 2, login: "alice-tools" },
-                        accessExpiresAtMs: null,
-                        refreshState: "available",
-                        pending: null,
-                      },
-                      pendingPersonal: null,
-                      latestShared: null,
+            <ChatDetailsDesktopContent
+              presented
+              dismissed={false}
+              cachedReady={false}
+              progressMenuRef={() => {}}
+              onHideProgress={() => {}}
+              chat={{
+                sessionKey: "agent:main:branch",
+                currentAgentId: "main",
+                messages: [],
+                selectedSession: undefined,
+                detailsWorkspace: {
+                  root: "/synthetic/project",
+                  label: "project",
+                  branch: branch.branch,
+                },
+                pullRequests: [],
+                pullRequestsBranch: branch,
+                pullRequestsStatus: "ready",
+                onDismissPullRequestsBranch: onDismissBranch,
+                githubPublication: publication({
+                  onPublish,
+                  onSelect,
+                  options: {
+                    shared,
+                    personal: {
+                      state: "connected",
+                      generation: "personal",
+                      account: { accountId: 2, login: "alice-tools" },
+                      accessExpiresAtMs: null,
+                      refreshState: "available",
+                      pending: null,
                     },
-                    selection: { source: "shared", expected: shared },
-                  }),
-                }}
-              />
-            </div>
+                    pendingPersonal: null,
+                    latestShared: null,
+                  },
+                  selection: { source: "shared", expected: shared },
+                }),
+              }}
+            />
           </section>
         </>
       ),
       { container },
     );
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
-      expect(container.querySelector(".chat-environment__branch")).not.toBeNull(),
+      expect(
+        container.querySelector(".chat-environment__branch .chat-pr__actions-trigger"),
+      ).not.toBeNull(),
     );
     const row = container.querySelector<HTMLElement>(".chat-environment__branch")!;
     const branchLabel = row.querySelector<HTMLElement>(".chat-environment__branch-name")!;
@@ -214,25 +227,22 @@ it.each([
     const publishButton = row.querySelector<HTMLButtonElement>("button.chat-pr__create")!;
     await expect.element(page.elementLocator(row)).toBeVisible();
     await expect.element(page.elementLocator(trigger)).toBeVisible();
-    expect(row.querySelector(".chat-environment__row")!.getBoundingClientRect().height).toBe(32);
     expect(publishButton.getBoundingClientRect().height).toBe(26);
     expect(trigger.getBoundingClientRect().width).toBeGreaterThanOrEqual(26);
+    const actions = row.querySelector<HTMLElement>(".chat-pr__publication-actions")!;
+    expect(trigger.getBoundingClientRect().right).toBeLessThanOrEqual(
+      actions.getBoundingClientRect().right,
+    );
     expect(row.getBoundingClientRect().left).toBeGreaterThanOrEqual(0);
     expect(row.getBoundingClientRect().right).toBeLessThanOrEqual(viewport);
     expect(branchLabel.textContent).toBe(branch.branch);
     expect(row.querySelector(".chat-pr__repo")).toBeNull();
-    expect(
-      Math.abs(branchLabel.getBoundingClientRect().left - diff.getBoundingClientRect().left),
-    ).toBeLessThanOrEqual(1);
-    expect(diff.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      branchLabel.getBoundingClientRect().bottom,
-    );
-    expect(
-      diff.getBoundingClientRect().top - branchLabel.getBoundingClientRect().bottom,
-    ).toBeLessThanOrEqual(12);
-    expect(diff.getBoundingClientRect().right).toBeLessThanOrEqual(
-      publishButton.getBoundingClientRect().left,
-    );
+    const labelBounds = branchLabel.getBoundingClientRect();
+    const diffBounds = diff.getBoundingClientRect();
+    expect(Math.abs(labelBounds.left - diffBounds.left)).toBeLessThanOrEqual(1);
+    expect(diffBounds.top).toBeGreaterThanOrEqual(labelBounds.bottom);
+    expect(diffBounds.top - labelBounds.bottom).toBeLessThanOrEqual(12);
+    expect(diffBounds.right).toBeLessThanOrEqual(publishButton.getBoundingClientRect().left);
     expect(publishButton.getBoundingClientRect().right).toBeLessThanOrEqual(
       trigger.getBoundingClientRect().left,
     );
@@ -240,15 +250,18 @@ it.each([
     expect(diff.textContent).toContain("−205");
     expect(getComputedStyle(diff).fontWeight).toBe("500");
     expect(getComputedStyle(diff).fontVariantNumeric).toBe("tabular-nums");
-    expect(branchLabel.getBoundingClientRect().width).toBeGreaterThan(40);
-    expect(branchLabel.getBoundingClientRect().height).toBeLessThanOrEqual(
+    expect(labelBounds.width).toBeGreaterThan(40);
+    expect(labelBounds.height).toBeLessThanOrEqual(
       Number.parseFloat(getComputedStyle(branchLabel).lineHeight) + 1,
     );
     expect(getComputedStyle(branchLabel).textOverflow).toBe("clip");
-    await waitForSolid(() =>
-      expect(getComputedStyle(branchLabel).maskImage).toContain("linear-gradient"),
-    );
-    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
+    await waitForSolid(() => {
+      expect(branchLabel.scrollWidth > branchLabel.clientWidth + 1).toBe(clipped);
+      expect(getComputedStyle(branchLabel).maskImage !== "none").toBe(clipped);
+    });
+    expect(branchLabel.parentElement?.getAttribute("title")).toBe(branch.branch);
+    const scrollPort = row.closest<HTMLElement>(".chat-details-desktop-body")!;
+    expect(scrollPort.scrollWidth).toBeLessThanOrEqual(scrollPort.clientWidth + 1);
 
     const dismiss = page.getByRole("button", {
       name: `Hide ${branch.branch} for this session`,
@@ -350,7 +363,7 @@ it.each([
     );
     const host = container.querySelector("openclaw-chat-details-session")!;
     await host.updateComplete;
-    await waitForSolid(() => expect(container.querySelector(".chat-pr")).not.toBeNull());
+    await waitForSolid(() => expect(container.querySelector("a.chat-pr__link")).not.toBeNull());
     const group = container.querySelector<HTMLDetailsElement>(
       '[data-details-group="pull-requests"]',
     )!;

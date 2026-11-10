@@ -16,6 +16,7 @@ import {
   isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
   isRenderablePayload,
+  shouldKeepPayloadDuringSilentTurn,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
@@ -64,13 +65,6 @@ async function normalizeSentMediaUrlsForDedupe(params: {
   return [...normalizedUrls];
 }
 
-function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
-  if (payload.isError || getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression) {
-    return true;
-  }
-  return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
-}
-
 function sanitizeFinalReplyText(
   payload: ReplyPayload,
   text: string | undefined,
@@ -82,29 +76,6 @@ function sanitizeFinalReplyText(
   return payload.isError
     ? renderUserFacingText(text, { errorContext: true, conversationContext })
     : sanitizeUserFacingText(text, { conversationContext });
-}
-
-function copyPayloadWithSanitizedText(
-  payload: ReplyPayload,
-  text: string | undefined,
-  conversationContext?: string,
-): ReplyPayload {
-  const sanitizedText = sanitizeFinalReplyText(payload, text, conversationContext);
-  const next = copyReplyPayloadMetadata(payload, {
-    ...payload,
-    text: sanitizedText,
-  });
-  const mirror = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
-  if (!mirror?.text) {
-    return next;
-  }
-  setReplyPayloadMetadata(next, {
-    sourceReplyTranscriptMirror: {
-      ...mirror,
-      text: sanitizeFinalReplyText(payload, mirror.text, conversationContext) || undefined,
-    },
-  });
-  return next;
 }
 
 export async function buildReplyPayloads(params: {
@@ -149,7 +120,22 @@ export async function buildReplyPayloads(params: {
       }
       text = stripped.text;
     }
-    sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, text, params.conversationContext));
+    const conversationContext = params.conversationContext;
+    const sanitizedText = sanitizeFinalReplyText(payload, text, conversationContext);
+    const next = copyReplyPayloadMetadata(payload, {
+      ...payload,
+      text: sanitizedText,
+    });
+    const mirror = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+    if (mirror?.text) {
+      setReplyPayloadMetadata(next, {
+        sourceReplyTranscriptMirror: {
+          ...mirror,
+          text: sanitizeFinalReplyText(payload, mirror.text, conversationContext) || undefined,
+        },
+      });
+    }
+    sanitizedPayloads.push(next);
   }
 
   const messageProvider = resolveOriginMessageProvider({

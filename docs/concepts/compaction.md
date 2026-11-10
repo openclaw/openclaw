@@ -16,9 +16,17 @@ Every model has a context window: the maximum number of tokens it can process. W
 
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
+Compaction and branch summaries omit an edit or write from modified-file metadata when its matching tool result explicitly reports `changed: false`. An earlier change to the same path remains recorded. Missing results and errors without that explicit outcome remain conservative: an error alone does not prove that no file changed.
+
 Built-in compaction summarizes the older history in one model request, whatever the size of the session or the context window. A split turn adds one request for the turn prefix, and a failed safeguard quality audit adds one request per corrective attempt. Each request's conversation input is capped at 160,000 characters (about 40,000 tokens), or less when the summarizer's own context window is smaller. A larger history is filled in this order: the newest messages verbatim, in half of that budget; your older messages, which carry the asks, decisions and corrections, in a quarter, each trimmed to at most 2,000 characters and spread evenly across the history when they do not all fit; the oldest messages, in a tenth; and evenly spaced runs of the remaining messages, trimmed to 6,000 characters each. Each gap is marked with the number of messages left out, and the summarizer is told not to guess their content and to keep the previous summary's facts. Chinese, Japanese, and Korean (CJK) characters count by their approximate token weight. The bound applies to the summarizer input only; the transcript keeps every message.
 
+Ordinary long tool results use a 2,000-character summary-input projection, including an explicit truncation marker. It keeps the beginning and end so terminal result codes survive. Existing diagnostic-preservation rules stay in place, and short results pass through unchanged. Text in the omitted middle can still be lost; the full result remains in the transcript.
+
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
+
+Compaction loads the complete current context: the latest reset or compaction boundary, its retained messages and previous summary, and the following history. Obsolete history before that window stays on disk without being loaded again, even when daily resets or `/new` keep the same session ID. The history hydration byte limit for ordinary turns does not clip compaction input; the summarizer's existing input budget still applies.
+
+Recovery keeps a bounded copy of the active human request in the summary, including across repeated compactions after its original message leaves the current context. Internal updates retain their source labels without replacing that request; newer human steering can update it. An independent internal run does not revive completed human work. An admitted input that has not been processed must remain intact.
 
 OpenAI Responses native compaction and checkpoint replay follow
 [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership),
@@ -38,6 +46,8 @@ retries invalid summary output once; manual compaction reports the failure witho
 retrying. If no valid summary is produced, the original history remains in context
 and no compaction entry is written. Branch navigation also rejects truncated
 summaries and leaves the current branch unchanged.
+
+If the summary output budget is exhausted without visible text, a reasoning model may have spent the allowance on thinking. Set `agents.defaults.compaction.thinkingLevel` to `"off"` if the model supports it, or use `agents.defaults.compaction.model` to select a model that can summarize within the available output budget. The error identifies the selected model, the summary allowance, and the model's configured `maxTokens`. The summary allowance is also limited by compaction's reserved budget, so increasing `maxTokens` alone may not raise it.
 
 Built-in summarization receives text, not image pixels. Omitted images and other non-text input receive markers such as `[image data omitted from summary input]`, without claiming that a model processed the data. The first eight affected messages receive at most two fixed markers each; further omissions receive one aggregate statement. These additions, including newly retained role labels and separators, total at most 847 UTF-8 bytes per summarizer request and count toward token estimates. Existing text is not capped by this omission budget. Custom compaction providers still receive the original message content.
 
@@ -71,6 +81,23 @@ commit without a generated summary; see [Auto-compaction](#auto-compaction).
 ## Auto-compaction
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
+
+Built-in client maintenance starts at the smaller of 75% of the active window
+and the window minus its compaction reserve. A 1,000,000-token window therefore
+starts maintenance at 750,000 tokens, while the summary reserve stays 20,000.
+During tool loops, completed provider usage triggers this maintenance before the
+next request. The request boundary also checks projected occupancy, including
+new tool results, against the full window even when proactive compaction is
+disabled. It stops an over-window submission and uses the existing safe recovery
+path. Native Codex and Claude CLI keep their own compaction policies.
+
+Scheduled turns in an existing session use the same built-in request checks.
+Their context totals update during requests and after completion even when the
+automation preserves the conversation's displayed model and billing snapshot.
+
+Preflight uses published context totals, falling back to a bounded recent usage
+tail or the same bounded context view used by the runtime. Missing usage does not
+trigger a second accounting pass over the entire conversation history.
 
 In the built-in runtime, native ChatGPT sign-in uses V2 compaction at normal
 request boundaries, including between completed tool rounds. It starts when the
@@ -224,6 +251,14 @@ This works with local models too, for example a second Ollama model dedicated to
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
 
+If the summarizer refuses the request, built-in compaction keeps the prepared recent
+history without requesting another summary. This applies to automatic maintenance
+and `/compact`. A persisted marker records that older messages were omitted without
+a new summary; saved history remains intact. A warning always explains the trim and
+asks you to resend essential older details, even when ordinary compaction notices
+are disabled. If the current request cannot fit, reduce it or use `/new` and resend
+the context needed to continue. Provider refusals do not switch models.
+
 Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain when no earlier summary can be reused. A summary deadline or an HTTP 408 or 504 instead uses the automatic timeout fallback (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
@@ -231,6 +266,8 @@ In safeguard mode, provider timeouts and rate limits from built-in summarization
 ### Identifier preservation
 
 Compaction summarization requests exact opaque identifier retention by default (`agents.defaults.compaction.identifierPolicy: "strict"`). Degraded summaries may omit identifiers that cannot fit. Set `agents.defaults.compaction.identifierPolicy: "off"` to disable the retention guidance. Custom guidance belongs in a compaction provider's `summarize()` implementation.
+
+When a quality audit finds missing identifiers, corrective feedback names only complete values that fit its bounded request and reports how many were omitted. It does not send a cut-off identifier as if it were an exact value.
 
 ### Active transcript byte guard
 
@@ -247,6 +284,12 @@ rewrite saved messages or count a failed attempt as successful compaction.
 It shows a notice even with compaction notifications disabled; resend any
 essential details from omitted history. The bound applies to selected history,
 not the fixed instructions, tool definitions, or current request.
+
+For direct Anthropic API-key routes, cleared turn-scoped runtime-context contents
+do not contribute to compaction pressure or the fallback window. Saved replay
+remains append-only. Event envelopes and history outside the bounded accounting
+read still count conservatively. The separate history hydration limit continues
+to count raw serialized bytes.
 
 Manual compaction also reports `transcript_bytes` pressure to the context engine
 when the configured positive threshold is reached and automatic compaction is
@@ -281,6 +324,8 @@ of the available byte capacity, subject to event and turn sizes, then grows towa
 the cap. Its existing prefix stays unchanged between steps, including across
 worker or process restarts. An independent event-count limit can still shorten
 unusually dense histories.
+If the previous turn exceeds the cap, the loader keeps its newest affordable
+atomic frames rather than starting the next turn with only the new prompt.
 
 This selection does not delete saved history, create a summary, run a memory
 flush, or trigger compaction notifications. Older context can therefore remain
@@ -313,25 +358,11 @@ exhausted but the reply still continues:
 
 Before compaction, OpenClaw can run a **silent memory flush** turn to save durable context. Memory Core appends to a workspace memory file; another selected memory plugin can persist through its own tools and use declared read-only lookup tools to check existing memory first. The tools retain the source conversation's memory audience and sandbox restrictions. Missing lookup tools produce a warning but do not block persistence. If policy removes every declared persistence tool, OpenClaw skips the flush and continues compaction.
 
-Set `agents.defaults.compaction.memoryFlush.model` when this housekeeping turn should use a local model instead of the active conversation model:
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "compaction": {
-        "memoryFlush": {
-          "model": "ollama/qwen3:8b"
-        }
-      }
-    }
-  }
-}
-```
+The flush uses the active session model and its normal fallback chain. To keep memory extraction local, use a local model for the session and configure local fallbacks.
 
 Memory flush is optional maintenance: a failure, including exhausted retries, does not reset the session or discard conversation history. If compaction is unnecessary or succeeds, OpenClaw continues the reply; with `notifyUser` enabled, exhausted flush retries also produce a degraded notice. If required compaction fails, OpenClaw reports that failure and keeps the conversation intact instead of starting over automatically.
 
-The memory-flush model override is exact and does not inherit the active session fallback chain. See [Memory](/concepts/memory) for details and config.
+See [Memory](/concepts/memory) for details and config.
 
 ## Provider and engine behavior
 
@@ -381,6 +412,9 @@ cleanup; removing checkpoint controls does not delete stored conversation histor
 ## Pluggable compaction providers
 
 Plugins can register a custom compaction provider via `registerCompactionProvider()` on the plugin API. When a provider is registered and configured, OpenClaw delegates summarization to it instead of the built-in LLM pipeline.
+
+Surrounding whitespace in a registered ID is ignored for lookup and duplicate
+checks; matching remains case-sensitive. The plugin-owned descriptor is not rewritten.
 
 To use a registered provider, set its id in your config:
 

@@ -1,23 +1,31 @@
-import { createMemo, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { focusChatComposerFromKeydown } from "../chat/chat-pane-shared.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
-import { resolveProjectChip } from "./project-chip.ts";
-import { ProjectChip } from "./project-chip.tsx";
-import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
+import { mountProjectChip } from "./project-chip.test-support.tsx";
+
+async function openProjectSearch(container: ParentNode) {
+  await waitForSolid(() => expect(container.querySelector(".header-search")).not.toBeNull());
+  if (!container.querySelector('input[type="search"]')) {
+    container.querySelector<HTMLButtonElement>(".header-search__toggle")?.click();
+    flush();
+  }
+  await waitForSolid(() => expect(container.querySelector('input[type="search"]')).not.toBeNull());
+}
 
 it("keeps project search live through catalog reads and retires invalidated rows", async () => {
   const fixture = createRepositoryFixture();
   const { browser, state: place, context, gateway, changed, request } = fixture;
   const first = createDeferred<ProjectsListResult>();
   const refreshed = createDeferred<ProjectsListResult>();
+  const recovered = createDeferred<ProjectsListResult>();
   const replacement = createDeferred<ProjectsListResult>();
   request
     .mockImplementationOnce(() => first.promise)
     .mockImplementationOnce(() => refreshed.promise)
+    .mockImplementationOnce(() => recovered.promise)
     .mockImplementationOnce(() => replacement.promise);
   Object.assign(gateway, {
     connected: true,
@@ -25,7 +33,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
     connectionEpoch: 1,
   });
   Object.assign(context.gateway.snapshot.hello!, { features: { methods: ["projects.list"] } });
-  vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
+  const popoverOpen = vi.spyOn(browser, "popoverOpen").mockReturnValue(false);
   vi.spyOn(place, "folder", "get").mockReturnValue("");
   vi.spyOn(place, "workspacePath").mockReturnValue("/home/openclaw/.openclaw/workspace");
   vi.spyOn(place, "browseAvailable").mockReturnValue(true);
@@ -34,44 +42,29 @@ it("keeps project search live through catalog reads and retires invalidated rows
   vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
   onTestFinished(() => browser.disconnect());
   browser.synchronize();
-  const options: NewSessionPlaceControlsOptions = {
-    place,
-    gateway,
-    context,
-    data: undefined,
-    submitting: false,
-    pendingPlacement: false,
-    onConnectMachine: vi.fn(),
-    onNavigate: vi.fn(),
-    onFocusComposer: vi.fn(),
-    onChange: changed,
-  };
   let nativeTerminal = false;
   const mountPicker = () =>
-    mountSolid(() => {
-      const [revision, setRevision] = createSignal(0);
-      changed.mockImplementation(() => setRevision((value) => value + 1));
-      const props = createMemo(() => {
-        revision();
-        return {
-          params: { ...options },
-          state: resolveProjectChip({
-            folder: "",
-            workspace: "/home/openclaw/.openclaw/workspace",
-            projectId: browser.projectId,
-            selectedRemoteProject: browser.remoteProject,
-            projects: browser.projects,
-            recents: [],
-            projectQuery: browser.projectQuery,
-          }),
-          nativeTerminal,
-        };
-      });
-      return <ProjectChip {...props()} />;
-    });
+    mountProjectChip(
+      fixture,
+      () => ({
+        folder: "",
+        workspace: "/home/openclaw/.openclaw/workspace",
+        projectId: browser.projectId,
+        selectedRemoteProject: browser.remoteProject,
+        projects: browser.projects,
+        recents: [],
+        projectQuery: browser.projectQuery,
+      }),
+      () => nativeTerminal,
+    );
   let view = mountPicker();
+  expect(view.container.querySelector('input[type="search"]')).toBeNull();
+  popoverOpen.mockReturnValue(true);
+  changed();
+  await openProjectSearch(view.container);
   let input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
-  const rows = () => Array.from(view.container.querySelectorAll('[data-value^="project:"]'));
+  const rows = () =>
+    Array.from(view.container.querySelectorAll<HTMLButtonElement>('[data-value^="project:"]'));
   const type = (value: string) => {
     input.value = value;
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -79,20 +72,39 @@ it("keeps project search live through catalog reads and retires invalidated rows
   };
   input.focus();
   type("alpha");
+  popoverOpen.mockReturnValue(false);
+  changed();
+  await waitForSolid(() =>
+    expect(
+      view.container
+        .querySelector(".new-session-page__project-popover")
+        ?.getAttribute("data-phase"),
+    ).toBe("hidden"),
+  );
+  expect(view.container.querySelector('input[type="search"]')).toBe(input);
+  popoverOpen.mockReturnValue(true);
+  changed();
+  await waitForSolid(() =>
+    expect(
+      view.container
+        .querySelector(".new-session-page__project-popover")
+        ?.getAttribute("data-phase"),
+    ).toBe("open"),
+  );
+  expect(input.value).toBe("alpha");
+  input.focus();
   expect(rows()).toHaveLength(0);
   expect(request).toHaveBeenCalledExactlyOnceWith("projects.list", {});
   const alpha = {
     id: "alpha",
     displayName: "Alpha project",
-    repoRoot: "/home/openclaw/.openclaw/projects/alpha",
-    originUrl: "https://github.com/openclaw/alpha.git",
+    repositoryIdentity: "acme-labs/alpha",
     source: "registered" as const,
   };
   const beta = {
     id: "beta",
     displayName: "Beta project",
-    repoRoot: "/home/openclaw/.openclaw/projects/beta",
-    originUrl: "https://github.com/openclaw/beta.git",
+    repositoryIdentity: "acme-labs/beta",
     source: "registered" as const,
   };
   first.resolve({ projects: [alpha, beta] });
@@ -105,9 +117,14 @@ it("keeps project search live through catalog reads and retires invalidated rows
   expect(rows()).toHaveLength(2);
   type("  ALPHA  ");
   expect(rows()).toEqual([alphaRow]);
-  type("openclaw");
-  expect(rows()).toHaveLength(0);
+  expect(alphaRow?.textContent).toContain("acme-labs/alpha");
+  type("acme-labs");
+  expect(rows()).toHaveLength(2);
   expect(view.container.querySelector('[data-value="workspace"]')).toBeNull();
+  type("/home/openclaw");
+  expect(rows()).toHaveLength(0);
+  type("acme-labs/beta");
+  expect(rows()[0]?.textContent).toContain("Beta project");
   type("worksp");
   expect(view.container.querySelector('[data-value="workspace"]')).not.toBeNull();
   type("alpha");
@@ -128,6 +145,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
   expect(document.activeElement).toBe(input);
   view.unmount();
   view = mountPicker();
+  await openProjectSearch(view.container);
   input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   input.focus();
   await waitForSolid(() => expect(rows()[0]?.textContent).toContain("Alpha project"));
@@ -139,7 +157,17 @@ it("keeps project search live through catalog reads and retires invalidated rows
   refreshed.reject(new Error("Fixture catalog unavailable"));
   await refresh;
   await waitForSolid(() => expect(rows()).toEqual([refreshedAlphaRow]));
-  expect(view.container.querySelector(".new-session-page__project-error")).toBeNull();
+  const failure = view.container.querySelector(".new-session-page__project-error");
+  expect(failure?.textContent).toContain("Fixture catalog unavailable");
+  const retry = failure?.querySelector("button");
+  expect(retry?.textContent).toContain("Retry");
+  retry?.click();
+  recovered.resolve({ projects: [alpha, beta] });
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".new-session-page__project-error")).toBeNull(),
+  );
+  expect(rows()).toEqual([refreshedAlphaRow]);
+  expect(document.activeElement).toBe(input);
   const replace = browser.refreshProjects(true);
   await waitForSolid(() => expect(rows()).toHaveLength(0));
   expect(input.value).toBe("alpha");
@@ -150,5 +178,110 @@ it("keeps project search live through catalog reads and retires invalidated rows
   type("beta");
   await waitForSolid(() => expect(rows()[0]?.textContent).toContain("Beta project"));
   expect(view.container.querySelector('[data-value="project:alpha"]')).toBeNull();
-  expect(request).toHaveBeenCalledTimes(3);
+  expect(request).toHaveBeenCalledTimes(4);
+});
+
+it("keeps automatic search on reopening, respects explicit collapse, and matches Unicode", async () => {
+  // The real composer registers its document capture before the lazy picker does.
+  const composer = document.body.appendChild(document.createElement("textarea"));
+  const redirectToComposer = (event: KeyboardEvent) =>
+    focusChatComposerFromKeydown(document.body, event, composer);
+  document.addEventListener("keydown", redirectToComposer, true);
+  onTestFinished(() => {
+    document.removeEventListener("keydown", redirectToComposer, true);
+    composer.remove();
+  });
+  const fixture = createRepositoryFixture();
+  const { browser, state: place, context, gateway, request, changed } = fixture;
+  const loaded = createDeferred<ProjectsListResult>();
+  request.mockImplementationOnce(() => loaded.promise);
+  Object.assign(gateway, {
+    connected: true,
+    client: context.gateway.snapshot.client,
+    connectionEpoch: 1,
+  });
+  Object.assign(context.gateway.snapshot.hello!, { features: { methods: ["projects.list"] } });
+  const popoverOpen = vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
+  vi.spyOn(place, "folder", "get").mockReturnValue("");
+  vi.spyOn(place, "workspacePath").mockReturnValue("/home/openclaw/.openclaw/workspace");
+  vi.spyOn(place, "browseAvailable").mockReturnValue(true);
+  vi.spyOn(place, "isAdmin").mockReturnValue(true);
+  vi.spyOn(place, "canWrite").mockReturnValue(true);
+  vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
+  onTestFinished(() => browser.disconnect());
+  browser.synchronize();
+  const view = mountProjectChip(
+    fixture,
+    () => ({
+      folder: "",
+      workspace: "/home/openclaw/.openclaw/workspace",
+      projectId: browser.projectId,
+      selectedRemoteProject: browser.remoteProject,
+      projects: browser.projects,
+      recents: [],
+      projectQuery: browser.projectQuery,
+    }),
+    () => false,
+  );
+  const rows = () =>
+    Array.from(view.container.querySelectorAll<HTMLButtonElement>('[data-value^="project:"]'));
+  // Stored NFD (e + combining acute); user types NFC (precomposed é).
+  const nfdName = "Cafe\u0301";
+  const nfcQuery = "Caf\u00e9";
+  expect(nfdName).not.toBe(nfcQuery);
+  loaded.resolve({
+    projects: [
+      {
+        id: "cafe",
+        displayName: nfdName,
+        repositoryIdentity: "acme-labs/cafe",
+        source: "registered" as const,
+      },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `other-${index}`,
+        displayName: `Other ${index}`,
+        source: "registered" as const,
+      })),
+    ],
+  });
+  await waitForSolid(() => expect(rows()).toHaveLength(6));
+  const toggle = () => view.container.querySelector<HTMLButtonElement>(".header-search__toggle")!;
+  toggle().click();
+  flush();
+  expect(view.container.querySelector('input[type="search"]')).toBeNull();
+  changed();
+  flush();
+  expect(view.container.querySelector('input[type="search"]')).toBeNull();
+  toggle().click();
+  flush();
+  popoverOpen.mockReturnValue(false);
+  changed();
+  await waitForSolid(() =>
+    expect(
+      view.container
+        .querySelector(".new-session-page__project-popover")
+        ?.getAttribute("data-phase"),
+    ).toBe("hidden"),
+  );
+  popoverOpen.mockReturnValue(true);
+  changed();
+  await waitForSolid(() =>
+    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
+  );
+  const input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  expect(input).not.toBeNull();
+  const projectRow = rows()[0]!;
+  projectRow.focus();
+  projectRow.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "C", bubbles: true, composed: true, cancelable: true }),
+  );
+  flush();
+  expect(input.value).toBe("C");
+  expect(document.activeElement).toBe(input);
+  input.value = nfcQuery;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  expect(rows()).toHaveLength(1);
+  expect(rows()[0]?.textContent).toContain("Cafe");
+  view.unmount();
 });

@@ -125,7 +125,7 @@ Each entry points at the page that now holds the content.
 - <a id="no-models-available" />[No models available](/providers/ollama/troubleshooting#no-models-available)
 - <a id="connection-refused" />[Connection refused](/providers/ollama/troubleshooting#connection-refused)
 - <a id="remote-host-works-with-curl-but-not-openclaw" />[Remote host works with curl but not OpenClaw](/providers/ollama/troubleshooting#remote-host-works-with-curl-but-not-openclaw)
-- <a id="model-outputs-tool-json-as-text" />[Model outputs tool JSON as text](/providers/ollama/troubleshooting#model-outputs-tool-json-as-text)
+- <a id="model-outputs-tool-json-as-text" />[Model outputs tool calls as text](/providers/ollama/troubleshooting#model-outputs-tool-calls-as-text)
 - <a id="kimi-or-glm-returns-garbled-symbols" />[Kimi or GLM returns garbled symbols](/providers/ollama/troubleshooting#kimi-or-glm-returns-garbled-symbols)
 - <a id="cold-local-model-times-out" />[Cold local model times out](/providers/ollama/troubleshooting#cold-local-model-times-out)
 - <a id="large-context-model-is-too-slow-or-runs-out-of-memory" />[Large-context model is too slow or runs out of memory](/providers/ollama/troubleshooting#large-context-model-is-too-slow-or-runs-out-of-memory)

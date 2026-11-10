@@ -90,7 +90,6 @@ export function resolveCodexPluginThreadConfigStartupPolicy(params: {
     policy.configured;
   const resolvedPluginPolicy = pluginThreadConfigRequired ? policy : undefined;
   return {
-    pluginThreadConfigRequired,
     pluginThreadConfigPluginConfig,
     resolvedPluginPolicy,
     enabledPluginConfigKeys: resolvedPluginPolicy

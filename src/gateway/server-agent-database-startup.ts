@@ -1,6 +1,6 @@
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
+import { isPreparedModelRuntimePluginLifecycleFailure } from "../agents/prepared-model-runtime.errors.js";
 import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import {
   isConfiguredAgentDatabaseTarget,
@@ -17,6 +17,7 @@ import {
   type getAgentDatabaseStartupAdmission,
 } from "../state/agent-database-startup.js";
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 function assertAgentDatabaseConfiguration(
   cfg: OpenClawConfig,
@@ -33,6 +34,7 @@ function assertAgentDatabaseConfiguration(
 /** Finish only the deferred agent's preparation before its admission owner recovers it. */
 export function activateGatewayAgentDatabaseStartup(params: {
   admission: ReturnType<typeof getAgentDatabaseStartupAdmission>;
+  context: GatewayRequestContext;
   preparationReady: Promise<void>;
   waitForPostReadyWork: () => Promise<void>;
   getConfig: () => OpenClawConfig;
@@ -66,10 +68,28 @@ export function activateGatewayAgentDatabaseStartup(params: {
   params.admission?.activate({
     isCurrent: params.isCurrent,
     preparationReady: params.preparationReady,
+    verifyIntegrity: (input) =>
+      runWithSpawnBroker(broker, async () => {
+        const { verifyAgentDatabaseStartupIntegrity } =
+          await import("../state/agent-database-startup-verification.js");
+        await verifyAgentDatabaseStartupIntegrity({
+          ...input,
+          assertCurrent: createPreparationGuard(
+            input.agentId,
+            input.paths,
+            input.env,
+            input.signal,
+            input.assertCurrent,
+          ),
+        });
+      }),
+    captureReadAdmission: ({ agentId, paths, env, signal, assertCurrent }) =>
+      createPreparationGuard(agentId, paths, env, signal, assertCurrent),
     openAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
-        const { prepareOpenClawAgentDatabaseExecution } =
+        const { captureOpenClawAgentDatabaseExecution, prepareOpenClawAgentDatabaseExecution } =
           await import("../state/openclaw-agent-execution.js");
+        await using prepared = new AsyncDisposableStack();
         const assertOpenCurrent = createPreparationGuard(
           agentId,
           paths,
@@ -79,12 +99,16 @@ export function activateGatewayAgentDatabaseStartup(params: {
         );
         assertOpenCurrent();
         for (const pathname of paths) {
+          // Keep the existing owner out of idle eviction until this agent's publication settles.
+          const execution = captureOpenClawAgentDatabaseExecution({ agentId, path: pathname, env });
+          prepared.defer(() => execution.release());
           await prepareOpenClawAgentDatabaseExecution(
             { agentId, path: pathname, env },
             assertOpenCurrent,
             signal,
           );
         }
+        return prepared.move();
       }),
     migrateAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
@@ -105,7 +129,17 @@ export function activateGatewayAgentDatabaseStartup(params: {
           log: params.log,
         });
         assertMigrationCurrent();
+        const { prepareAgentRestartRecovery } = await import("./session-restart-resume.js");
+        const recoverInputs = await prepareAgentRestartRecovery({
+          context: params.context,
+          agentId,
+          env,
+          signal,
+          assertCurrent: assertMigrationCurrent,
+          log: params.log,
+        });
         return {
+          recoverInputs,
           maintain: () =>
             runWithSpawnBroker(broker, async () => {
               await params.waitForPostReadyWork();
@@ -130,6 +164,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
             refreshPreparedModelRuntimeSnapshots,
             getPreparedModelRuntimeSnapshot,
             getPendingPreparedModelRuntimeReplacement,
+            retirePreparedModelRuntimeAgent,
           },
           { listConfiguredOwnerInputs },
           {
@@ -137,17 +172,19 @@ export function activateGatewayAgentDatabaseStartup(params: {
             getActiveSecretsRuntimeSnapshotRevision,
             refreshActiveSecretsRuntimeSnapshotForConfig,
           },
+          { clearRuntimeAuthProfileStoreSnapshotAtDatabasePath },
         ] = await Promise.all([
           import("../agents/prepared-model-runtime.js"),
           import("../agents/prepared-model-runtime.configured.js"),
           import("../secrets/runtime.js"),
+          import("../agents/auth-profiles/runtime-snapshots.js"),
         ]);
         assertCurrent();
         const beforeConfig = params.getConfig();
         assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
         // Non-roster stores (ACP-only or reserved) need no native auth/model publication.
         if (!listAgentIds(beforeConfig).includes(agentId)) {
-          return;
+          return undefined;
         }
         const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
         const previousSecrets = getActiveSecretsRuntimeSnapshot();
@@ -175,7 +212,8 @@ export function activateGatewayAgentDatabaseStartup(params: {
         const cfg = params.getConfig();
         const secretsRevision = getActiveSecretsRuntimeSnapshotRevision();
         const secrets = getActiveSecretsRuntimeSnapshot();
-        const authDatabasePath = resolveAuthProfileDatabasePath(resolveAgentDir(cfg, agentId, env));
+        const agentDir = resolveAgentDir(cfg, agentId, env);
+        const authDatabasePath = resolveAuthProfileDatabasePath(agentDir);
         if (
           secretsRevision !== previousSecretsRevision + 1 ||
           !secrets?.authStores.some((entry) =>
@@ -207,7 +245,8 @@ export function activateGatewayAgentDatabaseStartup(params: {
             isPublicationCurrent: () => assertionSucceeds(assertPreparationCurrent),
           }),
         ).catch(async (error: unknown) => {
-          if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+          // A reload retires this owner's plugins and supersedes its build alike.
+          if (!isPreparedModelRuntimePluginLifecycleFailure(error)) {
             throw error;
           }
           // Let the current publication settle before the admission owner's bounded retry.
@@ -229,6 +268,18 @@ export function activateGatewayAgentDatabaseStartup(params: {
           }
           throw new Error(`Agent ${agentId} model preparation has not published`);
         }
+        return () => {
+          if (!params.isCurrent()) {
+            return;
+          }
+          // Retire synchronously before auth invalidation can schedule another owner build.
+          const retiring = retirePreparedModelRuntimeAgent({ agentId, agentDirs: [agentDir] });
+          // The model owner retains in-flight builds; admission only withdraws visibility.
+          void retiring.catch((error: unknown) =>
+            params.log.warn(`Agent ${agentId} model runtime retirement failed: ${String(error)}`),
+          );
+          clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(authDatabasePath, agentDir);
+        };
       }),
   });
 }

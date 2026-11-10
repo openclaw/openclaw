@@ -209,11 +209,7 @@ describe("AppSidebar agent chip", () => {
     );
     expect(parentBadge?.dataset.workspaceConflicts).toBe("2");
     expect(parentBadge?.dataset.placementState).toBeUndefined();
-    expect(parentBadge?.hasAttribute("title")).toBe(false);
-    expect(
-      (parentBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-        ?.content,
-    ).toBe("Cloud worker children: 2 workspace conflicts");
+    expect(parentBadge?.getAttribute("title")).toBe("Cloud worker children: 2 workspace conflicts");
   });
 
   it("loads every child-session page before marking a parent complete", async () => {

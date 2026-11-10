@@ -39,15 +39,20 @@ const MAX_POLL_ATTEMPTS = 120;
 
 // /v1/openai/videos is async: POST returns a job, GET /{id} polls until the
 // job succeeds or fails, then the result contains downloadable video URLs.
-type DeepInfraVideoStatus = "queued" | "processing" | "succeeded" | "failed";
-
 type DeepInfraVideoJob = {
   id?: string;
-  status?: DeepInfraVideoStatus;
+  status?: "queued" | "processing" | "succeeded" | "failed";
   model?: string | null;
   data?: Array<{ url?: unknown } | null> | null;
   error?: string | null;
 };
+
+function isDeepInfraVideoJobComplete(payload: DeepInfraVideoJob): boolean {
+  if (payload.status === "failed") {
+    throw new Error(normalizeOptionalString(payload.error) ?? "DeepInfra video generation failed");
+  }
+  return payload.status === "succeeded";
+}
 
 async function parseVideoDataUrl(
   url: string,
@@ -201,34 +206,23 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
       if (!jobId) {
         throw new Error("DeepInfra video generation response missing job id");
       }
-      if (submitted.status === "failed") {
-        throw new Error(
-          normalizeOptionalString(submitted.error) ?? "DeepInfra video generation failed",
-        );
-      }
-
-      const completed =
-        submitted.status === "succeeded"
-          ? submitted
-          : await pollProviderOperationJson<DeepInfraVideoJob>({
-              url: `${baseUrl}/videos/${encodeURIComponent(jobId)}`,
-              headers,
-              deadline,
-              defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-              fetchFn: fetch,
-              maxAttempts: MAX_POLL_ATTEMPTS,
-              pollIntervalMs: POLL_INTERVAL_MS,
-              requestFailedMessage: "DeepInfra video status request failed",
-              timeoutMessage: `DeepInfra video generation job ${jobId} did not finish in time`,
-              allowPrivateNetwork,
-              dispatcherPolicy,
-              auditContext: "deepinfra-video-status",
-              isComplete: (payload) => payload.status === "succeeded",
-              getFailureMessage: (payload) =>
-                payload.status === "failed"
-                  ? (normalizeOptionalString(payload.error) ?? "DeepInfra video generation failed")
-                  : undefined,
-            });
+      const completed = isDeepInfraVideoJobComplete(submitted)
+        ? submitted
+        : await pollProviderOperationJson<DeepInfraVideoJob>({
+            url: `${baseUrl}/videos/${encodeURIComponent(jobId)}`,
+            headers,
+            deadline,
+            defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+            fetchFn: fetch,
+            maxAttempts: MAX_POLL_ATTEMPTS,
+            pollIntervalMs: POLL_INTERVAL_MS,
+            requestFailedMessage: "DeepInfra video status request failed",
+            timeoutMessage: `DeepInfra video generation job ${jobId} did not finish in time`,
+            allowPrivateNetwork,
+            dispatcherPolicy,
+            auditContext: "deepinfra-video-status",
+            isComplete: isDeepInfraVideoJobComplete,
+          });
 
       let videoUrl: string | undefined;
       for (const entry of completed.data ?? []) {

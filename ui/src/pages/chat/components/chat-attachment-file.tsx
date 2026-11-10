@@ -1,34 +1,34 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Loading, Show } from "solid-js";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentVideoPosterUrl } from "../attachment-payload-store.ts";
 import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { resolveAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 
+registerEnglishCatalog(registerChatComposerEnglish);
+
 export function AttachmentRemove(props: {
   label: string;
   disabled?: boolean;
-  onClick: () => void;
+  onClick: (event: MouseEvent) => void;
   buttonRef?: (element: HTMLButtonElement) => void;
   class?: string;
 }) {
   return (
-    <openclaw-tooltip prop:content={props.label}>
-      <button
-        ref={[props.buttonRef]}
-        class={props.class ?? "chat-attachment-remove"}
-        type="button"
-        aria-label={props.label}
-        disabled={props.disabled}
-        onClick={() => props.onClick()}
-      >
-        <Icon name="x" />
-      </button>
-    </openclaw-tooltip>
+    <IconButton
+      ref={(element: HTMLButtonElement) => props.buttonRef?.(element)}
+      class={props.class ?? "chat-attachment-remove"}
+      icon="x"
+      label={props.label}
+      disabled={props.disabled}
+      onClick={(event) => props.onClick(event)}
+    />
   );
 }
 
@@ -58,40 +58,32 @@ function AttachmentVideoPreview(props: {
       >
         {(preparation) => (
           <>
-            <span class="chat-attachment-video__placeholder">
+            <span
+              class={[
+                "chat-attachment-video__placeholder",
+                { "chat-attachment-video__placeholder--error": preparation().state === "error" },
+              ]}
+            >
               {preparation().state === "compressing" ? (
-                <svg class="chat-attachment-compression-progress" viewBox="0 0 32 32">
+                <svg class="chat-attachment-compression-progress" viewBox="0 0 24 24">
                   <circle
                     class="chat-attachment-compression-progress__track"
-                    cx="16"
-                    cy="16"
-                    r="13"
+                    cx="12"
+                    cy="12"
+                    r="10.25"
                   />
                   <circle
-                    cx="16"
-                    cy="16"
-                    r="13"
+                    cx="12"
+                    cy="12"
+                    r="10.25"
                     pathLength="100"
                     stroke-dasharray={`${(preparation().progress ?? 0) * 100} 100`}
                   />
                 </svg>
               ) : (
-                <Icon name="play" />
+                <Icon name={preparation().state === "error" ? "alertTriangle" : "play"} />
               )}
             </span>
-            <Show when={preparation().state !== "compressing"}>
-              <span
-                class={[
-                  "chat-attachment-video__play",
-                  {
-                    "chat-attachment-video__play--warning": preparation().state === "offer",
-                    "chat-attachment-video__play--error": preparation().state === "error",
-                  },
-                ]}
-              >
-                <Icon name="alertTriangle" />
-              </span>
-            </Show>
           </>
         )}
       </Show>

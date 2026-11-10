@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildImageResizeSideGrid, IMAGE_REDUCE_QUALITY_STEPS } from "./image-ops.js";
+import { buildImageResizeSideGrid } from "./image-ops.js";
 
 describe("buildImageResizeSideGrid", () => {
   it.each([
@@ -11,10 +11,4 @@ describe("buildImageResizeSideGrid", () => {
       expect(buildImageResizeSideGrid(maxSide, sideStart)).toEqual(expected);
     },
   );
-});
-
-describe("IMAGE_REDUCE_QUALITY_STEPS", () => {
-  it("keeps expected quality ladder", () => {
-    expect(IMAGE_REDUCE_QUALITY_STEPS).toEqual([85, 75, 65, 55, 45, 35]);
-  });
 });

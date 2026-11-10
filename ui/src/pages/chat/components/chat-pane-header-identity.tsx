@@ -1,12 +1,12 @@
 import { Show, createMemo, onSettled } from "solid-js";
-import { SessionColorDot } from "../../../components/session-color.ts";
+import { SessionColorDot } from "../../../components/session-color.tsx";
 import { GatewayStatus } from "../../../components/solid/gateway-status.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
-import "../../../components/workspace-icon.ts";
+import "../../../components/workspace-icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import {
   clearCompositionEnd,
@@ -90,7 +90,7 @@ export function IdentityCrumbs(props: ChatPaneHeaderProps) {
   );
 }
 
-// Roster mode keeps the session crumbs off the agent pill: it is one settings target.
+// Roster mode keeps the avatar and name together as one settings target.
 export function AgentCrumb(
   props: ChatPaneHeaderProps & { agent: NonNullable<ChatPaneHeaderProps["agent"]> },
 ) {
@@ -105,9 +105,6 @@ export function AgentCrumb(
         <AgentIdentityAvatar agent={props.agent} />
       </span>
       <span class="chat-pane__agent-name">{props.agent.name}</span>
-      <span class="chat-pane__agent-settings" aria-hidden="true">
-        <Icon name="settings" />
-      </span>
     </button>
   );
 }
@@ -115,7 +112,9 @@ export function AgentCrumb(
 function SessionTitle(props: ChatPaneHeaderProps) {
   return (
     <>
-      <SessionColorDot value={props.catalog ? props.catalogColor : props.session?.color} />
+      <SessionColorDot
+        value={props.catalog ? props.catalogColor : (props.sessionColor ?? props.session?.color)}
+      />
       <span class="chat-pane__session-title-text">
         <Show
           when={
@@ -142,7 +141,6 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
             <button
               class="chat-pane__session-title chat-pane__session-title-button"
               type="button"
-              title={t("chat.sessionHeader.renameTooltip")}
               aria-label={t("chat.sessionHeader.renameAria", { title: props.title })}
               onClick={() => props.onBeginRename()}
             >
@@ -262,14 +260,6 @@ export function ProjectCrumb(props: ChatPaneHeaderProps) {
       placement="bottom-start"
       label={t("chat.sessionHeader.workspaceAria", { workspace: props.workspaceLabel ?? "" })}
       triggerClass={`chat-pane__workspace-chip${!copied() && !props.workspaceIcon ? " chat-pane__workspace-chip--fallback-icon" : ""}`}
-      triggerAttributes={{
-        title:
-          props.workspaceLabel === t("sessionHovercard.workspaceLabel")
-            ? props.workspaceLabel
-            : props.mergedChrome
-              ? undefined
-              : (props.workspaceRoot ?? props.workspaceLabel ?? undefined),
-      }}
       items={items()}
       onSelect={(item) => {
         if (item.id === "reveal" || item.id === "copy-path" || item.id === "copy-branch") {

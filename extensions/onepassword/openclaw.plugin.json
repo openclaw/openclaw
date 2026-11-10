@@ -164,5 +164,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan least-privilege 1Password access for this agent.",
+    "Review my registered 1Password secret slugs and approval policies without retrieving values."
+  ]
 }

@@ -42,7 +42,10 @@ function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?
   return (
     <button
       ref={nativeListener("click", () => props.view().createTab())}
-      class={["rail-header__action bp-icon", { "session-panel-rail__button": props.internal }]}
+      class={[
+        "oc-icon-button oc-icon-button--28 rail-header__action bp-icon",
+        { "session-panel-rail__button": props.internal },
+      ]}
       type="button"
       aria-label={label()}
       title={label()}
@@ -397,7 +400,7 @@ function PanelView(
                 {editedUrl() && (
                   <button
                     class={[
-                      "rail-header__action bp-icon lr-go",
+                      "oc-icon-button oc-icon-button--28 rail-header__action bp-icon lr-go",
                       { "session-panel-rail__button": !props.mobile },
                     ]}
                     type="submit"
@@ -415,34 +418,37 @@ function PanelView(
                     () => owner.refresh(),
                     !target() || !props.available || !props.client || loading(),
                   )}
+                <a
+                  class="lr-external"
+                  href={target()!.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-link-reader-external
+                  aria-label={t("linkReader.openExternal", { provider: target()!.reader.label })}
+                  title={t("linkReader.openExternal", { provider: target()!.reader.label })}
+                >
+                  <span class="lr-external-label">
+                    {t("linkReader.openExternal", { provider: target()!.reader.label })}
+                  </span>
+                  <span class="lr-external-provider" aria-hidden="true">
+                    {target()!.reader.label}
+                  </span>
+                  <Icon name="externalLink" />
+                </a>
                 <Menu
                   id={railMenuId}
                   label={t("linkReader.moreActions")}
                   trigger={<Icon name="moreHorizontal" />}
                   triggerClass={
                     props.mobile
-                      ? "rail-header__action bp-icon lr-menu"
-                      : "rail-header__action bp-icon lr-menu session-panel-rail__button"
+                      ? "oc-icon-button oc-icon-button--28 rail-header__action bp-icon lr-menu"
+                      : "oc-icon-button oc-icon-button--28 rail-header__action bp-icon lr-menu session-panel-rail__button"
                   }
                   panelClass="lr-rail-menu"
                   placement="bottom-end"
                   disabled={!target()}
                   items={[
                     { id: "copy", label: t("linkReader.copyLink"), icon: <Icon name="copy" /> },
-                    {
-                      id: "external",
-                      label: props.mobile
-                        ? t("linkReader.openInBrowser")
-                        : t("linkReader.openExternal", { provider: target()?.reader.label ?? "" }),
-                      icon: <Icon name="externalLink" />,
-                      href: target()?.href,
-                      class: "lr-external",
-                      attributes: {
-                        target: "_blank",
-                        rel: "noopener noreferrer",
-                        "data-link-reader-external": "",
-                      },
-                    },
                   ]}
                   onSelect={(item) => {
                     const href = target()?.href;
@@ -450,6 +456,7 @@ function PanelView(
                       void copyToClipboard(href, () => host.isConnected).then((copied) => {
                         if (host.isConnected) {
                           showToast({
+                            severity: copied ? "success" : "error",
                             message: t(copied ? "common.copied" : "common.copyFailed"),
                             anchor: host,
                           });

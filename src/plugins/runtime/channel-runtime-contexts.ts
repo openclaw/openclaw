@@ -73,12 +73,7 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
         return { dispose: () => {} };
       }
       const token = Symbol(normalized.mapKey);
-      let disposed = false;
       const dispose = () => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
         // Detach before the token check: stale leases disposed after a replacement
         // registered must still release their listener on long-lived signals.
         params.abortSignal?.removeEventListener("abort", dispose);

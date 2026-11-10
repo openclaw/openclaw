@@ -1,6 +1,7 @@
-import { fork } from "node:child_process";
+import { execFile, fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
@@ -11,10 +12,6 @@ import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-age
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -29,26 +26,12 @@ function createSource(sql: string) {
   return pathname;
 }
 
-it.each(["abort", "dispose"] as const)("joins an unused prestarted child on %s", async (stop) => {
-  const controller = new AbortController();
-  await using reader = createAgentSchemaInspectionWorker();
-  vi.mocked(fork).mockClear();
-  reader.prestart(controller.signal);
-  const child = vi.mocked(fork).mock.results[0]?.value;
-  expect(child?.pid).toBeGreaterThan(0);
+function observeChild() {
+  const child = vi.mocked(fork).mock.results.at(-1)?.value;
   const closed = vi.fn();
   child.once("close", closed);
-  const closure = new Promise<void>((resolve) => {
-    child.once("close", resolve);
-  });
-  if (stop === "abort") {
-    controller.abort(new Error("startup stopped before target discovery"));
-    await closure;
-  }
-  await reader[Symbol.asyncDispose]();
-  expect(closed).toHaveBeenCalledOnce();
-  expect([reader.processCount, reader.inspectionCount, reader.snapshotCount]).toEqual([1, 0, 0]);
-});
+  return { child, closed };
+}
 
 it("hands its prestarted child to the first scheduler slot without spending inspection time", async () => {
   const pathname = createSource("CREATE TABLE probe(value TEXT); PRAGMA user_version = 1;");
@@ -61,9 +44,7 @@ it("hands its prestarted child to the first scheduler slot without spending insp
   });
   try {
     reader.prestart();
-    const child = vi.mocked(fork).mock.results[0]?.value;
-    const closed = vi.fn();
-    child.once("close", closed);
+    const { child, closed } = observeChild();
     // Discovery can outlast an inspection's entire budget; only the eventual read spends it.
     await vi.advanceTimersByTimeAsync(10_000);
     expect(child.killed).toBe(false);
@@ -96,17 +77,40 @@ it("hands its prestarted child to the first scheduler slot without spending insp
   }
 });
 
-it("inspects state in cold children without executing comparison DDL", async () => {
+it("reuses clean state proof in cold children and verifies unsealed state", async () => {
   const directory = tempDirs.make("state-schema-contract-transfer-");
-  const pathname = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: directory } }).path;
-  closeOpenClawStateDatabaseForTest();
+  // The ordinary test pool is an unhosted worker; only a real process owns seal custody.
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [
+      ...(process.versions.bun ? ["--no-install"] : ["--import", import.meta.resolve("tsx")]),
+      "--input-type=module",
+      "--eval",
+      `import { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } from ${JSON.stringify(new URL("./openclaw-state-db.ts", import.meta.url).href)};
+       const state = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: ${JSON.stringify(directory)} } });
+       await closeOpenClawStateDatabaseAsync();
+       console.log(state.path);`,
+    ],
+    { timeout: 30_000 },
+  );
+  const pathname = stdout.trim();
+  expect(fs.existsSync(`${pathname}.seal`)).toBe(true);
   const ddlLog = path.join(directory, "comparison-ddl.log");
   const preload = path.join(directory, "observe-comparison-ddl.cjs");
   fs.writeFileSync(ddlLog, "");
   fs.writeFileSync(
     preload,
     `const fs = require('node:fs');
-const { DatabaseSync } = require('node:sqlite');
+const { DatabaseSync, StatementSync } = require('node:sqlite');
+for (const method of ['all', 'get', 'iterate']) {
+  const read = StatementSync.prototype[method];
+  StatementSync.prototype[method] = function(...args) {
+    if (/^PRAGMA (?:integrity|quick|foreign_key)_check/i.test(this.sourceSQL)) {
+      fs.appendFileSync(${JSON.stringify(ddlLog)}, this.sourceSQL + '\\n');
+    }
+    return read.apply(this, args);
+  };
+}
 const exec = DatabaseSync.prototype.exec;
 DatabaseSync.prototype.exec = function(sql) {
   if (this.location() === null && /CREATE TABLE/i.test(sql)) {
@@ -123,15 +127,40 @@ DatabaseSync.prototype.exec = function(sql) {
           pathname,
           supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
           verifyCurrentSchemaShape: true,
+          requireStartupMigrationReadiness: true,
           purpose: "runtime",
           scope: "state",
         },
         undefined,
-        pathname,
       );
       expect(result?.schemas).toEqual({ incompatible: [], indeterminate: [] });
       expect(fs.readFileSync(ddlLog, "utf8")).toBe("");
+      expect(result?.startupMetrics).toEqual({
+        stateIntegrityCheckCount: 0,
+        stateIntegrityMs: 0,
+        stateSealCount: 1,
+      });
     }
+    // An external write invalidates the real close receipt; fresh inspection must refuse it.
+    using writer = new (sqlite.requireNodeSqlite().DatabaseSync)(pathname);
+    writer.exec(`PRAGMA foreign_keys=OFF;
+      INSERT INTO acp_replay_events
+        (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
+        VALUES ('missing-session', 1, 10, 'session', NULL, '{}', 0)`);
+    await using reader = createAgentSchemaInspectionWorker();
+    await expect(
+      reader.inspectState(
+        {
+          pathname,
+          supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+          requireStartupMigrationReadiness: true,
+          purpose: "runtime",
+          scope: "state",
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/foreign_key_check/);
+    expect(fs.readFileSync(ddlLog, "utf8")).toContain("PRAGMA integrity_check");
   });
 });
 
@@ -149,18 +178,13 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       await using reader = createAgentSchemaInspectionWorker();
       fs.chmodSync(snapshot, 0);
       const inspection = reader.inspect({ pathname, supportedVersion: 21 }, undefined, snapshot);
-      const refusedChild = vi.mocked(fork).mock.results.at(-1)?.value;
-      const refusedChildClosed = vi.fn();
-      refusedChild.once("close", refusedChildClosed);
+      const { closed } = observeChild();
       const failure = await inspection.catch((error: unknown) => error);
       expect(failure).toMatchObject({
-        name: "Error",
         code: "ERR_SQLITE_ERROR",
         errcode: 14,
-        message:
-          "failed while creating its private snapshot: unable to open database file (code=ERR_SQLITE_ERROR, errcode=14)",
       });
-      expect(refusedChildClosed).toHaveBeenCalledOnce();
+      expect(closed).toHaveBeenCalledOnce();
       expect(fs.statSync(snapshot, { bigint: true })).toMatchObject({
         dev: identity.dev,
         ino: identity.ino,
@@ -177,13 +201,10 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       expect([reader.processCount, reader.inspectionCount, reader.snapshotCount]).toEqual([
         2, 2, 2,
       ]);
-      for (const location of [pathname, snapshot]) {
-        using source = sqlite.openNodeSqliteDatabase(location, { readOnly: true });
-        expect(source.prepare("SELECT value FROM probe").get()).toEqual({ value: "unchanged" });
-        expect(source.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-        source.close();
-        expect(fs.readFileSync(location)).toEqual(before);
-      }
+      expect([pathname, snapshot].map((location) => fs.readFileSync(location))).toEqual([
+        before,
+        before,
+      ]);
     } finally {
       fs.chmodSync(snapshot, 0o600);
     }
@@ -207,7 +228,6 @@ it("agentSchemaInspection carries a Proxy env across IPC and retains typed migra
     kind: "agent-media",
     pathname,
     schemaVersion: 1,
-    message: new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, 1).message,
   });
   expect(fs.readFileSync(pathname)).toEqual(before);
 });
@@ -230,10 +250,8 @@ it.each(["before launch", "during read"])(
       expect(fork).not.toHaveBeenCalled();
       return;
     }
-    const child = vi.mocked(fork).mock.results.at(-1)?.value;
+    const { child, closed } = observeChild();
     expect(child?.pid).toBeGreaterThan(0);
-    const closed = vi.fn();
-    child.once("close", closed);
     const rejected = expect(operation).rejects.toBe(reason);
     controller.abort(reason);
     await rejected;

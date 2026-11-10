@@ -9,6 +9,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveDatabasePathKey } from "../../infra/sqlite-worker-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -170,6 +171,8 @@ it("keeps prepared entry authority current through native and worker writes with
   };
   const expectCurrent = async (check: Prepared, current: boolean) => {
     const sql = observeHostDataSql();
+    const stat = vi.spyOn(fs, "statSync");
+    const realpath = vi.spyOn(fs.realpathSync, "native");
     try {
       if (current) {
         expect(() => check.source()).not.toThrow();
@@ -180,7 +183,11 @@ it("keeps prepared entry authority current through native and worker writes with
       }
       await expect(check.isCurrent()).resolves.toBe(current);
       expect(sql.queries).toEqual([]);
+      expect(stat).not.toHaveBeenCalled();
+      expect(realpath).not.toHaveBeenCalled();
     } finally {
+      stat.mockRestore();
+      realpath.mockRestore();
       sql.restore();
     }
   };
@@ -238,14 +245,6 @@ it("keeps prepared entry authority current through native and worker writes with
       skipMaintenance: true,
     });
     await expectCurrent(lifecycle, false);
-    const unreadable = await capture();
-    const moved = `${scope.storePath}.unavailable`;
-    fs.renameSync(scope.storePath, moved);
-    try {
-      await expectCurrent(unreadable, false);
-    } finally {
-      fs.renameSync(moved, scope.storePath);
-    }
     const latest = await capture();
     latest.release();
     await expectCurrent(latest, false);
@@ -256,6 +255,70 @@ it("keeps prepared entry authority current through native and worker writes with
     }
   }
 });
+
+// Retained sources follow owner publications; unmanaged replacement is checked at write admission.
+it.skipIf(process.platform === "win32").each(["before preparation", "during preparation"] as const)(
+  "refuses a guarded entry write after database replacement %s",
+  async (phase) => {
+    const scope = makeScope("entry-current-replacement-", "agent:main:entry-current");
+    const original = { sessionId: "selected", updatedAt: 1 };
+    replaceSessionEntrySync(scope, original);
+    const database = openOpenClawAgentDatabase({
+      agentId: scope.agentId,
+      path: scope.storePath,
+      env: scope.env,
+    });
+    const check = await captureSessionEntryCurrentCheckAsyncInternal(scope);
+    const foreignPath = `${scope.storePath}.foreign`;
+    const originalPath = `${scope.storePath}.original`;
+    const foreign = openOpenClawAgentDatabase({
+      agentId: scope.agentId,
+      path: foreignPath,
+      env: scope.env,
+    });
+    replaceSessionEntrySync(
+      { ...scope, storePath: foreignPath },
+      { ...original, label: "foreign" },
+    );
+    let replaced = false;
+    const replace = () => {
+      fs.renameSync(scope.storePath, originalPath);
+      fs.renameSync(foreignPath, scope.storePath);
+      replaced = true;
+    };
+    try {
+      if (phase === "before preparation") {
+        replace();
+      }
+      await expect(
+        patchSessionEntryCore(
+          scope,
+          async () => {
+            if (!replaced) {
+              replace();
+            }
+            await Promise.resolve();
+            return { label: "must not persist" };
+          },
+          { workerGuard: { source: check.source }, skipMaintenance: true },
+        ),
+      ).rejects.toThrow(/identity|target changed|selected session changed/i);
+      expect(replaced).toBe(true);
+      for (const opened of [database, foreign]) {
+        const row = opened.db
+          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+          .get(scope.sessionKey);
+        expect(String(row?.entry_json)).not.toContain("must not persist");
+      }
+    } finally {
+      check.release();
+      if (replaced) {
+        fs.renameSync(scope.storePath, foreignPath);
+        fs.renameSync(originalPath, scope.storePath);
+      }
+    }
+  },
+);
 
 it("revokes absent entry authority when a managed write creates its missing database", async () => {
   const scope = makeScope("entry-current-missing-database-", "agent:main:entry-current");

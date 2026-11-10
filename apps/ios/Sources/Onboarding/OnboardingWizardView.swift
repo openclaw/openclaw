@@ -531,7 +531,7 @@ struct OnboardingWizardView: View {
 
     private var developerConnectSection: some View {
         Section {
-            self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
+            self.manualHostFieldRows
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
             ManualGatewaySecurityRows(presentation: self.manualTransport, useTLS: self.manualTLSBinding)
@@ -736,7 +736,7 @@ extension OnboardingWizardView {
 
     private func manualConnectionFieldsSection(title: LocalizedStringKey) -> some View {
         Section {
-            self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
+            self.manualHostFieldRows
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
             ManualGatewaySecurityRows(presentation: self.manualTransport, useTLS: self.manualTLSBinding)
@@ -758,6 +758,16 @@ extension OnboardingWizardView {
         } header: {
             Text(title)
                 .font(OpenClawType.footnoteSemiBold)
+        }
+    }
+
+    @ViewBuilder
+    private var manualHostFieldRows: some View {
+        self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
+        if let hostIssue = self.manualHostIssue {
+            Text(hostIssue)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(OpenClawBrand.warn)
         }
     }
 
@@ -896,6 +906,8 @@ extension OnboardingWizardView {
                 self.handleScannedLink(link)
             case let .setupCode(code):
                 self.handleScannedSetupCode(code)
+            case .espDevice:
+                return
             }
         }
         if delivery == nil {
@@ -1041,7 +1053,8 @@ extension OnboardingWizardView {
         self.pendingTargetSuppression.releaseAutoConnect(.qrScanner, controller: self.gatewayController)
     }
 
-    private func openQRScannerFromOnboarding(status: String = "Opening QR scanner…") {
+    private func openQRScannerFromOnboarding(status: String = "") {
+        // The scanner sheet provides opening feedback; keep the parent neutral when it is canceled.
         // Stop active reconnect loops before scanning new credentials.
         self.qrCodeCompletion.cancel()
         self.invalidateSetupAttempt()
@@ -1205,7 +1218,11 @@ extension OnboardingWizardView {
 
     private var canConnectManual: Bool {
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !host.isEmpty && self.resolvedManualPort(host: host) != nil
+        return !host.isEmpty && self.manualHostIssue == nil && self.resolvedManualPort(host: host) != nil
+    }
+
+    private var manualHostIssue: String? {
+        GatewayConnectionController.manualHostValidationMessage(host: self.manualHost)
     }
 
     private func initializeState() {

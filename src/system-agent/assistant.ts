@@ -8,13 +8,14 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
+  SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS,
+  SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
   SYSTEM_AGENT_GREETING_SYSTEM_PROMPT,
   buildSystemAgentAssistantUserPrompt,
   buildSystemAgentGreetingUserPrompt,
   parseSystemAgentAssistantPlanText,
   type SystemAgentAssistantPlan,
 } from "./assistant-prompts.js";
-import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import type { SystemAgentGreetingFacts, SystemAgentGreetingPlan } from "./greeting.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
@@ -23,6 +24,7 @@ import {
   systemAgentTerminalFailureGuidance,
 } from "./inference-run-errors.js";
 import type { SystemAgentOverview } from "./overview.js";
+import { isLocalSystemAgentRoute } from "./route-locality.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
   type SystemAgentVerifiedInferenceBinding,
@@ -114,7 +116,11 @@ async function runConfiguredSystemAgentText(params: {
   let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   try {
     const runId = `${params.runIdPrefix}-${randomUUID()}`;
-    const timeoutMs = params.timeoutMs ?? resolveSystemAgentAssistantTimeoutMs(route);
+    const timeoutMs =
+      params.timeoutMs ??
+      (isLocalSystemAgentRoute(route)
+        ? SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS
+        : SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS);
     preparedRunAdmission = prepareSystemAgentRunAdmission(
       route.runConfig,
       runId,
@@ -123,7 +129,6 @@ async function runConfiguredSystemAgentText(params: {
     );
     const shared = {
       sessionId: `${runId}-session`,
-      // OpenClaw is the planner surface, but the configured roster owner supplies runtime policy.
       agentId: route.agentId,
       trigger: "manual" as const,
       sessionFile: `in-memory:${runId}`,
@@ -144,6 +149,7 @@ async function runConfiguredSystemAgentText(params: {
       messageProvider: "openclaw",
       disableTools: true,
       disableTrajectory: true,
+      bootstrapContextMode: "lightweight" as const,
       ...(responseFormat ? { streamParams: { responseFormat } } : {}),
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };

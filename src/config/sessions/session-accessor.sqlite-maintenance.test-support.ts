@@ -66,7 +66,10 @@ export function observeSessionMaintenancePlanningWorker(hooks: {
             if (command.type === "session.maintenance.prepare") {
               await hooks.afterPrepare?.({ store: target });
             }
-            if (planning) {
+            if (
+              planning ||
+              (command.type === "session.maintenance.prepare" && result !== undefined)
+            ) {
               if (
                 !isRecord(result) ||
                 typeof result.workerThreadId !== "number" ||

@@ -5,18 +5,21 @@ import { registerChannelsCli } from "./channels-cli.js";
 const addCommand = vi.hoisted(() => vi.fn(async () => undefined));
 
 // mock-isolation: Exercise registration without reading installed plugins or user state.
-vi.mock("../plugins/bundled-package-channel-metadata.js", () => ({
-  listBundledPackageChannelMetadata: () => [
+vi.mock("../plugins/channel-catalog-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/channel-catalog-registry.js")>()),
+  listChannelCatalogEntries: () => [
     {
-      id: "matrix",
-      setup: {
-        fields: [
-          {
-            key: "homeserver",
-            kind: "string",
-            cli: { flags: "--homeserver <url>", description: "Matrix homeserver URL" },
-          },
-        ],
+      channel: {
+        id: "matrix",
+        setup: {
+          fields: [
+            {
+              key: "homeserver",
+              kind: "string",
+              cli: { flags: "--homeserver <url>", description: "Matrix homeserver URL" },
+            },
+          ],
+        },
       },
     },
   ],

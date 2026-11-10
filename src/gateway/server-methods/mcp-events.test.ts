@@ -120,6 +120,21 @@ it("discovers before listing and returns one explicit page without server-privat
   expect(mocks.release).toHaveBeenCalledOnce();
   expect(mocks.prepare.mock.calls[0]?.[0].principal.requester).toBeUndefined();
 });
+it("keeps an astral event description whole at the catalog cap", async () => {
+  const f = fixture();
+  const prefix = "a".repeat(4095);
+  mocks.request.mockImplementation(async (input) =>
+    input.method === "server/discover"
+      ? discovery
+      : { events: [{ ...event, description: `${prefix}\u{1F600}tail` }] },
+  );
+  await f.run();
+  expect(f.respond).toHaveBeenCalledWith(
+    true,
+    { serverName: "calendar", events: [{ ...event, description: prefix }] },
+    undefined,
+  );
+});
 it("refuses wire-supplied requester identities and connection URLs", async () => {
   const f = fixture();
   f.options.params.requesterSenderId = "another-user";

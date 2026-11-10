@@ -8,6 +8,7 @@ import {
   createAgentSelectionCapability,
   selectApplicationSession,
 } from "../../app/agent-selection.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionRequest } from "./hydration-family.test-support.ts";
@@ -107,12 +108,9 @@ describe("session selection hydration", () => {
         { ...gateway, connection: { gatewayUrl: "ws://gateway.example.test" } },
         {
           state: {
-            agentsList: {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "per-sender",
+            agentsList: makeBootRoster({
               agents: ["main", "writer", "research"].map((id) => ({ id })),
-            },
+            }),
           },
           subscribe: () => () => undefined,
         },

@@ -3,6 +3,7 @@
 export type { Generated, Selectable } from "kysely";
 export { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 export { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
+export { isSqliteSnapshotCapacityError } from "../infra/sqlite-snapshot-capacity-error.js";
 export {
   openSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
@@ -50,6 +51,7 @@ export { withSqliteReadOnlyInspection } from "../infra/sqlite-maintenance-inspec
 export {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
+  startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
 export { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 export {

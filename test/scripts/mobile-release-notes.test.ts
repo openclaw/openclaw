@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   generateMobileReleaseNotes,
@@ -13,17 +14,26 @@ import {
   write as writeFile,
 } from "./mobile-release-git.test-support.js";
 
-const api = vi.hoisted(() => ({ parse: vi.fn() }));
-vi.mock("openai", () => ({
-  default: class {
-    responses = { parse: api.parse };
-  },
-}));
+const api = vi.hoisted(() => ({ parse: vi.fn(), useSdk: false }));
+vi.mock("openai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openai")>();
+  return {
+    ...actual,
+    default: class {
+      responses: Pick<InstanceType<typeof actual.default>["responses"], "parse">;
+      constructor(options: ConstructorParameters<typeof actual.default>[0]) {
+        this.responses = api.useSdk ? new actual.default(options).responses : { parse: api.parse };
+      }
+    },
+  };
+});
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   api.parse.mockReset();
+  api.useSdk = false;
 });
 
 function fixture(platform: "ios" | "android" = "ios") {
@@ -119,6 +129,97 @@ function accept(file: string, changes = [claim], focus = "label") {
 }
 
 describe("generated mobile store notes", () => {
+  it.each(["timeout", "server", "permanent", "exhausted", "deadline"] as const)(
+    "handles %s transport failures without bypassing review or its generation deadline",
+    async (failure) => {
+      const f = fixture("android");
+      api.useSdk = true;
+      const stages: string[] = [];
+      let reviewAttempts = 0;
+      const started = Date.now();
+      let now = started;
+      if (failure === "deadline") {
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+      }
+      const transport = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        if (typeof init?.body !== "string") {
+          throw new Error("Expected a serialized Responses request.");
+        }
+        const request: { instructions: string; input: string; text: { format: { name: string } } } =
+          JSON.parse(init.body);
+        const stage = request.text.format.name;
+        const isWear = request.instructions.includes("Target audience: wear.");
+        stages.push(`${isWear ? "wear" : "phone"}:${stage}`);
+        let output: unknown;
+        if (stage === "release_notes_selection") {
+          output = { files: [selection(JSON.parse(request.input), f.file)] };
+        } else if (stage === "release_notes") {
+          output = { changes: isWear ? [] : [claim] };
+          if (failure === "deadline") {
+            now = started + 299_990;
+          }
+        } else if (stage === "release_notes_review") {
+          if (!isWear) {
+            reviewAttempts++;
+          }
+          expect(fs.existsSync(f.outputPath)).toBe(false);
+          if (
+            !isWear &&
+            (failure === "permanent" || failure === "exhausted" || reviewAttempts === 1)
+          ) {
+            if (failure === "timeout" || failure === "deadline") {
+              throw new DOMException("The operation was aborted.", "AbortError");
+            }
+            return Response.json(
+              { error: { message: "Synthetic provider failure", type: "api_error" } },
+              { status: failure === "permanent" ? 401 : 503, headers: { "retry-after-ms": "1" } },
+            );
+          }
+          output = { approved: true, problems: [] };
+        } else {
+          throw new Error(`Unexpected notes stage: ${stage}`);
+        }
+        return Response.json({
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: JSON.stringify(output), annotations: [] }],
+            },
+          ],
+        });
+      });
+      vi.stubGlobal("fetch", transport);
+      if (failure === "timeout" || failure === "server") {
+        const saved = await generateMobileReleaseNotes(f);
+        expect(saved.entries.map(({ audience, text }) => [audience, text])).toEqual([
+          ["phone", `- ${claim.text}`],
+          ["wear", "Bug fixes and improvements."],
+        ]);
+        expect(JSON.parse(readNotes(f))).toEqual(saved);
+        expect(reviewAttempts).toBe(2);
+      } else {
+        await expect(generateMobileReleaseNotes(f)).rejects.toThrow(
+          failure === "deadline" ? /aborted|budget/iu : /Synthetic provider failure/u,
+        );
+        expect(fs.existsSync(f.outputPath)).toBe(false);
+        expect(reviewAttempts).toBe(failure === "exhausted" ? 2 : 1);
+      }
+      expect(stages.slice(0, 3)).toEqual([
+        "phone:release_notes_selection",
+        "phone:release_notes",
+        "phone:release_notes_review",
+      ]);
+      expect(stages.slice(3)).toEqual([
+        ...(reviewAttempts === 2 ? ["phone:release_notes_review"] : []),
+        ...(failure === "timeout" || failure === "server"
+          ? ["wear:release_notes_selection", "wear:release_notes", "wear:release_notes_review"]
+          : []),
+      ]);
+    },
+  );
+
   it("selects bounded app evidence and freezes notes for replay with source, identity, baseline, and text validation", async () => {
     const f = fixture();
     const watchFile = "apps/shared/OpenClawWatchRTC/src/lib.rs";
@@ -160,6 +261,7 @@ describe("generated mobile store notes", () => {
       .mockResolvedValueOnce(approvedReview);
 
     const saved = await generateMobileReleaseNotes(f);
+    expect(git(f.rootDir, "rev-parse", "--is-shallow-repository")).toBe("false");
     for (const index of [1, 2]) {
       const request = api.parse.mock.calls[index]![0];
       expect(request.input.length).toBeLessThan(60_000);
@@ -199,7 +301,7 @@ describe("generated mobile store notes", () => {
     await expect(generateMobileReleaseNotes(f)).rejects.toThrow("different production baseline");
   });
 
-  it("keeps v2 phone and legacy Wear baselines and text separate", async () => {
+  it("keeps v2 phone and legacy Wear notes separate from shallow source", async () => {
     const f = fixture("android");
     const sourceRef = "refs/openclaw/mobile-releases/android/v2/2026.7.3/0/1/2026070449-2026070450";
     const wearBase = f.sourceSha;
@@ -215,9 +317,14 @@ describe("generated mobile store notes", () => {
       sourceRef,
     });
     savePlan(f);
+    const rootDir = temporary.make("mobile-notes-shallow-");
+    git(f.rootDir, "config", "uploadpack.allowFilter", "true");
+    git(f.rootDir, "clone", "--depth=1", pathToFileURL(f.rootDir).href, rootDir);
+    const options = { ...f, rootDir };
     accept(f.file);
     accept(wearFile, [{ text: "Clearer watch voice controls.", evidenceIds: ["e1"] }]);
-    const saved = await generateMobileReleaseNotes(f);
+    const saved = await generateMobileReleaseNotes(options);
+    expect(git(rootDir, "rev-parse", "HEAD")).toBe(f.sourceSha);
     expect(requestInput(3).files).toContainEqual(expect.objectContaining({ file: wearFile }));
     expect(requestInput(3).files).not.toContainEqual(expect.objectContaining({ file: f.file }));
     for (const index of [2, 5]) {
@@ -240,12 +347,12 @@ describe("generated mobile store notes", () => {
       ["wear", "2026070352", wearBase, "- Clearer watch voice controls."],
     ]);
     vi.stubEnv("OPENAI_API_KEY", "");
-    expect(await generateMobileReleaseNotes(f)).toEqual(saved);
+    expect(await generateMobileReleaseNotes(options)).toEqual(saved);
     fs.rmSync(f.outputPath);
     vi.stubEnv("OPENAI_API_KEY", "synthetic-key");
     f.plan.releaseNotesBaselines[0]!.build = "2026070450";
     savePlan(f);
-    await expect(generateMobileReleaseNotes(f)).rejects.toThrow(
+    await expect(generateMobileReleaseNotes(options)).rejects.toThrow(
       "does not match its recorded store identity",
     );
   });

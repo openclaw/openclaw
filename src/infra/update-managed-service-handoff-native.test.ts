@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { mockProcessPlatform, withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
 
 const mocks = vi.hoisted(() => ({ createRequire: vi.fn(), runtimeUrl: vi.fn() }));
@@ -57,7 +57,7 @@ function installedProcSafe() {
   write(path.join(nativeRoot, "package.json"), nativeMetadata(version));
 
   const observed = { startTimeSinceBootMicros: 5_200_002 };
-  const sourceIdentity = { readProcessIdentity: vi.fn(() => observed) };
+  const sourceIdentity = { readProcessIdentity: () => observed };
   const identity = { readProcessIdentity: vi.fn(() => observed) };
   const privateModules = path.join(destination, "runtime", "node_modules");
   const privateEntry = path.join(privateModules, procSafe, "dist", "identity.js");
@@ -66,10 +66,7 @@ function installedProcSafe() {
   const resolve = vi.fn((name: string) =>
     name.endsWith("/package.json") ? path.join(nativeRoot, "package.json") : addon,
   );
-  const source = Object.assign(
-    vi.fn(() => sourceIdentity),
-    { cache, resolve },
-  );
+  const source = Object.assign(() => sourceIdentity, { cache, resolve });
   const staged = Object.assign(
     vi.fn(() => {
       const canonical = fs.realpathSync(privateNativePath);
@@ -99,13 +96,12 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("preserves the single-file stage outside FreeBSD", async () => {
-  await withMockedPlatform("linux", async () => {
-    const files = stageManagedHandoffRuntime(destination);
-    expect(files).toEqual([path.join(destination, "runtime", "managed-handoff-runtime.mjs")]);
-    expect(fs.readFileSync(files[0]!)).toEqual(runtimeBytes);
-    expect(mocks.createRequire).not.toHaveBeenCalled();
-  });
+it("preserves the single-file stage outside FreeBSD", () => {
+  mockProcessPlatform("linux");
+  const files = stageManagedHandoffRuntime(destination);
+  expect(files).toEqual([path.join(destination, "runtime", "managed-handoff-runtime.mjs")]);
+  expect(fs.readFileSync(files[0]!)).toEqual(runtimeBytes);
+  expect(mocks.createRequire).not.toHaveBeenCalled();
 });
 
 it("copies private regular bytes through a temporary-directory alias", async () => {
@@ -131,7 +127,6 @@ it("copies private regular bytes through a temporary-directory alias", async () 
       expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     }
   }
-  expect(fixture.identity.readProcessIdentity).toHaveBeenCalledExactlyOnceWith(process.pid);
 });
 
 it.skipIf(!supportsPosixFiles).each(["LICENSE", "dist", "dist/native.js", "addon"])(

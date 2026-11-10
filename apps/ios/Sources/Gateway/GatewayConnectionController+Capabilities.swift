@@ -21,19 +21,56 @@ extension GatewayConnectionController {
     @discardableResult
     func refreshActiveGatewayRegistrationFromSettings() -> Task<Void, Never> {
         Task { [weak self] in
-            guard let self, let appModel = self.appModel,
-                  let cfg = appModel.activeGatewayConnectConfig,
-                  appModel.gatewayAutoReconnectEnabled
-            else { return }
-            let generation = appModel.gatewayConnectGeneration
-            var refreshedConfig = cfg
-            refreshedConfig.nodeOptions = await self.makeConnectOptions(
-                deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID,
-                allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
-            guard !Task.isCancelled,
-                  !self.hasPendingForgetCleanup(stableID: cfg.stableID),
-                  cfg.ingressAuthorization?.isCurrent() != false else { return }
-            appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
+            await self?.refreshActiveGatewayRegistrationFromSettingsAsync()
+        }
+    }
+
+    private func refreshActiveGatewayRegistrationFromSettingsAsync() async {
+        guard let appModel else { return }
+        // A queued handoff owns transport recovery; registration must not restart its paused sessions.
+        while self.pendingAutoConnectTask != nil || appModel.hasGatewaySessionResetInFlight {
+            await self.pendingAutoConnectTask?.value
+            await appModel.waitForGatewaySessionResetIfNeeded()
+        }
+        // A failed switch keeps the previous route paused until its retry, trust, or cancel decision.
+        guard let cfg = appModel.activeGatewayConnectConfig,
+              appModel.gatewayAutoReconnectEnabled,
+              appModel.unresolvedGatewayPreconnectStableID == nil
+        else { return }
+        let generation = appModel.gatewayConnectGeneration
+        var refreshedConfig = cfg
+        refreshedConfig.nodeOptions = await self.makeConnectOptions(
+            deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID,
+            allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
+        await appModel.waitForGatewaySessionResetIfNeeded()
+        // A replacement route can commit within the same connect generation while permissions are sampled.
+        guard !Task.isCancelled,
+              !self.hasPendingForgetCleanup(stableID: cfg.stableID),
+              cfg.ingressAuthorization?.isCurrent() != false,
+              appModel.gatewayAutoReconnectEnabled,
+              appModel.unresolvedGatewayPreconnectStableID == nil,
+              appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: cfg) == true
+        else { return }
+        // Unchanged registration is not a request to recover deliberately stopped transport loops.
+        guard !cfg.hasSameConnectionInputs(as: refreshedConfig) else { return }
+        appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
+    }
+
+    func observeGatewayRegistration() {
+        withObservationTracking {
+            _ = self.appModel?.locationAuthorizationSnapshot
+            // An attempt can invalidate a sampled refresh without replacing the route (for example, cancellation).
+            _ = self.appModel?.gatewayConnectGeneration
+            // Startup and target-review resume may install options captured before authorization changed.
+            _ = self.appModel?.activeGatewayConnectConfig
+            // Resolving a failed switch releases a refresh deferred while the previous route was paused.
+            _ = self.appModel?.unresolvedGatewayPreconnectStableID
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.observeGatewayRegistration()
+                await self.refreshActiveGatewayRegistrationFromSettingsAsync()
+            }
         }
     }
 
@@ -74,6 +111,19 @@ extension GatewayConnectionController {
             requiresTLS: requiresTLS,
             effectiveTLS: effectiveTLS,
             helperText: helperText)
+    }
+
+    /// Explains a Host value the connect path cannot turn into a gateway URL. It asks the same
+    /// endpoint builder as `connectManual`, so the forms block exactly the input that would fail.
+    static func manualHostValidationMessage(host: String) -> String? {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty,
+              GatewayConnectEndpoint(host: trimmedHost, port: 1, tls: true).websocketURL == nil
+        else { return nil }
+        if trimmedHost.contains("://") {
+            return String(localized: "Enter the host without https:// or wss://.")
+        }
+        return String(localized: "Enter only a host name or IP address.")
     }
 
     func manualStableID(host: String, port: Int, contextPath: String? = nil) -> String {
@@ -199,9 +249,12 @@ extension GatewayConnectionController {
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
         let locationStatus = self.locationAuthorizationSnapshot.authorizationStatus
-        permissions["location"] = await Self.isLocationAvailable(
+        let locationAvailable = await Self.isLocationAvailable(
             status: locationStatus,
             servicesEnabled: LocationService.servicesEnabled)
+        // Authorization can change while the services probe is suspended; that change schedules a fresh sample.
+        permissions["location"] = locationAvailable
+            && self.locationAuthorizationSnapshot.authorizationStatus == locationStatus
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
         permissions["photos"] = PhotoLibraryAccess.canRead(PhotoLibraryAccess.authorizationStatus())

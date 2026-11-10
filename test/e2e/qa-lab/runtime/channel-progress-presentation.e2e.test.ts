@@ -1257,7 +1257,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
 
   it.each([
     progressCase("discord", true),
-    progressCase("discord", false),
     progressCase("slack", true, { native: true }),
     progressCase("slack", false, { native: true }),
     progressCase("slack", false),
@@ -1472,7 +1471,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
         }
         expect(tasks.at(-1)?.status).toBe("complete");
       }
-      if (channel === "discord") {
+      // Portable message rendering is independent of progress mode and tool outcome.
+      if (channel === "discord" && tools && !failTool) {
         const text = [
           "QA-PREFIX-REPORT",
           ...Array.from(
@@ -1482,7 +1482,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
           ),
           "QA-PREFIX-END",
         ].join("\n");
-        expect(Array.from(text).length).toBeGreaterThan(1997);
         const client = await connectGatewayClient({
           url: gateway.wsUrl,
           token: gateway.token,

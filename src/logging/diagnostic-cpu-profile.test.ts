@@ -137,6 +137,40 @@ afterEach(() => {
 });
 
 describe("diagnostic CPU profile owner", () => {
+  it("preserves a large native graph while repairing names, URLs and signed script IDs", async () => {
+    const { parseNativeCpuProfile } = await import("./diagnostic-profile.js");
+    const nodes: Profiler.ProfileNode[] = Array.from({ length: 4_096 }, (_, index) => ({
+      id: index + 1,
+      hitCount: index % 3,
+      callFrame: {
+        functionName: `work${index}"\\\nlabel`,
+        lineNumber: index - 2,
+        columnNumber: -1,
+        scriptId: String(index - 2),
+        url: `file:///fixture/quoted"\\\nmodule${index}.js`,
+      },
+      ...(index < 4_095 ? { children: [index + 2] } : {}),
+      ...(index % 2 === 0
+        ? { deoptReason: "not optimized", positionTicks: [{ line: index, ticks: 2 }] }
+        : {}),
+    }));
+    const expected: Profiler.Profile = {
+      nodes,
+      startTime: 10_000,
+      endTime: 5_510_000,
+      samples: [4_096, 2, 4_096],
+      timeDeltas: [10_000, -500, 10_500],
+    };
+    // Match native field order and verbatim names/URLs, not JSON.stringify escaping.
+    const json = JSON.stringify(expected)
+      .replace(/"scriptId":"(-?\d+)"/g, '"scriptId":$1')
+      .replace(
+        /"(functionName|url)":("(?:\\.|[^"\\])*")/g,
+        (_match, key, value) => `"${key}":"${JSON.parse(value)}"`,
+      );
+    expect(parseNativeCpuProfile(json)).toStrictEqual(expected);
+  });
+
   it("reports disposal failure and allows a later native capture", async () => {
     Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
     native.dispose.mockImplementationOnce(() => {
@@ -151,7 +185,7 @@ describe("diagnostic CPU profile owner", () => {
     expect((await capture()).status).toBe("complete");
     expect(native.start).toHaveBeenCalledTimes(2);
   });
-  it("reports synchronous start blocking separately from awaited capture time", async () => {
+  it("reports elapsed capture time including native startup and stop completion", async () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     native.post.mockImplementation((method: string) => {
@@ -170,7 +204,7 @@ describe("diagnostic CPU profile owner", () => {
     });
     expect(await capture()).toMatchObject({
       status: "complete",
-      result: { startBlockedMs: 2_100, actualDurationMs: 5_500 },
+      result: { startBlockedMs: 2_100, actualDurationMs: 7_820 },
     });
   });
   it("returns a complete sanitized graph only after native cleanup", async () => {
@@ -181,7 +215,6 @@ describe("diagnostic CPU profile owner", () => {
     }
     expect(outcome.result).toMatchObject({
       requestedDurationMs: 5_000,
-      actualDurationMs: 5_500,
       samplingIntervalMicros: 10_000,
       sampleLossCount: null,
       redactedNodeCount: 1,
@@ -646,7 +679,7 @@ const pid = process.pid;
 const outcome = await captureDiagnosticCpuProfile({ signal: new AbortController().signal, hasAuthority: () => true });
 assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
 const result = outcome.result;
-assert.ok(result.actualDurationMs > 0);
+assert.ok(result.actualDurationMs >= result.requestedDurationMs - 1_000);
 assert.ok(result.profile.samples.length > 0);
 assert.equal(result.profile.samples.length, result.profile.timeDeltas.length);
 assert.ok(result.profile.timeDeltas.every(delta => Number.isFinite(delta)));

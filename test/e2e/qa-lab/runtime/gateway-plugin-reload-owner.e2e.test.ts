@@ -35,6 +35,7 @@ import { resetGatewayState } from "./gateway-startup-routing.test-support.js";
 
 // Real WebChat admission, plugin replacement and resumed tool execution; only model HTTP is synthetic.
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const FINAL_REPLY = "Owner-only read and Gateway inspection succeeded after actual plugin reload.";
 beforeEach(resetGatewayState);
 afterEach(resetGatewayState);
 type ProbeResult = {
@@ -48,13 +49,9 @@ type ProbeResult = {
 type Body = {
   instructions?: string;
   tools?: Array<{ name?: string }>;
-  input: Array<{
-    role?: string;
-    type?: string;
-    call_id?: string;
-    output?: string;
-    content?: unknown;
-  }>;
+  input: Array<
+    Partial<Record<"role" | "type" | "call_id" | "output", string>> & { content?: unknown }
+  >;
 };
 function writeToolCall(
   response: ServerResponse,
@@ -265,9 +262,7 @@ it(
                     ok: true,
                     plugin: { id: "owner-probe", enabled: true },
                   });
-                  reply(
-                    "Owner-only read and Gateway inspection succeeded after actual plugin reload.",
-                  );
+                  reply(FINAL_REPLY);
                   break;
                 }
                 default:
@@ -328,9 +323,7 @@ it(
           onEvent: (event) => {
             if (
               event.event === "chat" &&
-              JSON.stringify(event.payload).includes(
-                "Owner-only read and Gateway inspection succeeded after actual plugin reload.",
-              ) &&
+              JSON.stringify(event.payload).includes(FINAL_REPLY) &&
               (event.payload as { state?: string })?.state === "final"
             ) {
               delivered.resolve();
@@ -355,9 +348,7 @@ it(
         );
         assert(first);
         expect(history.sessionId).toBe(first.sessionId);
-        expect(JSON.stringify(history.messages)).toContain(
-          "Owner-only read and Gateway inspection succeeded after actual plugin reload.",
-        );
+        expect(JSON.stringify(history.messages)).toContain(FINAL_REPLY);
       } finally {
         try {
           if (gateway) {

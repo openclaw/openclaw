@@ -1,42 +1,97 @@
 import { createHash } from "node:crypto";
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { LruCache } from "../infra/lru-cache.js";
 import { buildLexicalIndex, readParameterText, tokenizeDocument } from "./tool-search-ranking.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 
+type TextLexicalIndex = ReturnType<typeof buildLexicalIndex<number>> & { bytes: number };
+
 // Content is the revision: rebuilt tools, agents, and sessions share only lexical
 // data. Positions are rebound to the caller's current, policy-filtered inventory.
-// Bound both revisions and estimated posting storage so retired catalogs age out.
-const indexes = new LruCache<{
-  index: ReturnType<typeof buildLexicalIndex<number>>;
-  bytes: number;
-}>(32, { maxBytes: 8 * 1024 * 1024, sizeOf: (entry) => entry.bytes });
+// Entry text, indexes and document terms share one byte budget. Exact text owns tokenization;
+// effective population and order still own each index's BM25 statistics.
+const lexicalData = new LruCache<
+  { bytes: number } & (
+    | { kind: "index"; index: TextLexicalIndex }
+    | { kind: "document"; terms: Map<string, number> }
+    | { kind: "entry"; text: string }
+  )
+>(1024, { maxBytes: 8 * 1024 * 1024, sizeOf: (entry) => entry.bytes });
 // Eviction retires idle retention, never an index still held by an admitted view.
-const active = new Map<string, WeakRef<ReturnType<typeof buildLexicalIndex<number>>>>();
+const active = new Map<string, WeakRef<TextLexicalIndex>>();
 const retired = new FinalizationRegistry<string>((revision) => {
   if (!active.get(revision)?.deref()) {
     active.delete(revision);
   }
 });
 
-export function getTextLexicalIndex(documents: readonly string[]) {
-  const revision = createHash("sha256").update(JSON.stringify(documents)).digest("hex");
-  const cached = indexes.get(revision)?.index ?? active.get(revision)?.deref();
+export function prepareTextLexicalDocument(text: string) {
+  return {
+    text,
+    // Preserve exact code units, including lone surrogates, in the content identity.
+    revision: createHash("sha256").update(text, "utf16le").digest("hex"),
+  } as const;
+}
+
+export function getTextLexicalIndex(
+  documents: readonly string[] | readonly ReturnType<typeof prepareTextLexicalDocument>[],
+  current?: { revision?: string; index?: TextLexicalIndex },
+) {
+  const prepared = typeof documents[0] === "object";
+  const revision = prepared
+    ? `prepared:${prepareTextLexicalDocument(JSON.stringify(documents.map((document) => (typeof document === "string" ? document : document.revision)))).revision}`
+    : createHash("sha256").update(JSON.stringify(documents)).digest("hex");
+  if (current?.revision === revision && current.index) {
+    return current.index;
+  }
+  const retained = lexicalData.get(revision);
+  const cached = retained?.kind === "index" ? retained.index : active.get(revision)?.deref();
   if (cached) {
+    if (current) {
+      Object.assign(current, { revision, index: cached });
+    }
     return cached;
   }
   let bytes = 0;
-  const index = buildLexicalIndex(
-    documents.map((text, value) => {
-      const terms = tokenizeDocument(text);
-      // Token slices can retain the full source; count repeated postings conservatively.
-      bytes += text.length * 2 + 64;
-      bytes += terms.reduce((size, term) => size + 64 + term.length * 2, 0);
-      return { value, terms };
+  let retainedBytes = 128 + documents.length * 64;
+  const indexed = buildLexicalIndex(
+    documents.map((document, value) => {
+      const text = typeof document === "string" ? document : document.text;
+      retainedBytes += text.length * 2;
+      // Index keys are SHA-256 hex; the prefix keeps raw text in a separate namespace.
+      const key = `text:${text}`;
+      let tokenized = lexicalData.get(key);
+      if (tokenized?.kind !== "document") {
+        const terms = new Map<string, number>();
+        for (const term of tokenizeDocument(text)) {
+          terms.set(term, (terms.get(term) ?? 0) + 1);
+        }
+        tokenized = {
+          kind: "document",
+          terms,
+          // Retain frequencies, not one string and array slot per occurrence.
+          bytes:
+            text.length * 2 +
+            64 +
+            Array.from(terms.keys()).reduce((size, term) => size + 96 + term.length * 2, 0),
+        };
+        lexicalData.set(key, tokenized);
+      }
+      bytes += tokenized.bytes;
+      return { value, terms: tokenized.terms };
     }),
   );
-  indexes.set(revision, { index, bytes });
+  // Charge backing strings, document/map overhead and spare postings capacity.
+  for (const [term, matches] of indexed.postings) {
+    retainedBytes += 128 + term.length * 2 + matches.length * 16;
+  }
+  const index = { ...indexed, bytes: retainedBytes };
+  lexicalData.set(revision, { kind: "index", index, bytes });
   active.set(revision, new WeakRef(index));
   retired.register(index, revision);
+  if (current) {
+    Object.assign(current, { revision, index });
+  }
   return index;
 }
 
@@ -96,12 +151,28 @@ export function getToolSearchLexicalIndex(
  * tool-search tools index argument metadata for the same reason.
  */
 function toolSearchEntryText(entry: ToolSearchCatalogEntry): string {
+  // Only the schema owner's immutable publication can replace traversal across runs.
+  // Share text, never descriptors or their run-scoped executors/authority.
+  const schema =
+    entry.source === "openclaw" ? getPublishedRuntimeToolInputSchema(entry.parameters) : undefined;
+  const key =
+    entry.source !== "openclaw" || schema
+      ? `entry:${JSON.stringify([entry.name, entry.id, entry.label ?? "", entry.description, schema?.fingerprint])}`
+      : undefined;
+  const cached = key && lexicalData.get(key);
+  if (cached && cached.kind === "entry") {
+    return cached.text;
+  }
   // Only first-party schemas are walked. MCP and client parameters are untrusted
   // and deliberately never traversed: compactToolSearchCatalogEntry reports them
   // as "unknown" for the same reason, and a client may hand us a lazy object that
   // throws on property access.
   const parameters = entry.source === "openclaw" ? readParameterText(entry.parameters) : "";
-  return [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
+  const text = [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
     .filter(Boolean)
     .join(" ");
+  if (key) {
+    lexicalData.set(key, { kind: "entry", text, bytes: (key.length + text.length) * 2 + 64 });
+  }
+  return text;
 }

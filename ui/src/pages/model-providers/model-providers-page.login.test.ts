@@ -8,13 +8,14 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/wizard.ts";
 import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createModelProviderLogin, type ModelProviderLogin } from "./login-controller.ts";
 import { ModelProviderLoginView } from "./login-view.tsx";
 import {
+  museCodeCapability,
   loginHarness,
   openPicker,
   selectProvider,
@@ -60,23 +61,7 @@ describe("Models provider login", () => {
   ])("connects Muse Code (setup: $setup, entry: $entry)", async ({ setup, entry }) => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, answer } = loginHarness({
-      capabilities: [
-        {
-          provider: "meta",
-          apiKeySupported: true,
-          quickApiKeySetup: true,
-          loginOptions: [
-            {
-              id: "meta/muse-code",
-              brandId: "meta",
-              label: "Muse Code",
-              kind: "device-code",
-              featured: true,
-              requiresSetup: true,
-            },
-          ],
-        },
-      ],
+      capabilities: [museCodeCapability()],
     });
     const originalRequest = request.getMockImplementation()!;
     const authStatusReady = deferred();
@@ -258,7 +243,7 @@ describe("Models provider login", () => {
       try {
         await chooseLogin(page, "Example browser sign-in");
         await waitForSolid(() =>
-          expect(page.querySelector<HTMLAnchorElement>(".wizard-step__sign-in a")?.href).toBe(
+          expect(page.querySelector<HTMLAnchorElement>(".wizard-sign-in a")?.href).toBe(
             "https://provider.example/sign-in",
           ),
         );
@@ -276,8 +261,10 @@ describe("Models provider login", () => {
           );
         }
         if (cancel) {
-          [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
-            .find((button) => button.textContent?.trim() === "Cancel")!
+          page
+            .querySelector<HTMLButtonElement>(
+              'openclaw-modal-dialog button[aria-label="Cancel sign-in"]',
+            )!
             .click();
           await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
           expect(session?.getStatus()).toBe("cancelled");
@@ -294,7 +281,7 @@ describe("Models provider login", () => {
             { timeout: 3000 },
           );
           expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-            "Example browser sign-in is connected",
+            "Example browser sign-in is ready",
           );
           expect(session?.getStatus()).toBe("done");
           expect(page.renderRoot.textContent).toContain(
@@ -410,7 +397,7 @@ describe("Models provider login", () => {
     expect(dismissal.defaultPrevented).toBe(true);
     cancel.resolve({ status: "running" });
     await waitForSolid(() =>
-      expect(page.renderRoot.textContent).toContain("Credentials are being saved."),
+      expect(page.renderRoot.textContent).toContain("Your account is being saved."),
     );
     expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
     expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
@@ -424,7 +411,7 @@ describe("Models provider login", () => {
       expect(page.querySelector('[data-provider-id="example"]')).not.toBeNull(),
     );
     expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-      "Example API key is connected",
+      "Example API key is ready",
     );
     expect(context.navigate).not.toHaveBeenCalled();
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
@@ -630,7 +617,7 @@ describe("Models provider login", () => {
             {
               id: "plugin/alpha-key",
               brandId: "alpha",
-              groupLabel: "Alpha",
+              groupLabel: "A\u0308lpha",
               label: "Account key",
               kind: "secret",
               featured: false,
@@ -648,8 +635,8 @@ describe("Models provider login", () => {
     expect(page.querySelector("[data-models-login-discover]")).not.toBeNull();
     expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
 
-    await searchProviders(page, "  EXAMPLE  ");
-    expect(providerChoices(page)).toEqual(["example"]);
+    await searchProviders(page, "  ÄLPHA  ");
+    expect(providerChoices(page)).toEqual(["alpha"]);
     await searchProviders(page, "browser sign-in");
     expect(providerChoices(page)).toEqual(["example"]);
     await searchProviders(page, "your Example account key");
@@ -679,11 +666,12 @@ describe("Models provider login", () => {
     await searchProviders(page, "");
     expect(providerChoices(page)).toEqual(["alpha", "example", "quick-key-only", "zebra"]);
     await selectProvider(page, "quick-key-only");
-    expect(page.querySelector("[data-models-login-choice] button")).toBeNull();
-    expect(document.activeElement).toBe(page.querySelector("[data-models-login-api-key]"));
-    page.querySelector<HTMLButtonElement>("[data-models-login-back]")!.click();
+    // One way in and nothing saved: the key form opens without a method step.
+    expect(page.querySelector("[data-models-login-choice]")).toBeNull();
+    expect(page.querySelector("[data-models-key-dialog]")).not.toBeNull();
+    page.querySelector<HTMLButtonElement>("[data-models-key-dialog] .oc-dialog__close")!.click();
     await page.updateComplete;
-    expect(document.activeElement).toBe(page.querySelector("[data-models-login-search]"));
+    await openPicker(page);
     await selectProvider(page, "zebra");
     expect(document.activeElement).toBe(page.querySelector("[data-models-login-choice] button"));
     await startSelectedLogin(page, "Device sign-in");
@@ -766,7 +754,7 @@ describe("Models provider login", () => {
     addAccount!.click();
     await page.updateComplete;
     expect(page.querySelector("[data-models-login-search]")).toBeNull();
-    expect(page.querySelector(".model-provider-login__provider")?.textContent).toContain(
+    expect(page.querySelector(".model-provider-login .oc-dialog__title")?.textContent).toContain(
       "Example provider",
     );
     const dialog = page.querySelector("openclaw-modal-dialog")!;
@@ -781,7 +769,10 @@ describe("Models provider login", () => {
     ).toBe(true);
     expect(profiles[0]?.textContent).toContain("External CLI account");
     expect(profiles[1]?.textContent).toContain("Saved browser account");
-    expect(profiles[1]?.textContent).toContain("Expiring");
+    expect(profiles[1]?.textContent).toContain("Account added");
+    expect(profiles[1]?.textContent).toContain(
+      "Access-token expiry alone does not mean you need to sign in again.",
+    );
     expect(dialog.textContent).not.toContain("other-provider@example.invalid");
     expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
     const originalRequest = request.getMockImplementation()!;
@@ -915,7 +906,9 @@ describe("Models provider login", () => {
         view.container.querySelector('.model-provider-login [role="status"]')?.textContent,
       ).toBe("Loading…"),
     );
-    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    view.container
+      .querySelector<HTMLButtonElement>(".model-provider-login .oc-dialog__close")!
+      .click();
     expect(controller.busy).toBe(false);
     agentId = "reviewer";
     await controller.open();
@@ -958,7 +951,9 @@ describe("Models provider login", () => {
         "Inventory unavailable",
       ),
     );
-    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    view.container
+      .querySelector<HTMLButtonElement>(".model-provider-login .oc-dialog__close")!
+      .click();
     if (cached) {
       authStatus = ready;
     }

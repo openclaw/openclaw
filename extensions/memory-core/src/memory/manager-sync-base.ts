@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type {
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderRuntime,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -16,12 +21,7 @@ import type {
   MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
-import {
-  resolveEmbeddingProviderIndexIdentity,
-  type EmbeddingProvider,
-  type EmbeddingProviderRuntime,
-} from "./embeddings.js";
+import { resolveEmbeddingProviderIndexIdentity } from "./embeddings.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import {
@@ -79,8 +79,8 @@ export type MemorySyncProviderGeneration =
   | (MemorySyncProviderGenerationBase & {
       kind: "semantic";
       embeddingDimensions?: number;
-      provider: EmbeddingProvider;
-      runtime?: EmbeddingProviderRuntime;
+      provider: MemoryEmbeddingProvider;
+      runtime?: MemoryEmbeddingProviderRuntime;
     });
 
 export type MemorySemanticProviderGeneration = Extract<
@@ -90,6 +90,7 @@ export type MemorySemanticProviderGeneration = Extract<
 
 export type MemoryReindexProgress = {
   memoryComplete: boolean;
+  cachePrunePending?: boolean;
   memoryPlan?: MemorySourceSyncPlan;
   completedSessionFiles: Set<string>;
   changedSessionFiles: Set<string>;
@@ -179,7 +180,7 @@ export abstract class MemoryManagerSyncBase {
   protected closing = false;
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
-  protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
+  protected readonly acquireLocalService?: AcquireConfiguredProviderLocalService;
   protected abstract readonly runInBackgroundContext: NonNullable<
     MemoryCoreRuntimeHost["runInBackgroundContext"]
   >;
@@ -187,11 +188,11 @@ export abstract class MemoryManagerSyncBase {
   protected abstract readonly agentId: string;
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
-  protected provider: EmbeddingProvider | null = null;
+  protected provider: MemoryEmbeddingProvider | null = null;
   protected fallbackFrom?: string;
   protected abstract providerUnavailableReason?: string;
   protected abstract providerLifecycle: MemoryProviderLifecycleState;
-  protected providerRuntime?: EmbeddingProviderRuntime;
+  protected providerRuntime?: MemoryEmbeddingProviderRuntime;
   protected abstract batch: MemoryEmbeddingBatchConfig;
   protected readonly sources: Set<MemorySource> = new Set();
   protected readonly sourceInspections = new Map<
@@ -256,7 +257,7 @@ export abstract class MemoryManagerSyncBase {
     message: string,
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
-  protected abstract pruneEmbeddingCacheIfNeeded(): Promise<void>;
+  protected abstract pruneEmbeddingCacheIfNeeded(recount?: boolean): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void>;
@@ -360,7 +361,7 @@ export abstract class MemoryManagerSyncBase {
         2 ** Math.min(this.fullReindexRetryBackoff.attempts - 1, 30),
       FULL_REINDEX_RETRY_MAX_DELAY_MS,
     );
-    this.fullReindexRetryBackoff.retryAt = Date.now() + delay;
+    this.fullReindexRetryBackoff.retryAt = performance.now() + delay;
   }
 
   protected clearFullReindexRetryBackoff(): void {
@@ -482,6 +483,14 @@ export abstract class MemoryManagerSyncBase {
     }
   }
 
+  protected resolveConfiguredMemoryScopeHash(): string {
+    return resolveConfiguredScopeHash({
+      workspaceDir: this.workspaceDir,
+      extraPaths: this.settings.extraPaths,
+      multimodal: this.settings.multimodal,
+    });
+  }
+
   protected resolveConfiguredIndexIdentity() {
     if (this.settings.provider === "none") {
       return undefined;
@@ -533,6 +542,7 @@ export abstract class MemoryManagerSyncBase {
           provider: configuredIndexIdentity.provider,
           cacheKeyData: configuredIndexIdentity.cacheKeyData,
           aliases: configuredIndexIdentity.aliases,
+          documentPrefix: this.settings.inputFormat?.document,
         })
       : [];
     const providerIdentities =
@@ -551,11 +561,7 @@ export abstract class MemoryManagerSyncBase {
       providerAliases: providerIdentities.slice(1),
       providerKeyKnown: configuredProviderKeyKnown ? true : params.providerKeyKnown,
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
-      configuredScopeHash: resolveConfiguredScopeHash({
-        workspaceDir: this.workspaceDir,
-        extraPaths: this.settings.extraPaths,
-        multimodal: this.settings.multimodal,
-      }),
+      configuredScopeHash: this.resolveConfiguredMemoryScopeHash(),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
       vectorReady,

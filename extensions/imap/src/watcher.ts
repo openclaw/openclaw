@@ -10,7 +10,6 @@ import { truncateUtf8Prefix, truncateUtf16Safe } from "openclaw/plugin-sdk/text-
 import type { ImapAccountConfig } from "./config.js";
 import { evaluateImapSender } from "./sender-gate.js";
 import {
-  advanceImapCursor,
   initializeImapCursor,
   isImapUid,
   MAX_IMAP_UID,
@@ -333,12 +332,11 @@ export class ImapAccountWatcher {
           offset = uids.length;
           break;
         }
-        await advanceImapCursor(
-          this.options.state,
-          this.options.accountId,
-          cursor.uidValidity,
-          message.uid,
-        );
+        await this.options.state.cursors.register(this.options.accountId, {
+          uidValidity: cursor.uidValidity,
+          lastSeenUid: message.uid,
+          updatedAt: Date.now(),
+        });
       }
     }
   }

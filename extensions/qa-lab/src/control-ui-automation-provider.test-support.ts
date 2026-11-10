@@ -1,8 +1,8 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { buffer } from "node:stream/consumers";
 import { inspect } from "node:util";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { redactQaGatewayDebugText } from "./gateway-log-redaction.ts";
 import { hasToolDefinition } from "./providers/mock-openai/mock-openai-directives.ts";
 import { buildAssistantEvents } from "./providers/mock-openai/mock-openai-events.ts";
@@ -87,13 +87,9 @@ export async function startAutomationProvider() {
       response.writeHead(500).end(error instanceof Error ? error.message : String(error));
     });
   });
-  await once(server.listen(0, "127.0.0.1"), "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Automation provider did not bind a loopback port");
-  }
+  const port = await listenOnLoopback(server);
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `http://127.0.0.1:${port}/v1`,
     requests,
     results,
     toolAvailability,

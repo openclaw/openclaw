@@ -65,6 +65,10 @@ installation, chat and local embeddings restore the same verified build before
 starting it. Custom server paths and installations from older releases still
 require manual repair or rerunning setup.
 
+On macOS, stopping a chat during orphaned managed-server recovery waits for
+process cleanup. Other pending chats can continue recovery with their own
+requests; cleanup failures still stop preparation and report the error.
+
 Managed local models automatically use structured [Tool Search](/tools/tool-search)
 unless you have explicitly configured it. Optional capabilities remain available.
 Their schemas load as needed, reducing the input the model must process before
@@ -218,6 +222,8 @@ Add a model under `models.providers.llama-cpp.models`, select its
 URIs, and HTTPS GGUF URLs that publish a SHA-256 response digest. The default
 cache is `~/.openclaw/models/llama.cpp`. A configured `modelCacheDir` remains
 authoritative for managed setup.
+Concurrent chats share pending GGUF verification or download work. Stopping one
+chat cancels only that chat's wait; the shared work continues for other chats.
 
 Setup resolves model aliases and account-qualified references to the selected
 authored model, and keeps that model even when it is not cached. It shows
@@ -476,6 +482,14 @@ transport. The llama.cpp compatibility family cleans unsupported tool-schema
 constraints. Agent turns and standalone completions also map thinking-off
 requests to the server's chat-template flag and adapt JSON Schema requests
 for older llama-server builds.
+
+For tool continuations with an unchanged prompt prefix, OpenClaw uses the server's
+measured context usage plus newly appended content to budget the next response.
+This avoids charging historical reasoning that the chat template discards.
+The first request of an attempt, a request with a changed prefix, or a request with
+a response schema keeps the conservative payload estimate. Replayed reasoning is
+preserved for templates that need it, and genuinely full contexts still trigger
+output limits or compaction.
 
 Local memory embeddings require managed mode:
 

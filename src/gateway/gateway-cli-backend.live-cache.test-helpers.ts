@@ -242,7 +242,6 @@ export async function verifyCliBackendAnnounceOrdering({
 }) {
   const nonce = randomBytes(3).toString("hex").toUpperCase();
   const sessionKey = `agent:dev:cli-announce-${nonce.toLowerCase()}`;
-  const childToken = `CLI_ANNOUNCE_CHILD_${nonce}`;
   const parentToken = `CLI_ANNOUNCE_PARENT_${nonce}`;
   let parentObservedAt: number | undefined;
   const request = client.request(
@@ -254,10 +253,10 @@ export async function verifyCliBackendAnnounceOrdering({
       timeout: 240,
       message: [
         "Run this exact OpenClaw CLI-backed completion announcement scenario. Use tool calls, not prose.",
-        `Call sessions_spawn exactly once with taskName=cli_announce_${nonce.toLowerCase()} and task=${JSON.stringify(`Reply exactly ${childToken} and nothing else.`)}.`,
+        `Call sessions_spawn exactly once with taskName=cli_announce_${nonce.toLowerCase()} and task=${JSON.stringify("Create a fresh random 16-character lowercase hexadecimal code. Reply exactly CLI_ANNOUNCE_CHILD_<code> and nothing else.")}.`,
         `After sessions_spawn returns status=accepted, call ${CLI_ANNOUNCE_BARRIER_TOOL_NAME} exactly once with no arguments.`,
         `After that tool returns, reply exactly ${parentToken}.`,
-        `When the child's completion is delivered in a later turn, include its exact result ${childToken} in your user-facing update.`,
+        "When the child's completion arrives, include its exact result in your user-facing update.",
       ].join("\n"),
     },
     { expectFinal: true, timeoutMs: requestTimeoutMs },
@@ -278,10 +277,12 @@ export async function verifyCliBackendAnnounceOrdering({
     return listSubagentRunsForRequester(sessionKey).find(
       (run) =>
         run.taskName === `cli_announce_${nonce.toLowerCase()}` &&
-        run.completion?.resultText?.includes(childToken) === true &&
+        Boolean(run.completion?.resultText?.trim()) &&
         run.execution.outcome?.status === "ok",
     );
   });
+  const childToken = completedChild.completion?.resultText?.trim() ?? "";
+  expect(childToken).toMatch(/^CLI_ANNOUNCE_CHILD_[a-f0-9]{16}$/);
   expect(barrier.calls).toBe(1);
   expect(parentObservedAt).toBeUndefined();
   expect(completedChild.delivery?.announcedAt).toBeUndefined();
@@ -304,10 +305,9 @@ export async function verifyCliBackendAnnounceOrdering({
         typeof run.delivery?.announcedAt === "number",
     ),
   );
-  expect(deliveredChild.delivery?.announcedAt).toBeGreaterThanOrEqual(parentObservedAt);
   expect(deliveredChild.delivery?.announcedAt).toBe(deliveredChild.delivery?.deliveredAt);
-  // CLI requesters use an ordered agent handoff, not the embedded steer queue.
-  // The committed parent reply must precede the completion in canonical history.
+  // A CLI completion can join the active answer through native steering.
+  // Both results must reach canonical history, whether combined or in separate replies.
   const entry = (await loadGatewaySessionEntryReadOnlyAsync(sessionKey)).entry;
   if (!entry?.sessionId) {
     throw new Error("CLI announce probe lost its requester session");
@@ -334,7 +334,7 @@ export async function verifyCliBackendAnnounceOrdering({
       ? { parentReplyIndex: parentIndex, completionReplyIndex: completionIndex }
       : undefined;
   });
-  logStep("announce-child:transcript-order", {
+  logStep("announce-child:transcript-results", {
     runId: deliveredChild.runId,
     parentObservedAt,
     delivery: deliveredChild.delivery,
@@ -342,17 +342,21 @@ export async function verifyCliBackendAnnounceOrdering({
     completionReplyIndex,
   });
   expect(parentReplyIndex).toBeGreaterThanOrEqual(0);
-  expect(completionReplyIndex).toBeGreaterThan(parentReplyIndex);
+  expect(completionReplyIndex).toBeGreaterThanOrEqual(0);
   if (minCacheHitRate === undefined) {
     return;
   }
-  // Ordinary -> verified completion -> ordinary must keep one reusable prefix.
-  logCliCacheUsage("announce-parent", {
-    meta: { agentMeta: { usage: assistantUsage[parentReplyIndex] } },
-  });
-  const completionHitRate = logCliCacheUsage("announce-completion", {
-    meta: { agentMeta: { usage: assistantUsage[completionReplyIndex] } },
-  });
+  // A shared row includes the cold parent turn's total; measure its final model call instead.
+  logCliCacheUsage("announce-parent", parent.result);
+  if (completionReplyIndex === parentReplyIndex) {
+    expect(extractPayloadText(parent.result)).toContain(childToken);
+  }
+  const completionHitRate = logCliCacheUsage(
+    "announce-completion",
+    completionReplyIndex === parentReplyIndex
+      ? parent.result
+      : { meta: { agentMeta: { usage: assistantUsage[completionReplyIndex] } } },
+  );
   const followupToken = `CLI_ANNOUNCE_FOLLOWUP_${nonce}`;
   const followup = await client.request(
     "agent",

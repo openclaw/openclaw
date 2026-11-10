@@ -33,14 +33,19 @@ export type PluginCommandSchedule = {
 /**
  * Store-private restart continuity, kept in job state so the envelope keeps its released shape.
  * Present only on schedules accepted by a host that re-arms them after a Gateway restart, from a
- * plugin whose loaded code has a captured source digest. It names the Gateway process and plugin
+ * plugin whose loaded code has a code identity: its captured source digest or, for a core-bundled
+ * plugin, its exact loaded OpenClaw build. It names the Gateway process and plugin
  * instance currently serving the schedule, and the code identity any later instance must match.
  * Older readers ignore it and keep ending the schedule with its original process.
  */
 export type PluginCommandScheduleBinding = {
   hostProcessId: string;
   pluginIncarnation: string;
-  /** Digest of the plugin generation's captured source, fixed when the schedule is accepted. */
+  /**
+   * Code identity fixed when the schedule is accepted: the captured source digest, or a
+   * `bundled-build:` identity of a core-bundled plugin's exact build. The released field name
+   * stays so stored rows keep one shape.
+   */
   sourceDigest: string;
 };
 
@@ -54,7 +59,7 @@ export type PluginCommandScheduleHost = {
   pluginSource: string;
   pluginRoot?: string;
   pluginVersion?: string;
-  /** Digest of the source this instance actually loaded. */
+  /** Code identity of what this instance actually loaded; see the binding. */
   sourceDigest: string;
   /** Authenticated native-subagent commands this instance currently registers. */
   commands: string[];

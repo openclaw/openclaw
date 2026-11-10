@@ -1,11 +1,14 @@
 import { createMemo, createSignal, onCleanup } from "solid-js";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { downloadBlobFile } from "../../../lib/download.ts";
 import { createDetailOperationPresentation } from "./chat-detail-panel-operation-lifetime.ts";
 import type {
   AttachmentSidebarRuntime,
   ChatDetailPanelContent,
 } from "./chat-sidebar-content-types.ts";
+
+registerChatComposerEnglish();
 
 export function createAttachmentDownload(
   content: () => ChatDetailPanelContent | null,

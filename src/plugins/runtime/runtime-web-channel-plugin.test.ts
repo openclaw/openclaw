@@ -13,8 +13,11 @@ import {
 } from "../../plugin-sdk/facade-loader.js";
 import { createPluginModuleLoader } from "../loader-module-runtime.js";
 import { adoptProcessPluginCache, createPluginCache, withPluginCache } from "../plugin-cache.js";
+import { bindPluginInstanceModuleLoader } from "../plugin-instance-module-loader.js";
 import { getPluginInstance } from "../plugin-instance-scope.js";
+import { PluginInstance } from "../plugin-instance.js";
 import { resolvePluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
+import { bindPluginRuntimeArtifactSelection } from "../plugin-runtime-artifact-binding.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRecord } from "../registry-types.js";
 import { resetPluginRuntimeStateForTest, stageActivePluginRegistry } from "../runtime.js";
@@ -195,6 +198,44 @@ it("shares registration state, retains captured lazy modules, and follows the ne
     "web channel plugin runtime is unavailable: missing plugin that provides light-runtime-api and runtime-api",
   );
   expect(resolvePluginMetadataSnapshot).not.toHaveBeenCalled();
+});
+
+it("loads the selected bundled web artifact inside a Gateway request", async () => {
+  const sourceRoot = path.join(root, "source");
+  const builtRoot = path.join(root, "built");
+  fs.mkdirSync(sourceRoot);
+  fs.mkdirSync(builtRoot);
+  writeFiles(builtRoot, {
+    "package.json": '{"type":"module"}',
+    "index.js": "export default {};",
+    "light-runtime-api.js": "export {};",
+    "runtime-api.js": 'export const monitorWebChannel = async () => "built";',
+  });
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({
+    id: "bundled-web",
+    rootDir: sourceRoot,
+    source: path.join(sourceRoot, "index.ts"),
+    origin: "bundled",
+  });
+  records.push(record);
+  registry.plugins.push(record);
+  const selected = { source: path.join(builtRoot, "index.js"), rootDir: builtRoot };
+  bindPluginRuntimeArtifactSelection(record, {
+    runtimeEntry: selected,
+  }).runtimeRegistrationComplete = true;
+  const instance = new PluginInstance(record.id, { record, registry });
+  const cache = createPluginCache();
+  withPluginCache(cache, () =>
+    bindPluginInstanceModuleLoader({ instance, origin: "bundled", ...selected }),
+  );
+  adoptProcessPluginCache(cache);
+  await expect(
+    withPluginRuntimeGatewayRequestScope(
+      { pluginRegistry: registry, isWebchatConnect: () => false },
+      () => monitorWebChannel(),
+    ),
+  ).resolves.toBe("built");
 });
 
 it.each(["disabled", "uninstalled"] as const)(

@@ -19,7 +19,7 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-it.skipIf(!connection)("ensures schema and paginates PostgreSQL chronology", ({ signal }) =>
+it.skipIf(!connection)("paginates PostgreSQL chronology with exact summaries", ({ signal }) =>
   fixture.run(async () => {
     const pathname = path.join(tempDirs.make("meeting-chronology-postgres-"), "state.sqlite");
     const url = resolveRuntimeWorkerUrl({

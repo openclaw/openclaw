@@ -22,15 +22,6 @@ import {
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-export const WITHOUT_OPENAI_ENV_AUTH = {
-  CODEX_API_KEY: undefined,
-  CODEX_HOME: "/__openclaw_models_list_test__/codex",
-  OPENAI_API_KEY: undefined,
-  OPENAI_BASE_URL: undefined,
-  OPENAI_OAUTH_TOKEN: undefined,
-  CHATGPT_OAUTH_TOKEN: undefined,
-} as const;
-
 export function withModelsListState<T>(
   run: Parameters<typeof withOpenClawTestState<T>>[1],
   options: Parameters<typeof withOpenClawTestState>[0] = {},

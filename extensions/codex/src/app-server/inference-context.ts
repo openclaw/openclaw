@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { embeddedAgentLog, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
@@ -9,6 +11,9 @@ const MAX_CONTEXT_BYTES = 256 * 1024;
 const MAX_ACTIVE_ROOTS = 64;
 const MAX_PREPARED_PREFIXES = 256;
 const MAX_RETAINED_REQUEST_BYTES = 32 * 1024 * 1024;
+export type CodexInferenceStreamParams = Parameters<
+  NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>
+>[0]["streamParams"];
 type PreparedPrefix = { text: string };
 const retained = defineCodexBuildState("openclaw.codexPreparedRequests", () => ({
   requests: new Map<PreparedPrefix, { body: JsonObject; bytes: number }>(),
@@ -65,6 +70,7 @@ type Registration = {
   text: string;
   forkPrefix?: JsonObject;
   denyToolCalls: boolean;
+  streamParams?: CodexInferenceStreamParams;
   controller: AbortController;
   assertCurrent: () => void;
   release: () => void;
@@ -75,6 +81,12 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
   const roots = new Map<string, Registration>();
   // Prepared bytes survive turn settlement, but confer no execution authority.
   const prefixes = new Map<string, PreparedPrefix>();
+  const waiters = new Set<{ admit: () => void; cancel: (error: unknown) => void }>();
+  const drain = () => {
+    while (roots.size < MAX_ACTIVE_ROOTS && waiters.size > 0) {
+      waiters.values().next().value?.admit();
+    }
+  };
   let closed = false;
   const assertOpen = () => {
     if (closed) {
@@ -83,7 +95,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
     assertClientCurrent();
   };
   return {
-    register(params: {
+    async register(params: {
       threadId: string;
       text: string;
       signal: AbortSignal;
@@ -91,6 +103,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       retainPrefix?: boolean;
       forkPrefix?: JsonObject;
       denyToolCalls?: boolean;
+      streamParams?: CodexInferenceStreamParams;
     }) {
       assertOpen();
       params.signal.throwIfAborted();
@@ -98,56 +111,93 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       if (Buffer.byteLength(params.text) > MAX_CONTEXT_BYTES) {
         throw new Error("Codex parent-local context exceeds the 256 KiB inference limit");
       }
-      if (!roots.has(params.threadId) && roots.size >= MAX_ACTIVE_ROOTS) {
-        throw new Error("Codex parent-local inference root limit reached");
-      }
-      if (
-        params.retainPrefix !== false &&
-        !prefixes.has(params.threadId) &&
-        prefixes.size >= MAX_PREPARED_PREFIXES
-      ) {
-        throw new Error("Codex prepared inference prefix limit reached; reconnect before retrying");
-      }
-      roots.get(params.threadId)?.release();
-      const controller = new AbortController();
-      const registration: Registration = {
-        generation: randomUUID(),
-        text: params.text,
-        forkPrefix: params.forkPrefix,
-        denyToolCalls: params.denyToolCalls === true,
-        controller,
-        assertCurrent: () => {
-          assertOpen();
-          controller.signal.throwIfAborted();
-          params.signal.throwIfAborted();
-          params.assertCurrent();
-          if (roots.get(params.threadId) !== registration) {
-            throw new Error("Codex parent-local inference generation was replaced");
-          }
-        },
-        release: () => {
-          if (roots.get(params.threadId) === registration) {
-            roots.delete(params.threadId);
-          }
-          registration.text = "";
-          controller.abort();
-          params.signal.removeEventListener("abort", registration.release);
-        },
-      };
-      roots.set(params.threadId, registration);
-      if (params.retainPrefix !== false) {
-        const prefix = prefixes.get(params.threadId);
-        if (prefix) {
-          prefix.text = params.text;
-        } else {
-          prefixes.set(params.threadId, { text: params.text });
+      const admit = () => {
+        assertOpen();
+        params.signal.throwIfAborted();
+        params.assertCurrent();
+        if (
+          params.retainPrefix !== false &&
+          !prefixes.has(params.threadId) &&
+          prefixes.size >= MAX_PREPARED_PREFIXES
+        ) {
+          throw new Error(
+            "Codex prepared inference prefix limit reached; reconnect before retrying",
+          );
         }
+        const controller = new AbortController();
+        const registration: Registration = {
+          generation: randomUUID(),
+          text: params.text,
+          forkPrefix: params.forkPrefix,
+          denyToolCalls: params.denyToolCalls === true,
+          streamParams: params.streamParams,
+          controller,
+          assertCurrent: () => {
+            assertOpen();
+            controller.signal.throwIfAborted();
+            params.signal.throwIfAborted();
+            params.assertCurrent();
+            if (roots.get(params.threadId) !== registration) {
+              throw new Error("Codex parent-local inference generation was replaced");
+            }
+          },
+          release: () => {
+            if (roots.get(params.threadId) === registration) {
+              roots.delete(params.threadId);
+              drain();
+            }
+            registration.text = "";
+            controller.abort();
+            params.signal.removeEventListener("abort", registration.release);
+          },
+        };
+        const previous = roots.get(params.threadId);
+        roots.set(params.threadId, registration);
+        previous?.release();
+        if (params.retainPrefix !== false) {
+          const prefix = prefixes.get(params.threadId);
+          if (prefix) {
+            prefix.text = params.text;
+          } else {
+            prefixes.set(params.threadId, { text: params.text });
+          }
+        }
+        params.signal.addEventListener("abort", registration.release, { once: true });
+        return { generation: registration.generation, release: registration.release };
+      };
+      if (roots.has(params.threadId) || roots.size < MAX_ACTIVE_ROOTS) {
+        return admit();
       }
-      params.signal.addEventListener("abort", registration.release, { once: true });
-      return { generation: registration.generation, release: registration.release };
+      embeddedAgentLog.debug("codex parent-local inference waiting for an active root", {
+        limit: MAX_ACTIVE_ROOTS,
+        waiting: waiters.size + 1,
+      });
+      return new Promise<ReturnType<typeof admit>>((resolve, reject) => {
+        const remove = () => {
+          waiters.delete(waiter);
+          params.signal.removeEventListener("abort", onAbort);
+        };
+        const waiter = {
+          admit: () => {
+            remove();
+            try {
+              resolve(admit());
+            } catch (error) {
+              reject(toErrorObject(error, "Codex inference root admission failed"));
+            }
+          },
+          cancel: (error: unknown) => {
+            remove();
+            reject(toErrorObject(error, "Codex inference root admission cancelled"));
+          },
+        };
+        const onAbort = () => waiter.cancel(params.signal.reason);
+        waiters.add(waiter);
+        params.signal.addEventListener("abort", onAbort, { once: true });
+      });
     },
     /** A retained prefix is data; only the new root's caller grants model authority. */
-    fork(params: {
+    async fork(params: {
       sourceThreadId: string;
       threadId: string;
       signal: AbortSignal;
@@ -280,6 +330,14 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
         if (registration.denyToolCalls) {
           preparedBody = { ...preparedBody, tool_choice: "none" };
         }
+        const { maxTokens, temperature } = registration.streamParams ?? {};
+        if (maxTokens !== undefined || temperature !== undefined) {
+          preparedBody = {
+            ...preparedBody,
+            ...(maxTokens !== undefined ? { max_output_tokens: maxTokens } : {}),
+            ...(temperature !== undefined ? { temperature } : {}),
+          };
+        }
         const retainedPrefix = metadata.threadId ? prefixes.get(metadata.threadId) : undefined;
         if (retainedPrefix) {
           retainRequest(retainedPrefix, preparedBody);
@@ -293,6 +351,9 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
     },
     close() {
       closed = true;
+      for (const waiter of waiters) {
+        waiter.cancel(new Error("Codex parent-local inference transport is closed"));
+      }
       for (const prefix of prefixes.values()) {
         forgetRequest(prefix);
       }

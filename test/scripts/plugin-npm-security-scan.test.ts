@@ -1,7 +1,12 @@
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { Header } from "tar";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { scanWithPublisherTooling } from "../../scripts/check-plugin-npm-security-scan.mts";
 import { scanPluginNpmArtifactSecurity } from "../../scripts/plugin-npm-security-scan.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 function tarEntry(path: string, value: string): Buffer {
   const content = Buffer.from(value, "utf8");
@@ -12,9 +17,9 @@ function tarEntry(path: string, value: string): Buffer {
   return Buffer.concat([header, content, padding]);
 }
 
-function scan(
+function packTarball(
   files: Record<string, string>,
-  packageName = "@openclaw/example",
+  packageName: string,
   manifest: Record<string, unknown> = {},
 ) {
   const entries = {
@@ -22,21 +27,24 @@ function scan(
     "package/openclaw.plugin.json": JSON.stringify({ id: "example" }),
     ...Object.fromEntries(Object.entries(files).map(([path, value]) => [`package/${path}`, value])),
   };
-  const tarball = gzipSync(
+  return gzipSync(
     Buffer.concat([
       ...Object.entries(entries).map(([path, value]) => tarEntry(path, value)),
       Buffer.alloc(1024),
     ]),
   );
+}
+
+function scan(
+  files: Record<string, string>,
+  packageName = "@openclaw/example",
+  manifest: Record<string, unknown> = {},
+) {
+  const tarball = packTarball(files, packageName, manifest);
   return scanPluginNpmArtifactSecurity({ packageName, packageVersion: "1.0.0", tarball });
 }
 
 const SPAWN_SOURCE = 'import { spawn } from "node:child_process";\nspawn("owned-child");\n';
-const BUNDLED_HELPER_EXEC_SOURCE = `
-import type { ChildProcess } from "node:child_process";
-const exec = compileMatcher();
-exec(value);
-`;
 
 function expectUnsafe(
   files: Record<string, string>,
@@ -93,9 +101,28 @@ it("classifies reviewed findings by their file layout", () => {
   expect(result.criticalFindingCount).toBe(1);
 });
 
-it("rejects changed bytes at the reviewed iMessage setup helper path", () => {
-  expectUnsafe(
-    { "dist/.setup/sanitize-outbound-3MLljgtY.mjs": BUNDLED_HELPER_EXEC_SOURCE },
-    "@openclaw/imessage",
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("rejects publisher-built packs whose reviewed finding bytes drifted", async () => {
+  // Stand-in publisher packer; the scan uses the real reviewed inventory.
+  const tooling = tempDirs.make("publisher-tooling-");
+  mkdirSync(join(tooling, "scripts"));
+  const packer = `cp "${tooling}/$(basename "$4").tgz" "$OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR/"`;
+  writeFileSync(join(tooling, "scripts/plugin-npm-publish.sh"), packer);
+  const name = "@openclaw/openshell-sandbox";
+  const files = { "dist/.setup/worker-cli-AbCd1234.mjs": SPAWN_SOURCE };
+  writeFileSync(join(tooling, "openshell.tgz"), packTarball(files, name));
+  const sha256 = createHash("sha256").update(SPAWN_SOURCE).digest("hex");
+  const plan = [name, "@openclaw/brave"].map((packageName) => ({
+    packageDir: packageName.includes("openshell") ? "openshell" : "brave",
+    packageName,
+    version: "1.0.0",
+  }));
+  // brave has no reviewed finding and no pack, so packing it would fail.
+  await expect(scanWithPublisherTooling(tooling, plan)).rejects.toThrow(
+    new RegExp(
+      `of 1 [\\s\\S]*${name}: unreviewed.*${sha256}.*worker-cli-<hash>[\\s\\S]*new hash`,
+      "u",
+    ),
   );
 });

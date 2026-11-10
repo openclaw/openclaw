@@ -96,3 +96,15 @@ export const hostedFeedDiffsEntry = {
     ],
   },
 };
+
+export function mockHostedOfficialCatalog(
+  mock: { mockResolvedValue(value: unknown): unknown },
+  entries: unknown[],
+) {
+  mock.mockResolvedValue({
+    source: "hosted",
+    entries,
+    feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
+    metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+  });
+}

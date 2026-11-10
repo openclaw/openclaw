@@ -2,7 +2,7 @@ import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-r
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
-import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badge-presentation.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -34,10 +34,20 @@ export function resolveChatPaneWorkspace(params: {
     worktree?.branch ||
     (remote || !workspace.root ? null : branches.get(workspace.root)?.value) ||
     null;
+  const defaultWorkspace =
+    !remote &&
+    !worktree &&
+    !session?.repository &&
+    !session?.repositoryWorkspaceId &&
+    !session?.deviceFolder &&
+    workspace.root === agentWorkspace?.trim();
   return {
     ...workspace,
+    label: defaultWorkspace ? null : workspace.label,
     branch,
-    canReveal: canRevealSessionWorkspace({ ...params, workspaceRoot: workspace.root }),
+    canReveal: Boolean(
+      workspace.root && params.methodAdvertised && params.hasAdminAccess && !remote,
+    ),
   };
 }
 
@@ -51,21 +61,6 @@ export function resolveChatPaneParentSession(
   }
   const parent = sessions.find((row) => areUiSessionKeysEquivalent(row.key, parentKey));
   return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
-}
-
-function canRevealSessionWorkspace(params: {
-  session: GatewaySessionRow | undefined;
-  workspaceRoot: string | null;
-  methodAdvertised: boolean;
-  hasAdminAccess: boolean;
-}): boolean {
-  return Boolean(
-    params.workspaceRoot &&
-    params.methodAdvertised &&
-    params.hasAdminAccess &&
-    !params.session?.execNode &&
-    !isCloudWorkerPlacementState(params.session?.placement?.state),
-  );
 }
 
 export function resolveChatPaneWorkspaceIcon(params: {

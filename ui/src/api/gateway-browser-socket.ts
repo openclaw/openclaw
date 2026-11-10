@@ -4,8 +4,22 @@ import {
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
+import { hasEmbedderTransport } from "../app/remote-ingress.ts";
 import { gatewayWebSocketTransportUrl, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
-import { formatUiError } from "../lib/format-error.ts";
+import { t } from "../i18n/index.ts";
+import { formatConnectionErrorSummary } from "../lib/connection-error.ts";
+import { listen } from "../lib/reactive/listener.ts";
+
+declare global {
+  /**
+   * Transport installed by an embedding loader (the OpenClaw ID claw loader's
+   * /_loader/inject.js). It returns a WebSocket-compatible socket for Gateway
+   * URLs it carries over its tunnel, or undefined to use the browser WebSocket.
+   */
+  interface Window {
+    ["__openclawTransport"]?: { createWebSocket(url: string): WebSocket | undefined };
+  }
+}
 
 const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
 export const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
@@ -13,7 +27,7 @@ export const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY
 export function formatBrowserWebSocketConstructorError(err: unknown, url: string): ErrorShape {
   const name = err && typeof err === "object" && "name" in err ? err.name : undefined;
   const browserErrorName = typeof name === "string" && name.trim() ? name : undefined;
-  const browserMessage = formatUiError(err);
+  const browserMessage = formatConnectionErrorSummary(err);
   const message = browserMessage.toLowerCase();
   const securityError =
     browserErrorName?.toLowerCase() === "securityerror" ||
@@ -27,11 +41,8 @@ export function formatBrowserWebSocketConstructorError(err: unknown, url: string
   return {
     code,
     message: securityError
-      ? "Browser refused the Gateway WebSocket for security reasons." +
-        (isPlaintextWs
-          ? " Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789."
-          : " Check the Gateway WebSocket URL and browser security policy.")
-      : `Could not create the Gateway WebSocket: ${browserMessage}`,
+      ? t(isPlaintextWs ? "runtimeErrors.socketInsecure" : "runtimeErrors.socketRefused")
+      : t("runtimeErrors.socketCreateFailed", { message: browserMessage }),
     details: { code, browserErrorName, browserMessage },
   };
 }
@@ -50,6 +61,7 @@ export async function probeGatewayReachability(url: string, signal: AbortSignal)
     const response = await fetch(probe, {
       cache: "no-store",
       credentials: "same-origin",
+      headers: { "X-OpenClaw-Reachability-Probe": "1" },
       redirect: "error",
       signal,
     });
@@ -73,9 +85,12 @@ export async function probeGatewayReachability(url: string, signal: AbortSignal)
 export function createBrowserGatewaySocket(
   url: string,
   handlers: GatewayProtocolSocketHandlers,
-  maxPayloadBytes?: () => number | undefined,
 ): GatewayProtocolSocket {
-  const socket = new WebSocket(gatewayWebSocketTransportUrl(url));
+  const transportUrl = gatewayWebSocketTransportUrl(url);
+  const socket =
+    (hasEmbedderTransport()
+      ? window["__openclawTransport"]?.createWebSocket(transportUrl)
+      : undefined) ?? new WebSocket(transportUrl);
   const listeners = new AbortController();
   const listenerOptions = { signal: listeners.signal };
   let opening = true;
@@ -97,7 +112,8 @@ export function createBrowserGatewaySocket(
     handlers.close(code, reason);
   };
 
-  socket.addEventListener(
+  listen(
+    socket,
     "open",
     () => {
       finishOpening();
@@ -105,17 +121,10 @@ export function createBrowserGatewaySocket(
     },
     listenerOptions,
   );
-  socket.addEventListener(
-    "message",
-    (event) => handlers.message(String(event.data ?? "")),
-    listenerOptions,
-  );
-  socket.addEventListener(
-    "close",
-    (event) => finishClose(event.code, event.reason),
-    listenerOptions,
-  );
-  socket.addEventListener(
+  listen(socket, "message", (event) => handlers.message(String(event.data ?? "")), listenerOptions);
+  listen(socket, "close", (event) => finishClose(event.code, event.reason), listenerOptions);
+  listen(
+    socket,
     "error",
     () => {
       finishOpening();
@@ -132,7 +141,9 @@ export function createBrowserGatewaySocket(
       return;
     }
     opening = false;
-    const reason = `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`;
+    const reason = t("runtimeErrors.socketTimeout", {
+      milliseconds: String(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS),
+    });
     try {
       handlers.error(new Error(reason));
     } finally {
@@ -143,13 +154,7 @@ export function createBrowserGatewaySocket(
 
   return {
     isOpen: () => !listeners.signal.aborted && socket.readyState === WebSocket.OPEN,
-    send: (data) => {
-      const limit = maxPayloadBytes?.();
-      if (limit !== undefined && new TextEncoder().encode(data).byteLength > limit) {
-        throw new GatewayPayloadLimitError();
-      }
-      socket.send(data);
-    },
+    send: (data) => socket.send(data),
     close: (code, reason) => {
       if (listeners.signal.aborted) {
         return;
@@ -162,13 +167,4 @@ export function createBrowserGatewaySocket(
       finishClose(code ?? 1000, reason ?? "");
     },
   };
-}
-
-export class GatewayPayloadLimitError extends Error {
-  constructor() {
-    super(
-      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-    );
-    this.name = "GatewayPayloadLimitError";
-  }
 }

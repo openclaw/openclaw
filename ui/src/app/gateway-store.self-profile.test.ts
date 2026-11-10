@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { UserProfile } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
 import { installOutboxBrowserStorage } from "../pages/chat/outbox-browser.test-support.ts";
@@ -64,6 +64,27 @@ afterEach(() => {
 });
 
 describe("Gateway self-profile ownership", () => {
+  it("keeps verified GitHub names consistent after loading the editable self profile", async () => {
+    const person: UserProfile = {
+      ...profile,
+      displayName: null,
+      githubIdentity: {
+        login: "octocat",
+        profileUrl: "https://github.com/octocat",
+        avatarUrl: "https://avatars.githubusercontent.com/u/42?v=4",
+      },
+    };
+    gateway.start();
+    current().request.mockResolvedValue({ profile: person });
+    current().testOptions.onHello?.(hello());
+    expect(await gateway.loadSelfProfile()).toEqual(person);
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      name: "octocat",
+      identity: { type: "profile", id: person.id },
+    });
+    expect(person.displayName).toBeNull();
+  });
+
   it.each([false, true])(
     "retains only resolved profileless identity through same-connection drops (retry: %s)",
     async (willRetry) => {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginBlobEntry, PluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
@@ -38,6 +39,20 @@ import {
   createMemoryWikiSourceSyncStateStore,
 } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
+
+export function observeKeyedQueueEnqueue(onEnqueue: () => void) {
+  const originalEnqueue = Object.getOwnPropertyDescriptor(KeyedAsyncQueue.prototype, "enqueue")
+    ?.value as KeyedAsyncQueue["enqueue"];
+  return vi.spyOn(KeyedAsyncQueue.prototype, "enqueue").mockImplementation(function (
+    this: KeyedAsyncQueue,
+    key,
+    task,
+    hooks,
+  ) {
+    onEnqueue();
+    return originalEnqueue.call(this, key, task, hooks);
+  });
+}
 
 export function createCompiledDigestPage(
   overrides: Partial<MemoryWikiCompiledDigestPage> = {},
@@ -80,7 +95,11 @@ export function createChatGptConversation(user: string, assistant: string) {
 }
 
 export function createCompiledSnapshot(
-  digest: MemoryWikiCompiledCacheSnapshot["digest"],
+  digest: MemoryWikiCompiledCacheSnapshot["digest"] = {
+    claimCount: 0,
+    contradictionCount: 0,
+    pages: [],
+  },
 ): MemoryWikiCompiledCacheSnapshot {
   return {
     digest,

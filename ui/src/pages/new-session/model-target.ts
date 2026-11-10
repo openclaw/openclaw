@@ -25,17 +25,14 @@ import {
   type ChatThinkingTarget,
 } from "../../lib/chat/thinking.ts";
 import type { ChatModelCatalogState } from "../../lib/model-catalog-store.ts";
-import {
-  resolveModelRuntimeEntry,
-  type ModelRuntimeEntry,
-} from "../../lib/model-runtime-choice.ts";
+import { resolveModelRuntimeEntry } from "../../lib/model-runtime-choice.ts";
 import { draftCloudProfileSupportsExecutionMode, type DraftCloudProfile } from "./discovery.ts";
 
 registerNewSessionSetupEnglish();
 registerModelControlsEnglish();
 
 type DraftModelTarget = {
-  entry?: ModelRuntimeEntry;
+  entry?: ModelCatalogEntry;
   model: string;
   provider: string | null;
 };
@@ -69,6 +66,22 @@ export function resolveDraftDefaultModelTarget(params: {
     policy?.restricted || agent?.model?.primary ? undefined : defaults?.modelProvider,
     catalog,
   );
+}
+
+export function resolveDraftAccessProgram(
+  params: Parameters<typeof resolveDraftDefaultModelTarget>[0] & {
+    model: string;
+    agentRuntime?: string;
+  },
+) {
+  const selected = resolveDraftModelTarget(
+    params.model,
+    undefined,
+    params.catalog,
+    params.agentRuntime,
+  );
+  return (selected?.entry ?? resolveDraftDefaultModelTarget(params)?.entry)
+    ?.cyberAccessProgramDefault;
 }
 
 export function resolveDraftModelControls(params: {
@@ -114,6 +127,7 @@ export function resolveDraftModelControls(params: {
   };
   return {
     defaultTarget,
+    accessProgramDefault: entry?.cyberAccessProgramDefault,
     agentDefaultModel,
     modelCatalogState,
     contextWindowTarget:
@@ -194,12 +208,9 @@ export function resolveDraftModelTarget(
   };
 }
 
-function resolveDraftModelUnavailableReason(params: {
-  model: string;
-  agentRuntime?: string;
-  metadata: NewSessionModelMetadata;
-  agent?: GatewayAgentRow;
-}): ModelRuntimeEntry["unavailableReason"] {
+function resolveDraftModelUnavailableReason(
+  params: Parameters<typeof resolveDraftModelSelectionBlockedReason>[0],
+): ModelCatalogEntry["unavailableReason"] {
   const { metadata, agent } = params;
   if (!metadata.hasSnapshot || metadata.status === "offline") {
     return undefined;
@@ -304,13 +315,13 @@ export function resolveDraftAgentRuntime(params: {
   catalog: ModelCatalogEntry[];
   modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
   retired?: boolean;
-}): ModelRuntimeEntry["agentRuntime"] {
+}): ModelCatalogEntry["agentRuntime"] {
   if (params.retired) {
     return undefined;
   }
   const policy = params.modelSelectionPolicy;
   const model = params.model || (policy?.restricted ? (policy.defaultModel ?? "") : "");
-  let runtime: ModelRuntimeEntry["agentRuntime"];
+  let runtime: ModelCatalogEntry["agentRuntime"];
   if (model) {
     // Explicit models without runtime metadata cannot borrow their agent's default runtime.
     runtime = resolveDraftModelTarget(model, undefined, params.catalog, params.agentRuntime)?.entry

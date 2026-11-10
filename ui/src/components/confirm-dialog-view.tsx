@@ -7,34 +7,17 @@ import type {
   ConfirmDialogChoiceOptions,
   ConfirmDialogOptions,
 } from "./confirm-dialog-types.ts";
-import { withPromiseModalHost } from "./promise-modal-host.ts";
+import { Checkbox } from "./solid/checkbox.tsx";
+import { DialogHeader } from "./solid/dialog-header.tsx";
 
-type ConfirmDialogViewOptions = ConfirmDialogOptions & Partial<ConfirmDialogChoiceOptions>;
+export type ConfirmDialogViewOptions = ConfirmDialogOptions & Partial<ConfirmDialogChoiceOptions>;
 
-let confirmationActive = false;
-
-export function presentConfirmDialog(
-  options: ConfirmDialogViewOptions,
-): Promise<ConfirmDialogChoice> {
-  if (confirmationActive) {
-    return Promise.resolve(null);
-  }
-  confirmationActive = true;
-  return withPromiseModalHost<ConfirmDialogChoice>(
-    { signal: options.signal, value: null },
-    ({ render, finish }) => render(() => <ConfirmDialogView options={options} finish={finish} />),
-  ).finally(() => {
-    confirmationActive = false;
-  });
-}
-
-function ConfirmDialogView(props: {
+export function ConfirmDialogView(props: {
   options: ConfirmDialogViewOptions;
   finish(value: ConfirmDialogChoice): void;
 }) {
   // A confirmation keeps the request it opened for until it settles.
   const initialOptions = untrack(() => props.options);
-  const title = () => initialOptions.title ?? t("common.confirm");
   let skipRequested = false;
   let cancelButton!: HTMLButtonElement;
   let actions!: HTMLElement;
@@ -108,7 +91,7 @@ function ConfirmDialogView(props: {
           props.finish("confirm");
         }}
       >
-        {initialOptions.confirmLabel ?? t("common.confirm")}
+        {initialOptions.confirmLabel}
       </button>
     </>
   );
@@ -116,48 +99,49 @@ function ConfirmDialogView(props: {
   return (
     <openclaw-modal-dialog
       prop:initialFocus={() => cancelButton}
-      label={title()}
+      label={initialOptions.title}
       description={initialOptions.message}
       onModal-cancel={() => props.finish(null)}
     >
-      <div class="exec-approval-card">
-        <div class="exec-approval-header">
-          <div>
-            <div class="exec-approval-title">{title()}</div>
-            <div class="exec-approval-sub" style={{ "white-space": "pre-line" }}>
-              {initialOptions.message}
-            </div>
+      <div class="oc-dialog confirm-dialog">
+        <DialogHeader
+          title={initialOptions.title}
+          description={<p>{initialOptions.message}</p>}
+          onClose={() => props.finish(null)}
+        />
+        {initialOptions.details ||
+        initialOptions.requiredAcknowledgement ||
+        initialOptions.skipPreference ? (
+          <div class="oc-dialog__body">
+            {initialOptions.details ? (
+              <div class="exec-approval-command mono">{initialOptions.details}</div>
+            ) : undefined}
+            {initialOptions.requiredAcknowledgement ? (
+              <label class="field checkbox">
+                <Checkbox
+                  checked={acknowledged()}
+                  onChange={(event) => setAcknowledged(event.currentTarget.checked)}
+                />
+                <span>{initialOptions.requiredAcknowledgement}</span>
+              </label>
+            ) : undefined}
+            {initialOptions.skipPreference && !initialOptions.requiredAcknowledgement ? (
+              <label class="field checkbox exec-approval-skip">
+                <Checkbox
+                  onChange={(event) => {
+                    skipRequested = event.currentTarget.checked;
+                  }}
+                />
+                <span>{initialOptions.skipPreference.label ?? t("common.dontAskAgain")}</span>
+              </label>
+            ) : undefined}
           </div>
-        </div>
-        {initialOptions.details ? (
-          <div class="exec-approval-command mono">{initialOptions.details}</div>
-        ) : undefined}
-        {initialOptions.requiredAcknowledgement ? (
-          <label class="field checkbox">
-            <input
-              type="checkbox"
-              checked={acknowledged()}
-              onChange={(event) => setAcknowledged(event.currentTarget.checked)}
-            />
-            <span>{initialOptions.requiredAcknowledgement}</span>
-          </label>
-        ) : undefined}
-        {initialOptions.skipPreference && !initialOptions.requiredAcknowledgement ? (
-          <label class="field checkbox exec-approval-skip">
-            <input
-              type="checkbox"
-              onChange={(event) => {
-                skipRequested = event.currentTarget.checked;
-              }}
-            />
-            <span>{t("common.dontAskAgain")}</span>
-          </label>
         ) : undefined}
         <openclaw-modal-actions
           ref={(element) => {
             actions = element;
           }}
-          class={["exec-approval-actions", { "confirm-dialog-actions--stacked": mobileChoices() }]}
+          class={["oc-dialog__footer", { "confirm-dialog-actions--stacked": mobileChoices() }]}
         >
           {initialOptions.groupChoicesOnMobile ? (
             <For each={mobileChoices() ? ["choices", "cancel"] : ["cancel", "choices"]}>

@@ -8,14 +8,15 @@ or publication work. Treat backport discovery and preparation as an ability of
 this release skill, not as a separate release workflow.
 
 The backport flow covers mainline inventory, private-security reconciliation,
-approval, the staging PR, and proof handoff. After it lands, use the shared
+approval, individual direct backports, and proof handoff. After the canonical
+branch contains the approved commits, use the shared
 release pipeline with the extended-stable track inputs below.
 
 Extended-stable requires a visible **SDK/config backport warning** whenever a
 candidate changes the public plugin SDK or a config/default/schema/migration
 surface. Prefer an adaptation that uses the SDK and configuration already
 shipped on that line. If a contract change remains necessary, record its
-published impact and the maintainer decision in the ledger and staging PR.
+published impact and the maintainer decision in the release ledger.
 Read `extended-stable-backports.md`; a clean cherry-pick, green
 release checks, or a regenerated baseline does not by itself explain the
 maintenance risk.
@@ -166,8 +167,11 @@ core recovery inputs:
   above `.33`; this is a core input, not a plugin input.
 - `plugin_npm_run_id=<successful-plugin-publication-run-id>` from this recovery.
 - Preserve `preflight_run_id`, `full_release_validation_run_id`, and
-  `full_release_validation_run_attempt` for the unchanged candidate. Current
-  qualified manifests supply both run IDs from the same successful validation.
+  `full_release_validation_run_attempt` for the unchanged candidate. For an
+  FRV-qualified candidate, both run-ID inputs are the **FRV parent run ID**;
+  never use the `artifact:npm` child run ID. The attempt is the exact
+  successful FRV parent attempt. Current qualified manifests supply these
+  values from the same successful validation.
 
 Core verifies the plugin workflow's identity, trusted-main ancestry, and exact
 candidate binding. Record both workflows' actual tooling SHAs and run IDs in
