@@ -2,7 +2,6 @@
 // and the supervised tunnel child. Imported only after the Labs switch is on.
 import { fork } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import type { Server as HttpServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,7 +62,8 @@ export function tunnelKeyPath(stateDir: string): string {
 
 const STAGE_TIMEOUT_MS = 30_000;
 
-// Runs one tunnel child in stage mode with `message`; resolves with its answer.
+// Runs one tunnel child in stage mode with `message`; resolves with its answer. A child that
+// cannot start, cannot be reached or answers nothing in time fails the step, never the Gateway.
 async function askStageChild(message: TunnelStageMessage): Promise<string | null> {
   const entry = resolveRuntimeProcessEntrypointUrl("openclawIdTunnel");
   const child = fork(fileURLToPath(entry), [TUNNEL_STAGE_ARG], {
@@ -71,28 +71,35 @@ async function askStageChild(message: TunnelStageMessage): Promise<string | null
     serialization: "advanced",
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
+  const gone = new Promise<void>((resolve) => {
+    child.once("exit", () => resolve());
+    // A child that never spawned emits only `error`.
+    child.once("error", () => resolve());
+  });
+  const answer = new Promise<string | null | undefined>((resolve) => {
+    child.on("message", (raw) => {
+      const reply = parseTunnelToGatewayMessage(raw);
+      if (reply?.type === "staged") {
+        resolve(reply.endpointKey);
+      }
+    });
+    void gone.then(() => resolve(undefined));
+  });
   const timer = setTimeout(() => child.kill("SIGKILL"), STAGE_TIMEOUT_MS);
   try {
-    const answer = new Promise<string | null | undefined>((resolve) => {
-      child.on("message", (raw) => {
-        const reply = parseTunnelToGatewayMessage(raw);
-        if (reply?.type === "staged") {
-          resolve(reply.endpointKey);
-        }
-      });
-      child.once("exit", () => resolve(undefined));
+    child.send(message, (error) => {
+      if (error) {
+        child.kill("SIGKILL");
+      }
     });
-    child.send(message);
     const endpointKey = await answer;
     if (endpointKey === undefined) {
       throw new Error(`the tunnel child could not ${message.type} the next endpoint key`);
     }
     return endpointKey;
   } finally {
+    await gone;
     clearTimeout(timer);
-    if (child.exitCode === null && child.signalCode === null) {
-      await once(child, "exit");
-    }
   }
 }
 

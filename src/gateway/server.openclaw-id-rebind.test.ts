@@ -145,9 +145,13 @@ describe.skipIf(!hasBinding)("OpenClaw ID re-bind", () => {
         throw new Error("kit refused");
       }
       recorded.length = 0;
-      expect(
-        await call("openclawId.authority", { action: "rebind_commit", binding: signed.binding }),
-      ).toMatchObject({ ok: true, bindingSeq: 2 });
+      // A cancel racing the commit runs after it and cannot take the keys it bound.
+      const [committed, cancelled] = await Promise.all([
+        call("openclawId.authority", { action: "rebind_commit", binding: signed.binding }),
+        call("openclawId.authority", { action: "rebind_cancel" }),
+      ]);
+      expect(committed).toMatchObject({ ok: true, bindingSeq: 2 });
+      expect(cancelled).toMatchObject({ ok: true });
 
       // Remote access is back on the new keys, both promoted from the staged files.
       await expect
@@ -176,6 +180,9 @@ describe.skipIf(!hasBinding)("OpenClaw ID re-bind", () => {
       await expect
         .poll(() => recorded.find((r) => r.body?.payload?.event === "rebind"), { timeout: 10_000 })
         .toMatchObject({ keyid: prep.k_gw, body: { to: "owners", payload: { ref: "2" } } });
+      // Publishing again does not mail it again.
+      await call("openclawId.authority", { action: "publish" });
+      expect(recorded.filter((r) => r.body?.payload?.event === "rebind")).toHaveLength(1);
 
       // Owner devices and members are untouched.
       const stored = await readStoredClaw();
