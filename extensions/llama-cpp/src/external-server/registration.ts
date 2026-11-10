@@ -29,7 +29,7 @@ export function createLlamaServerAuthMethod(server: LlamaServerIdentity): Provid
     run: async (ctx) => {
       if (app) {
         await ctx.prompter.note(
-          "Get Llama at https://llama.app/, choose and download a model in the app, and enable its API server. Then connect to an address this Gateway can reach. OpenClaw does not install the app or manage its model cache.",
+          "Get Llama at https://llama.app/, choose and download a model in the app, and keep the app open. Then connect to an address this Gateway can reach. OpenClaw does not install the app or manage its model cache.",
           "Connect Llama",
         );
       }

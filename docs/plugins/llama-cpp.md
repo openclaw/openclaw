@@ -59,7 +59,7 @@ Llama or replaces a configured default.
 
 Choose **Llama** in provider setup. On a fresh machine, first get the app from
 [llama.app](https://llama.app/), choose and download a model inside Llama, and
-start its API server. OpenClaw's setup explains this handoff; it does not install
+keep the app open. OpenClaw's setup explains this handoff; it does not install
 the app, choose a download on your behalf, or adopt the app's cache or process.
 If the server is unavailable or has no usable models, setup stays incomplete
 and names what to do before retrying.

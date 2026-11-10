@@ -47,7 +47,7 @@ function describeDiscoveryFailure(
   const nextStep =
     server.id === LLAMA_CPP_SERVER.id
       ? ""
-      : " Open https://llama.app/, start its API server on a reachable address, then retry.";
+      : " Open the Llama app (https://llama.app/), then retry.";
   switch (result.kind) {
     case "unreachable":
       return `${label} could not be reached at ${result.endpoint.origin}.${nextStep}`;
