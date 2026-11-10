@@ -16,6 +16,8 @@ import {
   PlatformMessageNotDispatchedError,
 } from "../../../infra/outbound/deliver-types.js";
 import { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
+import { createTestInstance } from "../../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
@@ -370,7 +372,8 @@ const committedSessionSpawnEvidence = {
   acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
 } as const;
 
-function registerDirectTargetTestChannel(channelId: string): void {
+function registerDirectTargetTestChannel(channelId: string) {
+  const instance = createTestInstance(channelId);
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -382,13 +385,15 @@ function registerDirectTargetTestChannel(channelId: string): void {
             capabilities: { chatTypes: ["direct", "channel"] },
           }),
           messaging: {
-            inferTargetChatType: ({ to }: { to: string }) =>
+            inferTargetChatType: instance.wrap(({ to }: { to: string }) =>
               to.startsWith("channel:") || to.startsWith("thread:") ? "channel" : "direct",
+            ),
           },
         },
       },
     ]),
   );
+  return instance;
 }
 
 function expectGatewayAgentParams(
@@ -1860,3 +1865,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("routes Telegram completion after the producer plugin scope closes", async () => {
+  const instance = registerDirectTargetTestChannel("telegram");
+  const scope = new PluginInvocationScope(createTestRegistry(), [instance]);
+  const resume = createDeferredCore();
+  const delivery = scope.run(async () => {
+    await resume.promise;
+    return runDelivery("telegram", { internalEvents: identifiedCompletion() });
+  });
+  scope.release();
+  resume.resolve();
+  const { result, sendMessage } = await delivery;
+  expect(result).toMatchObject({ delivered: true, path: "direct" });
+  expect(sendMessage).toHaveBeenCalledOnce();
+});

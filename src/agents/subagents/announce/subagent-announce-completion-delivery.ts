@@ -11,7 +11,6 @@ import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
-import { pluginInvocationContext } from "../../../plugins/plugin-instance-scope.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
@@ -423,53 +422,50 @@ export async function deliverCompletionDirect(params: {
     if (params.signal?.aborted) {
       return { delivered: false, path: "none" };
     }
-    // Completion delivery outlives the producing turn and its plugin invocation scope.
-    const sendResult = await pluginInvocationContext.exit(() =>
-      sendSubagentAnnounceMessage({
-        cfg: params.cfg,
-        channel: params.deliveryTarget.channel,
-        to: params.deliveryTarget.to,
-        accountId: params.deliveryTarget.accountId,
-        threadId: params.deliveryTarget.threadId,
-        requesterSessionKey: params.requesterSessionKey,
-        // The child produced this result; the requester key scopes policy only.
-        session: { agentId, policyKey: params.requesterSessionKey },
-        agentId,
-        conversationType: "direct",
-        content: content ?? "",
-        ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
-        ...(audioAsVoice ? { asVoice: true } : {}),
-        idempotencyKey,
-        skipQueue: true,
-        abortSignal: params.signal,
-        onPlatformSendDispatch: async () => assertDeliveryCurrent(),
-        assertDirectAdapterHandoff: assertDeliveryCurrent,
-        onDeliveredPayload: () => {
-          if (committedDelivery) {
-            return;
+    const sendResult = await sendSubagentAnnounceMessage({
+      cfg: params.cfg,
+      channel: params.deliveryTarget.channel,
+      to: params.deliveryTarget.to,
+      accountId: params.deliveryTarget.accountId,
+      threadId: params.deliveryTarget.threadId,
+      requesterSessionKey: params.requesterSessionKey,
+      // The child produced this result; the requester key scopes policy only.
+      session: { agentId, policyKey: params.requesterSessionKey },
+      agentId,
+      conversationType: "direct",
+      content: content ?? "",
+      ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+      ...(audioAsVoice ? { asVoice: true } : {}),
+      idempotencyKey,
+      skipQueue: true,
+      abortSignal: params.signal,
+      onPlatformSendDispatch: async () => assertDeliveryCurrent(),
+      assertDirectAdapterHandoff: assertDeliveryCurrent,
+      onDeliveredPayload: () => {
+        if (committedDelivery) {
+          return;
+        }
+        // This single payload must finish every chunk and attachment before settling,
+        // still ahead of potentially blocked conversation history.
+        committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
+        deliveryResultReported = Promise.resolve(
+          params.onDeliveryResult?.(committedDelivery),
+        ).catch(() => {
+          // Bookkeeping failure cannot make a fully sent result retryable.
+        });
+      },
+      // Pin history to the requester generation that spawned the child.
+      ...(params.requesterSessionId
+        ? {
+            transcriptExpectedGeneration: {
+              sessionKey: params.requesterSessionKey,
+              sessionId: params.requesterSessionId,
+              lifecycleRevision: params.requesterLifecycleRevision,
+            },
           }
-          // This single payload must finish every chunk and attachment before settling,
-          // still ahead of potentially blocked conversation history.
-          committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
-          deliveryResultReported = Promise.resolve(
-            params.onDeliveryResult?.(committedDelivery),
-          ).catch(() => {
-            // Bookkeeping failure cannot make a fully sent result retryable.
-          });
-        },
-        // Pin history to the requester generation that spawned the child.
-        ...(params.requesterSessionId
-          ? {
-              transcriptExpectedGeneration: {
-                sessionKey: params.requesterSessionKey,
-                sessionId: params.requesterSessionId,
-                lifecycleRevision: params.requesterLifecycleRevision,
-              },
-            }
-          : {}),
-        transcriptProvenance: { kind: "subagent-completion" },
-      }),
-    );
+        : {}),
+      transcriptProvenance: { kind: "subagent-completion" },
+    });
     if (committedDelivery) {
       return committedDelivery;
     }

@@ -2,6 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
+import { pluginInvocationContext } from "../../../plugins/plugin-instance-scope.js";
 import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
@@ -76,10 +77,13 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
-  return withSubagentRequesterDelivery(
-    params.targetRequesterSessionKey,
-    params,
-    sendSubagentAnnounceDirectlyBound,
+  // Completed turns release their plugin scope before the host routes announcements.
+  return pluginInvocationContext.exit(() =>
+    withSubagentRequesterDelivery(
+      params.targetRequesterSessionKey,
+      params,
+      sendSubagentAnnounceDirectlyBound,
+    ),
   );
 }
 
