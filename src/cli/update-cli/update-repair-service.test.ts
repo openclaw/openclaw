@@ -347,7 +347,8 @@ it.each(["thrown", "stopped"])(
       });
     }
     await repair();
-    expect(listUpdateRuns()[0]?.status).toBe("failed");
+    // Repair maintenance finished; the unverified Gateway is reported as its next step.
+    expect(listUpdateRuns()[0]?.status).toBe("succeeded");
     vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped" });
     await repair();
     expect(service.start).not.toHaveBeenCalled();
@@ -384,7 +385,7 @@ it("does not start the Gateway while a helper still owns its installation", asyn
 });
 
 it.each(["start failure", "unverified health"])(
-  "reports %s with the deep status command",
+  "completes repair with a %s warning naming the recovery commands",
   async (reason) => {
     seed(true);
     if (reason === "start failure") {
@@ -398,13 +399,22 @@ it.each(["start failure", "unverified health"])(
       staleGatewayPids: [],
     });
     await repair();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw gateway status --deep"),
+    expect(listUpdateRuns()[0]?.status).toBe("succeeded");
+    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "warning",
+        restart: false,
+        postUpdate: expect.objectContaining({
+          doctor: expect.objectContaining({
+            warnings: [
+              expect.stringMatching(
+                /Gateway recovery after update repair was not verified.*openclaw gateway start.*openclaw gateway status --deep/,
+              ),
+            ],
+          }),
+        }),
+      }),
     );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw gateway start"),
-    );
-    expect(listUpdateRuns()[0]?.status).toBe("failed");
   },
 );
 
@@ -431,7 +441,8 @@ it.each([
       });
     }
     await repair();
-    expect(listUpdateRuns()[0]?.status).toBe("failed");
+    // Repair maintenance finished; the unverified Gateway is reported as its next step.
+    expect(listUpdateRuns()[0]?.status).toBe("succeeded");
     if (status === "running") {
       vi.mocked(service.readRuntime).mockResolvedValue({ status: "running", pid: 4242 });
     } else {
