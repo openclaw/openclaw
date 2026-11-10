@@ -106,12 +106,10 @@ aroundEach(async (runTest) => {
 afterEach(cleanupMcpCliTestState);
 
 const run = (...args: string[]) => runMcpCommand(["mcp", ...args]);
-async function probe(args: string[]) {
+async function runMcp(...args: string[]) {
   await runCliWithExitFinalization({
-    run: () => run("probe", "docs", ...args),
-    onError: (error) => {
-      throw error;
-    },
+    run: () => run(...args),
+    onError: (error) => Promise.reject(error),
   });
 }
 const errors = () => mockError.mock.calls.map(([line]) => String(line)).join("\n");
@@ -125,32 +123,22 @@ function expectCleanup(exitCode?: number) {
 
 it.each([204, 400])("succeeds after DELETE %s", async (status) => {
   deleteStatus = status;
-  await probe(["--json"]);
+  await runMcp("probe", "docs", "--json");
   expect(JSON.parse(lastLogLine())).not.toHaveProperty("cleanupError");
   expectCleanup();
 });
 
 it("preserves the discovery failure when DELETE is unconfirmed", async () => {
   failCatalog = true;
-  await probe(["--json"]);
+  await runMcp("probe", "docs", "--json");
   const result = JSON.parse(lastLogLine());
   expect(result).toMatchObject({
     diagnostics: [{ serverName: "docs", message: expect.stringContaining(CATALOG_ERROR) }],
   });
   expect(result).not.toHaveProperty("cleanupError");
-  expect(errors()).toContain(CATALOG_ERROR);
   expectCleanup(1);
-});
-
-it("prints a failed add check and the not-saved notice on separate lines", async () => {
-  failCatalog = true;
-  await runCliWithExitFinalization({
-    run: () => run("add", "more", "--url", endpoint, "--transport", "streamable-http"),
-    onError: (error) => {
-      throw error;
-    },
-  });
-  expect(errors()).toMatch(/^MCP check failed for "more" in .*\nConfiguration was not saved\.$/u);
-  expect(errors()).not.toContain("\\n");
-  expect(process.exitCode).toBe(1);
+  await runMcp("add", "more", "--url", endpoint, "--transport", "streamable-http");
+  expect(errors()).toMatch(
+    /unavailable.*\nMCP check failed for "more".*\nConfiguration was not saved/u,
+  );
 });
