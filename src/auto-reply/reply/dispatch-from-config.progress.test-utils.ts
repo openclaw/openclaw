@@ -100,7 +100,7 @@ describe("dispatchReplyFromConfig", () => {
     ]) {
       setNoAbort();
       sessionStoreMocks.currentEntry = {
-        sessionId: "session",
+        sessionId: `preparation-${denied}-${heartbeat}`,
         updatedAt: 0,
         sendPolicy: denied ? "deny" : "allow",
       };
