@@ -2,6 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { assert, expect, it } from "vitest";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { applyTemplateAddPlanStateless } from "../templates/add-stateless.js";
 import { buildGatewayTemplateAddPlan } from "../templates/gateway-add-plan.js";
 import { bindTemplatePluginInstallConsent } from "../templates/gateway-plugin-consent.js";
@@ -23,14 +24,11 @@ it("builds a plugin directory and installs the reviewed artifact through native 
     const project = fixture.statePath("project");
     const plugin = path.join(project, "plugins", "probe");
     await mkdir(plugin, { recursive: true });
-    await writeFile(
-      path.join(project, "package.json"),
-      JSON.stringify({
-        name: "@fixture/bundled-plugin-template",
-        version: "1.0.0",
-        openclaw: { template: "CLAW.md" },
-      }),
-    );
+    writeJsonFile(path.join(project, "package.json"), {
+      name: "@fixture/bundled-plugin-template",
+      version: "1.0.0",
+      openclaw: { template: "CLAW.md" },
+    });
     await writeFile(
       path.join(project, "CLAW.md"),
       `---\n${JSON.stringify({
@@ -39,22 +37,16 @@ it("builds a plugin directory and installs the reviewed artifact through native 
         plugins: [{ path: "plugins/probe" }],
       })}\n---\nUse the bundled probe.\n`,
     );
-    await writeFile(
-      path.join(plugin, "package.json"),
-      JSON.stringify({
-        name: "@fixture/template-directory-probe",
-        version: "1.0.0",
-        type: "module",
-        openclaw: { extensions: ["./index.js"] },
-      }),
-    );
-    await writeFile(
-      path.join(plugin, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
-    );
+    writeJsonFile(path.join(plugin, "package.json"), {
+      name: "@fixture/template-directory-probe",
+      version: "1.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    writeJsonFile(path.join(plugin, "openclaw.plugin.json"), {
+      id: pluginId,
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    });
     await writeFile(path.join(plugin, "index.js"), pluginCode);
     const built = await buildTemplateProject(project, fixture.statePath("template.tgz"));
     await writeFile(path.join(plugin, "index.js"), "Changed after building.\n");
