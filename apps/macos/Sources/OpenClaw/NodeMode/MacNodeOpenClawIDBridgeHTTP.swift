@@ -187,32 +187,60 @@ enum MacNodeOpenClawIDBridgeHTTP {
     {
         let head = try await stream.responseHead()
         let response = try Self.responseHead(status: head.status, headers: head.headers, method: method)
-        try await io.write(response)
-        let noBody = method == "HEAD" || [204, 304].contains(head.status)
+        try await io.write(response.bytes)
+        var remaining = response.length
         while let bytes = try await stream.nextBody() {
-            if !noBody, !bytes.isEmpty {
-                try await io.write(Data("\(String(bytes.count, radix: 16))\r\n".utf8) + bytes + Data([13, 10]))
+            if !response.noBody, !bytes.isEmpty {
+                if let count = remaining {
+                    guard bytes.count <= count else { throw MacNodeOpenClawIDBridgeError.malformedRequest }
+                    try await io.write(bytes)
+                    remaining = count - bytes.count
+                } else {
+                    try await io.write(Data("\(String(bytes.count, radix: 16))\r\n".utf8) + bytes + Data([13, 10]))
+                }
             }
         }
-        if !noBody { try await io.write(Data("0\r\n\r\n".utf8)) }
+        if !response.noBody {
+            if let remaining {
+                guard remaining == 0 else { throw MacNodeOpenClawIDBridgeError.malformedRequest }
+            } else {
+                try await io.write(Data("0\r\n\r\n".utf8))
+            }
+        }
+    }
+
+    struct ResponseHead {
+        let bytes: Data
+        let length: Int?
+        let noBody: Bool
     }
 
     /// Validate remote headers before serializing: tunnel metadata must not inject HTTP lines.
-    static func responseHead(status: Int, headers: [[String]], method: String) throws -> Data {
+    static func responseHead(status: Int, headers: [[String]], method: String) throws -> ResponseHead {
         guard (200...599).contains(status), headers.count <= 128,
               headers.allSatisfy({ $0.count == 2 && MacNodeOpenClawIDBridgeRequest.validHeader($0[0], $0[1]) })
         else { throw MacNodeOpenClawIDBridgeError.malformedRequest }
         let noBody = method == "HEAD" || [204, 304].contains(status)
         let forwarded = MacNodeOpenClawIDBridgeRequest.endToEndHeaders(headers).filter {
-            $0[0].lowercased() != "content-length"
+            status != 204 || $0[0].lowercased() != "content-length"
+        }
+        let lengths = forwarded.filter { $0[0].lowercased() == "content-length" }.map { $0[1] }
+        guard lengths.count <= 1 else { throw MacNodeOpenClawIDBridgeError.malformedRequest }
+        let length: Int?
+        if let value = lengths.first {
+            guard !value.isEmpty, value.utf8.allSatisfy({ (48...57).contains($0) }), let count = Int(value)
+            else { throw MacNodeOpenClawIDBridgeError.malformedRequest }
+            length = count
+        } else {
+            length = nil
         }
         var text = "HTTP/1.1 \(status) Tunnel Response\r\nConnection: close\r\n"
         for pair in forwarded { text += "\(pair[0]): \(pair[1])\r\n" }
-        if !noBody { text += "Transfer-Encoding: chunked\r\n" }
+        if !noBody, length == nil { text += "Transfer-Encoding: chunked\r\n" }
         text += "\r\n"
         guard text.utf8.count <= MacNodeOpenClawIDBridgeRequest.maximumHeadBytes else {
             throw MacNodeOpenClawIDBridgeError.limitExceeded
         }
-        return Data(text.utf8)
+        return ResponseHead(bytes: Data(text.utf8), length: length, noBody: noBody)
     }
 }

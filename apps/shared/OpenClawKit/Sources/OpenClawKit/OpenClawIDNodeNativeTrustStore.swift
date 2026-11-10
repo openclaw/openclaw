@@ -47,9 +47,10 @@ public actor OpenClawIDNodeNativeTrustStore: OpenClawIDNodeTrustStore {
         let database = try database()
         let query = try database.prepare("""
         SELECT enrollment_id, discovery_origin, relay_url, server_key, peer_key, evidence_json
-        FROM openclaw_id_node_targets WHERE hostname = ? AND enrollment_id IS NOT NULL
+        FROM openclaw_id_node_enrollments WHERE hostname = ? AND enrollment_id = ?
         """)
         try query.bindText(hostname, at: 1)
+        try query.bindText(enrollmentID.uuidString, at: 2)
         guard try query.step() == .row else { return nil }
         guard let id = try UUID(uuidString: query.requiredText(at: 0, field: "enrollment ID")) else {
             throw OpenClawNativeStateError("Invalid saved node enrollment identity")
@@ -84,8 +85,12 @@ public actor OpenClawIDNodeNativeTrustStore: OpenClawIDNodeTrustStore {
             let merged = try OpenClawIDNodeTrust.mergeObservation(target.state, with: current)
             try Self.write(hostname: target.hostname, state: merged, database: database)
             let query = try database.prepare("""
-            UPDATE openclaw_id_node_targets SET enrollment_id = ?, discovery_origin = ?, relay_url = ?,
-              server_key = ?, peer_key = ?, evidence_json = ? WHERE hostname = ?
+            INSERT INTO openclaw_id_node_enrollments
+              (enrollment_id, discovery_origin, relay_url, server_key, peer_key, evidence_json, hostname)
+              VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (hostname, enrollment_id) DO UPDATE SET discovery_origin = excluded.discovery_origin,
+              relay_url = excluded.relay_url, server_key = excluded.server_key,
+              peer_key = excluded.peer_key, evidence_json = excluded.evidence_json
             """)
             for (offset, value) in [enrollmentID.uuidString, target.discoveryOrigin.absoluteString,
                                     target.relayURL.absoluteString, target.serverKey, target.peerKey,

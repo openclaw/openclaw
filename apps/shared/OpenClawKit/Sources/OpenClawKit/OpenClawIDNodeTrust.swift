@@ -53,7 +53,7 @@ public struct OpenClawIDNodeTrustAssessment: Sendable {
 /// Strict schema, signature, pin and snapshot verification for the node descriptor response.
 public enum OpenClawIDNodeTrust {
     /// Separates verified nonfuture high-water facts from permission to install a dialable target.
-    /// Invalid evidence throws without publishing an observation; future snapshots never become state.
+    /// A verified binding remains pinned even when its snapshot is invalid or future-dated.
     public static func assess(response: Data, link: OpenClawIDNodeEnrollmentLink, discoveryOrigin: URL,
                               peerKey: String, previous: OpenClawIDNodeTrustState?, now: Int64) throws
         -> OpenClawIDNodeTrustAssessment
@@ -112,38 +112,46 @@ public enum OpenClawIDNodeTrust {
             }
             guard bindingSequence >= previous.bindingSequence else { throw OpenClawIDNodeEnrollmentError.rollback }
         }
-        let snapshot = try envelope(response["snapshot"]!, type: "MembershipSnapshot", signer: gateway)
-        let fields = try validateSnapshot(snapshot)
-        guard try identifier(fields["claw_id"]!) == claw else { throw OpenClawIDNodeEnrollmentError.wrongClaw }
-        let sequence = try fields["seq"]!.number()
-        let issued = try fields["issued_at"]!.number()
-        let snapshotBinding = try fields["binding_seq"]!.number(minimum: 1)
-        let candidate = OpenClawIDNodeTrustState(clawID: claw, rootFingerprint: rootFingerprint,
-            bindingSequence: bindingSequence, snapshotSequence: sequence, snapshotIssuedAt: issued,
-            snapshotBindingSequence: snapshotBinding)
-        // Future evidence may refuse a dial, but must never poison durable high-water state.
-        let observation = issued <= now + 300 ? try mergeObservation(candidate, with: previous) : nil
-        let refusal: OpenClawIDNodeEnrollmentError?
-        if max(snapshotBinding, previous?.snapshotBindingSequence ?? 0) > bindingSequence {
-            refusal = .rollback
-        } else if issued > now + 300 || issued < now - 10_800 {
-            refusal = .staleSnapshot
-        } else if let previous, olderSnapshot(candidate, than: previous) {
-            refusal = .rollback
-        } else if snapshotBinding < bindingSequence {
-            refusal = .rollback
-        } else if try !strings(fields["node_peer_keys"]!, prefix: "iroh:").contains(peerKey) {
-            refusal = .notAdmitted
-        } else {
-            refusal = nil
+        let pinned = OpenClawIDNodeTrustState(clawID: claw, rootFingerprint: rootFingerprint,
+            bindingSequence: bindingSequence, snapshotSequence: previous?.snapshotSequence ?? 0,
+            snapshotIssuedAt: previous?.snapshotIssuedAt ?? 0,
+            snapshotBindingSequence: previous?.snapshotBindingSequence ?? bindingSequence)
+        do {
+            let snapshot = try envelope(response["snapshot"]!, type: "MembershipSnapshot", signer: gateway)
+            let fields = try validateSnapshot(snapshot)
+            guard try identifier(fields["claw_id"]!) == claw else { throw OpenClawIDNodeEnrollmentError.wrongClaw }
+            let sequence = try fields["seq"]!.number()
+            let issued = try fields["issued_at"]!.number()
+            let snapshotBinding = try fields["binding_seq"]!.number(minimum: 1)
+            let candidate = OpenClawIDNodeTrustState(clawID: claw, rootFingerprint: rootFingerprint,
+                bindingSequence: bindingSequence, snapshotSequence: sequence, snapshotIssuedAt: issued,
+                snapshotBindingSequence: snapshotBinding)
+            // Future evidence may refuse a dial, but must never poison durable high-water state.
+            let observation = issued <= now + 300 ? try mergeObservation(candidate, with: previous) : pinned
+            let refusal: OpenClawIDNodeEnrollmentError?
+            if max(snapshotBinding, previous?.snapshotBindingSequence ?? 0) > bindingSequence {
+                refusal = .rollback
+            } else if issued > now + 300 || issued < now - 10_800 {
+                refusal = .staleSnapshot
+            } else if let previous, olderSnapshot(candidate, than: previous) {
+                refusal = .rollback
+            } else if snapshotBinding < bindingSequence {
+                refusal = .rollback
+            } else if try !strings(fields["node_peer_keys"]!, prefix: "iroh:").contains(peerKey) {
+                refusal = .notAdmitted
+            } else {
+                refusal = nil
+            }
+            if let refusal {
+                return .init(observation: observation, verdict: .failure(refusal))
+            }
+            let target = OpenClawIDNodeTrustTarget(hostname: hostname, discoveryOrigin: discoveryOrigin, relayURL: relay,
+                serverKey: server, peerKey: peerKey, state: observation ?? candidate,
+                evidence: OpenClawIDCanonicalJSON.object(response).encoded)
+            return .init(observation: observation, verdict: .success(target))
+        } catch let error as OpenClawIDNodeEnrollmentError {
+            return .init(observation: pinned, verdict: .failure(error))
         }
-        if let refusal {
-            return .init(observation: observation, verdict: .failure(refusal))
-        }
-        let target = OpenClawIDNodeTrustTarget(hostname: hostname, discoveryOrigin: discoveryOrigin, relayURL: relay,
-            serverKey: server, peerKey: peerKey, state: observation ?? candidate,
-            evidence: OpenClawIDCanonicalJSON.object(response).encoded)
-        return .init(observation: observation, verdict: .success(target))
     }
 
     /// Merges an observation inside the state owner's transaction: pin never decreases, and the
