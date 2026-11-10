@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import type { TemplateLifecyclePlanResult } from "../../packages/gateway-protocol/src/schema/templates.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { acquireCronInferenceAuthorization } from "../cron/inference-binding.runtime.js";
+import { loadCronJobsStore } from "../cron/store.js";
 import { testApi as loggingTestApi } from "../logging/logger.test-support.js";
 import { clawHubSecurityResponse } from "../plugins/clawhub.test-fixtures.js";
 import { createClawHubArchiveFactory } from "../plugins/clawhub.test-support.js";
@@ -105,6 +109,19 @@ async function makeFixture(kind: Kind, label: string) {
       [kind === "skill" ? "skills" : "plugins"]: [
         kind === "clawhub-plugin" ? { ref: pluginName, version } : { path: dependencyPath },
       ],
+      ...(kind === "plugin" && label === "allowed"
+        ? {
+            automations: [
+              {
+                id: "daily-probe",
+                enabled: false,
+                schedule: { cron: "0 8 * * *", timezone: "UTC" },
+                session: "isolated",
+                message: "Report the synthetic probe status.",
+              },
+            ],
+          }
+        : {}),
     })}\n---\nCompare synthetic public research.\n`,
     ...(pluginArchive
       ? {}
@@ -224,7 +241,6 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       await fs.writeFile(policyPath, "// Synthetic external operator policy.\n", { mode: 0o700 });
       let armed = false;
       let skillPreflight: string | undefined;
-      let revokedWorkspace: string | undefined;
       const finalPolicySources: string[] = [];
       remote.policy.mockImplementation(async (_command: string[], options: { input: string }) => {
         const request = JSON.parse(options.input);
@@ -268,6 +284,16 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       });
       const claim = await acquireGatewayE2ePortBlock();
       const port = claim.port;
+      if (kind === "plugin") {
+        await persistAuthProfileBatch({
+          profiles: [
+            {
+              profileId: "openai:template-scheduling",
+              credential: { type: "api_key", provider: "openai", key: "synthetic-scheduling-key" },
+            },
+          ],
+        });
+      }
       await state.writeConfig({
         gateway: {
           mode: "local",
@@ -276,7 +302,7 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
           controlUi: { enabled: false, experimental: { templates: true } },
         },
         logging: { level: "error", consoleLevel: "silent", file: state.path("gateway.log") },
-        agents: { defaults: { workspace: state.workspaceDir } },
+        agents: { defaults: { workspace: state.workspaceDir, model: "openai/gpt-4.1" } },
         security: {
           installPolicy: {
             enabled: true,
@@ -374,6 +400,48 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       expect(
         await admin.client.request("templates.add.apply", params(allowed, allowedPlan)),
       ).toMatchObject({ status: "complete" });
+      if (kind === "plugin") {
+        // Preserve the real Gateway handoff: Add must publish its new agent
+        // before native scheduling, without a manual config receipt or restart.
+        const schedules = await admin.client.request<{ jobs: Array<{ id: string }> }>("cron.list", {
+          agentId: allowed.agentId,
+          includeDisabled: true,
+        });
+        expect(schedules.jobs).toEqual([
+          expect.objectContaining({
+            agentId: allowed.agentId,
+            effectiveAgentId: allowed.agentId,
+            declarationKey: `template:${allowed.agentId}:daily-probe`,
+            enabled: false,
+            schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+          }),
+        ]);
+        expect(JSON.stringify(schedules)).not.toMatch(
+          /inferenceBinding|authorizationId|synthetic-/,
+        );
+        const stored = (await loadCronJobsStore(state.statePath("cron", "jobs.json"))).jobs.find(
+          (job) => job.id === schedules.jobs[0]!.id,
+        );
+        expect(stored).toMatchObject({
+          agentId: allowed.agentId,
+          enabled: false,
+          inferenceBinding: { provider: "openai", profileId: "openai:template-scheduling" },
+        });
+        assert(stored?.inferenceBinding);
+        expect(stored.payload).not.toHaveProperty("model");
+        const cfg = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
+        const authority = await acquireCronInferenceAuthorization({
+          binding: stored.inferenceBinding,
+          cfg,
+          agentDir: resolveAgentDir(cfg, allowed.agentId),
+        });
+        try {
+          await authority.revalidate();
+          authority.assertCurrent();
+        } finally {
+          authority.dispose();
+        }
+      }
       expect(await effects(allowed, allowedWorkspace)).toMatchObject({
         agent: expect.objectContaining({}),
         published: true,
@@ -399,7 +467,7 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       }
       const revokedPlan = await plan(admin.client, revoked);
       expect(revokedPlan.blockers).toEqual([]);
-      revokedWorkspace = revokedPlan.target.workspace!;
+      const revokedWorkspace = revokedPlan.target.workspace!;
       const { identity, issued } = await pairOperatorDeviceFixture({
         identityPath: state.path("device", "client", "credentials.sqlite"),
         scopes: ["operator.read", "operator.admin"],
@@ -450,7 +518,7 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
         },
         captureOpenClawStateWorkerContext({ env: state.env }),
         async () => {
-          await noEffects(revoked, revokedWorkspace!);
+          await noEffects(revoked, revokedWorkspace);
           expect(await fs.stat(finalSource).catch(() => null)).toBeNull();
         },
       );
