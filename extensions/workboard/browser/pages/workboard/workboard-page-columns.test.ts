@@ -73,8 +73,15 @@ it("saves chosen, ordered and relabeled Cards board columns through boards.upser
 });
 
 it("resets saved columns with null and leaves untouched columns out of the upsert", async () => {
-  const page = planningPage({ visible: ["done", "todo"], labels: { done: "Shipped" } });
+  const page = planningPage({
+    visible: ["done", "todo"],
+    labels: { done: "Shipped" },
+    emptyColumnMode: "show",
+  });
   let form = await openBoardEditor(page);
+  expect(
+    form.querySelector<HTMLSelectElement>(".workboard-columns-editor select")?.selectedIndex,
+  ).toBe(0);
   expect(
     Array.from(form.querySelectorAll<HTMLElement>(".workboard-columns-editor__row")).map(
       (element) => element.dataset.status,

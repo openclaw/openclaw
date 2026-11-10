@@ -60,7 +60,8 @@ function createColumnsDraft(columns?: WorkboardCardsBoardColumns): CardsColumnsD
         label: columns?.labels?.[status] ?? "",
       }),
     ),
-    emptyColumnMode: columns?.emptyColumnMode ?? "",
+    // "show" is the default, which the editor represents as no explicit choice.
+    emptyColumnMode: columns?.emptyColumnMode === "show" ? "" : (columns?.emptyColumnMode ?? ""),
   };
 }
 
