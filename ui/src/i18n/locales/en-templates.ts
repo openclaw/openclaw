@@ -79,6 +79,7 @@ const enTemplates = {
     reviewDescription: "This template needs permission to add the following plugins or skills.",
     version: "Version {version}",
     dependencyClawHub: "ClawHub · Version {version}",
+    dependencyBundled: "Bundled with template",
     contentsLoading: "Loading template contents…",
     noVersion: "This template has no published release yet.",
   },

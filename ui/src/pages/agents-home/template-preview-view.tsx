@@ -86,6 +86,9 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
         t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationPaused")
       );
     }
+    if ("source" in item && item.source === "bundled") {
+      return t("templatesCatalog.dependencyBundled");
+    }
     if ("ref" in item) {
       return t("templatesCatalog.dependencyClawHub", { version: item.version });
     }
@@ -217,23 +220,25 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                     <span>
                                       <strong>{item.name}</strong>
                                       <small>
-                                        {"ref" in item
-                                          ? t("templatesCatalog.dependencyClawHub", {
-                                              version: item.version,
-                                            })
-                                          : "excerpt" in item
-                                            ? item.excerpt
-                                            : "schedule" in item
-                                              ? item.schedule +
-                                                " · " +
-                                                item.timezone +
-                                                " · " +
-                                                t(
-                                                  item.enabled
-                                                    ? "templatesCatalog.automationEnabled"
-                                                    : "templatesCatalog.automationPaused",
-                                                )
-                                              : ""}
+                                        {"source" in item && item.source === "bundled"
+                                          ? t("templatesCatalog.dependencyBundled")
+                                          : "ref" in item
+                                            ? t("templatesCatalog.dependencyClawHub", {
+                                                version: item.version,
+                                              })
+                                            : "excerpt" in item
+                                              ? item.excerpt
+                                              : "schedule" in item
+                                                ? item.schedule +
+                                                  " · " +
+                                                  item.timezone +
+                                                  " · " +
+                                                  t(
+                                                    item.enabled
+                                                      ? "templatesCatalog.automationEnabled"
+                                                      : "templatesCatalog.automationPaused",
+                                                  )
+                                                : ""}
                                       </small>
                                     </span>
                                     <Icon name="chevronRight" />

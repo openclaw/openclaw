@@ -340,6 +340,67 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     expect(await detail.getByText("Installed", { exact: true }).count()).toBe(0);
   });
 
+  it.each([viewports[0], viewports[3]])(
+    "shows bundled and referenced contents at $name width",
+    async (viewport) => {
+      const { page, gateway } = await fixture(viewport);
+      await gateway.setMethodResponse("templates.catalog.detail", {
+        detail: {
+          ...workflowOperator,
+          version: "1.2.0",
+          agentName: "Workflow Operator",
+          contents: {
+            instructions: [{ name: "AGENTS.md", source: "workspace/AGENTS.md" }],
+            skills: [
+              {
+                name: "Local research",
+                source: "bundled",
+                path: "skills/research",
+                excerpt: "Research public releases.",
+              },
+              {
+                name: "Trip research",
+                source: "clawhub",
+                ref: "@openclaw/trip-research",
+                version: "2.0.0",
+              },
+            ],
+            integrations: [
+              {
+                name: "workflow-tools",
+                kind: "plugin",
+                source: "bundled",
+                path: "plugins/workflow-tools",
+              },
+              {
+                name: "@openclaw/workflow-tools",
+                kind: "plugin",
+                source: "clawhub",
+                ref: "@openclaw/workflow-tools",
+                version: "1.2.0",
+              },
+            ],
+            automations: [],
+          },
+        },
+      });
+      const detail = await openDetail(page);
+      await capture(
+        page,
+        `bundled-provenance-${viewport.name}`,
+        detail.getByRole("heading", { name: "Skills" }),
+      );
+      expect(await detail.getByText("Bundled with template", { exact: true }).count()).toBe(2);
+      await detail.getByText("ClawHub · Version 2.0.0", { exact: true }).waitFor();
+      await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
+      expect(await detail.getByText("Installed", { exact: true }).count()).toBe(1);
+      expect(await detail.textContent()).not.toContain("undefined");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+    },
+  );
+
   async function expectClamped(description: Locator) {
     const layout = await description.evaluate((element) => {
       const style = getComputedStyle(element);

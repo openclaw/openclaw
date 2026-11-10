@@ -858,47 +858,74 @@ describe("Templates discovery", () => {
     ).toHaveProperty("acknowledgeClawHubRisk", true);
   });
 
-  it.each(["plugin", "skill"] as const)("asks before applying a %s review plan", async (kind) => {
-    const { detail, request, navigate } = createDetail({
-      templatesEnabled: true,
-      reviewRequiredOnce: kind,
-    });
+  it.each([
+    { kind: "plugin", bundled: false },
+    { kind: "skill", bundled: false },
+    { kind: "skill", bundled: true },
+  ] as const)(
+    "asks before applying a $kind review plan (bundled=$bundled)",
+    async ({ kind, bundled }) => {
+      const { detail, request, navigate } = createDetail({
+        templatesEnabled: true,
+        reviewRequiredOnce: kind,
+        bundledReview: bundled,
+      });
 
-    await vi.waitFor(() =>
-      expect(
-        detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.disabled,
-      ).toBe(false),
-    );
-    detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
-
-    await vi.waitFor(() =>
-      expect(detail.querySelector(".templates-add-consent")?.textContent).toContain(
-        kind === "plugin" ? "@openclaw/workflow-tools" : "@openclaw/research",
-      ),
-    );
-    if (kind === "plugin") {
-      expect(detail.querySelector(".templates-add-consent")?.textContent).toContain(
-        "Conversation access: Allowed",
+      await vi.waitFor(() =>
+        expect(
+          detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.disabled,
+        ).toBe(false),
       );
-    }
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.plan")).toHaveLength(
-      1,
-    );
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
-      1,
-    );
-    expect(navigate).not.toHaveBeenCalledWith("chat", expect.anything());
+      detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
 
-    detail
-      .querySelector<HTMLButtonElement>(".templates-add-consent__actions .btn.primary")
-      ?.click();
-    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
-    const applyParams = request.mock.calls.findLast(
-      ([method]) => method === "templates.add.apply",
-    )?.[1];
-    expect(applyParams).toHaveProperty("planIntegrity", "sha256:reviewed-plan");
-    expect(applyParams).not.toHaveProperty("acknowledgeClawHubRisk");
-  });
+      await vi.waitFor(() =>
+        expect(detail.querySelector(".templates-add-consent")?.textContent).toContain(
+          bundled
+            ? "research"
+            : kind === "plugin"
+              ? "@openclaw/workflow-tools"
+              : "@openclaw/research",
+        ),
+      );
+      if (kind === "plugin") {
+        expect(detail.querySelector(".templates-add-consent")?.textContent).toContain(
+          "Conversation access: Allowed",
+        );
+      }
+      expect(request.mock.calls.filter(([method]) => method === "templates.add.plan")).toHaveLength(
+        1,
+      );
+      expect(
+        request.mock.calls.filter(([method]) => method === "templates.add.apply"),
+      ).toHaveLength(1);
+      expect(navigate).not.toHaveBeenCalledWith("chat", expect.anything());
+
+      detail
+        .querySelector<HTMLButtonElement>(".templates-add-consent__actions .btn.primary")
+        ?.click();
+      await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
+      const applyParams = request.mock.calls.findLast(
+        ([method]) => method === "templates.add.apply",
+      )?.[1];
+      expect(applyParams).toHaveProperty("planIntegrity", "sha256:reviewed-plan");
+      expect(applyParams).not.toHaveProperty("acknowledgeClawHubRisk");
+      if (bundled) {
+        expect(detail.textContent).not.toContain("Version undefined");
+        if (kind === "skill") {
+          expect(applyParams).toHaveProperty("acknowledgeSkillWarnings", [
+            {
+              actionId: "skill:@openclaw/research",
+              source: "bundled",
+              path: "skills/research",
+              digest: `sha256:${"b".repeat(64)}`,
+              reviewToken: "review-research",
+              acknowledgeRiskWarning: true,
+            },
+          ]);
+        }
+      }
+    },
+  );
 
   it("requires both consents when trust and plugin review are needed", async () => {
     const { detail, request, navigate } = createDetail({
