@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1268,6 +1269,74 @@ describe("ClawHub prepared publication", () => {
 });
 
 describe("original sealed ClawHub source", () => {
+  it("settles the native original CLI after dynamically loading FRV evidence", () => {
+    const f = originalPackedFixture();
+    const runId = f.request.inputs.full_release_validation_run_id;
+    const artifact = {
+      name: `full-release-validation-${runId}-1`,
+      expired: false,
+      workflow_run: { id: Number(runId) },
+    };
+    f.metadata.set(artifactsPath(Number(runId)), { artifacts: [artifact, artifact] });
+    const request = join(f.directory, "original-request.json");
+    const output = join(f.directory, "original-descriptor.json");
+    const preload = join(f.directory, "cli-io.mjs");
+    writeFileSync(request, JSON.stringify(f.request));
+    // Replace only external I/O: importing any release module here would finish
+    // its evaluation before the CLI and conceal the top-level-await cycle.
+    writeFileSync(
+      preload,
+      String.raw`import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const metadata = new Map(${JSON.stringify([...f.metadata])});
+const archives = new Map(${JSON.stringify([...f.archives].map(([id, bytes]) => [id, bytes.toString("base64")]))});
+function read(path) {
+  if (!metadata.has(path)) throw new Error("Unexpected CLI fixture request: " + path);
+  return metadata.get(path);
+}
+childProcess.execFileSync = (command, args) => {
+  if (command !== "gh" || args[0] !== "api") throw new Error("Unexpected CLI fixture command");
+  return JSON.stringify(read(args[1].replace("repos/openclaw/openclaw/", "")));
+};
+syncBuiltinESMExports();
+globalThis.fetch = async (input, init) => {
+  if (init?.method && init.method !== "GET") throw new Error("Unexpected CLI fixture write");
+  const url = new URL(input);
+  if (url.origin !== "https://api.github.com") throw new Error("Unexpected CLI fixture origin");
+  const path = url.pathname.replace("/repos/openclaw/openclaw/", "") + url.search;
+  const archive = /^actions\/artifacts\/(\d+)\/zip$/u.exec(path);
+  return archive ? new Response(Buffer.from(archives.get(Number(archive[1])), "base64"))
+    : Response.json(read(path));
+};
+`,
+    );
+    const result = spawnSync(
+      "node",
+      [
+        "--import",
+        preload,
+        "scripts/clawhub-prepared-artifact.mjs",
+        "original",
+        "--request",
+        request,
+        "--output",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...f.options.env },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `multiple release validation manifest artifacts found: ${runId}`,
+    );
+    expect(result.stderr).toContain("[clawhub-prepared-artifact] FAILED (exit 1)");
+    expect(existsSync(output)).toBe(false);
+  });
+
   it("resolves package directories without expanding a huge unrelated source subtree", async () => {
     const f = originalPackedFixture();
     const hugeTree = {

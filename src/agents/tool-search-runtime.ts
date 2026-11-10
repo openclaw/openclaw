@@ -565,11 +565,10 @@ export function formatToolSearchControlResult<T>(
   options: {
     parentToolCallId?: string;
     terminalBatchStatus?: "waiting" | "completed" | "failed";
-    compact?: boolean;
     images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
   } = {},
 ): AgentToolResult<T> {
-  const serialized = serializeToolSearchControlResult(payload, options.compact);
+  const serialized = serializeToolSearchControlResult(payload);
   const networkContent = runtime?.hasNetworkContent(options.parentToolCallId) ?? false;
   const { text } = renderToolSearchControlText(serialized, networkContent);
   const result = textResult(text, payload);

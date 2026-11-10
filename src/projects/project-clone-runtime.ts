@@ -276,20 +276,30 @@ async function withProjectCheckoutTransport(
   );
 }
 
+async function readProjectCheckoutFilter(
+  input: { target: string; url: string },
+  options: ProjectCloneOptions,
+) {
+  const filterResult = await runProjectCheckoutGit(input, options, [
+    "config",
+    "--get",
+    "remote.origin.partialclonefilter",
+  ]);
+  return filterResult.code === 1 && filterResult.termination === "exit"
+    ? ""
+    : requireGitCommandOutput("git config remote.origin.partialclonefilter", filterResult).trim();
+}
+
 /** Refreshes refs in an existing Gateway-managed project checkout. */
 export async function refreshProjectCheckout(
   input: { target: string; url: string },
   options: ProjectCloneOptions = {},
 ): Promise<void> {
-  const [initialRefs, filterResult] = await Promise.all([
+  // Literal URLs and temporary metadata do not inherit origin's filter.
+  const [initialRefs, filter] = await Promise.all([
     readProjectRemoteRefs(input, options),
-    runProjectCheckoutGit(input, options, ["config", "--get", "remote.origin.partialclonefilter"]),
+    readProjectCheckoutFilter(input, options),
   ]);
-  // The temporary repository does not inherit the managed clone's origin filter.
-  const filter =
-    filterResult.code === 1 && filterResult.termination === "exit"
-      ? ""
-      : requireGitCommandOutput("git config remote.origin.partialclonefilter", filterResult).trim();
   let currentRefs = initialRefs;
   await withProjectCheckoutTransport(input, options, async (staging, stagingOptions) => {
     let protectedRefs: ReadonlySet<string> | undefined;
@@ -539,9 +549,11 @@ export async function ensureProjectCheckoutCommit(
   if (present.code === 0 && present.termination === "exit" && present.stdout.trim()) {
     return;
   }
+  const filter = await readProjectCheckoutFilter(input, options);
   const fetch = () =>
     command([
       "fetch",
+      ...(filter ? [`--filter=${filter}`] : []),
       "--no-auto-maintenance",
       "--no-tags",
       "--no-recurse-submodules",

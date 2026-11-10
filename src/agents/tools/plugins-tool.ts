@@ -36,7 +36,7 @@ function pluginsToolResult(payload: Record<string, unknown>, refreshUnavailable 
     .join(" ");
   const response = continuation ? { ...payload, next: continuation } : payload;
   const size = boundedJsonUtf8Bytes(response, PLUGINS_TOOL_RESULT_MAX_BYTES);
-  const text = size.complete ? JSON.stringify(response, null, 2) : undefined;
+  const text = size.complete ? JSON.stringify(response) : undefined;
   if (text !== undefined && Buffer.byteLength(text, "utf8") <= PLUGINS_TOOL_RESULT_MAX_BYTES) {
     return textResult(text, response);
   }

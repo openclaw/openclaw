@@ -465,8 +465,7 @@ describe("project registry persistence", () => {
     const target = path.join(root, "partial");
     const url = pathToFileURL(source).href;
     await git(root, "clone", "--filter=blob:none", "--no-checkout", url, target);
-    await git(target, "config", `remote.${url}.promisor`, "true");
-    await git(target, "config", `remote.${url}.partialclonefilter`, "blob:none");
+    await git(target, "config", "fetch.unpackLimit", "1");
     const base = await gitText(target, "rev-parse", "HEAD");
     const packs = path.join(target, ".git", "objects", "pack");
     const before = new Set(await fs.readdir(packs));
@@ -482,9 +481,11 @@ describe("project registry persistence", () => {
       (name) => name.endsWith(".idx") && !before.has(name),
     );
     expect(added).toHaveLength(1);
+    await fs.stat(path.join(packs, added[0]!.replace(/\.idx$/, ".promisor")));
     const indexed = (await git(target, "verify-pack", "-v", path.join(packs, added[0]!))).stdout;
     expect(indexed).toContain(`${commit} commit`);
     expect(indexed).not.toContain(`${base} commit`);
+    expect(indexed).not.toContain(" blob ");
     expect(await gitText(target, "rev-parse", "HEAD")).toBe(base);
     expect(await gitText(target, "cat-file", "-t", commit)).toBe("commit");
     await ensureProjectCheckoutCommit(
