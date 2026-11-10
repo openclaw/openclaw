@@ -285,14 +285,14 @@ it.for([false, true])(
             status: "unavailable",
           });
           expect(requests.toSorted()).toEqual(["/native/models", "/provider/models"]);
-          // Gateway refresh can return a pending snapshot before discovery publishes.
-          const refresh = () =>
-            waitForCatalogPublication({
-              signal,
-              start: () => request({ view: "all", refresh: true }),
-              read: list,
-              ready: (result) => !result.pendingProviders?.includes(provider),
-            });
+          // Provider publication can clear pending before native discovery starts.
+          // Join this refresh's request before accepting its terminal publication.
+          const refresh = async () => {
+            nativeRequested = createDeferred();
+            await request({ view: "all", refresh: true });
+            await withinTest(nativeRequested.promise, signal);
+            return published((result) => !result.pendingProviders?.includes(provider));
+          };
           const unavailable = await refresh();
           expect(unavailable.refreshFailed).toBe(true);
           expect.soft(unavailable.models).toContainEqual(model("unconfigured-starter"));
