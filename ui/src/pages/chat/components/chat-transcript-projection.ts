@@ -478,8 +478,6 @@ export function projectChatTranscript(
     props.assistantAttachmentAuthToken,
     props.mediaOwner,
     props.mediaReadAllowed,
-    // Visibility also activates inline plugin rows, which have no tool cards.
-    presented,
     props.connectionEpoch,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
@@ -522,7 +520,7 @@ export function projectChatTranscript(
           preview.revision,
           preview.latest,
         ]),
-        ...transcriptContextDependencies(item, loadedReplySources, props),
+        ...transcriptContextDependencies(item, loadedReplySources, props, presented),
         ...(pendingSteerForMessage
           ? groups.flatMap((group) =>
               group.messages.map(({ message }) => pendingSteerForMessage(message)),
@@ -532,6 +530,7 @@ export function projectChatTranscript(
         hasQuestions ? asyncQuestions : undefined,
         hasQuestions ? asyncQuestions.drafts : undefined,
         hasQuestions ? asyncQuestionGeneration : undefined,
+        hasTools ? presented : undefined,
         readsRoster ? subagents.rowsKey : undefined,
       ];
     },

@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { messageClientSourcesKey } from "../../../../../src/chat/message-client-source.js";
 import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
@@ -120,6 +121,7 @@ export function transcriptContextDependencies(
     | "displayFacts"
     | "replyMessageAccess"
   >,
+  presented: boolean,
 ): unknown[] {
   if (item.kind === "notice") {
     return [
@@ -135,6 +137,14 @@ export function transcriptContextDependencies(
     item.kind === "agent-run-frame" && item.fragment?.first ? item.fragment.source : item;
   for (const group of chatItemGroups(replySource)) {
     for (const source of group.messages) {
+      // Inline plugin rows need visibility to activate even without a tool card.
+      const content = asNullableRecord(source.message)?.content;
+      if (
+        Array.isArray(content) &&
+        content.some((block) => asNullableRecord(block)?.type === "plugin_view")
+      ) {
+        dependencies.push(presented);
+      }
       const display = props.displayFacts?.forRow(persistedMessageEntryId(source.message))?.read();
       dependencies.push(display?.scope, display?.facts);
       if (source.replyTarget?.kind === "id") {

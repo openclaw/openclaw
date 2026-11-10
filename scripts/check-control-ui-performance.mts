@@ -58,9 +58,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Receipt narrowing: 1,298,275 → 1,299,181 B (+906 B) on current main.
+  // Receipt narrowing: 1,298,275 → 1,299,196 B (+921 B) on current main.
   // Preserve main's 253 B headroom; the coordinator allowance is about 1.1 KB.
-  chatBootJsGzipBytes: 1_299_434,
+  chatBootJsGzipBytes: 1_299_449,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
   newBootJsGzipBytes: 803_364,
   startupCssRequests: 1,
