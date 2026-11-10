@@ -64,7 +64,7 @@ export function RecoveryKitPanel(props: {
         </div>
       </div>
       <p class="openclaw-id-kit__warning">{t("openclawId.kitWarning")}</p>
-      <div class="chip-row openclaw-id-kit__actions">
+      <div class="openclaw-id-kit__actions">
         <button
           type="button"
           class="btn btn--sm"
@@ -78,11 +78,11 @@ export function RecoveryKitPanel(props: {
             )
           }
         >
-          <Icon
-            name="check"
-            class="openclaw-id-kit__exported"
-            style={{ visibility: downloaded() ? "visible" : "hidden" }}
-          />
+          <Show when={downloaded()}>
+            <span class="openclaw-id-kit__exported">
+              <Icon name="check" />
+            </span>
+          </Show>
           {t("openclawId.downloadKit")}
         </button>
         <button
@@ -95,11 +95,11 @@ export function RecoveryKitPanel(props: {
             )
           }
         >
-          <Icon
-            name="check"
-            class="openclaw-id-kit__exported"
-            style={{ visibility: printed() ? "visible" : "hidden" }}
-          />
+          <Show when={printed()}>
+            <span class="openclaw-id-kit__exported">
+              <Icon name="check" />
+            </span>
+          </Show>
           {t("openclawId.printKit")}
         </button>
         <button
@@ -119,7 +119,7 @@ export function RecoveryKitPanel(props: {
       <div class="openclaw-id-setup__status" role="status">
         <Show when={note()}>{(message) => <OpenClawIdErrorMessage error={message()} />}</Show>
       </div>
-      <label class="openclaw-id-kit__saved">
+      <label class="field checkbox openclaw-id-kit__saved">
         <Checkbox
           checked={props.saved}
           onChange={(event) => props.onSaved(event.currentTarget.checked)}

@@ -7,23 +7,36 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
   margin-block: min(128px, 16dvh) auto;
 }
 
+.openclaw-id-setup > .oc-dialog__body {
+  padding-top: 14px;
+}
+
+.openclaw-id-setup openclaw-modal-actions {
+  margin-top: -4px;
+}
+
 .openclaw-id-setup p {
   margin: 0;
 }
 
 .openclaw-id-setup__field {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .openclaw-id-setup__field > label {
   color: var(--text-strong);
   font-weight: 500;
+  font-size: var(--control-ui-text-sm);
+}
+
+.openclaw-id-setup__field + .openclaw-id-setup__field {
+  margin-top: 2px;
 }
 
 .openclaw-id-setup__inline {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
 }
 
@@ -34,14 +47,35 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
 
 .openclaw-id-setup__inline a {
   flex-shrink: 0;
+  height: auto;
+  min-height: 0;
+  padding-block: 0;
 }
 
 .openclaw-id-setup__status {
-  min-height: 3em;
+  min-height: 18px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.5;
+  font-size: var(--control-ui-text-xs);
+  line-height: 18px;
+  text-wrap: pretty;
   overflow-wrap: anywhere;
+}
+
+.openclaw-id-setup__address {
+  color: var(--text-strong);
+  font-weight: 500;
+}
+
+.openclaw-id-setup__status details,
+.openclaw-id-steps__message details {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.openclaw-id-setup__status summary,
+.openclaw-id-steps__message summary {
+  width: max-content;
+  cursor: pointer;
 }
 
 .openclaw-id-setup__status.is-error {
@@ -50,7 +84,20 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
 
 .openclaw-id-kit__lead {
   display: grid;
-  gap: 4px;
+  gap: 2px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.openclaw-id-kit__lead > :first-child {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  line-height: 20px;
+}
+
+.openclaw-id-kit__lead strong {
+  font-weight: 600;
 }
 
 .openclaw-id-setup #openclaw-recovery-kit {
@@ -62,25 +109,45 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
   display: grid;
   gap: 12px;
   padding: 14px;
-  border: 1px solid var(--border);
+  box-shadow: inset 0 0 0 1px var(--border);
   border-radius: var(--radius-md);
   background: var(--secondary);
 }
 
 .openclaw-id-kit .field {
-  gap: 8px;
+  gap: 6px;
+}
+
+.openclaw-id-kit .field > label {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+}
+
+.openclaw-id-kit__secret {
+  letter-spacing: 0.04em;
 }
 
 .openclaw-id-kit .row {
   gap: 8px;
+  align-items: stretch;
+}
+
+.openclaw-id-kit .row > .btn {
+  padding-block: 0;
 }
 
 .openclaw-id-kit .muted {
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--control-ui-text-xs);
+  line-height: 16px;
 }
 
 .openclaw-id-kit .oc-dialog__row {
   min-height: 26px;
+}
+
+.openclaw-id-kit .oc-dialog__row > :last-child {
+  font-variant-numeric: tabular-nums;
 }
 
 .openclaw-id-kit .oc-dialog__rows {
@@ -99,8 +166,9 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
 }
 
 .openclaw-id-kit__warning {
-  font-size: inherit;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.5;
+  text-wrap: pretty;
 }
 
 .openclaw-id-kit__actions {
@@ -109,23 +177,39 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
   gap: 8px;
 }
 
-.openclaw-id-kit__saved {
-  display: flex;
-  align-items: start;
-  gap: 12px;
+.openclaw-id-kit__saved.field.checkbox {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: var(--control-ui-text-sm);
+  cursor: pointer;
+}
+
+#openclaw-recovery-kit > .openclaw-id-setup__status {
+  margin-top: -4px;
+}
+
+#openclaw-recovery-kit > .openclaw-id-setup__status:empty {
+  display: none;
 }
 
 .openclaw-id-kit__exported {
   color: var(--ok);
 }
 
-.openclaw-id-kit__saved input {
-  flex-shrink: 0;
-  margin-top: 2px;
+.openclaw-id-kit__exported svg {
+  width: 14px;
+  height: 14px;
+}
+
+.openclaw-id-kit__saved input.oc-checkbox {
+  margin: 0;
+  border-radius: var(--radius-sm);
 }
 
 .openclaw-id-linking__title {
-  min-height: 3em;
+  min-height: 40px;
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -146,7 +230,7 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
   gap: 10px;
   padding-block: 6px;
   font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
+  line-height: 18px;
   overflow-wrap: anywhere;
 }
 
@@ -156,18 +240,29 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
 
 .openclaw-id-steps__mark {
   display: flex;
+  justify-content: center;
   color: var(--muted);
-  padding-top: 2px;
+  height: 18px;
+  align-items: center;
 }
 
 .openclaw-id-steps__mark svg,
 .openclaw-id-setup__spinner {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
 }
 
 .openclaw-id-steps__item[data-state="done"] .openclaw-id-steps__mark {
   color: var(--ok);
+}
+
+.openclaw-id-steps__item[data-state="running"] .openclaw-id-steps__mark {
+  color: var(--text);
+}
+
+.openclaw-id-setup .btn > svg {
+  width: 14px;
+  height: 14px;
 }
 
 .openclaw-id-steps__item[data-state="warning"] .openclaw-id-steps__mark {
@@ -175,9 +270,11 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
 }
 
 .openclaw-id-steps__message {
-  margin-top: 4px;
+  margin-top: 2px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--control-ui-text-xs);
+  line-height: 17px;
+  text-wrap: pretty;
 }
 
 .openclaw-id-setup__spinner {

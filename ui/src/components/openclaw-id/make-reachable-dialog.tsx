@@ -99,6 +99,23 @@ function publicationError(publication: OpenClawIdPublication | null): OpenClawId
 /** The address Discovery offers for a claw name (openclawId.authority check_name). */
 type NameCheck = { name: string; accountTag: string; hostname: string; available: boolean };
 
+/** Emphasize the address without changing the catalog's surrounding copy. */
+function AddressMessage(props: { message: string; hostname: string }) {
+  const address = () => `https://${props.hostname}`;
+  return (
+    <For each={props.message.split(address())}>
+      {(part, index) => (
+        <>
+          <Show when={index() > 0}>
+            <strong class="openclaw-id-setup__address">{address()}</strong>
+          </Show>
+          {part}
+        </>
+      )}
+    </For>
+  );
+}
+
 // The name offered until the owner types one.
 const DEFAULT_CLAW_NAME = "claw";
 
@@ -383,7 +400,7 @@ export function showMakeReachableDialog(params: {
                       </div>
                       <div
                         id="openclaw-id-code-status"
-                        class="openclaw-id-setup__status"
+                        class={["openclaw-id-setup__status", { "is-error": Boolean(codeError()) }]}
                         role="status"
                       >
                         <Show when={codeError()} fallback={t("openclawId.enrollmentCodeHint")}>
@@ -426,9 +443,17 @@ export function showMakeReachableDialog(params: {
                           <Show when={check()} fallback={t("openclawId.clawNameHint")}>
                             {(checked) => (
                               <span>
-                                {checked().available
-                                  ? t("openclawId.nameAvailable", { host: checked().hostname })
-                                  : t("openclawId.nameTaken", { host: checked().hostname })}
+                                <Show
+                                  when={checked().available}
+                                  fallback={t("openclawId.nameTaken", { host: checked().hostname })}
+                                >
+                                  <AddressMessage
+                                    message={t("openclawId.nameAvailable", {
+                                      host: checked().hostname,
+                                    })}
+                                    hostname={checked().hostname}
+                                  />
+                                </Show>
                               </span>
                             )}
                           </Show>
@@ -511,11 +536,17 @@ export function showMakeReachableDialog(params: {
                     <>
                       <div role="status" aria-live="polite">
                         <p class="openclaw-id-linking__title">
-                          {current().kind === "done"
-                            ? t("openclawId.doneBody", { host: current().hostname })
-                            : t("openclawId.linkingTitle", {
-                                name: clawNameFromHostname(current().hostname),
-                              })}
+                          <Show
+                            when={current().kind === "done"}
+                            fallback={t("openclawId.linkingTitle", {
+                              name: clawNameFromHostname(current().hostname),
+                            })}
+                          >
+                            <AddressMessage
+                              message={t("openclawId.doneBody", { host: current().hostname })}
+                              hostname={current().hostname}
+                            />
+                          </Show>
                         </p>
                         <ol class="openclaw-id-steps">
                           <For each={LINK_STEPS}>

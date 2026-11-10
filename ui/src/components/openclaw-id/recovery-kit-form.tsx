@@ -99,7 +99,7 @@ export function RecoveryCodeField(props: { code: string }) {
           ref={(element) => (input = element)}
           id="openclaw-recovery-kit-password"
           name="password"
-          class="secret-reveal__code openclaw-id-kit__secret"
+          class="settings-input secret-reveal__code openclaw-id-kit__secret"
           type={shown() ? "text" : "password"}
           autocomplete="new-password"
           readonly

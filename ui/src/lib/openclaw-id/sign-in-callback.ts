@@ -5,6 +5,12 @@
 // pages cut window.opener), then closes. The code is useless without the
 // Gateway's PKCE verifier, and the state ties it to the sign-in that tab started.
 import "./sign-in-callback.css";
+import { loadUiPreferences } from "../../app/settings.ts";
+import {
+  applyTypefaceOverrides,
+  loadTypefaceStylesheet,
+  resolveTypefaces,
+} from "../../app/typography.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
   OPENCLAW_ID_CALLBACK_KEY_PREFIX,
@@ -27,15 +33,15 @@ export function finishOpenClawIdCallback(): void {
   }
   // Drop the code from the address bar and history before closing.
   window.history.replaceState(null, "", window.location.pathname);
+  // This entry point skips the application, including its selected font loader.
+  const { theme, fontUi, fontChat } = loadUiPreferences();
+  loadTypefaceStylesheet(resolveTypefaces(theme, fontUi, fontChat).ui);
+  applyTypefaceOverrides(fontUi, fontChat);
   const status = document.createElement("main");
   status.setAttribute("role", "status");
   status.textContent = message.error
     ? "Sign-in was not completed. You can close this window."
     : "Signed in. You can close this window.";
-  // This entry point skips the application theme owner; use the same system-mode tokens.
-  const mode = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  document.documentElement.dataset.theme = mode;
-  document.documentElement.dataset.themeMode = mode;
   document.body.classList.add("openclaw-id-callback");
   document.body.replaceChildren(status);
   window.close();
