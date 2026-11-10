@@ -102,12 +102,13 @@ export function decodeOpenAIDecisionResult(
         ? Object.keys(question.criteria)
         : question.criteria.map((_, i) => String(i));
     const distribution = new Map<string, number>();
+    let hasPositive = false;
     for (const item of answer.probabilities) {
-      const label = isRecord(item)
-        ? item[question.type === "choice" ? "value" : "label"]
-        : undefined;
+      if (!isRecord(item)) {
+        return { status: "unavailable", reason: "invalid-response" };
+      }
+      const label = item[question.type === "choice" ? "value" : "label"];
       if (
-        !isRecord(item) ||
         typeof label !== "string" ||
         !labels.includes(label) ||
         distribution.has(label) ||
@@ -116,12 +117,11 @@ export function decodeOpenAIDecisionResult(
       ) {
         return { status: "unavailable", reason: "invalid-response" };
       }
-      distribution.set(label, item.probability);
+      const value = item.probability;
+      distribution.set(label, value);
+      hasPositive ||= value > 0;
     }
-    if (
-      distribution.size !== labels.length ||
-      ![...distribution.values()].some((value) => value > 0)
-    ) {
+    if (distribution.size !== labels.length || !hasPositive) {
       return { status: "unavailable", reason: "invalid-response" };
     }
     if (question.type === "choice") {
