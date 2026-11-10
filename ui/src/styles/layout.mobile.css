@@ -568,6 +568,13 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     padding-bottom: 0;
   }
 
+  /* Full-bleed route edges belong to the shell, including cold Systems entry
+     before the lazy chat sheets load. New Session keeps its own inset contract. */
+  .shell--mobile-nav .content--chat:not(.content--new-session) {
+    --content-inline-padding: 0px;
+    padding-inline: 0;
+  }
+
   /* Custodian owns its page inset and vertical rhythm. Keep the generic mobile
      content rule below from stacking shell spacing onto that owner. */
   main.content--custodian {
