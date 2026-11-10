@@ -119,13 +119,15 @@ it.each([
 });
 
 it.each([
-  { direction: 1, expected: ["58", "59", "60"] },
-  { direction: -1, expected: ["42", "43", "44"] },
+  { direction: 1, residual: 0, expected: ["58", "59", "60"] },
+  { direction: -1, residual: 0, expected: ["42", "43", "44"] },
+  { direction: 1, residual: 0.5, expected: ["58", "59", "60"] },
+  { direction: -1, residual: 0.5, expected: ["42", "43", "44"] },
 ])(
-  "covers the next wheel viewport after native consumption ($direction)",
-  ({ direction, expected }) => {
+  "covers the next wheel viewport after native consumption ($direction, residual $residual)",
+  ({ direction, residual, expected }) => {
     const { range, virtualizer, present } = createPendingWheelRange();
-    range.recordWheel(direction * 480);
+    range.recordWheel(direction * (480 + residual));
     range.recordReaderMovement(direction * 480);
     virtualizer.scrollOffset = 6000 + direction * 480;
     expect(present().forecastRowKeys).toEqual(new Set(expected));

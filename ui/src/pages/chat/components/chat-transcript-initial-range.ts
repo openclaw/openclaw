@@ -220,9 +220,11 @@ export class TranscriptInitialRange {
   }
 
   private pendingWheelDelta(): number {
-    return this.pendingWheel && performance.now() - this.pendingWheel.time < 100
-      ? this.pendingWheel.delta
-      : 0;
+    // Native scrollTop rounds fractional wheel travel. Its subpixel residue
+    // must not replace the next observed step with a stationary forecast.
+    const wheel = this.pendingWheel;
+    const now = performance.now();
+    return wheel && now - wheel.time < 100 && Math.abs(wheel.delta) > 1 ? wheel.delta : 0;
   }
 
   private forecastViewport() {
