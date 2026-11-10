@@ -324,6 +324,13 @@ describe("models list published transport", () => {
     expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
   });
 
+  it("rejects --json with --plain as an ExpectedCliError", async () => {
+    await expect(list({ json: true, plain: true })).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "Choose either --json or --plain, not both.",
+    });
+  });
+
   it("filters only proven local rows and renders their exact keys in plain output", async () => {
     gatewayModels(
       model,
