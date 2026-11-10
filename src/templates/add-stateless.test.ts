@@ -1,11 +1,12 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { chmod, cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
+import { ensureAgentWorkspace, resolveWorkspaceBootstrapStatus } from "../agents/workspace.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   readSessionEntryRow,
@@ -694,6 +695,52 @@ describe("stateless Template Add", () => {
       "workspace-agent-2",
     ]);
     expect(existsSync(path.join(stateDir, "workspace-workspace-agent-2", "SOUL.md"))).toBe(true);
+  });
+
+  it("keeps package onboarding pending through first workspace preparation until consumed", async () => {
+    const root = path.join(stateDir, "source");
+    const bootstrap =
+      "Ask the user to finish setup. Keep these instructions until setup is complete.\n";
+    await writeFile(path.join(root, "BOOTSTRAP.md"), bootstrap);
+    await mkdir(path.join(root, "bundles", "research"), { recursive: true });
+    await writeFile(
+      path.join(root, "bundles", "research", "SKILL.md"),
+      "---\nname: research\ndescription: Research public sources.\n---\nUse public sources.\n",
+    );
+    await writeFile(
+      path.join(root, "CLAW.md"),
+      '---\nschemaVersion: 1\nagent: { id: workspace-agent }\nworkspace:\n  bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } }\nskills:\n  - path: bundles/research\n---\n',
+    );
+    const reread = await readTemplateManifestFile(path.join(root, "CLAW.md"));
+    assert(reread.ok);
+    source = reread;
+    const plan = await buildPlan();
+    expect(await apply(plan)).toMatchObject({ status: "complete", configCommitted: true });
+    const dir = plan.agent.workspace;
+    const bootstrapPath = path.join(dir, "BOOTSTRAP.md");
+    expect(await readFile(bootstrapPath, "utf8")).toBe(bootstrap);
+    await expect(resolveWorkspaceBootstrapStatus(dir)).resolves.toBe("pending");
+    expect(await readFile(path.join(dir, "SOUL.md"), "utf8")).toBe(
+      "Workspace agent instructions.\n",
+    );
+    expect(existsSync(path.join(dir, "skills", "research", "SKILL.md"))).toBe(true);
+
+    for (let preparation = 0; preparation < 2; preparation++) {
+      await expect(
+        ensureAgentWorkspace({ dir, ensureBootstrapFiles: true }),
+      ).resolves.toMatchObject({
+        bootstrapPending: true,
+      });
+      expect(await readFile(bootstrapPath, "utf8")).toBe(bootstrap);
+      await expect(resolveWorkspaceBootstrapStatus(dir)).resolves.toBe("pending");
+    }
+
+    await rm(bootstrapPath);
+    await expect(ensureAgentWorkspace({ dir, ensureBootstrapFiles: true })).resolves.toMatchObject({
+      bootstrapPending: false,
+    });
+    await expect(resolveWorkspaceBootstrapStatus(dir)).resolves.toBe("complete");
+    expect(existsSync(bootstrapPath)).toBe(false);
   });
 
   it.each(["workspace failure", "lost config acknowledgement"] as const)(
