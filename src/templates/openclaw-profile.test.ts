@@ -57,6 +57,18 @@ describe("OpenClaw profile schema", () => {
     expect(result.ok).toBe(false);
   });
 
+  it.each([
+    { exec: { mode: "full" } },
+    { message: { crossContext: { allowAcrossProviders: true } } },
+  ])("keeps operator-only tool authority out of Templates: %j", (authority) => {
+    const result = parseTemplateOpenClawProfile({
+      schemaVersion: 1,
+      agent: { tools: { profile: "full", allow: ["read"], ...authority } },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
   it("rejects retired heartbeat fields with a heartbeat-scoped diagnostic", () => {
     const result = parseTemplateOpenClawProfile({
       schemaVersion: 1,

@@ -82,6 +82,6 @@ it("keeps legacy installed-Template tool authority fail-closed without an update
 
   await setAppliedRuntimeConfigSnapshot(config, config);
 
-  expect(resolve).toThrow("Add the Template again to create an ordinary agent");
+  expect(resolve).toThrow("openclaw templates release worker");
   expect(worker.mainRead).not.toHaveBeenCalled();
 });
