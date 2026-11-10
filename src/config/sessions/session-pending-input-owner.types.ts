@@ -9,6 +9,9 @@ export type SessionPendingInputOwner = Omit<
   SessionPendingInputWorkerFacts,
   "preparedAuthority" | "sources"
 > & {
+  /** Host source identity for graceful shutdown; worker receipts do not grant recovery. */
+  runId?: string;
+  recoverySource?: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
   sessionActor?: SessionActorStorageBinding;
   /** Immutable facts decoded from this owner's accepted bytes before projections escape. */
   requesterOrigin?: RequesterOrigin;

@@ -79,6 +79,12 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
       await persistRunningSessionsForRestart({ cfg: {} });
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
         queuedInputIds: [queued.inputId],
+        queuedInputSources: {
+          [queued.inputId]: {
+            runId: "queued-behind-completed-reply",
+            source: { kind: "unavailable" },
+          },
+        },
       });
     } finally {
       queued?.finish("interrupted");
@@ -138,7 +144,7 @@ it("leaves running cron and external-harness sessions with their execution owner
     }
   }));
 
-it("settles captured queued sends as failed when the recorded owner's authority is revoked", () =>
+it("settles source-less queued sends even when the recorded owner cannot resume", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       gateway: {

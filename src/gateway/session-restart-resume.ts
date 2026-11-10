@@ -256,6 +256,7 @@ export async function persistRunningSessionsForRestart(params: {
               ...entry,
               resumeAfterRestart: {
                 queuedInputIds: queued.queuedInputIds,
+                queuedInputSources: queued.queuedInputSources,
                 ...(session.hadBackgroundExec ? { hadBackgroundExec: true } : {}),
               },
             },
@@ -503,8 +504,8 @@ export async function resumeMarkedSessions(params: {
           context,
           { ...target, agentId, sessionKey, sessionId: entry.sessionId },
           {
+            ...marker,
             signal,
-            queuedInputIds: marker.queuedInputIds,
             assertCurrent: () => signal.throwIfAborted(),
           },
         );

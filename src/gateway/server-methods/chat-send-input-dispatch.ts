@@ -22,6 +22,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
+import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
@@ -347,6 +348,7 @@ export async function handleChatSendWithStorage(
       const staged = await withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
         userTurnRecorder.stageApproved?.({
           ...pendingAdmission,
+          recoverySource: captureQueuedOperatorRecoverySource(admission.operatorAuthority),
         }),
       );
       stagePhase?.finish();
