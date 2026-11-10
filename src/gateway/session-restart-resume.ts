@@ -110,7 +110,7 @@ export async function persistRunningSessionsForRestart(params: {
 }
 
 async function persistRunningSessions(
-  params: { cfg: OpenClawConfig; signal?: AbortSignal },
+  params: Parameters<typeof persistRunningSessionsForRestart>[0],
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Promise<void> {
   const assertCurrent = () => params.signal?.throwIfAborted();
@@ -250,7 +250,6 @@ async function persistRunningSessions(
             }
             const queued = await captureSessionQueuedInputsForRestart({
               ...session,
-              storePath: first.storePath,
               sessionId: entry.sessionId,
             });
             if (!session.needsResume && queued.queuedInputIds.length === 0) {
@@ -263,6 +262,7 @@ async function persistRunningSessions(
                 ...entry,
                 resumeAfterRestart: {
                   queuedInputIds: queued.queuedInputIds,
+                  queuedInputSources: queued.queuedInputSources,
                   ...(session.hadBackgroundExec ? { hadBackgroundExec: true } : {}),
                 },
               },
@@ -711,8 +711,8 @@ async function resumeRestartStore(
           context,
           { ...target, agentId, sessionKey, sessionId: entry.sessionId },
           {
+            ...marker,
             signal,
-            queuedInputIds: marker.queuedInputIds,
             assertCurrent: () => signal.throwIfAborted(),
           },
         );
