@@ -443,12 +443,40 @@ describe("Muse native MSP harness", () => {
     },
   );
 
-  it("returns liveness to the host once the native turn completes", async () => {
+  it("returns liveness on native completion before host transcript draining finishes", async () => {
     const { run } = setup();
-    const result = await run({ prompt: "hello" });
-    expect(terminal(result).kind).not.toBe("failed");
-    expect(registeredRun.handle?.ownsLiveness?.()).toBe(false);
-    expect(registeredRun.handle?.isStopped?.()).toBe(true);
+    const writing = Promise.withResolvers<void>();
+    const drain = Promise.withResolvers<void>();
+    const completed = Promise.withResolvers<void>();
+    const submission = vi
+      .spyOn(Session.prototype, "sendUserTurn")
+      .mockImplementation(async function (this: Session, options) {
+        submission.mockRestore();
+        const turn = await this.sendUserTurn(options);
+        void turn.completed.then(completed.resolve, completed.reject);
+        return turn;
+      });
+    writes.append.mockImplementationOnce(async ({ messages }) => {
+      writing.resolve();
+      await drain.promise;
+      return messages;
+    });
+    const finished = vi.fn();
+    const running = run({ prompt: "hello", timeoutMs: 2 ** 31 }).then((result) => {
+      finished();
+      return result;
+    });
+    try {
+      await Promise.all([writing.promise, completed.promise]);
+      expect(finished).not.toHaveBeenCalled();
+      expect(registeredRun.handle?.ownsLiveness?.()).toBe(false);
+      expect(registeredRun.handle?.isStopped?.()).toBe(true);
+    } finally {
+      drain.resolve();
+      submission.mockRestore();
+      await running;
+    }
+    expect(terminal(await running).kind).toBe("ok");
   });
 
   it("returns liveness to the host when the attempt fails before the turn settles", async () => {

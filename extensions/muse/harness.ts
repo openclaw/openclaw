@@ -250,9 +250,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         if (!abortPromise) {
           // An interrupt ack is not settlement. Retire an unresponsive host so
           // cancellation cannot leave a turn waiting indefinitely.
-          forceCloseTimer = setTimeout(() => {
-            void runtime.close();
-          }, 5000);
+          forceCloseTimer = setTimeout(() => void runtime.close(), 5000);
           forceCloseTimer.unref();
           const nativeTurn = turn;
           abortPromise = (async () => {
@@ -271,9 +269,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         aborted = true;
         await stop();
       };
-      const onAbort = () => {
-        void abort().catch(() => runtime.close());
-      };
+      const onAbort = () => void abort().catch(() => runtime.close());
       const handle = {
         kind: "embedded" as const,
         runId: params.runId,
@@ -452,6 +448,11 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
             ? { reasoningEffort: params.thinkLevel === "off" ? "minimal" : params.thinkLevel }
             : {}),
         });
+        // Native completion must release liveness even while host consumers are still draining.
+        const markSettled = () => {
+          settled = true;
+        };
+        void turn.completed.then(markSettled, markSettled);
         lifecycle.emitLifecycleStart({ provider: "meta", model: params.modelId });
         lifecycle.emitExecutionPhaseOnce("accepted", { phase: "turn_accepted" });
         // Publish the binding only once Muse accepted the turn carrying any fresh-session
@@ -514,7 +515,6 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           messages.push(...group);
           assistantTranscriptOwned = finalKey !== undefined;
         });
-        settled = true;
         text = result.visibleText;
         lastToolError = result.lastToolError;
         if (result.outcome.kind !== "completed") {
