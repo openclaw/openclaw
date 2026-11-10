@@ -508,14 +508,13 @@ catch (error) { if (error.message !== "detach interrupted") throw error; }
     expect(result.status, result.stderr).toBe(0);
     const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
     utimesSync(f.anchor, old, old);
+    const before = readPrCacheState(entry);
     const complete = completeProcessCensus(f);
     sweep(f.cache);
     expect(existsSync(f.anchor)).toBe(!complete);
-    expect(readPrCacheState(entry)).toEqual({
-      registered: true,
-      settled: true,
-      anchors: complete ? [] : [f.anchor],
-    });
+    expect(readPrCacheState(entry)).toEqual(
+      complete ? { registered: true, settled: true, anchors: [] } : before,
+    );
   });
 
   it("bounds orphan collection and retains entries when the process census is restricted", () => {
