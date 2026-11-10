@@ -610,11 +610,13 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
       registryCount += 1;
     }
     const templateModelRegistry = prepared.modelRegistry;
-    const configuredRuntimeModels = completeConfiguredRuntimeModels(
+    const configuredRuntimeModels = await completeConfiguredRuntimeModels(
       facts,
       params.pluginGeneration,
       templateModelRegistry,
+      () => params.assertCurrent?.(facts.input),
     );
+    params.assertCurrent?.(facts.input);
     catalogs.set(
       facts.input,
       prepareCapturedRuntimeFacts({

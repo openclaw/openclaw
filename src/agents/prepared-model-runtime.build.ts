@@ -371,7 +371,10 @@ async function buildSnapshotBatch(
         assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent);
         preparedCatalogs.set(
           input,
-          await prepareFullCatalogFacts(agentFacts, pluginGeneration, catalogMode, catalogSource),
+          await prepareFullCatalogFacts(agentFacts, pluginGeneration, catalogMode, catalogSource, {
+            assertCurrent: () =>
+              assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent),
+          }),
         );
         assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent);
         runtimeRegistryCount += 1;

@@ -1,0 +1,2 @@
+# Cold dynamic capability publication, retained full-catalog facts, fallback, and superseded preparation regressions for #196142.
+124

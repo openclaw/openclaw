@@ -1,5 +1,8 @@
 import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { isAbortError } from "../infra/abort-signal.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { indexFirstByKey } from "../shared/dedupe-by-key.js";
@@ -15,6 +18,7 @@ import {
   createModelVisibilityPolicyWithFallbacks,
   listModelAliasCandidates,
 } from "./model-selection-shared.js";
+import { isPreparedModelRuntimePluginLifecycleFailure } from "./prepared-model-runtime-admission-errors.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import type {
   PreparedConfiguredRuntimeModel,
@@ -23,7 +27,9 @@ import type {
 } from "./prepared-model-runtime.types.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
-export function completeConfiguredRuntimeModels(
+const log = createSubsystemLogger("agents/prepared-model-runtime");
+
+export async function completeConfiguredRuntimeModels(
   agentFacts: Pick<
     PreparedModelRuntimeAgentFacts,
     "input" | "env" | "configuredModelRefs" | "configuredRuntimeModels"
@@ -33,7 +39,8 @@ export function completeConfiguredRuntimeModels(
     "pluginMetadataSnapshot" | "pluginRegistry"
   >,
   modelRegistry: ModelRegistry,
-): readonly PreparedConfiguredRuntimeModel[] {
+  assertCurrent?: () => void,
+): Promise<readonly PreparedConfiguredRuntimeModel[]> {
   if (!pluginGeneration.pluginRegistry) {
     return agentFacts.configuredRuntimeModels;
   }
@@ -46,7 +53,7 @@ export function completeConfiguredRuntimeModels(
       metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: pluginGeneration.pluginRegistry,
     },
-    () => {
+    async () => {
       const existing = new Map(
         configuredRuntimeModels.map((configured) => [
           buildModelCatalogMergeKey(configured.provider, configured.modelId),
@@ -58,15 +65,20 @@ export function completeConfiguredRuntimeModels(
         buildModelCatalogMergeKey(provider, modelId),
       )) {
         const { provider, modelId } = ref;
-        const model =
-          existing.get(key)?.model ??
-          resolveLoadedProviderRuntimePlugin({
+        let model = existing.get(key)?.model;
+        if (!model) {
+          const runtimeProvider = resolveLoadedProviderRuntimePlugin({
             provider,
             modelId,
             config,
             workspaceDir,
             env,
-          })?.resolveDynamicModel?.({
+          });
+          // Complete only the synchronous fallback owners already used by this path.
+          if (!runtimeProvider?.resolveDynamicModel) {
+            continue;
+          }
+          const context = {
             config,
             agentDir,
             workspaceDir,
@@ -76,7 +88,22 @@ export function completeConfiguredRuntimeModels(
             providerConfig:
               config.models?.providers?.[provider] ??
               findNormalizedProviderValue(config.models?.providers, provider),
-          });
+          };
+          assertCurrent?.();
+          try {
+            model = (await runtimeProvider.prepareDynamicModel?.(context)) ?? undefined;
+          } catch (error) {
+            assertCurrent?.();
+            if (isAbortError(error) || isPreparedModelRuntimePluginLifecycleFailure(error)) {
+              throw error;
+            }
+            log.warn(
+              `dynamic model preparation failed for ${provider}/${modelId}: ${formatErrorMessage(error)}`,
+            );
+          }
+          assertCurrent?.();
+          model ??= runtimeProvider.resolveDynamicModel(context) ?? undefined;
+        }
         if (model) {
           completed.push({ ...ref, model });
         }

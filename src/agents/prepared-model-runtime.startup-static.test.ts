@@ -430,116 +430,240 @@ describe("prepared model runtime Gateway catalog mode", () => {
     },
   );
 
-  it("does not publish a static catalog generation superseded while its hook is running", async () => {
-    const staleConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    const latestConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
-    const defaultPrepareStaticCatalog = mocks.prepareStaticCatalog.getMockImplementation();
-    const started = createDeferred();
-    const finish = createDeferred();
-    mocks.prepareStaticCatalog.mockImplementationOnce(async (...args: unknown[]) => {
-      started.resolve();
-      await finish.promise;
-      if (!defaultPrepareStaticCatalog) {
-        throw new Error("expected default static catalog implementation");
+  it.each(["static", "dynamic"] as const)(
+    "does not continue a superseded %s catalog generation",
+    async (kind) => {
+      const staleConfig = {
+        agents: {
+          defaults: {
+            model:
+              kind === "static"
+                ? "openai/gpt-5.5"
+                : { primary: "fixture-provider/first", fallbacks: ["fixture-provider/second"] },
+          },
+        },
+      };
+      const latestConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+      const defaultPrepareStaticCatalog = mocks.prepareStaticCatalog.getMockImplementation();
+      const started = createDeferred();
+      const finish = createDeferred();
+      let continuedAfterSupersession = false;
+      if (kind === "static") {
+        mocks.prepareStaticCatalog.mockImplementationOnce(async (...args: unknown[]) => {
+          started.resolve();
+          await finish.promise;
+          if (!defaultPrepareStaticCatalog) {
+            throw new Error("expected default static catalog implementation");
+          }
+          return await defaultPrepareStaticCatalog(...args);
+        });
+      } else {
+        const registry = createEmptyPluginRegistry();
+        registry.providers.push({
+          pluginId: "fixture-provider",
+          source: "test",
+          provider: {
+            id: "fixture-provider",
+            label: "Fixture provider",
+            auth: [],
+            prepareDynamicModel: async ({ modelId }) => {
+              if (modelId === "second") {
+                continuedAfterSupersession = true;
+                return;
+              }
+              started.resolve();
+              await finish.promise;
+            },
+            resolveDynamicModel: ({ provider, modelId }) => mocks.model(provider, modelId),
+          },
+        });
+        mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+          const fresh = createEmptyPluginRegistry();
+          fresh.providers.push(...registry.providers);
+          return fresh;
+        });
       }
-      return await defaultPrepareStaticCatalog(...args);
-    });
 
-    const stale = refresh(staleConfig);
-    // Surface refresh failures before hook entry instead of waiting for the test timeout.
-    await Promise.race([
-      started.promise,
-      stale.then(() => {
-        throw new Error("static catalog refresh completed before its hook");
-      }),
-    ]);
-    const latest = refresh(latestConfig);
-    finish.resolve();
+      const stale = refresh(staleConfig);
+      // Surface refresh failures before hook entry instead of waiting for the test timeout.
+      await Promise.race([
+        started.promise,
+        stale.then(() => {
+          throw new Error("static catalog refresh completed before its hook");
+        }),
+      ]);
+      const latest = refresh(latestConfig);
+      finish.resolve();
 
-    await expect(stale).rejects.toThrow("superseded");
-    await latest;
-    expect(snapshotFor(latestConfig)?.config).toBe(latestConfig);
-  });
+      await expect(stale).rejects.toThrow("superseded");
+      await latest;
+      expect(continuedAfterSupersession).toBe(false);
+      expect(snapshotFor(latestConfig)?.config).toBe(latestConfig);
+    },
+  );
 
-  it("publishes exact dynamic configured models without building a live catalog", async () => {
+  it("keeps a healthy primary and cached fallback when dynamic metadata preparation fails", async () => {
     const provider = "fixture-provider";
-    const modelId = "fixture-model-2026-08-09";
+    const modelId = "cached-model";
     const registry = createEmptyPluginRegistry();
-    const resolveDynamicModel = vi.fn((context: { provider: string; modelId: string }) =>
-      mocks.model(context.provider, context.modelId, "Fixture dated model"),
-    );
     registry.providers.push({
       pluginId: provider,
-      provider: { id: provider, label: "Fixture provider", auth: [], resolveDynamicModel },
       source: "test",
+      provider: {
+        id: provider,
+        label: "Fixture provider",
+        auth: [],
+        prepareDynamicModel: async () => {
+          throw new Error("catalog unavailable");
+        },
+        resolveDynamicModel: () => mocks.model(provider, modelId, "Cached fallback"),
+      },
     });
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
-    mocks.modelRegistry.find.mockImplementation((registryProvider, registryModelId) =>
-      registryProvider === "registry-only" &&
-      ["MIXED", "Shadow", "shadow"].includes(registryModelId)
-        ? mocks.model(registryProvider, registryModelId, "Exact-case registry model")
-        : undefined,
-    );
     const config = {
-      models: {
-        providers: {
-          [provider]: {
-            api: "openai-responses" as const,
-            baseUrl: "https://configured.fixture.invalid/v1",
-            models: [],
-          },
-        },
-      },
       agents: {
-        defaults: {
-          model: {
-            primary: `${provider}/${modelId}`,
-            fallbacks: [
-              "openai/gpt-5.5",
-              `${provider}/${modelId}`,
-              "registry-only/mixed",
-              "REGISTRY-ONLY/MIXED",
-              "registry-only/Shadow",
-              "registry-only/shadow",
-              "bare-alias",
-              "provider-only/",
-            ],
-          },
-        },
+        defaults: { model: { primary: "openai/gpt-5.5", fallbacks: [`${provider}/${modelId}`] } },
       },
     };
 
     await refresh(config);
 
-    expect(mocks.discoverModels.mock.invocationCallOrder[0]).toBeLessThan(
-      resolveDynamicModel.mock.invocationCallOrder[0]!,
+    expect(snapshotFor(config)?.modelCatalog.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: "openai", id: "gpt-5.5", reasoning: true }),
+        expect.objectContaining({
+          provider,
+          id: modelId,
+          name: "Cached fallback",
+          reasoning: true,
+        }),
+      ]),
     );
-    const snapshot = snapshotFor(config);
-    expect(
-      snapshot?.configuredRuntimeModels.map(
-        (configured) => `${configured.provider}/${configured.modelId}`,
-      ),
-    ).toEqual([`${provider}/${modelId}`, "openai/gpt-5.5"]);
-    expect(snapshot?.configuredRuntimeModels[0]?.model.id).toBe(modelId);
-    for (const entries of [snapshot?.modelCatalog.entries, snapshot?.modelCatalog.routeVariants]) {
-      expect(entries?.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
-        `${provider}/${modelId}`,
-        "openai/gpt-5.5",
-        "registry-only/MIXED",
-        "registry-only/Shadow",
-        "registry-only/shadow",
-      ]);
-    }
-    expect(
-      snapshot?.modelCatalog.staticEntries?.map((entry) => `${entry.provider}/${entry.id}`),
-    ).toEqual([`${provider}/${modelId}`, "openai/gpt-5.5"]);
-    expect(
-      snapshot?.modelCatalog.staticEntries?.find((entry) => entry.provider === "openai")
-        ?.thinkingLevelMap,
-    ).toEqual({ off: null, max: "max" });
-    expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
-    expect(mocks.loadStaticCatalog).not.toHaveBeenCalled();
-    expect(mocks.planOpenClawModelsJsonSource).not.toHaveBeenCalled();
-    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "publishes prepared dynamic configured models (direct result=%s)",
+    async (direct) => {
+      const provider = "fixture-provider";
+      const modelId = "fixture-model-2026-08-09";
+      const registry = createEmptyPluginRegistry();
+      let prepared = false;
+      let discoveryOnlyPrepared = false;
+      const dynamicModel = (context: { provider: string; modelId: string }) => ({
+        ...mocks.model(context.provider, context.modelId, "Fixture dated model"),
+        reasoning: prepared,
+      });
+      const resolveDynamicModel = (context: { provider: string; modelId: string }) =>
+        direct ? undefined : dynamicModel(context);
+      registry.providers.push({
+        pluginId: "discovery-only",
+        source: "test",
+        provider: {
+          id: "discovery-only",
+          label: "Discovery-only provider",
+          auth: [],
+          prepareDynamicModel: async () => {
+            discoveryOnlyPrepared = true;
+            throw new Error("missing-provider-auth");
+          },
+        },
+      });
+      registry.providers.push({
+        pluginId: provider,
+        provider: {
+          id: provider,
+          label: "Fixture provider",
+          auth: [],
+          prepareDynamicModel: async (context) => {
+            await Promise.resolve();
+            prepared = true;
+            return direct ? dynamicModel(context) : undefined;
+          },
+          resolveDynamicModel,
+        },
+        source: "test",
+      });
+      mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+      mocks.modelRegistry.find.mockImplementation((registryProvider, registryModelId) =>
+        registryProvider === "registry-only" &&
+        ["MIXED", "Shadow", "shadow"].includes(registryModelId)
+          ? mocks.model(registryProvider, registryModelId, "Exact-case registry model")
+          : undefined,
+      );
+      const config = {
+        models: {
+          providers: {
+            [provider]: {
+              api: "openai-responses" as const,
+              baseUrl: "https://configured.fixture.invalid/v1",
+              models: [],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: `${provider}/${modelId}`,
+              fallbacks: [
+                "openai/gpt-5.5",
+                `${provider}/${modelId}`,
+                "registry-only/mixed",
+                "REGISTRY-ONLY/MIXED",
+                "registry-only/Shadow",
+                "registry-only/shadow",
+                "bare-alias",
+                "provider-only/",
+                "discovery-only/unavailable",
+              ],
+            },
+          },
+        },
+      };
+
+      await refresh(config);
+
+      expect(discoveryOnlyPrepared).toBe(false);
+      const snapshot = snapshotFor(config);
+      expect(
+        snapshot?.configuredRuntimeModels.map(
+          (configured) => `${configured.provider}/${configured.modelId}`,
+        ),
+      ).toEqual([`${provider}/${modelId}`, "openai/gpt-5.5"]);
+      expect(snapshot?.configuredRuntimeModels[0]?.model).toMatchObject({
+        id: modelId,
+        reasoning: true,
+      });
+      expect(
+        snapshot?.modelCatalog.entries.find((entry) => entry.provider === provider)?.reasoning,
+      ).toBe(true);
+      for (const entries of [
+        snapshot?.modelCatalog.entries,
+        snapshot?.modelCatalog.routeVariants,
+      ]) {
+        expect(entries?.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+          `${provider}/${modelId}`,
+          "openai/gpt-5.5",
+          "registry-only/MIXED",
+          "registry-only/Shadow",
+          "registry-only/shadow",
+        ]);
+      }
+      expect(
+        snapshot?.modelCatalog.staticEntries?.map((entry) => `${entry.provider}/${entry.id}`),
+      ).toEqual([`${provider}/${modelId}`, "openai/gpt-5.5"]);
+      expect(
+        snapshot?.modelCatalog.staticEntries?.find((entry) => entry.provider === "openai")
+          ?.thinkingLevelMap,
+      ).toEqual({ off: null, max: "max" });
+      expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+      expect(mocks.loadStaticCatalog).not.toHaveBeenCalled();
+      expect(mocks.planOpenClawModelsJsonSource).not.toHaveBeenCalled();
+      expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+
+      const fullCatalog = await snapshot!.loadFullModelCatalog!();
+      expect(fullCatalog.entries.find((entry) => entry.provider === provider)?.reasoning).toBe(
+        true,
+      );
+    },
+  );
 });
