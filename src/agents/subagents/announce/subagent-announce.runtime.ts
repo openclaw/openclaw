@@ -1,3 +1,4 @@
+import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { callGateway as GatewayCaller } from "../../../gateway/call.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
@@ -42,13 +43,13 @@ export async function commitRequesterSubagentResult(
     Parameters<typeof commitBackgroundPayloadsToSession>[0],
     "payloads" | "provenance"
   > & {
-    text: string;
+    payload: ReplyPayload;
   },
 ): Promise<void> {
-  const { text, ...rest } = params;
+  const { payload, ...rest } = params;
   const committed = await commitBackgroundPayloadsToSession({
     ...rest,
-    payloads: [{ text }],
+    payloads: [payload],
     provenance: { kind: "subagent-completion" },
   });
   if (!committed.ok) {

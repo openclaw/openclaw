@@ -1,7 +1,10 @@
 import type { SessionGoal } from "../../../config/sessions/types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
-import { resolveDirectCompletionInjectionText } from "./subagent-announce-completion-delivery.js";
+import {
+  resolveDirectCompletionInjectionContent,
+  type DirectCompletionContent,
+} from "./subagent-announce-completion-delivery.js";
 
 /** Transcript label for a child result held while the requester goal is paused. */
 export const PAUSED_GOAL_CHILD_RESULT_LABEL = "Subagent result (goal paused)";
@@ -38,15 +41,16 @@ function recordedChildSpawnTimestamp(record: ChildSpawnRecord): number | undefin
   return timestamps.length > 0 ? Math.min(...timestamps) : undefined;
 }
 
-function visiblePausedGoalText(params: {
+function visiblePausedGoalContent(params: {
   internalEvents?: readonly AgentInternalEvent[];
   pausedGoalVisibleText?: string;
   /** A failed child, or a required result that never arrived; not a successful empty one. */
   hasFailedOrMissingChildResult: boolean;
-}): string | undefined {
-  // Completed event text wins. Settle findings supply text when those events
-  // are absent. The failed notice is reserved for a failed or no-output child.
-  const completed = resolveDirectCompletionInjectionText({
+}): DirectCompletionContent | undefined {
+  // Completed event content wins, with its media kept structured. Settle findings
+  // supply text when those events are absent. The failed notice is reserved for
+  // a failed or no-output child.
+  const completed = resolveDirectCompletionInjectionContent({
     events: params.internalEvents,
     contentKind: "completed_result",
   });
@@ -55,19 +59,18 @@ function visiblePausedGoalText(params: {
   }
   const visible = params.pausedGoalVisibleText?.trim();
   if (visible) {
-    return visible;
+    return { content: visible, mediaUrls: [] };
   }
-  if (params.hasFailedOrMissingChildResult) {
-    return resolveDirectCompletionInjectionText({
-      events: params.internalEvents,
-      contentKind: "failed_notice",
-    });
-  }
-  return undefined;
+  return params.hasFailedOrMissingChildResult
+    ? resolveDirectCompletionInjectionContent({
+        events: params.internalEvents,
+        contentKind: "failed_notice",
+      })
+    : undefined;
 }
 
 /**
- * Visible child text to inject instead of starting a requester turn.
+ * Visible child content to record instead of starting a requester turn.
  * Undefined keeps the ordinary turn: the goal is not paused, the completion
  * is parent-only, a registry row is missing, a child spawned at or after the
  * pause, or a successful child has no visible text.
@@ -81,7 +84,7 @@ export function resolvePausedGoalChildInjection(params: {
   pausedGoalVisibleText?: string;
   /** A failed child, or a required result that never arrived; not a successful empty one. */
   hasFailedOrMissingChildResult: boolean;
-}): string | undefined {
+}): DirectCompletionContent | undefined {
   const pausedAt = params.goal?.status === "paused" ? params.goal.pausedAt : undefined;
   // Parent-only output must stay off the visible transcript. There is no hold
   // that keeps it private, so that completion stays on the requester turn.
@@ -100,5 +103,5 @@ export function resolvePausedGoalChildInjection(params: {
       return undefined;
     }
   }
-  return visiblePausedGoalText(params);
+  return visiblePausedGoalContent(params);
 }

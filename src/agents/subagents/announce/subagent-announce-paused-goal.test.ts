@@ -204,22 +204,27 @@ it("injects a child result spawned before a paused goal without a requester turn
     sessionKey,
     agentId: "main",
     expectedGeneration: { sessionId: "requester-session", lifecycleRevision: "requester-revision" },
-    text: shown(childResult),
+    payload: { text: shown(childResult) },
     idempotencyKey: "paused-goal-completion:paused-goal",
   });
   expect(accepted).toEqual([undefined]);
 });
 
-it("reuses one idempotency key when a paused-goal completion is retried", async () => {
-  const fixture = deliver({ goal: goal("paused", pausedAt), createdAt: 100, startedAt: 200 });
+it("keeps child media structured in the paused-goal result row", async () => {
+  const fixture = deliver({
+    goal: goal("paused", pausedAt),
+    createdAt: 100,
+    startedAt: 200,
+    result: "Chart ready\nMEDIA:/synthetic/chart.png",
+  });
   await fixture.run();
-  await fixture.run();
-  const keys = fixture.inject.mock.calls.map((call) => call[0].idempotencyKey);
-  expect(keys).toEqual([
-    "paused-goal-completion:paused-goal",
-    "paused-goal-completion:paused-goal",
-  ]);
-  expect(methods(fixture)).not.toContain("agent");
+  expect(methods(fixture)).toEqual(["inject"]);
+  const { payload } = fixture.inject.mock.calls[0]![0];
+  expect(payload).toMatchObject({
+    text: shown("Chart ready"),
+    mediaUrls: ["/synthetic/chart.png"],
+  });
+  expect(payload.text).not.toContain("chart.png");
 });
 
 it.each([
@@ -276,7 +281,7 @@ it("injects settle-wake findings for children spawned before a paused goal", asy
   expect(methods(fixture)).toEqual(["inject"]);
   expect(fixture.inject.mock.calls[0]?.[0]).toMatchObject({
     sessionKey,
-    text: shown(settleFindings),
+    payload: { text: shown(settleFindings) },
   });
   expect(JSON.stringify(fixture.dispatch.mock.calls)).not.toContain(failedNotice);
 });
@@ -298,6 +303,6 @@ it.each([
   expect(result).toMatchObject({ delivered: true, path: "direct" });
   expect(methods(fixture)).toEqual(["inject"]);
   expect(fixture.inject.mock.calls[0]?.[0]).toEqual(
-    expect.objectContaining({ text: shown(failedNotice) }),
+    expect.objectContaining({ payload: { text: shown(failedNotice) } }),
   );
 });

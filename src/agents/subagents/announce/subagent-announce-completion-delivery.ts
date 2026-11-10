@@ -268,7 +268,11 @@ export function isDirectMessageDeliveryTarget(
   return deriveSessionChatTypeFromKey(requesterSessionKey) === "direct";
 }
 
-type DirectCompletionContent = { content: string; mediaUrls: string[]; audioAsVoice?: boolean };
+export type DirectCompletionContent = {
+  content: string;
+  mediaUrls: string[];
+  audioAsVoice?: boolean;
+};
 
 function collectDirectCompletionContent(params: {
   agentResult?: { payloads?: unknown };
@@ -358,19 +362,16 @@ function collectDirectCompletionContent(params: {
   return undefined;
 }
 
-/** Child text for one requested injection kind. Empty completed output stays empty. */
-export function resolveDirectCompletionInjectionText(params: {
+/** Structured child content for one requested kind. Empty completed output stays empty. */
+export function resolveDirectCompletionInjectionContent(params: {
   events: readonly AgentInternalEvent[] | undefined;
   contentKind: "completed_result" | "failed_notice";
-}): string | undefined {
+}): DirectCompletionContent | undefined {
   const extracted = collectDirectCompletionContent({
     events: params.events,
     contentKind: params.contentKind,
   });
-  const text = [extracted?.content, ...(extracted?.mediaUrls ?? [])]
-    .filter((part): part is string => Boolean(part))
-    .join("\n\n");
-  return text || undefined;
+  return extracted && (extracted.content || extracted.mediaUrls.length > 0) ? extracted : undefined;
 }
 
 export async function deliverCompletionDirect(params: {

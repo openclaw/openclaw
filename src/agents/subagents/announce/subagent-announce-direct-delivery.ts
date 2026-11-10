@@ -447,7 +447,7 @@ async function sendSubagentAnnounceDirectlyBound(
       // Announce cleanup and requester-settle retries call this function again.
       // A recorded result settles the completion, so a later attempt cannot
       // turn the same pre-pause child into a requester model run.
-      const pausedGoalMessage = resolvePausedGoalChildInjection({
+      const pausedGoalContent = resolvePausedGoalChildInjection({
         completionTarget: params.completionTarget,
         sourceSessionKey: params.sourceSessionKey,
         settleWakeSourceSessionKeys: params.settleWakeSourceSessionKeys,
@@ -462,7 +462,7 @@ async function sendSubagentAnnounceDirectlyBound(
       });
       // The row only records history. A requester with an external delivery route,
       // or without a resolved generation, keeps the ordinary path that delivers it.
-      if (pausedGoalMessage && !deliveryTarget.deliver && requesterAgentId && requesterSessionId) {
+      if (pausedGoalContent && !deliveryTarget.deliver && requesterAgentId && requesterSessionId) {
         if (params.onBeforeDispatch) {
           await params.onBeforeDispatch();
           dispatchPrepared = true;
@@ -482,7 +482,15 @@ async function sendSubagentAnnounceDirectlyBound(
             sessionId: requesterSessionId,
             lifecycleRevision: requesterLifecycleRevision,
           },
-          text: `[${PAUSED_GOAL_CHILD_RESULT_LABEL}]\n\n${pausedGoalMessage}`,
+          payload: {
+            text: [`[${PAUSED_GOAL_CHILD_RESULT_LABEL}]`, pausedGoalContent.content]
+              .filter(Boolean)
+              .join("\n\n"),
+            ...(pausedGoalContent.mediaUrls.length > 0
+              ? { mediaUrls: pausedGoalContent.mediaUrls }
+              : {}),
+            ...(pausedGoalContent.audioAsVoice ? { audioAsVoice: true } : {}),
+          },
           idempotencyKey: `${params.directIdempotencyKey}:paused-goal`,
           config: cfg,
           signal: params.signal,
