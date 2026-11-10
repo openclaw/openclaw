@@ -269,6 +269,7 @@ it.each([
   ["filesystem root", "/", null],
   ["ordinary directory", "/sandbox/nested", "/sandbox/nested"],
   ["excluded directory", "/sandbox/.git/nested", null],
+  ["nested repository metadata", "/sandbox/nested/.git", null],
   ["mid-path symlink", "/sandbox/link/nested", null],
   ["agent disabled mount", "/agent/nested", null],
   ["generated skills ancestor", "/sandbox/.openclaw", "/sandbox/.openclaw"],
@@ -288,6 +289,7 @@ it.each([
     for (const root of [workspaceDir, agentWorkspaceDir]) {
       await fs.mkdir(path.join(root, "nested"));
     }
+    await fs.mkdir(path.join(workspaceDir, "nested", ".git"));
     for (const excluded of [".git", "hooks", "git-hooks"]) {
       await fs.mkdir(path.join(workspaceDir, excluded, "nested"), { recursive: true });
     }

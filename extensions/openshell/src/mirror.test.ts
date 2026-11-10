@@ -132,6 +132,44 @@ describe("replaceDirectoryContents", () => {
     }
   });
 
+  it.each(["replace", "stage"] as const)(
+    "%s excludes nested Git metadata while copying ordinary nested content",
+    async (mode) => {
+      await writeFiles(source, {
+        "repo/.git/config": "sandbox",
+        "fresh/.git": "gitdir: ../repo/.git\n",
+        "src/hooks/use.ts": "ordinary source",
+      });
+      if (mode === "replace") {
+        await writeFiles(target, { "repo/.git/config": "host" });
+        await replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS);
+        await expectFiles(target, { "repo/.git/config": "host" });
+      } else {
+        await stageDirectoryContents({
+          sourceDir: source,
+          targetDir: target,
+          excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+        });
+        await expectPathMissing(path.join(target, "repo/.git"));
+      }
+      await expectPathMissing(path.join(target, "fresh/.git"));
+      await expectFiles(target, { "src/hooks/use.ts": "ordinary source" });
+    },
+  );
+
+  it.each(["deleted", "replaced by a file"] as const)(
+    "preserves nested host metadata when its remote parent is %s",
+    async (mode) => {
+      await writeFiles(target, { "repo/.git/config": "host", "repo/old.txt": "old" });
+      if (mode === "replaced by a file") {
+        await writeFiles(source, { repo: "remote file" });
+      }
+      await replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS);
+      await expectFiles(target, { "repo/.git/config": "host" });
+      await expectPathMissing(path.join(target, "repo/old.txt"));
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "preserves target-only special files and their ancestor directories",
     async () => {

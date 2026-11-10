@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import pLimit from "p-limit";
 
 export const DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS = ["hooks", "git-hooks", ".git"] as const;
+const NESTED_GIT_EXCLUDE_DIRS = [".git"] as const;
 const COPY_TREE_FS_CONCURRENCY = 16;
 
 function createExcludeMatcher(excludeDirs?: readonly string[]) {
@@ -18,6 +19,7 @@ async function reconcileMirrorPath(params: {
   sourcePath?: string;
   targetPath: string;
   replace: boolean;
+  excludeDirs?: readonly string[];
 }): Promise<boolean> {
   const targetStats = await runLimitedFs(lstatIfExists, params.targetPath, "ENOENT");
   // Preserve host entries mirror transport cannot represent and their ancestor directories.
@@ -39,6 +41,7 @@ async function reconcileMirrorPath(params: {
       sourceDir,
       targetDir: params.targetPath,
       replace: params.replace,
+      excludeDirs: params.excludeDirs,
     });
     // A remote file cannot replace a directory containing preserved host entries.
     if (sourceDir || preservedEntries) {
@@ -64,6 +67,7 @@ async function reconcileMirrorDirectory(params: {
 }): Promise<boolean> {
   const { sourceDir } = params;
   const isExcluded = createExcludeMatcher(params.excludeDirs);
+  const nestedExcludeDirs = isExcluded(".git") ? NESTED_GIT_EXCLUDE_DIRS : undefined;
   await runLimitedFs(fs.mkdir, params.targetDir, { recursive: true });
   const sourceEntries = new Set(sourceDir ? await runLimitedFs(() => fs.readdir(sourceDir)) : []);
   const targetEntries = params.replace
@@ -79,10 +83,11 @@ async function reconcileMirrorDirectory(params: {
             sourceDir && sourceEntries.has(entry) ? path.join(sourceDir, entry) : undefined,
           targetPath: path.join(params.targetDir, entry),
           replace: params.replace,
+          excludeDirs: nestedExcludeDirs,
         }),
       ),
   );
-  let preservedEntries = false;
+  let preservedEntries = targetEntries.some(isExcluded);
   for (const result of results) {
     if (result.status === "rejected") {
       throw result.reason;
@@ -95,7 +100,7 @@ async function reconcileMirrorDirectory(params: {
 export async function replaceDirectoryContents(params: {
   sourceDir: string;
   targetDir: string;
-  /** Top-level directory names to exclude from sync (preserved in target, skipped from source). */
+  /** Root names to exclude; .git also stays excluded at every depth. */
   excludeDirs?: readonly string[];
 }): Promise<void> {
   await reconcileMirrorDirectory({ ...params, replace: true });
@@ -104,7 +109,7 @@ export async function replaceDirectoryContents(params: {
 export async function stageDirectoryContents(params: {
   sourceDir: string;
   targetDir: string;
-  /** Top-level directory names to exclude from the staged upload. */
+  /** Root names to exclude; .git also stays excluded at every depth. */
   excludeDirs?: readonly string[];
 }): Promise<void> {
   await reconcileMirrorDirectory({ ...params, replace: false });

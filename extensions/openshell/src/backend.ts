@@ -452,7 +452,8 @@ class OpenShellSandboxBackendImpl {
       if (
         DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS.some(
           (excluded) => excluded === normalizeLowercaseStringOrEmpty(parts[0]),
-        )
+        ) ||
+        parts.slice(1).some((part) => normalizeLowercaseStringOrEmpty(part) === ".git")
       ) {
         return null;
       }
