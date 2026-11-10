@@ -11,23 +11,14 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import {
-  WorkspaceAliasRepointedError,
-  WorkspaceVanishedError,
-} from "../../agents/workspace-state-identity.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
-import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import {
-  findStartupMaintenanceRequiredError,
-  StartupMaintenanceRequiredError,
-} from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
@@ -43,10 +34,7 @@ import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
-import {
-  markReplyPayloadForSourceSuppressionDelivery,
-  type ReplyPayload,
-} from "../reply-payload.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { finishCommandTurn } from "./command-turn-completion.js";
@@ -93,7 +81,7 @@ import {
 import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
-import { prepareReplyWorkspace } from "./reply-workspace.js";
+import { prepareReplyWorkspace, replyForUnavailableWorkspace } from "./reply-workspace.js";
 import { withReplySessionDiffBaseline, type ReplyDiffBaseline } from "./session-diff-baseline.js";
 import { resolveScheduledSessionModelSelection } from "./session-event-model-selection.js";
 import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
@@ -293,16 +281,13 @@ async function resolveReplyFromConfig(
       }
       return { text: error.message };
     };
-    const rejectLegacyWorkspacePreparation = (error: unknown): ReplyPayload => {
-      const maintenance = findStartupMaintenanceRequiredError(error);
-      if (maintenance?.kind !== "legacy-workspace") {
+    const rejectUnavailableWorkspacePreparation = (error: unknown): ReplyPayload => {
+      const reply = replyForUnavailableWorkspace(error);
+      if (!reply) {
         throw error;
       }
       typing.cleanup();
-      logVerbose(`workspace unavailable; replying with repair notice: ${maintenance.message}`);
-      return markReplyPayloadForSourceSuppressionDelivery({
-        text: "⚠️ This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.",
-      });
+      return reply;
     };
 
     const nativeSlashCommandFastReply = await traceGetReplyPhase(
@@ -361,6 +346,7 @@ async function resolveReplyFromConfig(
         prepareReplyWorkspace({
           dir: workspaceDirRaw,
           ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          deferWorkspaceBootstrap: optsWithSkillFilter?.deferWorkspaceBootstrap,
           skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
           useFastTestBootstrap,
           provisioningInput: acpWorkspaceProvisioningInput,
@@ -369,23 +355,7 @@ async function resolveReplyFromConfig(
         }),
       );
     } catch (error) {
-      if (error instanceof StartupMaintenanceRequiredError && error.kind === "legacy-workspace") {
-        return rejectLegacyWorkspacePreparation(error);
-      }
-      if (
-        !(error instanceof WorkspaceAliasRepointedError || error instanceof WorkspaceVanishedError)
-      ) {
-        throw error;
-      }
-      // Permanent failures must finish ingress even in tool-only conversations.
-      // Keep host paths in operator logs.
-      typing.cleanup();
-      logVerbose(`workspace unavailable; replying with repair notice: ${error.message}`);
-      const text =
-        error instanceof WorkspaceAliasRepointedError
-          ? "⚠️ This agent's workspace state needs repair: the configured workspace path no longer matches its stored identity. Ask the gateway operator to run `openclaw doctor --fix` and confirm the move only if the same workspace moved."
-          : "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore the workspace from backup and run `openclaw doctor`.";
-      return markReplyPayloadForSourceSuppressionDelivery({ text });
+      return rejectUnavailableWorkspacePreparation(error);
     }
     const workspaceDir = preparedWorkspaceDir ?? workspace.dir;
     const workspaceContext = { cfg, agentId, agentDir, workspaceDir };
@@ -435,7 +405,7 @@ async function resolveReplyFromConfig(
           }),
         );
       } catch (error) {
-        return rejectLegacyWorkspacePreparation(error);
+        return rejectUnavailableWorkspacePreparation(error);
       }
     }
 
@@ -942,7 +912,7 @@ async function resolveReplyFromConfig(
           )
         ).staged;
       } catch (error) {
-        return rejectLegacyWorkspacePreparation(error);
+        return rejectUnavailableWorkspacePreparation(error);
       }
     }
 

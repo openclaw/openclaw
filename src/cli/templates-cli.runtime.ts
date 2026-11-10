@@ -11,7 +11,6 @@ import { redactSensitiveArgv } from "../config/redact-argv.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
-import { monotonicNow } from "../shared/monotonic-time.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -49,9 +48,6 @@ import {
   type TemplateAddPlan,
   type TemplateReadResult,
 } from "../templates/types.js";
-import { sleep } from "../utils/sleep.js";
-import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
-import { callGatewayFromCli, callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
@@ -79,8 +75,9 @@ function addPlanSkillWarnings(plan: TemplateAddPlan): TemplateCliSkillWarning[] 
   });
 }
 
-const TEMPLATE_AGENT_RELOAD_TIMEOUT_MS = 15_000;
-const TEMPLATE_AGENT_RELOAD_POLL_MS = 100;
+type TemplateAddLocalRequest =
+  | { mode: "preview" }
+  | { mode: "apply"; assertCurrent: () => void; signal: AbortSignal };
 
 function logTemplateAddPlanSummary(plan: TemplateAddPlan): void {
   runtime.log(`Agent: ${sanitizeTerminalText(plan.agent.finalId)}`);
@@ -205,10 +202,11 @@ export async function runTemplatesAddCommand(
   sourcePath: string,
   opts: TemplatesAddOptions,
 ): Promise<void> {
-  const run = async () => {
-    const config = opts.dryRun
-      ? readCurrentConfigForPolicyCheck({ configPath: resolveConfigPath(), env: process.env })
-      : getRuntimeConfig();
+  const run = async (request: TemplateAddLocalRequest) => {
+    const config =
+      request.mode === "preview"
+        ? readCurrentConfigForPolicyCheck({ configPath: resolveConfigPath(), env: process.env })
+        : getRuntimeConfig();
     if (!isTemplatesLabsEnabled(config)) {
       emitTemplateFailure(opts.json, TEMPLATES_LABS_DISABLED_MESSAGE, {
         schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
@@ -224,6 +222,7 @@ export async function runTemplatesAddCommand(
         await readTemplateManifestFile(sourcePath),
         opts,
         config,
+        request,
       );
     }
     let sourceRunStarted = false;
@@ -231,11 +230,11 @@ export async function runTemplatesAddCommand(
     try {
       await withResolvedClawHubSource({
         coordinate: { packageName: sourcePath },
-        mode: opts.dryRun ? "preview" : "apply",
+        mode: request.mode,
         acknowledgeClawHubRisk: opts.acknowledgeClawhubRisk,
         run: async (source, trust) => {
           sourceRunStarted = true;
-          await runTemplatesAddFromSource(source, opts, config, trust);
+          await runTemplatesAddFromSource(source, opts, config, request, trust);
           sourceRunFinished = true;
         },
       });
@@ -264,14 +263,16 @@ export async function runTemplatesAddCommand(
     }
   };
   if (opts.dryRun) {
-    return await withArtifactPreservingStateReads(() => withOpenClawStateDatabaseReadSnapshot(run));
+    return await withArtifactPreservingStateReads(() =>
+      withOpenClawStateDatabaseReadSnapshot(() => run({ mode: "preview" })),
+    );
   }
   return await runWithLocalStateOwner({
     method: "templates.add",
     params: {},
     target: "Template configuration and provenance",
     onForeignOwner: "refuse",
-    runLocal: run,
+    runLocal: async ({ assertCurrent, signal }) => run({ mode: "apply", assertCurrent, signal }),
   });
 }
 
@@ -279,6 +280,7 @@ async function runTemplatesAddFromSource(
   result: TemplateReadResult,
   opts: TemplatesAddOptions,
   config: OpenClawConfig,
+  request: TemplateAddLocalRequest,
   trust?: ClawHubTemplateTrust,
 ): Promise<void> {
   if (!result.ok) {
@@ -292,7 +294,7 @@ async function runTemplatesAddFromSource(
   }
 
   const listedMcpServers = await listConfiguredMcpServers(
-    opts.dryRun ? { observe: false } : undefined,
+    request.mode === "preview" ? { observe: false } : undefined,
   );
   if (!listedMcpServers.ok) {
     runtime.error(listedMcpServers.error);
@@ -344,7 +346,7 @@ async function runTemplatesAddFromSource(
     return;
   }
 
-  if (opts.dryRun) {
+  if (request.mode === "preview") {
     if (opts.json) {
       writeRuntimeJson(runtime, preview);
     } else {
@@ -458,91 +460,40 @@ async function runTemplatesAddFromSource(
           acceptCapabilities: opts.acceptCapabilities,
           runtime,
         }).onCapabilityConsent;
-        return await applyTemplateAddPlanStateless(plan, {
-          config,
-          assertCurrent: () => lease.assertOwned(),
-          assertForwardCurrent: assertCurrentLab,
-          pluginConsent: {
-            onCapabilityConsent: async (review) => await onCapabilityConsent?.(review),
-            confirmInstall: async (_pluginId, warning) =>
-              !warning || (riskApproved && warnedPackages.length > 0),
-          },
-          ...(skillConsent ? { skillConsent } : {}),
-          reloadPlugins: await resolvePluginBatchReload(),
-          consentPlanIntegrity: plan.planIntegrity,
+        const { createLocalTemplateConversationAdapters } =
+          await import("./templates-agent-conversation.js");
+        const assertCurrent = () => {
+          request.assertCurrent();
+          lease.assertOwned();
+          assertCurrentLab();
+        };
+        assertCurrent();
+        const conversation = createLocalTemplateConversationAdapters({
+          agentId: plan.agent.finalId,
+          assertCurrent,
+          signal: request.signal,
           runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
-          cronGateway: {
-            add: async (input) => await callGatewayFromCli("cron.add", {}, input),
-            list: async (agentId) =>
-              await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
-            get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
-            writeScratch: async (id, content, commitGuard) => {
-              commitGuard();
-              const scratchResult = await callGatewayFromCli(
-                "cron.scratch.set",
-                {},
-                {
-                  id,
-                  content,
-                  expectedRevision: 0,
-                },
-              );
-              if (!scratchResult.ok) {
-                throw new Error("Template automation scratch changed before import.");
-              }
-            },
-            enable: async (id, expectedConfigRevision, commitGuard) => {
-              commitGuard();
-              await callGatewayFromCli(
-                "cron.update",
-                {},
-                {
-                  id,
-                  patch: { enabled: true },
-                  expectedConfigRevision,
-                },
-              );
-            },
-            remove: async (id, options) =>
-              await callGatewayFromCli(
-                "cron.remove",
-                {},
-                {
-                  id,
-                  expectedConfigRevision: options.expectedConfigRevision,
-                },
-              ),
-            waitUntilAgentAvailable: async (agentId) => {
-              const deadline = monotonicNow() + TEMPLATE_AGENT_RELOAD_TIMEOUT_MS;
-              let lastError: unknown;
-              while (monotonicNow() < deadline) {
-                try {
-                  const response = await callGatewayFromCliWithTransport<{
-                    config?: OpenClawConfig;
-                    configRevisionHash?: unknown;
-                    appliedConfigHash?: unknown;
-                  }>("config.get", { timeout: "5000" }, {});
-                  // Matching tokens can describe a cached roster from before this agent was added.
-                  if (
-                    Object.hasOwn(response.config?.agents?.entries ?? {}, agentId) &&
-                    typeof response.configRevisionHash === "string" &&
-                    response.configRevisionHash === response.appliedConfigHash
-                  ) {
-                    return;
-                  }
-                  lastError = undefined;
-                } catch (error) {
-                  lastError = error;
-                }
-                await sleep(TEMPLATE_AGENT_RELOAD_POLL_MS);
-              }
-              const suffix = lastError instanceof Error ? `: ${lastError.message}` : "";
-              throw new Error(
-                `Gateway did not apply the Template agent configuration in time${suffix}`,
-              );
-            },
-          },
         });
+        const { withLocalCronService } = await import("../cron/local-service.js");
+        const { createTemplateCronGateway } = await import("../templates/cron-gateway.js");
+        return await withLocalCronService(getRuntimeConfig, async (cron) =>
+          applyTemplateAddPlanStateless(plan, {
+            ...conversation,
+            config,
+            assertCurrent,
+            assertForwardCurrent: assertCurrentLab,
+            pluginConsent: {
+              onCapabilityConsent: async (review) => await onCapabilityConsent?.(review),
+              confirmInstall: async (_pluginId, warning) =>
+                !warning || (riskApproved && warnedPackages.length > 0),
+            },
+            ...(skillConsent ? { skillConsent } : {}),
+            reloadPlugins: await resolvePluginBatchReload(),
+            consentPlanIntegrity: plan.planIntegrity,
+            runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
+            cronGateway: createTemplateCronGateway(cron, getRuntimeConfig, assertCurrent),
+          }),
+        );
       },
     );
   } catch (error) {

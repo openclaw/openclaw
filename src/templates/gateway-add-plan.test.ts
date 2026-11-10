@@ -64,6 +64,40 @@ const buildPlan = (
 ) => buildGatewayTemplateAddPlan(source, { config, agentId, sourceMcpServers: {} });
 
 describe("Gateway Template Add plan", () => {
+  it("does not load host MCP configuration for a Template with no MCP declarations", async () => {
+    const source = await readGatewayPackageFixture();
+    source.manifest = { ...source.manifest, mcpServers: {} };
+    const loadMcp = vi.fn(async () => ({}));
+    const plan = await buildGatewayTemplateAddPlan(source, {
+      config: { agents: { entries: {} } },
+      sourceMcpServers: loadMcp,
+    });
+    expect(plan.blockers).toEqual([]);
+    expect(loadMcp).not.toHaveBeenCalled();
+  });
+
+  it("loads current authored MCP configuration when the Template declares MCP", async () => {
+    const source = await readGatewayPackageFixture();
+    source.manifest = {
+      ...source.manifest,
+      mcpServers: { fixture: { command: "fixture-server" } },
+    };
+    const loadMcp = vi.fn(async () => ({ fixture: { command: "fixture-server" } }));
+    const plan = await buildGatewayTemplateAddPlan(source, {
+      config: { agents: { entries: {} } },
+      sourceMcpServers: loadMcp,
+    });
+    expect(loadMcp).toHaveBeenCalledTimes(1);
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "mcpServer",
+        id: "fixture",
+        action: "configure",
+        details: { command: "fixture-server", expectedState: "present-exact", prerequisites: [] },
+      }),
+    );
+  });
+
   it("compares relocated plan paths without treating sibling paths as source contents", () => {
     const previewRoot = path.resolve("preview-template");
     const persistedRoot = path.resolve("persisted-template");

@@ -462,6 +462,13 @@ for ordinary same-revision manual or scheduled validation.
 
 ### Boat build qualification
 
+Live Media Runner Image and Sandbox Common Smoke are prepared to use
+GitHub-hosted `ubuntu-24.04` when the repository-wide Boat backend is enabled.
+Until that cutover, qualify Boat with the admitted `runner_backend=boat` dispatch
+below. The utility jobs retain their 30- and 45-minute budgets and existing
+triggers, permissions, and Docker commands. Other backend settings retain their
+existing routes.
+
 A maintainer can dispatch `ci.yml` with `runner_backend=boat`,
 `release_gate=true`, `pull_request_number`, and `target_ref` set to the full
 current same-repository PR head. The workflow branch and revision must match
