@@ -1255,7 +1255,16 @@ export async function downloadExactActionsArtifactArchive(params) {
     "GitHub Actions artifact metadata",
   );
   validateArtifactMetadata(artifactMetadata, expected);
-  const archiveBytes = await transfer.archive();
+  const replay = params.immutableReads;
+  replay?.observeArchive(expected.artifactId, artifactMetadata);
+  const archiveBytes = replay
+    ? await replay.bytes(`actions/artifacts/${expected.artifactId}/zip`, () => transfer.archive())
+    : await transfer.archive();
+  // Replay is content-only: metadata above stays live, and the selected tuple
+  // must authenticate the bytes even when the carrier itself was authentic.
+  if (replay) {
+    verifyArchiveBytes(archiveBytes, expected, "GitHub Actions artifact download");
+  }
   return { archiveBytes, artifactMetadata };
 }
 

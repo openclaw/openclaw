@@ -18,6 +18,7 @@ import {
   validateReceiptRecoveryRequest,
   verifyOriginalReceiptQualification,
 } from "../../scripts/full-release-receipt-recovery.mjs";
+import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
 import * as qualificationAuthority from "../../scripts/release-qualification-admission.mjs";
 import * as toolingAuthority from "../../scripts/release-tooling-identity.mjs";
 import * as candidateReuse from "../../scripts/lib/full-release-candidate-reuse.mjs";
@@ -39,7 +40,11 @@ const roles = [
   "pluginPrereleaseCandidate",
 ];
 function fixture() {
-  const old = candidatePublicationFixture();
+  const candidate = candidatePublicationFixture();
+  const old = {
+    ...candidate,
+    client: { ...createReleaseEvidenceClient(candidate.repository), ...candidate.client },
+  };
   const producer = { runId: "900", runAttempt: 1, fullRef: "refs/heads/main", sha: "c".repeat(40) };
   const source = createPublicationSourceFact(
     receiptRecoverySourceRequest(old.admission.receipt, producer),

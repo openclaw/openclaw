@@ -1,2 +1,2 @@
-# Regression for bounded receipt replay, authenticated inventory reuse, and fail-closed live metadata.
-430
+# Regression for authenticated receipt replay, raw-transport CLI consumers, live gates, and unknown dispatch/registry outcomes.
+1023

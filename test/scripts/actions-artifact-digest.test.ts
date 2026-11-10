@@ -4,6 +4,7 @@ import {
   downloadExactActionsArtifactArchive,
   verifyExactActionsArtifactDigest,
 } from "../../scripts/lib/actions-artifact-archive.mjs";
+import { createReleaseEvidenceReplay } from "../../scripts/lib/release-evidence-replay.mjs";
 
 function fixture(size = 4, transferredSize = size) {
   const chunk = Buffer.alloc(64 * 1024, 7);
@@ -147,6 +148,36 @@ describe("exact artifact streaming digest verification", () => {
     params.expected.artifactDigest = `sha256:${"b".repeat(64)}`;
     params.metadata.digest = params.expected.artifactDigest;
     await expect(verifyExactActionsArtifactDigest(params)).rejects.toThrow("does not match");
+  });
+
+  it("replays archive bytes but retains live metadata and selected-digest checks", async () => {
+    const params = fixture();
+    const binding = { publication: "archive-boundary-fixture" };
+    const preview = createReleaseEvidenceReplay(binding);
+    await downloadExactActionsArtifactArchive({ ...params, immutableReads: preview });
+    const payload = JSON.parse(preview.serialize());
+    params.fetchImpl.mockClear();
+    const replay = () => createReleaseEvidenceReplay(binding, payload);
+    const result = await downloadExactActionsArtifactArchive({ ...params, immutableReads: replay() });
+    expect(result.archiveBytes).toEqual(Buffer.alloc(4, 7));
+    expect(params.fetchImpl.mock.calls.map(([url]) => String(url))).toEqual([
+      "https://api.github.com/repos/openclaw/openclaw/actions/artifacts/777",
+    ]);
+
+    params.metadata.expired = true;
+    await expect(
+      downloadExactActionsArtifactArchive({ ...params, immutableReads: replay() }),
+    ).rejects.toThrow("immutable publication tuple");
+    params.metadata.expired = false;
+
+    // A self-consistent carrier digest is not the selected publication digest.
+    const changed = Buffer.alloc(4, 8);
+    payload.entries[0][1].data = changed.toString("base64");
+    payload.entries[0][1].sha256 = createHash("sha256").update(changed).digest("hex");
+    await expect(
+      downloadExactActionsArtifactArchive({ ...params, immutableReads: replay() }),
+    ).rejects.toThrow(/does not match/iu);
+    expect(params.fetchImpl.mock.calls.every(([url]) => !String(url).endsWith("/zip"))).toBe(true);
   });
 
   it("rejects changed remote identity before reading the binary body", async () => {

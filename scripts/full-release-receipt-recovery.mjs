@@ -6,7 +6,6 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { verifyRetainedPublicationArtifacts } from "./full-release-artifacts.mjs";
 import {
   createPublicationAdmission,
   publicationObservationJson,
@@ -20,7 +19,6 @@ import {
   validateReleaseChildDispatchBinding,
 } from "./full-release-validation-policy.mjs";
 import {
-  downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,
   validateArtifactMetadata,
   verifyExactActionsArtifactDigest,
@@ -263,9 +261,10 @@ async function readPayload(repository, artifact, workflowSha, deps, mode = "arch
     validateArtifactMetadata(metadata, expected);
     return expected.artifactDigest;
   }
-  const transfer =
-    mode === "digest" ? verifyExactActionsArtifactDigest : downloadExactActionsArtifactArchive;
-  const downloaded = await transfer({ expected, token: deps.token });
+  const downloaded =
+    mode === "digest"
+      ? await verifyExactActionsArtifactDigest({ expected, token: deps.token })
+      : await deps.client.downloadArtifactArchive({ expected, token: deps.token });
   return mode === "digest" ? downloaded.digest : downloaded.archiveBytes;
 }
 
@@ -355,6 +354,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
   );
   await verifySealedFullReleaseCandidate({
     binding,
+    downloadArchive: (options) => client.downloadArtifactArchive(options),
     consumerRunId: request.originalParent.runId,
     consumerRunAttempt: "1",
     readArtifact: (id) => client.getArtifact(id),
@@ -427,7 +427,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     targetSha: target,
     publicationArtifacts: request.publicationArtifacts,
   };
-  const publication = await verifyRetainedPublicationArtifacts(
+  const publication = await client.verifyRetainedPublicationArtifacts(
     originalRoot,
     {
       GITHUB_REPOSITORY: request.repository,
