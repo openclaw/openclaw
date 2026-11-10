@@ -248,7 +248,7 @@ describe("resolveFollowupDeliveryDecision", () => {
   );
 
   it.each(["automatic", "message_tool_only"] as const)(
-    "keeps pending tool audio after queued NO_REPLY in %s mode",
+    "keeps pending tool audio and an earlier steered answer after queued NO_REPLY in %s mode",
     async (sourceReplyDeliveryMode) => {
       const turn = createTurn();
       turn.queued.run.sourceReplyDeliveryMode = sourceReplyDeliveryMode;
@@ -259,27 +259,23 @@ describe("resolveFollowupDeliveryDecision", () => {
         terminalReply: { disposition: "silent" },
       };
       const media = setReplyPayloadMetadata(
-        {
-          text: "Unsent caption",
-          mediaUrl: "https://example.invalid/pending.opus",
-          audioAsVoice: true,
-        },
+        { text: "Unsent", mediaUrl: "https://example.invalid/pending.opus", audioAsVoice: true },
         { assistantTranscriptOwned: true, deliverDespiteSourceReplySuppression: true },
       );
+      const earlier = setReplyPayloadMetadata({ text: "Earlier" }, { precedingInputAnswer: true });
       const decision = await decide(
         turn,
         execution,
-        createAccounting([{ text: "Unsent confirmation" }, media]),
+        createAccounting([earlier, { text: "Unsent confirmation" }, media]),
       );
       expect(decision).toMatchObject({
         kind: "deliver",
-        payloads: [{ mediaUrl: "https://example.invalid/pending.opus", audioAsVoice: true }],
+        payloads: [{ text: "Earlier" }, { mediaUrl: media.mediaUrl, audioAsVoice: true }],
       });
       if (decision.kind === "deliver") {
-        expect(decision.payloads).toHaveLength(1);
-        expect(decision.payloads[0]?.text).toBeUndefined();
+        expect(decision.payloads.map((p) => p.text)).toEqual(["Earlier", undefined]);
         expect(
-          getReplyPayloadMetadata(expectDefined(decision.payloads[0], "queued media payload")),
+          getReplyPayloadMetadata(expectDefined(decision.payloads[1], "queued media payload")),
         ).toMatchObject({
           assistantTranscriptOwned: true,
           deliverDespiteSourceReplySuppression: true,
