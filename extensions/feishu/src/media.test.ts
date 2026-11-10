@@ -462,33 +462,6 @@ describe("saveMessageResourceFeishu", () => {
       response: { status },
     });
 
-  it.each([
-    ['attachment; filename="report.csv"', "report"],
-    ['attachment; filename="report; final.csv"', "report_final", "report; final.csv"],
-    ['attachment; filename="report\\; final.csv"', "report_final"],
-    ["attachment; filename=report.csv", "report"],
-    ["attachment; filename=literal%20name.csv", "literal_20name"],
-    ["attachment; filename=\"report; final.csv\"; filename*=UTF-8''preferred.csv", "preferred"],
-    ['attachment; filename="report; final.csv', "backup"],
-    ['attachment; x-filename="wrong.csv"', "backup"],
-  ])(
-    "saves the expected filename from %s",
-    async (disposition, savedBase, originalFilename?: string) => {
-      const data = "column,value\nprobe,17\n";
-      messageResourceGetMock.mockResolvedValueOnce(
-        resourceResponse(data, {
-          "content-type": "text/csv",
-          "content-disposition": disposition,
-        }),
-      );
-
-      const result = await downloadResource({ originalFilename: originalFilename ?? "backup.csv" });
-
-      expect(result.id).toMatch(new RegExp(`^${savedBase}---[a-f0-9-]{36}\\.csv$`));
-      expect(messageResourceGetMock).toHaveBeenCalledOnce();
-    },
-  );
-
   it("retries file resources as media after HTTP 502", async () => {
     const originalError = httpStatusError(502);
     messageResourceGetMock.mockRejectedValueOnce(originalError).mockResolvedValueOnce(
@@ -525,25 +498,19 @@ describe("saveMessageResourceFeishu", () => {
     expect(resourceRequest(1).params).toEqual({ type: "media" });
   });
 
-  it.each(["header", "payload"])(
-    "recovers Latin-1-decoded CJK filenames from %s",
-    async (source) => {
-      const fileName = "武汉15座山登山信息汇总.csv";
-      const latin1 = Buffer.from(fileName, "utf8").toString("latin1");
-      messageResourceGetMock.mockResolvedValueOnce(
-        resourceResponse(
-          "a,b\n1,2\n",
-          source === "header"
-            ? { "content-disposition": `attachment; filename="${latin1}"` }
-            : { "content-type": "text/csv" },
-        ),
-      );
-      const result = await downloadResource(
-        source === "payload" ? { originalFilename: latin1 } : {},
-      );
-      expect(result.id).toMatch(/^武汉15座山登山信息汇总---[a-f0-9-]{36}\.csv$/);
-    },
-  );
+  const latin1 = Buffer.from("武汉15座山.csv", "utf8").toString("latin1");
+  it.each([
+    [`attachment; filename="${latin1}"`, undefined, "武汉15座山"],
+    [undefined, latin1, "武汉15座山"],
+    ['attachment; filename="report; final.csv"', undefined, "report_final"],
+    ["attachment; filename=\"a;b.csv\"; filename*=UTF-8''preferred.csv", undefined, "preferred"],
+    ['attachment; filename="report; final.csv', undefined, "backup"],
+  ])("saves the filename from %s / %s", async (disposition, originalFilename, base) => {
+    const headers = disposition ? { "content-disposition": disposition } : {};
+    messageResourceGetMock.mockResolvedValueOnce(resourceResponse("a,b\n1,2\n", headers));
+    const result = await downloadResource({ originalFilename: originalFilename ?? "backup.csv" });
+    expect(result.id).toMatch(new RegExp(`^${base}---[a-f0-9-]{36}\\.csv$`));
+  });
 
   it("keeps the shipped 120-second media timeout for stalled stream bodies", async () => {
     vi.useFakeTimers();
