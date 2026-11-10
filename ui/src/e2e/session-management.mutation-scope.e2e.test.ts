@@ -250,9 +250,13 @@ suite.define(() => {
             agentId: "research",
             reason: "create",
           });
-          const readsBeforeReturn = await countLists(researchMatch);
+          const returnedMatch = {
+            ...researchMatch,
+            limit: filter === "All" ? pageSize : retainedLimit,
+          };
+          const readsBeforeReturn = await countLists(returnedMatch);
           await selectResearchAgent();
-          const returnedList = await waitForList(researchMatch, readsBeforeReturn);
+          const returnedList = await waitForList(returnedMatch, readsBeforeReturn);
           expect(returnedList.params).toMatchObject({
             limit: filter === "All" ? pageSize : retainedLimit,
           });

@@ -242,6 +242,7 @@ it.each([true, false])(
       expect(entry?.textContent).toContain("Molty");
     }
     entry!.click();
+    await vi.waitFor(() => expect(onNavigate).toHaveBeenCalled());
     await sidebar.updateComplete;
     if (cached) {
       expect(setSessionKey).not.toHaveBeenCalled();
@@ -268,6 +269,10 @@ it("switches the Skills owner without opening an agent conversation", async () =
 
   await clickAgentMenu(sidebar);
   await clickAgentMenu(sidebar, "agent:research");
+  await vi.waitFor(() =>
+    expect(context.agentSelection.state).toEqual({ selectedId: "research", scopeId: "research" }),
+  );
+  await sidebar.updateComplete;
 
   expect(context.agentSelection.state).toEqual({ selectedId: "research", scopeId: "research" });
   expect(find(".sidebar-agent-card__name")?.textContent).toContain("research");

@@ -19,11 +19,11 @@ import {
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
 import {
-  buildAgentMainSessionKey,
   normalizeAgentId,
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
 } from "../lib/sessions/session-key.ts";
+import { loadSidebarAgentSelection } from "./app-sidebar-agent-selection-loader.ts";
 import {
   projectSidebarAgentSessionRows,
   type SidebarHomeSession,
@@ -37,6 +37,7 @@ import {
   createSidebarPinnedSessions,
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
+  personalSidebarAgentNavigationResult,
   projectUnpinnedSessionRows,
   sidebarVisibleRowsInOrder,
 } from "./app-sidebar-personal-navigation.ts";
@@ -58,7 +59,6 @@ import {
   findProjectedSidebarSession,
   findSidebarSessionInTree,
   projectSidebarVisibleMainSession,
-  resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
   restoreSnapshotNavigation,
   type SidebarSessionNavigationState,
@@ -111,6 +111,7 @@ import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { mountedViewerSessionKeys } from "./solid/viewer-facepile.tsx";
 
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
+  private agentNavigationIntent = 0;
   readonly personCardTriggers = new WeakMap<HTMLElement, HTMLElement>();
   readonly presencePeople = new Map<string, HTMLElement>();
 
@@ -601,27 +602,20 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     });
   }
 
-  private agentResumeKey(agentId: string): string {
-    const latest = resolveLatestSidebarAgentSession({
-      agentId,
-      result: this.selectedAgentSessionResult(agentId),
-      context: this.context,
-    });
-    return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey: this.sessionMainKey() });
-  }
-
   switchChipAgent(agentId: string) {
-    this.sidebarMenus.closeAgentMenu();
-    this.expandAgent(agentId);
-    // Skills uses the shared agent selection in place; opening chat would
-    // discard the discovery page instead of updating its workspace scope.
-    if (this.activeRouteId !== "skills") {
-      if (this.connected) {
-        this.selectSession(this.agentResumeKey(agentId));
-      } else {
-        this.onNavigate?.("appearance");
-      }
+    const intent = ++this.agentNavigationIntent;
+    const context = this.context;
+    if (!context) {
+      return;
     }
+    loadSidebarAgentSelection(
+      this,
+      agentId,
+      context,
+      () => intent === this.agentNavigationIntent && this.context === context,
+      (id) => this.expandAgent(id),
+      () => this.sessionMainKey(),
+    );
   }
 
   knownSessionGroups(): string[] {
@@ -716,6 +710,18 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     return roster ? roster.result : this.sessionData.resultForAgent(agentId);
   }
 
+  private agentNavigationResult(agentId: string): SessionsListResult | null {
+    // The visible agent picker owns an all-agent inventory independently of the
+    // selected sidebar window. Its navigation still honors the chosen owner.
+    return (
+      personalSidebarAgentNavigationResult(
+        this,
+        agentId,
+        rosterActivityStore(this.context).snapshot.result,
+      ) ?? this.selectedAgentSessionResult(agentId)
+    );
+  }
+
   selectedAgentMainSessionKey(agentId?: string): string {
     return resolveSidebarMainSessionKey({
       agentId: agentId ?? this.expandedAgentId(),
@@ -791,7 +797,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   agentUnreadCount(agentId: string): number {
     const normalized = normalizeAgentId(agentId);
-    const rows = this.selectedAgentSessionResult(normalized)?.sessions ?? [];
+    const rows = this.agentNavigationResult(normalized)?.sessions ?? [];
     return this.sessionProjection.agentUnreadCount(normalized, rows, this);
   }
 

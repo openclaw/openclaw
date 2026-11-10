@@ -239,6 +239,9 @@ describe("AppSidebar agent chip", () => {
     );
     const researchRow = menuAgent(menu!, "research");
     researchRow?.click();
+    await vi.waitFor(() =>
+      expect(context.agentSelection.state).toEqual({ selectedId: "research", scopeId: "research" }),
+    );
     await sidebar.updateComplete;
 
     expect(context.agentSelection.state).toEqual({ selectedId: "research", scopeId: "research" });
