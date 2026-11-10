@@ -336,11 +336,10 @@ export function renderBrowse(
     );
   }
   const pages = el("div", undefined, "knowledge-pagination");
-  const capped = result.nextOffset !== null && result.nextOffset > 500;
   pages.append(
     el(
       "span",
-      `${result.total ? s.offset + 1 : 0}–${s.offset + result.records.length} of ${result.total.toLocaleString()} · ${result.total > 550 ? "partial browse access" : `complete list${s.includeHistory ? " · including history" : ""}`}`,
+      `${result.total ? s.offset + 1 : 0}–${s.offset + result.records.length} of ${result.total.toLocaleString()} · complete list${s.includeHistory ? " · including history" : ""}`,
     ),
   );
   const previousOffset = s.browseBack.findLast((seen) => seen < s.offset);
@@ -355,18 +354,9 @@ export function renderBrowse(
     s.offset = result.nextOffset!;
     void load();
   });
-  next.disabled = result.nextOffset === null || capped;
+  next.disabled = result.nextOffset === null;
   pages.append(previous, next);
   data.append(pages);
-  if (capped) {
-    data.append(
-      el(
-        "p",
-        "This server cannot page beyond 550 records. Narrow the type filter to see more.",
-        "knowledge-notice",
-      ),
-    );
-  }
   const results = el("div", undefined, "knowledge-browse-results");
   results.append(panel);
   layout.append(facets, results);
