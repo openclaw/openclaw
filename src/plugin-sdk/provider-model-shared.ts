@@ -356,6 +356,8 @@ type BuildProviderReplayFamilyHooksOptions =
       duplicateToolCallIdStyle?: "openai";
       /** Whether replay policy should strip reasoning blocks from history. */
       dropReasoningFromHistory?: boolean;
+      /** Whether replay policy should retain temporal carriers across turns for prefix caching. */
+      appendOnlyRuntimeContext?: boolean;
     }
   | {
       /** Anthropic-style transcript policy selected by Claude model id. */
@@ -396,6 +398,7 @@ export function buildProviderReplayFamilyHooks(
         sanitizeToolCallIds: options.sanitizeToolCallIds,
         duplicateToolCallIdStyle: options.duplicateToolCallIdStyle,
         dropReasoningFromHistory: options.dropReasoningFromHistory,
+        appendOnlyRuntimeContext: options.appendOnlyRuntimeContext,
       };
       return {
         buildReplayPolicy: (ctx: ProviderReplayPolicyContext) =>
