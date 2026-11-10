@@ -30,8 +30,9 @@ indirect enum OpenClawIDCanonicalJSON: Sendable, Equatable {
         }
     }
 
-    func fields(_ names: Set<String>) throws -> [String: Self] {
-        guard case let .object(fields) = self, Set(fields.keys) == names else {
+    func fields(_ names: Set<String>, optional: Set<String> = []) throws -> [String: Self] {
+        guard case let .object(fields) = self, names.isSubset(of: Set(fields.keys)),
+              Set(fields.keys).isSubset(of: names.union(optional)) else {
             throw OpenClawIDNodeEnrollmentError.malformed
         }
         return fields

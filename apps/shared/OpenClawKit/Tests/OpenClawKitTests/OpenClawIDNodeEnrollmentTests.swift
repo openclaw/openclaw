@@ -12,6 +12,7 @@ struct OpenClawIDNodeEnrollmentTests {
         let now: Int64
         let node_invite: Invite
         let node_key: Key
+        let reset_invite_link: String
     }
 
     private func fixture() throws -> (Fixture, [String: OpenClawIDCanonicalJSON]) {
@@ -151,6 +152,96 @@ struct OpenClawIDNodeEnrollmentTests {
         #expect(!String(decoding: mail, as: UTF8.self).contains("KioqKioq"))
         let signed = try #require(requests.first?.value(forHTTPHeaderField: "openclaw-signature"))
         #expect(signed.hasPrefix("keyid=\(identity.signingKey),ts=\(fixture.now),sig="))
+    }
+
+    @Test func resetDescriptorEnrollsNewRootInvitationButNeverChangesAnOldPin() async throws {
+        let (fixture, json) = try fixture()
+        let response = try #require(json["reset_response"]).encoded
+        let oldLink = try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link)
+        let newLink = try OpenClawIDNodeEnrollmentLink(fixture.reset_invite_link)
+        let origin = try OpenClawIDNodeEnrollmentLink.discoveryOrigin("https://discovery.example")
+        let identity = try OpenClawIDNodeIdentity(seed: OpenClawIDNodeIdentity.unhex(fixture.node_key.seed_hex))
+        let store = TrustStore()
+        let http = ScriptedHTTP(responses: [.init(status: 202, body: Data()), .init(status: 200, body: response)])
+        let client = OpenClawIDNodeEnrollmentClient(http: http, trustStore: store, now: { fixture.now })
+        // The descriptor's binding and reset evidence come from the protocol's owner-reset golden.
+        let target = try await client.enroll(joinLink: fixture.reset_invite_link,
+            discoveryOrigin: origin.absoluteString, identity: identity, description: description(),
+            onVerificationCode: { _ in })
+        #expect(target.state.rootFingerprint == newLink.rootFingerprint)
+        #expect(target.state.bindingSequence == 3)
+        #expect(target.state.snapshotBindingSequence == 3)
+        #expect(await store.saved?.state == target.state)
+        #expect(await http.requests.map(\.httpMethod) == ["POST", "GET"])
+
+        let oldTarget = try OpenClawIDNodeTrust.assess(response: #require(json["response"]).encoded,
+            link: oldLink, discoveryOrigin: origin, peerKey: identity.peerKey, previous: nil,
+            now: fixture.now).verdict.get()
+        // Neither an old invitation nor a new invitation over an existing pin can repin it.
+        let oldPins: [(OpenClawIDNodeEnrollmentLink, OpenClawIDNodeTrustState?)] = [(oldLink, nil), (newLink, oldTarget.state)]
+        for (link, previous) in oldPins {
+            #expect(throws: OpenClawIDNodeEnrollmentError.rootMismatch) {
+                try OpenClawIDNodeTrust.assess(response: response, link: link, discoveryOrigin: origin,
+                    peerKey: identity.peerKey, previous: previous, now: fixture.now)
+            }
+        }
+        #expect(throws: OpenClawIDNodeEnrollmentError.rootMismatch) {
+            try OpenClawIDNodeTrust.assessRefresh(response: response, hostname: oldLink.hostname,
+                discoveryOrigin: origin, peerKey: identity.peerKey, previous: oldTarget.state, now: fixture.now)
+        }
+    }
+
+    @Test func resetMetadataRemainsStrictAndCannotReplaceBindingOrSnapshotSignatures() throws {
+        let (fixture, json) = try fixture()
+        let response = try #require(json["reset_response"])
+        let link = try OpenClawIDNodeEnrollmentLink(fixture.reset_invite_link)
+        let origin = try OpenClawIDNodeEnrollmentLink.discoveryOrigin("https://discovery.example")
+        func verify(_ value: OpenClawIDCanonicalJSON) throws -> OpenClawIDNodeTrustTarget {
+            try OpenClawIDNodeTrust.assess(response: value.encoded, link: link, discoveryOrigin: origin,
+                peerKey: fixture.node_key.iroh, previous: nil, now: fixture.now).verdict.get()
+        }
+        func replacing(_ value: OpenClawIDCanonicalJSON, path: [String], with replacement: OpenClawIDCanonicalJSON?) throws
+            -> OpenClawIDCanonicalJSON
+        {
+            guard let name = path.first, case .object(var fields) = value else {
+                throw OpenClawIDNodeEnrollmentError.malformed
+            }
+            if path.count == 1 {
+                fields[name] = replacement
+            } else {
+                fields[name] = try replacing(#require(fields[name]), path: Array(path.dropFirst()), with: replacement)
+            }
+            return .object(fields)
+        }
+        for path in [
+            ["descriptor", "unknown"], ["descriptor", "reset", "unknown"],
+            ["descriptor", "reset", "previous_binding", "unknown"],
+            ["descriptor", "reset", "previous_binding", "body", "unknown"],
+            ["descriptor", "reset", "statement", "unknown"],
+            ["descriptor", "reset", "statement", "body", "unknown"],
+        ] {
+            #expect(throws: OpenClawIDNodeEnrollmentError.malformed) {
+                try verify(replacing(response, path: path, with: .bool(true)))
+            }
+        }
+        let malformedResets: [OpenClawIDCanonicalJSON] = [.null, .object([:])]
+        for replacement in malformedResets {
+            #expect(throws: OpenClawIDNodeEnrollmentError.malformed) {
+                try verify(replacing(response, path: ["descriptor", "reset"], with: replacement))
+            }
+        }
+        #expect(throws: OpenClawIDNodeEnrollmentError.malformed) {
+            try verify(replacing(response, path: ["descriptor", "binding"], with: nil))
+        }
+        for path in [["descriptor", "binding", "body", "issued_at"], ["snapshot", "body", "seq"]] {
+            #expect(throws: OpenClawIDNodeEnrollmentError.badSignature) {
+                try verify(replacing(response, path: path, with: .integer(99)))
+            }
+        }
+        // A fresh pin does not rely on reset signatures, only on its own root's binding and K_gw.
+        let untrustedReset = try replacing(response, path: ["descriptor", "reset", "statement", "sig"],
+            with: .string(String(repeating: "A", count: 86)))
+        #expect(try verify(untrustedReset).state == verify(response).state)
     }
 
     @Test func lostMailResponseRetriesIdenticalRedemption() async throws {
