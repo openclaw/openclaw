@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { apiKey, harnessRegistry } from "../../agents/model-catalog-fixtures.test-support.js";
 import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import {
@@ -13,12 +14,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as providerPolicySurface from "../../plugins/provider-policy-surface.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as pluginScope from "../../plugins/runtime/gateway-request-scope.js";
+import { connectUserModelAccount } from "../../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { authorizationClient } from "../server-methods.authorization.test-support.js";
 import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import * as sessionReads from "../session-utils-store.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
@@ -48,6 +52,110 @@ function modelsReader(
     return call?.[1] as ModelsListResult | undefined;
   };
 }
+
+it.each(["ambient", "configured", "personal"] as const)(
+  "defers required-worker auth without hiding %s account failures",
+  async (selection) => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "worker-model-picker-", env: WITHOUT_OPENAI_ENV_AUTH },
+      async (state) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              model: `openai/worker-default${selection === "configured" ? "@openai:chosen" : ""}`,
+              models: { "openai/worker-default": {}, "openai/worker-alternative": {} },
+            },
+            entries: { main: {} },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://models.example.test/v1",
+                api: "openai-completions",
+                models: ["worker-default", "worker-alternative"].map((id) => modelDefinition(id)),
+              },
+            },
+          },
+          cloudWorkers: {
+            requiredProfile: "dedicated",
+            profiles: {
+              dedicated: {
+                provider: "device",
+                settings: { device: "paired", inference: "worker" },
+              },
+            },
+          },
+        };
+        let client: GatewayClient | null = null;
+        if (selection === "personal") {
+          const person = ensureProfileForEmail("worker-picker@example.test");
+          connectUserModelAccount({
+            ownerProfileId: person.id,
+            credential: {
+              type: "token",
+              provider: "openai",
+              token: "synthetic-expired",
+              expires: 1,
+            },
+            assertCurrent() {},
+          });
+          client = authorizationClient("worker-picker", ["operator.read"], {
+            authenticatedUserProfile: gatewayProfile(
+              person.id,
+              person.displayName,
+              person.updatedAt,
+            ),
+          });
+        }
+        const context = createModelsListTestContext({
+          cfg,
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          catalog: ["worker-default", "worker-alternative"].map((id) =>
+            providerCatalogEntry("openai", id),
+          ),
+        });
+        const read = (view: "configured" | "provider-config") =>
+          modelsReader(context, { agentId: "main", view }, client)();
+        const draft = await read("configured");
+        expect(draft?.models.map((model) => model.id)).toEqual([
+          "worker-default",
+          "worker-alternative",
+        ]);
+        for (const model of draft!.models) {
+          const pinned =
+            selection === "personal" ||
+            (selection === "configured" && model.id === "worker-default");
+          if (pinned) {
+            expect(model.available).toBe(false);
+            expect(model.unavailableReason).toBeDefined();
+          } else {
+            // Ambient worker auth stays unknown until admission, not positively available.
+            expect(model).not.toHaveProperty("available");
+            expect(model).not.toHaveProperty("unavailableReason");
+          }
+        }
+        for (const model of (await read("provider-config"))!.models) {
+          expect(model).toMatchObject({
+            available: false,
+            unavailableReason:
+              selection === "configured" && model.id === "worker-default"
+                ? "auth-failed"
+                : "missing-auth",
+          });
+        }
+        if (selection === "personal") {
+          // The same catalog identity must not carry a different requester's private pin.
+          const ambient = await modelsReader(context, { agentId: "main", view: "configured" })();
+          expect(ambient?.models.every((model) => model.available === undefined)).toBe(true);
+          expect(
+            (await read("configured"))?.models.every((model) => model.available === false),
+          ).toBe(true);
+        }
+      },
+    );
+  },
+);
 
 it("retains the model-list projection until its catalog facts change", async () => {
   await withOpenClawTestState(

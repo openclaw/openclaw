@@ -130,3 +130,15 @@ it("lets listed Claude capabilities override id rules per flag without changing 
   const betweenTools = { ...listedOn, id: "claude-sonnet-5-5" };
   expect(claude.requiresClaudeMandatoryAdaptiveThinking(betweenTools)).toBe(false);
 });
+
+it("reads server compaction from the listed /v1/models capability", () => {
+  const listed = (serverCompaction: boolean) => ({
+    id: "claude-zzz-9-9",
+    params: { claudeCapabilities: { serverCompaction } },
+  });
+  expect(claude.supportsClaudeServerCompaction({ id: "claude-zzz-9-9" })).toBe(false);
+  expect(claude.supportsClaudeServerCompaction(listed(true))).toBe(true);
+  expect(claude.supportsClaudeServerCompaction({ ...listed(false), id: "claude-fable-5-1" })).toBe(
+    false,
+  );
+});

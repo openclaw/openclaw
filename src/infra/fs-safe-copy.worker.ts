@@ -1,4 +1,5 @@
-import { readFileSync, rmSync } from "node:fs";
+import { chmodSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import path from "node:path";
 import { serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
@@ -9,6 +10,7 @@ import {
   readCloneFileMetadata,
 } from "@openclaw/fs-safe/copy";
 import { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
+import { hasErrnoCode } from "./errno.js";
 import type {
   FsSafeCopyRead,
   FsSafeCopyReply,
@@ -25,6 +27,23 @@ function failure(error: unknown): FsSafeCopyReply {
       ? { code: error.code }
       : {}),
   };
+}
+
+function prepareOwnedDirectoryRemoval(directory: string): void {
+  const stats = lstatSync(directory);
+  if (!stats.isDirectory()) {
+    return;
+  }
+  // Retired templates and captures have no writers. Repair their directories,
+  // including excluded outputs, without changing files or following symlinks.
+  if ((stats.mode & 0o700) !== 0o700) {
+    chmodSync(directory, (stats.mode & 0o7777) | 0o700);
+  }
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      prepareOwnedDirectoryRemoval(path.join(directory, entry.name));
+    }
+  }
 }
 
 normalizeFsSafeNativeEnv();
@@ -104,7 +123,19 @@ if (parentPort) {
     switch (command.type) {
       case "remove":
         // Node's synchronous remover walks natively, outside the Gateway's JS heap.
-        rmSync(command.destination, { recursive: true, force: true });
+        try {
+          rmSync(command.destination, { recursive: true, force: true });
+        } catch (error) {
+          if (
+            !hasErrnoCode(error, "EACCES") &&
+            !hasErrnoCode(error, "EPERM") &&
+            !hasErrnoCode(error, "ENOTEMPTY")
+          ) {
+            throw error;
+          }
+          prepareOwnedDirectoryRemoval(command.destination);
+          rmSync(command.destination, { recursive: true, force: true });
+        }
         break;
       case "create":
         await createCloneSource(command.destination, { signal: controller.signal });
