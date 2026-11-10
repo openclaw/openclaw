@@ -12,12 +12,13 @@ import {
   resolveEffectiveEnableState,
 } from "../plugins/config-state.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
+import { preparePluginFromPath } from "../plugins/install-package.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolvePluginInstallDir,
 } from "../plugins/install-paths.js";
+import { formatInstallPolicyNotice } from "../plugins/install-policy-notice.js";
 import type { InstallPolicyWarningDetails } from "../plugins/install-security-scan.types.js";
-import { installPluginFromPath } from "../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { installManagedPlugin } from "../plugins/management-mutations.js";
 import { uninstallPluginWithPolicy } from "../plugins/management-uninstall.js";
@@ -99,9 +100,8 @@ export async function preflightBundledTemplatePlugin(params: {
     const records = await loadInstalledPluginIndexInstallRecords({ env });
     let inspected: ReturnType<typeof inspectTemplatePluginCapabilities> | undefined;
     const warnings: InstallPolicyWarningDetails[] = [];
-    const request: Parameters<typeof installPluginFromPath>[0] = {
+    const request: Parameters<typeof preparePluginFromPath>[0] = {
       path: await prepared.createArchive(),
-      dryRun: true,
       extensionsDir: isolated.dir,
       config,
       installPolicyRequest: { kind: "plugin-archive", source: policySource },
@@ -115,22 +115,13 @@ export async function preflightBundledTemplatePlugin(params: {
         );
       },
     };
-    let probe = await installPluginFromPath(request);
-    let riskWarning: string | undefined;
-    if (!probe.ok && probe.installPolicyWarning) {
-      const reviewedWarning = probe.installPolicyWarning;
-      riskWarning = probe.error;
-      probe = await installPluginFromPath({
-        ...request,
-        onInstallPolicyWarning: async (warning) => {
-          if (stableStringify(warning) !== stableStringify(reviewedWarning)) {
-            return { status: "declined" };
-          }
-          warnings.push(warning);
-          return { status: "approved" };
-        },
-      });
-    }
+    const probe = await preparePluginFromPath({
+      ...request,
+      onInstallPolicyWarning: async (warning) => {
+        warnings.push(warning);
+        return { status: "approved" };
+      },
+    });
     if (!probe.ok) {
       return { ok: false, code: probe.code ?? "bundled_plugin_invalid", message: probe.error };
     }
@@ -211,7 +202,16 @@ export async function preflightBundledTemplatePlugin(params: {
       ...(requirements.length ? { requirements } : {}),
       ...(warnings.length
         ? {
-            warning: riskWarning,
+            warning: [
+              ...new Set(
+                warnings.map((warning) =>
+                  formatInstallPolicyNotice({
+                    ...warning,
+                    decision: "warn",
+                  }),
+                ),
+              ),
+            ].join("\n\n"),
             installPolicyWarningDigest: policyWarningDigest(warnings),
           }
         : {}),

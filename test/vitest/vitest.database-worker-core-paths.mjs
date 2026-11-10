@@ -773,6 +773,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-db.template-cutover.test.ts",
   "src/templates/add-state.worker.test.ts",
   "src/templates/add-stateless.test.ts",
+  "src/templates/bundled-plugin.preflight.test.ts",
   "src/templates/mcp.test.ts",
   "src/templates/gateway-add-apply.plugin-batch.test.ts",
   "src/templates/packages.runtime.test.ts",
