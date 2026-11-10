@@ -86,9 +86,9 @@ export const REPORT_SCRIPT = `(() => {
     const empty = document.querySelector('[data-maintainer-filter-empty]');
     if (filter) {
       const applyFilter = () => {
-        const value = filter.value.trim().replace(/^@/, '').toLocaleLowerCase();
+        const value = filter.value.trim().replace(/^@/, '').toLocaleLowerCase().normalize('NFC');
         const rows = [...document.querySelectorAll('[data-maintainer-search]')];
-        for (const row of rows) row.hidden = !row.dataset.maintainerSearch.toLocaleLowerCase().includes(value);
+        for (const row of rows) row.hidden = !row.dataset.maintainerSearch.toLocaleLowerCase().normalize('NFC').includes(value);
         const shown = rows.filter(row => !row.hidden).length;
         if (status) status.textContent = shown + ' of ' + rows.length + ' members shown';
         if (empty) empty.hidden = shown > 0;
