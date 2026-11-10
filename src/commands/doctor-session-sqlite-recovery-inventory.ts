@@ -97,6 +97,7 @@ export function collectRecoveryInventory(params: {
     }
   }
   const references = new Map<string, RecoveryArtifactReference[]>();
+  const incompleteTargets = new Set<SessionSqliteMigrationTargetManifest>();
   let manifestPaths: string[] = [];
   const artifacts: RecoveryCleanupArtifact[] = [];
   const missingOriginals = new Set<string>();
@@ -143,6 +144,14 @@ export function collectRecoveryInventory(params: {
       for (const target of manifest.targets) {
         if (params.scan && !params.scan.available()) {
           break;
+        }
+        // Every archive reference shares this target's immutable findings for this scan.
+        if (
+          !manifest.completedAt ||
+          target.validationBeforeArchive !== "passed" ||
+          target.issues.some((issue) => !isSessionSqliteMigrationWarning(issue))
+        ) {
+          incompleteTargets.add(target);
         }
         const expected = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath);
         const trusted =
@@ -221,14 +230,7 @@ export function collectRecoveryInventory(params: {
           (stat.nlink !== 1n && !isPendingMigrationArtifactClaim(archivePath, evidence))))
     ) {
       classify("blocked", "artifact-alias-or-nonregular");
-    } else if (
-      refs.some(
-        ({ run, target }) =>
-          !run.manifest.completedAt ||
-          target.validationBeforeArchive !== "passed" ||
-          target.issues.some((issue) => !isSessionSqliteMigrationWarning(issue)),
-      )
-    ) {
+    } else if (refs.some(({ target }) => incompleteTargets.has(target))) {
       classify("protected", "incomplete-recovery-operation");
     } else if (refs.some(({ move }) => move.artifact?.classification === "protected")) {
       classify(
