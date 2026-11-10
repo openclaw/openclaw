@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { copyProvisionedPaths } from "./provisioned-copy.js";
 
 const { copiedOptions } = vi.hoisted(() => ({ copiedOptions: vi.fn() }));
@@ -169,7 +170,7 @@ it.skipIf(process.platform !== "linux")(
     const result = await copyProvisionedPaths(source, destination, [...names, "skipped/link"], {
       assertCurrent: authority,
     });
-    expect(authority.mock.calls.length).toBeLessThanOrEqual(5);
+    expect(authority.mock.calls.length).toBeLessThanOrEqual(6);
     expect(swapped).toBe(true);
     expect(result).toEqual(names.toSorted());
     expect(await fs.readdir(outside)).toEqual(["file"]);
@@ -251,7 +252,7 @@ it.skipIf(process.platform !== "linux")(
 );
 
 it.skipIf(process.platform !== "linux").for(["flat", "directories"])(
-  "refuses another batch after authority revocation across %s without an abort signal",
+  "refuses publication after authority revocation during a child across %s without aborting",
   async (layout) => {
     const { source, destination } = fixture();
     const names = Array.from({ length: 256 }, (_, index) =>
@@ -262,17 +263,19 @@ it.skipIf(process.platform !== "linux").for(["flat", "directories"])(
       await fs.writeFile(path.join(source, name), name);
     }
     let current = true;
+    const controller = new AbortController();
     const failure = new Error("copy authority retired");
     const spawn = childProcess.spawn.bind(childProcess);
     const copies = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
       const child = spawn(...args);
-      child.once("close", () => {
+      child.once("spawn", () => {
         current = false;
       });
       return child;
     });
     await expect(
       copyProvisionedPaths(source, destination, names, {
+        signal: controller.signal,
         assertCurrent() {
           if (!current) {
             throw failure;
@@ -281,12 +284,13 @@ it.skipIf(process.platform !== "linux").for(["flat", "directories"])(
       }),
     ).rejects.toBe(failure);
     expect(copies).toHaveBeenCalledTimes(1);
-    for (const name of names.slice(0, 128)) {
-      expect(await fs.readFile(path.join(destination, name), "utf8")).toBe(name);
-    }
-    await expect(fs.stat(path.join(destination, names[128]!))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    expect(controller.signal.aborted).toBe(false);
+    const remaining = await listDirectoryTreeStrict(destination);
+    expect(
+      remaining.every(
+        ({ dirent }) => dirent.isDirectory() && !dirent.name.startsWith(".provision-"),
+      ),
+    ).toBe(true);
   },
 );
 

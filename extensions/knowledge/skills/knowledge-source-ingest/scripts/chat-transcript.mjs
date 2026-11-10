@@ -41,7 +41,8 @@ async function run(argv) {
 
   // Reads all rows in time order. Splits on \n only: message text may contain U+2028, which readline treats as a line break.
   async function readRows(filename) {
-    const rows = (await readFile(filename, "utf8"))
+    const rows = new TextDecoder("utf-8", { fatal: true })
+      .decode(await readFile(filename))
       .split("\n")
       .filter((line) => line.trim())
       .map((line) => JSON.parse(line));

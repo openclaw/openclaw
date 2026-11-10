@@ -1893,7 +1893,7 @@ const reviewedOperations = new Map([
           "hasSessionStateWatchersInDatabase",
           "isSessionStateUpstreamCurrentInDatabase",
         ],
-        evidence: "session-state-events.worker.ts and session-upstream-links.worker.ts",
+        evidence: "session-state-events-record.worker.ts and session-upstream-links.worker.ts",
       },
       {
         tier: "W",
@@ -1909,13 +1909,13 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
         evidence:
-          "Watch commands and event recording execute only in session-state-events.worker.ts and subagent-registry.store.worker.ts",
+          "Watch/record workers and subagent-registry.store.worker.ts execute these queries",
       },
       {
         tier: "W",
         operations: ["recordSessionStateEventsInDatabase"],
         evidence:
-          "All producers await sessionState.record; the only direct production kernel callers are session-state-events.worker.ts and subagent-registry.store.worker.ts",
+          "sessionState.record dispatches to session-state-events-record.worker.ts; subagent-registry.store.worker.ts is the other direct caller",
       },
     ],
   ],

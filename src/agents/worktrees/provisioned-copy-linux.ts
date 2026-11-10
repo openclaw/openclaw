@@ -154,6 +154,8 @@ export async function copyProvisionedPathsLinux(
         );
       });
       check();
+      options.assertCurrent?.();
+      check();
       for (const [index, file] of batch.entries()) {
         const staged = `${descriptorPath(staging)}/${index + 4}`;
         fsSync.chmodSync(staged, file.mode);
