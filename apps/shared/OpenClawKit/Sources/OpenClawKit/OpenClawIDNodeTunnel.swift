@@ -30,13 +30,11 @@ public actor OpenClawIDNodeTunnel {
     private let serverKey: @Sendable () async throws -> String
     private let relayURL: URL
     private let clock: OpenClawIDNodeClock
-    private var pending: Task<(connection: any OpenClawIDNodeConnection, key: String), Error>?
+    private var pending: Task<Void, Error>?
     private var active: (id: UUID, connection: any OpenClawIDNodeConnection, key: String)?
     // Reconnects and probes re-verify K_srv independently; refreshes run one at a time (in commit
     // order) and `latestKey` is the newest one's, so a connection to a superseded key is refused.
     private var keyLane: Task<String, Error>?
-    private var keySequence: UInt64 = 0
-    private var latestKeySequence: UInt64 = 0
     private var latestKey: String?
     private var closeWatcher: Task<Void, Never>?
     private var watchdog: Task<Void, Never>?
@@ -70,9 +68,10 @@ public actor OpenClawIDNodeTunnel {
         self.lastReceived = self.clock.now()
     }
 
-    private func checkActive() throws {
+    private func checkActive(connectionID: UUID? = nil) throws {
         if self.removed { throw OpenClawIDNodeTransportError.removed }
         if self.stopped { throw OpenClawIDNodeTransportError.closed }
+        if let connectionID, self.active?.id != connectionID { throw OpenClawIDNodeTransportError.closed }
         try Task.checkCancellation()
     }
 
@@ -81,17 +80,22 @@ public actor OpenClawIDNodeTunnel {
         let refresh = self.serverKey
         let task = Task {
             _ = try? await previous?.value
-            return try await refresh()
-        }
-        self.keyLane = task
-        self.keySequence &+= 1
-        let sequence = self.keySequence
-        let key = try await task.value
-        if sequence > self.latestKeySequence {
-            self.latestKeySequence = sequence
+            try self.checkActive()
+            let key = try await refresh()
+            try self.checkActive()
+            // Publication belongs to the serialized refresh, not its awaiting caller. The next
+            // refresh cannot commit before this key is visible and its predecessor is retired.
             self.latestKey = key
+            if let active = self.active, active.key != key {
+                self.active = nil
+                self.closeWatcher?.cancel()
+                self.closeWatcher = nil
+                await active.connection.close(code: 10)
         }
         return key
+    }
+        self.keyLane = task
+        return try await task.value
     }
 
     private func dial() async throws -> (connection: any OpenClawIDNodeConnection, key: String) {
@@ -150,22 +154,33 @@ public actor OpenClawIDNodeTunnel {
         }
     }
 
-    private func connection() async throws -> any OpenClawIDNodeConnection {
+    private func connection() async throws -> (id: UUID, connection: any OpenClawIDNodeConnection, key: String) {
         try self.checkActive()
-        if let active = self.active { return active.connection }
-        if let pending = self.pending { return try await pending.value.connection }
-        let generation = self.generation
-        let task = Task { try await self.dial() }
+        if let active = self.active { return active }
+        let task: Task<Void, Error>
+        if let pending = self.pending {
+            task = pending
+        } else {
+            task = Task { try await self.installConnection() }
         self.pending = task
-        do {
-            let (connection, key) = try await task.value
+        }
+        try await task.value
+        try self.checkActive()
+        guard let active = self.active else { throw OpenClawIDNodeTransportError.closed }
+        return active
+    }
+
+    // Every caller joins installation, never a raw dial result. Only this owner may publish a
+    // connection after checking the current lifetime and most recently committed server key.
+    private func installConnection() async throws {
+        defer { self.pending = nil }
+        let generation = self.generation
+        let (connection, key) = try await self.dial()
             guard generation == self.generation, !self.stopped, !self.removed else {
                 await connection.close(code: 0)
                 try self.checkActive()
                 throw CancellationError()
             }
-            self.pending = nil
-            // A newer refresh committed another binding while this dial ran: never install it.
             guard key == self.latestKey else {
                 await connection.close(code: 0)
                 throw OpenClawIDNodeTransportError.closed
@@ -190,11 +205,6 @@ public actor OpenClawIDNodeTunnel {
                     }
                 }
             }
-            return connection
-        } catch {
-            if generation == self.generation { self.pending = nil }
-            throw error
-        }
     }
 
     private func didClose(id: UUID, close: OpenClawIDNodeClose) async {
@@ -209,10 +219,10 @@ public actor OpenClawIDNodeTunnel {
     }
 
     public func openStream() async throws -> any OpenClawIDNodeStream {
-        let connection = try await self.connection()
-        try self.checkActive()
-        let stream = try await connection.openBi()
-        do { try self.checkActive() } catch {
+        let active = try await self.connection()
+        try self.checkActive(connectionID: active.id)
+        let stream = try await active.connection.openBi()
+        do { try self.checkActive(connectionID: active.id) } catch {
             await stream.reset(code: 4)
             await stream.stop(code: 4)
             throw error
@@ -241,12 +251,6 @@ public actor OpenClawIDNodeTunnel {
             try await task.value
             self.probe = nil
             try self.checkActive()
-            // The probe verified a newer binding: the active connection's server key is retired.
-            if let active = self.active, active.key != self.latestKey {
-                self.active = nil
-                await active.connection.close(code: 10)
-                return
-            }
             self.lastReceived = self.clock.now()
         } catch {
             self.probe = nil

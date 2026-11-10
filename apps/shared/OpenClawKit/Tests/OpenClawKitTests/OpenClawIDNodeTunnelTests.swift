@@ -266,6 +266,69 @@ import Testing
         await tunnel.shutdown()
     }
 
+    @Test func pendingStreamJoinersCannotUseAKeySupersededByAProbe() async throws {
+        let a = "iroh:" + String(repeating: "a", count: 64)
+        let b = "iroh:" + String(repeating: "b", count: 64)
+        let endpoint = NodeOverlappingEndpoint(oldKey: a)
+        let keys = NodeKeySequence([a, b])
+        let tunnel = OpenClawIDNodeTunnel(
+            endpoint: endpoint, verifiedServerKey: { try await keys.next() },
+            relayURL: URL(string: "https://relay.example/")!,
+            clock: OpenClawIDNodeClock(now: { 0 }, sleep: { duration in
+                if duration == .milliseconds(500) { return }
+                try await NodeTestWaiter<Void>().wait()
+            }))
+        let lead = Task { try await tunnel.openStream() }
+        try await endpoint.oldDialStarted.wait()
+        let joining = NodeTestWaiter<Void>()
+        let joiner = Task {
+            joining.resolve(())
+            return try await tunnel.openStream()
+        }
+        try await joining.wait()
+        // The probe verifies B while both stream callers share the in-flight A dial. Hold the
+        // probe's transport too, so neither an incidental close nor the probe's completion is proof.
+        let probe = Task { try await tunnel.checkLiveness() }
+        try await endpoint.newDialStarted.wait()
+        endpoint.releaseOldDial.resolve(())
+        await #expect(throws: OpenClawIDNodeTransportError.closed) { try await lead.value }
+        await #expect(throws: OpenClawIDNodeTransportError.closed) { try await joiner.value }
+        #expect(await endpoint.oldConnection.opens == 0)
+        #expect(await endpoint.oldConnection.closes == [0])
+        endpoint.releaseNewDial.resolve(())
+        try await probe.value
+        await tunnel.shutdown()
+    }
+
+    @Test func aStreamOpeningDuringKeyRetirementIsResetBeforeReturn() async throws {
+        let a = "iroh:" + String(repeating: "a", count: 64)
+        let b = "iroh:" + String(repeating: "b", count: 64)
+        let endpoint = NodeOverlappingEndpoint(oldKey: a, blockOldStream: true)
+        endpoint.releaseOldDial.resolve(())
+        let keys = NodeKeySequence([a, b])
+        let tunnel = OpenClawIDNodeTunnel(
+            endpoint: endpoint, verifiedServerKey: { try await keys.next() },
+            relayURL: URL(string: "https://relay.example/")!,
+            clock: OpenClawIDNodeClock(now: { 0 }, sleep: { duration in
+                if duration == .milliseconds(500) { return }
+                try await NodeTestWaiter<Void>().wait()
+            }))
+        let opening = Task { try await tunnel.openStream() }
+        try await endpoint.oldConnection.openStarted.wait()
+        let probe = Task { try await tunnel.checkLiveness() }
+        try await endpoint.newDialStarted.wait()
+        // A newer binding retires A before the probe transport completes, not just when a
+        // checkLiveness caller happens to resume. A late FFI open must not escape to the caller.
+        #expect(await endpoint.oldConnection.closes == [10])
+        endpoint.oldConnection.releaseOpen.resolve(())
+        await #expect(throws: OpenClawIDNodeTransportError.closed) { try await opening.value }
+        #expect(await endpoint.oldConnection.stream.resets == [4])
+        #expect(await endpoint.oldConnection.stream.stops == [4])
+        endpoint.releaseNewDial.resolve(())
+        try await probe.value
+        await tunnel.shutdown()
+    }
+
     @Test func fullRangeCloseCodesAreNotNarrowedIntoRevocation() {
         #expect(OpenClawIDNodeClose(code: 1, kind: .application).requiresReenrollment)
         #expect(OpenClawIDNodeClose(code: 2, kind: .application).requiresReenrollment)
@@ -290,6 +353,7 @@ private actor NodeTestStream: OpenClawIDNodeStream {
     var writes: [Data] = []
     var readLimits: [Int] = []
     var resets: [Int64] = []
+    var stops: [Int64] = []
     var finishes = 0
     private var blockWrite = false
     nonisolated let writeStarted = NodeTestWaiter<Void>()
@@ -318,7 +382,7 @@ private actor NodeTestStream: OpenClawIDNodeStream {
         self.resets.append(code)
         self.writeRelease.reject(CancellationError())
     }
-    func stop(code: Int64) async {}
+    func stop(code: Int64) async { self.stops.append(code) }
 }
 
 private actor NodeTestEndpoint: OpenClawIDNodeEndpoint {
@@ -431,4 +495,49 @@ private struct NodeClosedConnection: OpenClawIDNodeConnection {
     func openBi() async throws -> any OpenClawIDNodeStream { throw OpenClawIDNodeTransportError.closed }
     func closed() async throws -> OpenClawIDNodeClose { .init(code: self.code, kind: .application) }
     func close(code: Int64) async {}
+}
+
+/// The transport boundary deliberately permits opening after close: the tunnel owner must never
+/// hand the superseded connection to a pending caller, regardless of FFI close completion timing.
+private actor NodeOverlappingConnection: OpenClawIDNodeConnection {
+    var opens = 0
+    var closes: [Int64] = []
+    let stream = NodeTestStream(input: Data())
+    let blockOpen: Bool
+    nonisolated let openStarted = NodeTestWaiter<Void>()
+    nonisolated let releaseOpen = NodeTestWaiter<Void>()
+    init(blockOpen: Bool = false) { self.blockOpen = blockOpen }
+    func openBi() async throws -> any OpenClawIDNodeStream {
+        self.opens += 1
+        self.openStarted.resolve(())
+        if self.blockOpen { try await self.releaseOpen.wait() }
+        return self.stream
+    }
+    func closed() async throws -> OpenClawIDNodeClose { try await NodeTestWaiter<OpenClawIDNodeClose>().wait() }
+    func close(code: Int64) async { self.closes.append(code) }
+}
+
+private actor NodeOverlappingEndpoint: OpenClawIDNodeEndpoint {
+    let oldKey: String
+    nonisolated let oldDialStarted = NodeTestWaiter<Void>()
+    nonisolated let newDialStarted = NodeTestWaiter<Void>()
+    nonisolated let releaseOldDial = NodeTestWaiter<Void>()
+    nonisolated let releaseNewDial = NodeTestWaiter<Void>()
+    let oldConnection: NodeOverlappingConnection
+    init(oldKey: String, blockOldStream: Bool = false) {
+        self.oldKey = oldKey
+        self.oldConnection = NodeOverlappingConnection(blockOpen: blockOldStream)
+    }
+    func connect(serverKey: String, relayURL: URL, alpn: Data) async throws -> any OpenClawIDNodeConnection {
+        if serverKey == self.oldKey {
+            self.oldDialStarted.resolve(())
+            try await self.releaseOldDial.wait()
+            return self.oldConnection
+        }
+        self.newDialStarted.resolve(())
+        try await self.releaseNewDial.wait()
+        return NodeOverlappingConnection()
+    }
+    func relayStatus() async -> [OpenClawIDNodeRelayStatus] { [] }
+    func shutdown() async {}
 }
