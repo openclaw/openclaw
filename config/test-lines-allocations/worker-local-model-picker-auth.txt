@@ -1,3 +1,3 @@
-# Required-worker draft model-list regression and switched-session/account admission guards.
+# Required-worker draft model-list, configured/personal account pins and session admission guards.
 # Exact net test growth; shared ceiling remains unchanged.
-116
+168

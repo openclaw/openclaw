@@ -35,6 +35,7 @@ import type {
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
 import type { GatewayModelCatalogContext } from "./models-list-context.js";
+import { hasModelChoiceAccountPin } from "./models-list-public-projection.js";
 
 export type ChatMetadataProjectionFacts = {
   agentId: string;
@@ -300,6 +301,9 @@ export function projectSessionModelCatalog(
       allowPluginNormalization: false,
     });
   return models.map((model) => {
+    if (workerAuth && hasModelChoiceAccountPin(model)) {
+      return model;
+    }
     const configuredWorkerModel =
       workerAuth &&
       (!model.agentRuntime || model.agentRuntime.id === "openclaw") &&

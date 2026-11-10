@@ -264,8 +264,9 @@ that account to be available.
 The model picker also allows configured OpenClaw models on this required worker
 route when the Gateway has no provider credential. Their authentication remains
 unknown until worker admission checks the node; this does not advertise the node's
-private model catalog or claim the provider is reachable. Other harnesses and
-personal account selections keep their own authentication requirements.
+private model catalog or claim the provider is reachable. Other harnesses,
+configured account pins, and linked personal defaults keep their own authentication
+requirements.
 
 **Current limitation:** optional profiles still use Gateway model availability
 and auth checks for explicit model/runtime selection; worker proxy auth values
