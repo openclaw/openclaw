@@ -1,0 +1,5 @@
+70
+# Exact inherited main debt at 1004b4fb2ac2: 6,618,377 LF test lines
+# against a 6,618,307 ceiling. Authorized release-retro CI repair.
+# Shared by PRs #195011 and #194992; identical path prevents double credit.
+# No speculative headroom; keep the shared scalar unchanged.
