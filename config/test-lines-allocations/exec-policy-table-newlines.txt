@@ -1,2 +1,0 @@
-2
-# exec-policy show --verbose renders policy cell lines as real lines.
