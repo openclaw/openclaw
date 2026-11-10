@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { SessionDiffFile } from "../../../packages/gateway-protocol/src/index.js";
+import { EMPTY_WORKTREE_INITIAL_COMMIT_ID } from "../../agents/worktrees/empty-source-identity.js";
 import { workerProtocolObject } from "../../worker/protocol-record.js";
 import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
 import type {
@@ -39,6 +40,21 @@ export function localWorkspaceBaseRefreshRef(identity: string): string {
 
 export function isLocalWorkspaceBaseRefreshRef(ref: string | null): boolean {
   return ref !== null && BASE_REFRESH_REF.test(ref);
+}
+
+/** Only the host-owned first import establishes a repository rather than editing one. */
+export function isInitialWorkspaceSourceImport(
+  ref: string,
+  base: WorkerWorkspaceManifest,
+  current: WorkerWorkspaceManifest,
+): boolean {
+  return (
+    isLocalWorkspaceBaseRefreshRef(ref) &&
+    base.baseCommit === EMPTY_WORKTREE_INITIAL_COMMIT_ID &&
+    base.entries.length === 0 &&
+    current.baseCommit !== null &&
+    current.baseCommit !== base.baseCommit
+  );
 }
 
 export function requireWorkerResultStorageRef(ref: string): string {

@@ -16,7 +16,7 @@ import {
   prepareLocalWorkspaceCheckpoint,
   selectLocalWorkspaceCheckpoint,
   stageLocalWorkspaceCheckpoint,
-  createLocalWorkspaceCheckpointRejection,
+  createLocalWorkspaceCheckpointOperations,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
@@ -52,13 +52,15 @@ import {
   applyStagedWorkerWorkspace,
   recoverWorkerWorkspaceReconciliation,
 } from "./workspace-reconcile.js";
-import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
+import {
+  isInitialWorkspaceSourceImport,
+  isLocalWorkspaceBaseRefreshRef,
+} from "./workspace-result-inventory.js";
 import {
   hasWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
   withStagedWorkerWorkspaceManifest,
-  deleteStagedWorkerWorkspaceResult,
 } from "./workspace-result-staging.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -100,10 +102,16 @@ export function projectionOperations(
   ) => {
     row = await store.update(current(), patch, owner.workerAuthority, manifest);
   };
-  const rejection = createLocalWorkspaceCheckpointRejection({
+  const { settle, cleanupAccepted, ...rejection } = createLocalWorkspaceCheckpointOperations({
     current,
     update,
     removedAt: owner.worktree.removedAt,
+    root: owner.worktree.path,
+    repoRoot: owner.worktree.repoRoot,
+    signal,
+    buildCacheInputs: () => buildCacheInputs(),
+    baselineDocument: () => baselineDocument(),
+    settlePending: (...args) => settlePending(...args),
     reject: async (selected, value) => {
       row = await store.reject(selected, value, owner.workerAuthority);
     },
@@ -252,30 +260,6 @@ export function projectionOperations(
     }
     await update({ journal_json: null, journal_pack: null });
   };
-  const cleanupAccepted = async () => {
-    const selected = current();
-    if (!selected.pending_ref || selected.pending_target) {
-      return;
-    }
-    await deleteStagedWorkerWorkspaceResult({
-      root: owner.worktree.repoRoot,
-      stagedResultRef: selected.pending_ref,
-      assertCurrent,
-    });
-    await update({
-      pending_ref: null,
-      checkpoint_json: null,
-      ...(selected.tree_root_digest ? { baseline_json: null } : {}),
-    });
-  };
-  const settle = async (
-    retainAccepted = false,
-    preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
-  ) =>
-    rejection.settle(
-      () => settlePending(retainAccepted, preparedSnapshot),
-      preparedSnapshot?.currentManifestRef,
-    );
   const settlePending = async (
     retainAccepted: boolean,
     preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
@@ -403,6 +387,11 @@ export function projectionOperations(
           currentManifestRef: snapshot.currentManifestRef,
           reconciliation: snapshot.reconciliation,
           current: snapshot.current,
+          initialSourceImport: isInitialWorkspaceSourceImport(
+            selected.pending_ref!,
+            snapshot.base,
+            snapshot.current,
+          ),
           assertCurrent,
           journal: {
             load: async () => undefined,

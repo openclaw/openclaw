@@ -180,6 +180,11 @@ URL arrives.
 An explicitly empty managed workspace can receive the PR without selecting a
 project first. Existing managed projects must match the PR's head or base
 repository.
+The first repository import into an empty workspace does not count as authored
+changes against the 50,000-path workspace result limit. File-size, manifest and
+source-integrity checks still apply. Retrying preparation also resumes an initial
+import rejected by that path limit on an older Gateway, without deleting its
+saved source. Ordinary edits and later repository refreshes retain the limit.
 
 An ordinary conversation without a project ends its active turn, prepares a new
 session-owned workspace, and resumes in the same conversation. Existing files

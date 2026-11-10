@@ -20,6 +20,7 @@ import {
 import { readWorkspaceTreeFile } from "./workspace-reconcile-fs.js";
 import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js";
 import {
+  isInitialWorkspaceSourceImport,
   requireWorkerResultStorageRef,
   STAGED_RESULT_MESSAGE,
   WorkspaceStageCurrentPathError,
@@ -165,7 +166,11 @@ export async function buildWorkspaceStageInput(
     }
     throw error;
   }
-  const compared = parseChangedWorkspaceResult(base, current);
+  const compared = parseChangedWorkspaceResult(
+    base,
+    current,
+    !isInitialWorkspaceSourceImport(stagedResultRef, base, current),
+  );
   // Deletions are represented by the authenticated manifests and need no blob.
   await writeWorkspaceGitInput({
     assertBeforeMutation,

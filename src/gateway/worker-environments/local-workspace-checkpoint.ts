@@ -8,8 +8,13 @@ import type {
   LocalWorkspaceProjection,
   LocalWorkspaceRejectedResult,
 } from "./local-workspace-store.types.js";
-import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
+import { loadStagedWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
+  isInitialWorkspaceSourceImport,
+  isLocalWorkspaceBaseRefreshRef,
+} from "./workspace-result-inventory.js";
+import {
+  deleteStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
@@ -28,9 +33,18 @@ export class RejectedLocalWorkspaceResultError extends Error {
   }
 }
 
-export function createLocalWorkspaceCheckpointRejection(params: {
+export function createLocalWorkspaceCheckpointOperations(params: {
   current: () => LocalWorkspaceProjection;
   removedAt: number | undefined;
+  root: string;
+  repoRoot: string;
+  signal: AbortSignal;
+  buildCacheInputs: () => Promise<string[]>;
+  baselineDocument: () => Promise<{ manifestRef: string }>;
+  settlePending: (
+    retainAccepted: boolean,
+    snapshot?: LocalWorkspaceManifestCheckpoint,
+  ) => Promise<void>;
   update: (patch: Parameters<LocalWorkspaceStore["update"]>[1]) => Promise<void>;
   reject: (
     selected: LocalWorkspaceProjection,
@@ -59,10 +73,51 @@ export function createLocalWorkspaceCheckpointRejection(params: {
   };
   return {
     assertNotRejected,
-    settle: async (run: () => Promise<void>, manifestRef?: string) => {
+    cleanupAccepted: async () => {
+      const selected = params.current();
+      if (!selected.pending_ref || selected.pending_target) {
+        return;
+      }
+      await deleteStagedWorkerWorkspaceResult({
+        root: params.repoRoot,
+        stagedResultRef: selected.pending_ref,
+        assertCurrent: () => void params.current(),
+      });
+      await params.update({
+        pending_ref: null,
+        checkpoint_json: null,
+        ...(selected.tree_root_digest ? { baseline_json: null } : {}),
+      });
+    },
+    settle: async (retainAccepted = false, snapshot?: LocalWorkspaceManifestCheckpoint) => {
+      const pending = params.current();
+      if (
+        pending.rejectedResult &&
+        pending.pending_ref &&
+        pending.rejectedResult.ref === pending.pending_ref &&
+        isLocalWorkspaceBaseRefreshRef(pending.pending_ref)
+      ) {
+        const source = await loadStagedWorkspaceManifest(
+          params.root,
+          pending.pending_ref,
+          params.signal,
+          await params.buildCacheInputs(),
+        );
+        const baseline = await params.baselineDocument();
+        if (
+          source.baseManifestRef === baseline.manifestRef &&
+          isInitialWorkspaceSourceImport(pending.pending_ref, source.base, source.current) &&
+          (!pending.rejectedResult.manifestRef ||
+            pending.rejectedResult.manifestRef === source.currentManifestRef)
+        ) {
+          // Older releases rejected the initial repository as a giant edit. Resume
+          // that same validated source, preserving its ref and saved checkpoint.
+          await params.update({ checkpoint_json: pending.checkpoint_json });
+        }
+      }
       assertNotRejected();
       try {
-        await run();
+        await params.settlePending(retainAccepted, snapshot);
       } catch (error) {
         if (!(error instanceof Error) || !hasErrnoCode(error, "WORKSPACE_RESULT_LIMIT")) {
           throw error;
@@ -75,7 +130,7 @@ export function createLocalWorkspaceCheckpointRejection(params: {
             (selected.pending_target === "projection"
               ? " in the canonical workspace, then retry workspace preparation."
               : ", then checkpoint the corrected workspace.");
-          await params.reject(selected, { reason, manifestRef });
+          await params.reject(selected, { reason, manifestRef: snapshot?.currentManifestRef });
           throw rejection(reason);
         }
         throw error;
