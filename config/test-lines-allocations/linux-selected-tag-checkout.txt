@@ -1,0 +1,4 @@
+# PR #194996 added 71 net lines for selected-tag retries, exhausted-retry refusal,
+# and exact checkout identity. A subsequent Discord change removed one line;
+# reconcile only the remaining 70 lines of inherited main debt.
+70
