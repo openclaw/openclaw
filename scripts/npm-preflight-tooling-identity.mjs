@@ -474,7 +474,7 @@ export function verifyReleasePreflightToolingIdentity({
   return validated;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+async function main() {
   try {
     const { values } = parseArgs({
       options: {
@@ -617,4 +617,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  // Let this module finish evaluating before a lazy import cycles back to it.
+  void main();
 }
