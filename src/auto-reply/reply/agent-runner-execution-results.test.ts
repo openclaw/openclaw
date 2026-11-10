@@ -105,12 +105,7 @@ it.each(["missing-answer", "provider-refusal", "blocked-tool"])(
           : { text: "⚠️ Bash blocked", isError: true };
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [notice],
-      meta: {
-        error: {
-          kind: "incomplete_turn",
-          message: notice.text,
-        },
-      },
+      meta: { error: { kind: "incomplete_turn", message: notice.text } },
     });
     const params = createMinimalRunAgentTurnParams({ followupRun });
     const execute = await getRawExecuteAgentTurnForTest();
