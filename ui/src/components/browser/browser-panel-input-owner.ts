@@ -734,6 +734,7 @@ export class BrowserPanelInputOwner {
     void copyToClipboard(read(), current).then((copied) => {
       if (copied) {
         showToast({
+          severity: "success",
           message: selection?.truncated
             ? t("browser.copyTruncated", { count: String(BROWSER_SELECTION_LIMIT) })
             : t("common.copied"),

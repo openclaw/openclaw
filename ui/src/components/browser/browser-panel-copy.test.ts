@@ -97,7 +97,7 @@ describe("Browser panel copy", () => {
       const event = key({ key: "c", ...modifier });
       controller.input.handleViewportKeydown(event);
 
-      await vi.waitFor(() => expect(toasts()).toEqual(["Copied!"]));
+      await vi.waitFor(() => expect(toasts()).toEqual(["Copied"]));
       expect(event.defaultPrevented).toBe(true);
       expect(writeText).toHaveBeenCalledExactlyOnceWith("remote 🦞 text");
       expect(remote.acts("press")).toEqual([]);
@@ -281,7 +281,7 @@ describe("Browser panel copy rendering", () => {
     await waitForSolid(() => expect(copyItem(menu).getAttribute("aria-disabled")).not.toBe("true"));
     copyItem(menu).click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledExactlyOnceWith("hello"));
-    expect(toasts()).toEqual(["Copied!"]);
+    expect(toasts()).toEqual(["Copied"]);
   });
 
   it("disables Copy selection with the reason when page scripting is off", async () => {
