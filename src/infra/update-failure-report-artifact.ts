@@ -16,7 +16,6 @@ import { sha256Hex } from "./crypto-digest.js";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { withFileLock } from "./file-lock.js";
-import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 import { formatUpdateDoctorLintFinding } from "./update-doctor-lint.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
@@ -57,7 +56,6 @@ async function writeReportText(
   // Unlike beforeRename, this synchronous dependency guard covers each new
   // mutation after an await, including rename retries and copy fallback.
   await replaceFileAtomic({
-    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(filePath)),
     filePath,
     content,
     mode: 0o600,

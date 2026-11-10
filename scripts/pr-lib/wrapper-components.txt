@@ -38,6 +38,9 @@ packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-exec-app
 packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-gateway-tool.js
 packages/gateway-protocol/src/compiled/sender-identity.js
 packages/gateway-protocol/src/failover-reasons.ts
+packages/gateway-protocol/src/gateway-error-codes.ts
+packages/gateway-protocol/src/gateway-error-details.ts
+packages/gateway-protocol/src/missing-scope-error.ts
 packages/gateway-protocol/src/payload-limits.ts
 packages/gateway-protocol/src/plugin-ui-capabilities.ts
 packages/gateway-protocol/src/protocol-validator.ts
@@ -45,6 +48,7 @@ packages/gateway-protocol/src/protocol-value-normalization.ts
 packages/gateway-protocol/src/schema/closed-object.ts
 packages/gateway-protocol/src/schema/cron-automation-result.ts
 packages/gateway-protocol/src/schema/cron-shared.ts
+packages/gateway-protocol/src/schema/error-codes.ts
 packages/gateway-protocol/src/schema/failover-reason.ts
 packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts
 packages/gateway-protocol/src/schema/presence-activity.ts
@@ -273,8 +277,10 @@ scripts/lib/tooling-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
 scripts/lib/watch-pr-ci-run.mts
 scripts/lib/windows-taskkill.mjs
+scripts/lib/windows-test-targets.mts
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
+scripts/pr-lib/dependency-hold-release.mjs
 scripts/run-vitest.mts
 scripts/stage-openclaw-bun.sh
 scripts/test-projects.test-support.mts
@@ -408,6 +414,10 @@ src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/cron-default-destinations.ts
 src/config/zod-schema.database.ts
+src/gateway/session-request-agent.ts
+src/gateway/session-request-error.ts
+src/gateway/session-store-key.ts
+src/gateway/session-subscription-keys.ts
 src/infra/directory-walk.ts
 src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
@@ -670,6 +680,7 @@ src/config/io.write-values.ts
 src/config/issue-format.ts
 src/config/json5-comments.ts
 src/config/legacy-codex-provider.ts
+src/config/legacy-workboard-database.ts
 src/config/legacy.default-agent-owner-state.ts
 src/config/legacy.default-agent-owner.ts
 src/config/legacy.default-agent-roles.ts
@@ -728,6 +739,8 @@ src/config/schema.walk.ts
 src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
+src/config/sessions/main-session-key.ts
+src/config/sessions/main-session.ts
 src/config/sessions/session-worker-execution-source.ts
 src/config/sessions/transcript-file-names.ts
 src/config/sessions/auth-profile-override-provenance.ts
@@ -1062,7 +1075,6 @@ src/infra/format-time/duration-units.ts
 src/infra/format-time/format-duration-exact.ts
 src/infra/format-time/format-duration-internal.ts
 src/infra/fs-safe-copy.worker.ts
-src/infra/fs-safe-drvfs.ts
 src/infra/fs-safe-env.ts
 src/infra/fs-safe-remove.ts
 src/infra/fs-safe.ts
@@ -1171,6 +1183,7 @@ src/infra/package-update-publication-tree.ts
 src/infra/package-update-recovery-contract.ts
 src/infra/package-update-refusal.ts
 src/infra/path-case.ts
+src/infra/path-containment.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
 src/infra/plain-object.ts
@@ -1294,6 +1307,7 @@ src/infra/sqlite-snapshot-capacity-error.ts
 src/infra/sqlite-snapshot-diagnostics.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
+src/infra/sqlite-snapshot-publication-cleanup.ts
 src/infra/sqlite-snapshot-reclamation.ts
 src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-reuse.ts
@@ -1838,6 +1852,7 @@ src/process/child-memory.ts
 src/process/child-process-tree.ts
 src/process/child-process.ts
 src/process/command-error.ts
+src/process/command-reservation-census.ts
 src/process/darwin-process-inspection.ts
 src/process/exec-output.ts
 src/process/exec-result.ts
@@ -1850,6 +1865,7 @@ src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
 src/process/linux-exec-cgroup-device.ts
 src/process/linux-exec-cgroup.ts
+src/process/linux-oom-score-spawn.ts
 src/process/linux-oom-score.ts
 src/process/output-drain.ts
 src/process/process-deadline.ts
@@ -1962,6 +1978,7 @@ src/shared/freebsd-process-identity-native.ts
 src/shared/freebsd-process-identity.ts
 src/shared/gateway-edge-auth-headers.ts
 src/shared/gateway-tailscale-auth-policy.ts
+src/shared/environment-key.ts
 src/shared/global-singleton.ts
 src/shared/http-error-response.ts
 src/shared/immutable-data.ts
@@ -2904,6 +2921,7 @@ src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
 src/shared/pending-promises.ts
 src/shared/state-lease-loss.ts
+src/shared/state-lease-loss-format.ts
 src/shared/weak-owner-map.ts
 src/status/utility-model-warnings.ts
 src/infra/sqlite-integrity.worker.ts
@@ -2931,3 +2949,5 @@ src/plugins/installed-plugin-snapshot-candidates.ts
 src/plugins/installed-plugin-snapshot-candidates.kernel.ts
 src/plugins/installed-plugin-snapshot-candidates.types.ts
 src/plugins/plugin-source-snapshot-publication.ts
+src/agents/code-mode-session-store-replay.ts
+src/config/sessions/session-transcript-maintenance-suffix.ts

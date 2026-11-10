@@ -103,6 +103,16 @@ async function createMultiRootFixture() {
 }
 
 describe("buildSkillSnapshot", () => {
+  it("offers bundled template creation to the model for ordinary requests", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("template-creation");
+    const snapshot = await buildSnapshot(workspaceDir, {
+      bundledSkillsDir: path.resolve("skills"),
+      config: { skills: { allowBundled: ["create-template"] } },
+    });
+
+    expect(snapshot.prompt).toContain("<name>create-template</name>");
+  });
+
   it("keeps custodian skills absent from every non-custodian discovery surface", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("custodian-gate");
     for (const name of CUSTODIAN_SKILL_NAMES) {

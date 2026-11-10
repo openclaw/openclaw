@@ -22,9 +22,9 @@
 .sidebar-file-mobile__name {
   display: block;
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 500;
-  line-height: 20px;
+  line-height: calc(20px * var(--control-ui-text-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }

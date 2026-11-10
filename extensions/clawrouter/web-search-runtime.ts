@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   fetchClawRouterCapabilityOffers,
   resolveClawRouterCapabilityHttpContext,
@@ -169,11 +170,11 @@ const tavilySearchCodec = {
         {
           url: row.url,
           title: wrapWebContent(
-            typeof row.title === "string" ? row.title.slice(0, 500) : "",
+            typeof row.title === "string" ? truncateUtf16Safe(row.title, 500) : "",
             "web_search",
           ),
           snippet: wrapWebContent(
-            typeof row.content === "string" ? row.content.slice(0, 4_000) : "",
+            typeof row.content === "string" ? truncateUtf16Safe(row.content, 4_000) : "",
             "web_search",
           ),
         },

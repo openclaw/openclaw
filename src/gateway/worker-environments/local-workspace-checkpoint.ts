@@ -17,10 +17,12 @@ import {
 export type LocalWorkspaceSyncTarget = "canonical" | "projection";
 class UnstagedWorkspacePathError extends Error {}
 
-class RejectedLocalWorkspaceResultError extends Error {
+export class RejectedLocalWorkspaceResultError extends Error {
   constructor(
     message: string,
     readonly repairable: boolean,
+    readonly resultRef: string | null,
+    readonly projectionPath: string,
   ) {
     super(message);
   }
@@ -41,7 +43,12 @@ export function createLocalWorkspaceCheckpointRejection(params: {
       : undefined;
   const rejection = (reason: string) => {
     const selected = params.current();
-    return new RejectedLocalWorkspaceResultError(reason, repairTarget(selected) === "canonical");
+    return new RejectedLocalWorkspaceResultError(
+      reason,
+      repairTarget(selected) === "canonical",
+      selected.pending_ref,
+      selected.projection_path,
+    );
   };
   const assertNotRejected = () => {
     const selected = params.current();
@@ -94,7 +101,12 @@ export function createLocalWorkspaceCheckpointRejection(params: {
       // Only changed source files can replace rejection. Its Git ref and guest
       // files remain recoverable; background settlement never retries it.
       const snapshot = await input.scan(input.target);
-      if (replacedRejected && rejected && snapshot.currentManifestRef === rejected.manifestRef) {
+      if (
+        replacedRejected &&
+        rejected &&
+        (snapshot.currentManifestRef === rejected.manifestRef ||
+          snapshot.resultingRoot === rejected.manifestRef)
+      ) {
         throw rejection(rejected.reason);
       }
       if (snapshot.resultingRoot !== snapshot.previousRoot) {

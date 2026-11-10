@@ -165,6 +165,10 @@ export function ensurePageState(page: Page): PageState {
     if (state.console.length > MAX_CONSOLE_MESSAGES) {
       state.console.shift();
     }
+    // The text log owns no remote values; Playwright retains every argument handle otherwise.
+    for (const arg of msg.args()) {
+      void arg.dispose().catch(() => {});
+    }
   });
   page.on("pageerror", (err: Error) => {
     state.errors.push({

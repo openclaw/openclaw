@@ -21,12 +21,11 @@
 .deep-research-heading p,
 .deep-research-muted {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--control-ui-text-scale));
 }
 .deep-research-pane button,
 .deep-research-pane select,
-.deep-research-pane textarea,
-.deep-research-accessory {
+.deep-research-pane textarea {
   font: inherit;
   color: var(--text);
   background: var(--bg-elevated);
@@ -78,7 +77,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--control-ui-text-scale));
 }
 .deep-research-tabs {
   display: flex;
@@ -107,11 +106,11 @@
 }
 .deep-research-counts dt {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--control-ui-text-scale));
 }
 .deep-research-counts dd {
   margin: 4px 0 0;
-  font-size: 1.25rem;
+  font-size: calc(1.25rem * var(--control-ui-text-scale));
 }
 .deep-research-source {
   border: 1px solid var(--border);
@@ -126,7 +125,7 @@
 .deep-research-source summary span {
   display: block;
   margin-top: 4px;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--control-ui-text-scale));
 }
 .deep-research-source a {
   color: var(--accent);
@@ -134,7 +133,7 @@
 }
 .deep-research-badge {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--control-ui-text-scale));
   margin-inline-end: 8px;
 }
 .deep-research-source blockquote {
@@ -154,10 +153,6 @@
   color: var(--accent);
   display: inline;
   font-size: inherit;
-}
-.deep-research-accessory {
-  font-size: 0.8rem;
-  white-space: normal;
 }
 .deep-research-pane [hidden] {
   display: none;

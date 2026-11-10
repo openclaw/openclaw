@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, lazy, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId } from "../app-route-paths.ts";
+import { finishBootFrame } from "../app/boot-composer.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import {
@@ -71,6 +72,11 @@ const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
   export: "AppSidebarOnline",
 });
 
+function SidebarReady() {
+  onSettled(() => finishBootFrame("sidebar"));
+  return null;
+}
+
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
   private readonly emptyNarrationLines = new Map<string, string>();
   private readonly emptyNarrationTools = new Map<string, SidebarToolActivity>();
@@ -112,7 +118,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             .sections,
         tree: () => this.visibleSessionTreeInOrder(),
         catalogs: () => this.sidebarSessionCatalogs(),
-        catalogRows: this.catalogLiveRows,
         ownerOptions: () => this.ownerOptions,
       })
     );
@@ -230,9 +235,15 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   // Catalog rows load when their keyed section needs them.
-  private readonly Catalog = lazy(() => import("./app-sidebar-session-catalog-render.tsx"), {
-    export: "renderSessionCatalogGroups",
-  });
+  private readonly Catalog = lazy(
+    async () => {
+      const renderer = await import("./app-sidebar-session-catalog-render.tsx");
+      this.catalogRenderer = renderer;
+      this.invalidate();
+      return renderer;
+    },
+    { export: "renderSessionCatalogGroups" },
+  );
   readonly catalogRendererImport = createSidebarRendererLoader(this.Catalog.preload);
   catalogProjectGrouping: CatalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
@@ -308,16 +319,21 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       this.selectedAgentSessionRows(this.getSessionNavigationState()),
     ).sections;
     const disclosure = this.sessionProjection.children;
-    const selected = sections.find((section) =>
-      section.rows.some((row) => row.key === disclosure.selectedRootKey && !row.visuallyActive),
-    );
-    if (
-      selected &&
-      disclosure.revealOnce("section:" + selected.id) &&
-      this.sessionOrganizer.collapsedSessionSections.has(selected.id)
-    ) {
-      this.sessionOrganizer.toggleSection(selected.id);
+    for (const section of sections) {
+      for (const row of section.rows) {
+        if (row.key !== disclosure.selectedRootKey || row.visuallyActive) {
+          continue;
+        }
+        if (
+          disclosure.revealOnce("section:" + section.id) &&
+          this.sessionOrganizer.collapsedSessionSections.has(section.id)
+        ) {
+          this.sessionOrganizer.toggleSection(section.id);
+        }
+        return;
+      }
     }
+    this.catalogRenderer?.revealSidebarCatalogSelection(this, this.sidebarSessionCatalogs());
   }
 
   toggleSessionPin(session: SidebarRecentSession): void {
@@ -469,27 +485,29 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       </Boundary>
     );
     const NativeList = () => (
-      <SessionList
-        host={host()}
-        empty={visibleSessions().length === 0}
-        sections={sections()}
-        nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
-        nativeSessionsLoading={host().sessionData.sessionsLoading}
-        catalogRenderer={Catalog}
-        catalogs={{
-          catalogs: catalogs(),
-          basePath: host().basePath,
-          routeSessionKey: catalogRouteSessionKey(),
-          newSessionAgentId: expandedAgentId(),
-          mainKey: host().sessionMainKey(),
-          loadingMoreCatalogIds: host().sessionData.loadingMoreSessionCatalogIds,
-          projectGrouping: host().catalogProjectGrouping,
-          liveRows: host().catalogLiveRows(),
-          toSidebarSession: navigationState().toSidebarSession,
-          catalogOpenTarget: host().catalogOpenTarget,
-          terminalAvailable: host().terminalAvailable,
-        }}
-      />
+      <>
+        <SidebarReady />
+        <SessionList
+          host={host()}
+          empty={visibleSessions().length === 0}
+          sections={sections()}
+          nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
+          nativeSessionsLoading={host().sessionData.sessionsLoading}
+          catalogRenderer={Catalog}
+          catalogs={{
+            catalogs: catalogs(),
+            basePath: host().basePath,
+            routeSessionKey: catalogRouteSessionKey(),
+            newSessionAgentId: expandedAgentId(),
+            mainKey: host().sessionMainKey(),
+            loadingMoreCatalogIds: host().sessionData.loadingMoreSessionCatalogIds,
+            projectGrouping: host().catalogProjectGrouping,
+            projectedRows: host().catalogSessionRows(),
+            catalogOpenTarget: host().catalogOpenTarget,
+            terminalAvailable: host().terminalAvailable,
+          }}
+        />
+      </>
     );
     return (
       <>
@@ -502,6 +520,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         </Show>
         <Show when={host().sidebarAgentsMode === "roster"} fallback={<NativeList />}>
           <SidebarViewBoundary>
+            <SidebarReady />
             <SidebarAgentRoster
               host={host()}
               active={
@@ -527,6 +546,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       const rail = renderSidebarRail(this);
       const Pages = () => (
         <SidebarViewBoundary>
+          <SidebarReady />
           <SidebarPages host={this} />
         </SidebarViewBoundary>
       );
@@ -595,6 +615,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                         }
                       >
                         <SidebarViewBoundary>
+                          <SidebarReady />
                           <SidebarOnline host={this} />
                         </SidebarViewBoundary>
                       </Show>

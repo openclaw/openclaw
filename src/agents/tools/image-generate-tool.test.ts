@@ -935,7 +935,6 @@ describe("createImageGenerateTool", () => {
     },
     requesterOrigin: { channel: "discord", to: "dm:123" },
     references: ["https://example.test/first.png", "https://example.test/second.png"],
-    referenceSignal: "caller",
     loadMedia: () => vi.spyOn(webMedia, "loadWebMedia"),
     setup: (phase) => {
       stubImageGenerationProviders();

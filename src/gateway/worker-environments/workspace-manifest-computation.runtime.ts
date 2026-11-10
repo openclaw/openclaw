@@ -29,6 +29,7 @@ import type {
 } from "./workspace-manifest-computation.js";
 import { applyWorkspaceSourceOverlay } from "./workspace-manifest-overlay.js";
 import {
+  gitFileMode,
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
@@ -86,6 +87,38 @@ export async function executeWorkspaceManifestComputation(
   assertBeforeMutation?: () => void,
 ): Promise<WorkspaceManifestComputationResult> {
   switch (command.type) {
+    case "workspace.manifest.template": {
+      const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
+      const input = decodeManifestValue(command);
+      const previous = input.previous;
+      const entries = new Map(
+        previous
+          ? parseWorkerWorkspaceManifest(previous.rawManifest, previous.manifestRef).entries.map(
+              (entry) => [entry.path, entry] as const,
+            )
+          : [],
+      );
+      const changed = new Set(previous?.changedPaths);
+      // Keep discovery: installers can create empty directories, and staged-input
+      // markers can change eligibility. Only unchanged immutable file bytes are reused.
+      const { rawManifest, manifestRef } = await readActualWorkspaceManifestImpl(
+        { ...input, buildCacheInputs: new Set(input.buildCacheInputs) },
+        previous
+          ? (relative, _identity, stats) => {
+              const entry = entries.get(relative);
+              return !changed.has(relative) &&
+                // Installer-owned bytes can be retained by a staged-input marker.
+                !/(?:^|\/)node_modules\//u.test(relative) &&
+                entry?.type === "file" &&
+                entry.size === Number(stats.size) &&
+                entry.mode === gitFileMode(Number(stats.mode & 0o777n))
+                ? entry
+                : undefined;
+            }
+          : undefined,
+      );
+      return { rawManifest, manifestRef };
+    }
     case "workspace.manifest.local": {
       const { executeLocalWorkspaceManifestRead } =
         await import("./local-workspace-manifest-scan.js");
@@ -260,6 +293,10 @@ export async function executeWorkspaceManifestComputation(
         readActualWorkspaceManifestImpl({
           ...input,
           includePaths: input.includePaths && new Set(input.includePaths),
+          gitIgnore: input.gitIgnore && {
+            paths: new Set(input.gitIgnore.paths),
+            retainedPaths: new Set(input.gitIgnore.retainedPaths),
+          },
           buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),
           preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
         }),

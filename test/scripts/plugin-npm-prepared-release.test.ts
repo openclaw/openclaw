@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -41,6 +42,29 @@ const tempRoot = () => tempDirs.make("plugin-npm-prepared-");
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
+});
+
+it("reports validation errors after the authorize CLI loads its cyclic imports", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/plugin-npm-prepared-release.mjs", "authorize", "--artifact", "{}"],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_REPOSITORY: "invalid-repository",
+        PREPARED_NPM_FRV_RUN_ID: "1",
+        PREPARED_NPM_FRV_RUN_ATTEMPT: "1",
+        PREPARED_NPM_EVIDENCE_ID: "",
+      },
+      timeout: 10_000,
+    },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stderr).toContain("repository must use the owner/name form");
+  expect(result.stderr).toContain("[plugin-npm-prepared-release] FAILED (exit 1)");
+  expect(result.stderr).not.toContain("unsettled top-level await");
 });
 
 function digest(bytes: Buffer, algorithm = "sha256") {
@@ -184,7 +208,7 @@ it("authenticates Q != P and reads the exact Q policy through the FRV admission 
     throw new Error("Missing live candidate authority");
   }
   const revalidate = admitted.revalidateAuthority;
-  revalidate();
+  await revalidate();
   qualification.admission.authority.permission = "read";
   expect(() => revalidate()).toThrow();
 });
@@ -374,7 +398,7 @@ it("loads and consumes the original Q bytes using authenticated Q expectations a
   if (!authenticated.revalidateAuthority) {
     throw new Error("Missing live candidate authority");
   }
-  authenticated.revalidateAuthority();
+  await authenticated.revalidateAuthority();
 });
 
 it("seals regular stable bootstrap without granting publication authority", () => {

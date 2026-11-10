@@ -289,6 +289,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
           args,
           preparedScriptWrapperEnv(preparedModules, {
             PATH: process.env.PATH,
+            OPENCLAW_VITEST_RUNTIME: "node",
             HOME: root,
             USERPROFILE: root,
             TMPDIR: root,

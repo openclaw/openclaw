@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 90908,
-  "reason": "PR #194142 (L293): Details first-frame prewarm loader in startup; lead byte exception",
-  "updatedAt": "2026-11-07"
+  "startupJsGzipBytes": 91561,
+  "reason": "PR #195865 (L310): warm cached-page reveal latch in startup boot owners; lead byte exception",
+  "updatedAt": "2026-11-09"
 }

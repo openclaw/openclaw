@@ -132,7 +132,7 @@
   margin: 0;
   color: var(--text-strong);
   font-family: var(--font-display);
-  font-size: clamp(24px, 5vw, 34px);
+  font-size: calc(clamp(24px, 5vw, 34px) * var(--control-ui-text-scale));
   font-weight: 720;
   letter-spacing: -0.025em;
   line-height: 1.12;
@@ -346,12 +346,11 @@
 }
 
 .approval-page__spinner {
+  --spinner-art: var(--spinner-mask-large);
   width: 34px;
   height: 34px;
   margin-bottom: 20px;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask-large);
   border-radius: 50%;
   animation: btn-spinner-spin 800ms linear infinite;
 }
@@ -413,7 +412,7 @@
 
   .approval-page__heading h1,
   .approval-page__state h1 {
-    font-size: 22px;
+    font-size: calc(22px * var(--control-ui-text-scale));
   }
 
   .approval-page__heading p {
@@ -546,7 +545,7 @@
   }
 
   .question-page .chat-question-panel__prompt {
-    font-size: 16px;
+    font-size: var(--control-ui-text-lg);
     line-height: 1.35;
   }
 
@@ -643,7 +642,7 @@
 
   .question-page .chat-question-summary__prompt {
     color: var(--text-strong);
-    font-size: 16px;
+    font-size: var(--control-ui-text-lg);
     font-weight: 600;
     line-height: 1.35;
   }

@@ -20,6 +20,7 @@ export const AgentDatabaseAdmissionRefusalSchema = Type.Union([
     code: Type.Union([
       Type.Literal("agent-database-inspection-pending"),
       Type.Literal("agent-database-inspection-failed"),
+      Type.Literal("agent-deletion"),
     ]),
   }),
 ]);

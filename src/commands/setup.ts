@@ -369,7 +369,11 @@ async function setupWithGatewayOwner(
     });
     configChanged = !isDeepStrictEqual(change.previous, change.next);
     if (configChanged) {
-      restartHint = await commit(change);
+      const committed = await commit(change);
+      restartHint = committed.hint;
+      for (const warning of committed.warnings) {
+        runtime.error(warning);
+      }
     }
   }
   if (!opts?.json) {

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/openclaw-id-access",
-  "version": "2026.10.9",
+  "version": "2026.11.2",
   "private": true,
   "description": "OpenClaw ID remote access page for the Control UI",
   "type": "module",

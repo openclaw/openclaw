@@ -1,7 +1,8 @@
-import { getRuntimeConfig } from "../../config/config.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../../config/io.plugin-metadata.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import { readRuntimeConfig as getRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureEnvironmentKey } from "../../shared/environment-key.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
 import { resolvePluginControlPlaneWorkspace } from "../control-plane-workspace.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
@@ -31,6 +32,7 @@ export function resolvePluginRuntimeLoadContext(
   options?: PluginRuntimeLoadContextOptions,
 ): PluginRuntimeLoadContext {
   const env = options?.env ?? process.env;
+  const environmentKey = captureEnvironmentKey(options?.env);
   const rawConfig = options?.config ?? getRuntimeConfig();
   const rawWorkspaceDir = resolvePluginControlPlaneWorkspace({
     config: rawConfig,
@@ -80,6 +82,7 @@ export function resolvePluginRuntimeLoadContext(
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     env,
+    environmentKey,
     logger: options?.logger ?? pluginRuntimeLoaderLogger,
     ...(manifestRegistry ? { manifestRegistry } : {}),
     ...(metadataSnapshot ? { metadataSnapshot } : {}),

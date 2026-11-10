@@ -128,7 +128,15 @@ function captureWorkspace<Type extends WorkspaceCaptureCommand>(
   params: WorkspaceCaptureArguments,
 ): Promise<WorkspaceManifestComputationOperations[Type]["output"]["value"]>;
 async function captureWorkspace(type: WorkspaceCaptureCommand, params: WorkspaceCaptureArguments) {
-  const { root, baseCommit, preserveDirectories, includePaths, buildCacheInputs, signal } = params;
+  const {
+    root,
+    baseCommit,
+    preserveDirectories,
+    includePaths,
+    buildCacheInputs,
+    gitIgnore,
+    signal,
+  } = params;
   if (hasGitWorkerContext()) {
     const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
     const snapshot = await readActualWorkspaceManifestImpl(params);
@@ -151,6 +159,10 @@ async function captureWorkspace(type: WorkspaceCaptureCommand, params: Workspace
         root,
         baseCommit,
         includePaths: includePaths === undefined ? undefined : [...includePaths],
+        gitIgnore: gitIgnore && {
+          paths: [...gitIgnore.paths],
+          retainedPaths: [...gitIgnore.retainedPaths],
+        },
         buildCacheInputs: buildCacheInputs === undefined ? undefined : [...buildCacheInputs],
         preserveDirectories:
           preserveDirectories === undefined ? undefined : [...preserveDirectories],
@@ -219,6 +231,14 @@ export async function workspaceSnapshotsEqual(
 
 export async function captureWorkspaceManifestDocument(params: WorkspaceCaptureArguments) {
   return await captureWorkspace("workspace.manifest.document", params);
+}
+
+/** Only the template owner supplies a previous generation after validating immutable source. */
+export async function captureTemplateWorkspaceManifest(
+  input: WorkspaceManifestValueInputs["workspace.manifest.template"],
+  signal?: AbortSignal,
+) {
+  return await computeValue("workspace.manifest.template", input, signal);
 }
 
 export async function captureWorkspaceManifestReference(params: WorkspaceCaptureArguments) {

@@ -8,8 +8,10 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
+import { replyWithBillingRouteWarnings } from "./config-write-flow.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
+import type { RespondFn } from "./types.js";
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -121,7 +123,7 @@ it("reports only the committed config with a projected hash and redacted secrets
   const committed = createDeferred();
   const application = createDeferred<"failed">();
   const queueFollowUp = vi.fn();
-  write.mockImplementationOnce(async () => {
+  write.mockImplementationOnce(async ({ respond }: { respond?: RespondFn }) => {
     committed.resolve();
     return {
       path: "/tmp/openclaw.json",
@@ -132,6 +134,7 @@ it("reports only the committed config with a projected hash and redacted secrets
       hash: "committed-hash",
       application: application.promise,
       queueFollowUp,
+      reply: replyWithBillingRouteWarnings(respond, [], undefined),
     };
   });
   const harness = patchHarness("public:base-hash");
