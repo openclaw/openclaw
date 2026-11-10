@@ -73,9 +73,8 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
       const second = inputs()[1]!;
       await page.elementLocator(second).fill("x");
       expect(second.getAttribute("aria-invalid")).toBe("true");
-      const blurred = new Promise<void>((resolve) => {
-        second.addEventListener("blur", () => resolve(), { once: true });
-      });
+      const { promise: blurred, resolve } = Promise.withResolvers();
+      second.addEventListener("blur", resolve, { once: true });
       const action = container.querySelector<HTMLElement>(
         scenario === "unrelated edit"
           ? '.settings-toggle__input[role="switch"]'
@@ -176,9 +175,8 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
     const values = { type: "array", items: { type: "string", pattern: "^[a-z0-9]+$" } };
     const { state, container } = mountForm({ values }, { values: ["coder"] });
     await page.elementLocator(addControl(container)).click();
-    await page
-      .elementLocator(container.querySelector("[data-collection-draft-value]")!)
-      .fill("writer");
+    const draft = container.querySelector("[data-collection-draft-value]")!;
+    await page.elementLocator(draft).fill("writer");
     await page.elementLocator(container.querySelector(".cfg-array__value input")!).fill("coder2");
     container.querySelector<HTMLElement>(".cfg-collection-draft button")!.click();
     expect(state.configForm).toEqual({ settings: { values: ["coder2", "writer"] } });
