@@ -127,12 +127,9 @@ function assignModelUsageAttrs(
     ["gen_ai.usage.output_tokens", usage.output],
     ["gen_ai.usage.cache_read.input_tokens", usage.cacheRead],
     ["gen_ai.usage.cache_creation.input_tokens", usage.cacheWrite],
-    // Anthropic splits cache writes by TTL; the OTel GenAI conventions define
-    // no TTL attributes, so these keys extend the generic cache-write
-    // sub-namespace in the dotted breakdown shape Langfuse #19420 maps to
-    // priced input_cache_creation_5m/_1h usage types, rebalancing the total
-    // to its unattributed remainder. On older consumers the keys stay
-    // unpriced pass-through buckets and the total prices exactly once.
+    // Anthropic splits cache writes by TTL; the OTel GenAI conventions define no TTL attributes, so these keys extend the generic cache-write sub-namespace
+    // with the provider-reported breakdown. Consumers that recognize the dotted breakdown price each bucket at its own rate and reduce the combined key to
+    // its unattributed remainder; consumers that do not keep the breakdown as unpriced extras while the combined total prices exactly once.
     ["gen_ai.usage.cache_creation.5m_input_tokens", usage.cacheWrite5m],
     ["gen_ai.usage.cache_creation.1h_input_tokens", usage.cacheWrite1h],
   ] as const) {

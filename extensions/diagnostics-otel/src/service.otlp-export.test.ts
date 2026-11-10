@@ -332,13 +332,9 @@ test("exports cache-write TTL facts on generic and OpenClaw usage keys", async (
   const attrs = sdk.exporter.getFinishedSpans().map((span) => span.attributes);
   const generic = "gen_ai.usage.cache_creation.input_tokens";
   const local = "openclaw.model_call.usage.cache_creation_input_tokens";
-  // The OTel GenAI conventions define no TTL attributes, so the generic TTL
-  // keys extend the standard's cache-write sub-namespace in the dotted
-  // breakdown shape (gen_ai.usage.cache_creation.*_input_tokens).
-  // Langfuse #19420 maps that shape to priced input_cache_creation_5m/_1h
-  // usage types and rebalances the total to its unattributed remainder, so
-  // downstream pricing counts each write once; older consumers keep the keys
-  // as unpriced pass-through buckets and the total prices exactly once.
+  // The OTel GenAI conventions define no TTL attributes, so the generic TTL keys extend the standard's cache-write sub-namespace in the dotted breakdown
+  // shape (gen_ai.usage.cache_creation.*_input_tokens). Consumers that map that shape price each bucket at its own rate and reduce the combined key to
+  // its unattributed remainder, counting each write once; consumers that do not keep the keys as unpriced extras while the combined total prices once.
   expect(
     attrs.map((a) => [
       a[generic],

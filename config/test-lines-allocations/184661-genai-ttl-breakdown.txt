@@ -1,2 +1,2 @@
 # Exact net test-line growth from PR #184661 (gen_ai cache-write TTL breakdown export) that left main over the ceiling.
-29
+25
