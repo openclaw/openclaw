@@ -419,6 +419,8 @@ it
         await fs.mkdir(protectedPath, { recursive: true });
         await fs.writeFile(path.join(protectedPath, "host-only.txt"), "private\n", "utf8");
       }
+      await fs.mkdir(path.join(mirrorWorkspaceDir, "nested-repo/.git"), { recursive: true });
+      await writeFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
       const hostLinkTarget = path.join(rootDir, "host-link-target.txt");
       await fs.writeFile(hostLinkTarget, "host-only-link-target\n");
       const hostLinks = [
@@ -520,11 +522,33 @@ it
 
       const mirrorExecResult = await exec(
         mirrorBackend,
-        "pwd && cat mirror-seed.txt && test ! -e .git && test ! -e hooks && test ! -e git-hooks",
+        "pwd && cat mirror-seed.txt && test ! -e .git && test ! -e hooks && test ! -e git-hooks && test ! -e nested-repo/.git",
         { timeoutMs: 2 * 60_000 },
       );
       expect(mirrorExecResult.stdout).toContain("/sandbox/project");
       expect(mirrorExecResult.stdout).toContain("mirror-from-local");
+      await exec(
+        mirrorBackend,
+        "mkdir -p nested-repo/.git fresh-repo/.git spaced && printf sandbox > nested-repo/.git/config && printf sandbox > fresh-repo/.git/config && printf ordinary > 'spaced/ .git '",
+      );
+      await expectFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
+      await expectFile(mirrorWorkspaceDir, "spaced/ .git ", "ordinary");
+      await expect(
+        fs.lstat(path.join(mirrorWorkspaceDir, "nested-repo/.git/config")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        fs.lstat(path.join(mirrorWorkspaceDir, "fresh-repo/.git")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await exec(mirrorBackend, "rm -rf nested-repo");
+      await expectFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
+      await expect(
+        exec(mirrorBackend, "rm -rf nested-repo && printf collision > nested-repo"),
+      ).rejects.toThrow(/download the sandbox file directly/u);
+      await expectFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
       expect((await fs.lstat(mirrorFifoPath)).isFIFO()).toBe(true);
       expect((await fs.lstat(mirrorSocketPath)).isSocket()).toBe(true);
       if (stressMode === "mirror") {

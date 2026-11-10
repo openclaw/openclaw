@@ -132,6 +132,76 @@ describe("replaceDirectoryContents", () => {
     }
   });
 
+  it.each(["replace", "stage"] as const)(
+    "%s excludes nested Git metadata while copying ordinary nested content",
+    async (mode) => {
+      await writeFiles(source, {
+        "repo/.git/config": "sandbox",
+        "fresh/.git": "gitdir: ../repo/.git\n",
+        "src/hooks/use.ts": "ordinary source",
+        "src/ .git /note.txt": "ordinary spaced name",
+      });
+      if (mode === "replace") {
+        await writeFiles(target, { "repo/.git/config": "host" });
+        await replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS);
+        await expectFiles(target, { "repo/.git/config": "host" });
+      } else {
+        await stageDirectoryContents({
+          sourceDir: source,
+          targetDir: target,
+          excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+        });
+        await expectPathMissing(path.join(target, "repo/.git"));
+      }
+      await expectPathMissing(path.join(target, "fresh/.git"));
+      await expectFiles(target, {
+        "src/hooks/use.ts": "ordinary source",
+        "src/ .git /note.txt": "ordinary spaced name",
+      });
+    },
+  );
+
+  it("preserves nested host metadata when its remote parent is deleted", async () => {
+    await writeFiles(target, { "repo/.git/config": "host", "repo/old.txt": "old" });
+    await replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS);
+    await expectFiles(target, { "repo/.git/config": "host" });
+    await expectPathMissing(path.join(target, "repo/old.txt"));
+  });
+
+  it.each(["repo/.git/config", "repo/sub/.git/config"])(
+    "reports a sandbox file that conflicts with preserved host metadata at %s",
+    async (metadataFile) => {
+      await writeFiles(target, { [metadataFile]: "host" });
+      await writeFiles(source, { repo: "sandbox file" });
+
+      await expect(replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS)).rejects.toThrow(
+        /download the sandbox file directly with the OpenShell CLI before another mirrored command discards it/u,
+      );
+      await expectFiles(target, { [metadataFile]: "host" });
+    },
+  );
+
+  it("reports every colliding sandbox file by its workspace path", async () => {
+    await writeFiles(target, {
+      "a/repo/.git/config": "host a",
+      "b/repo/sub/.git/config": "host b",
+    });
+    await writeFiles(source, { "a/repo": "sandbox a", "b/repo": "sandbox b" });
+
+    let failure: unknown;
+    try {
+      await replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS);
+    } catch (error) {
+      failure = error;
+    }
+    expect(String(failure)).toContain('"a/repo"');
+    expect(String(failure)).toContain('"b/repo"');
+    await expectFiles(target, {
+      "a/repo/.git/config": "host a",
+      "b/repo/sub/.git/config": "host b",
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "preserves target-only special files and their ancestor directories",
     async () => {
