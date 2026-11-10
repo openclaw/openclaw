@@ -139,7 +139,7 @@ function assertSource(pair: PluginCohortRecoveryPair, options: CohortOptions): v
   }
 }
 
-/** Captured after the database backup, before candidate Doctor can mutate plugins. */
+/** Retain plugin preimages before database capture and candidate Doctor mutations. */
 export async function beginUpdatePluginCohort(
   params: CohortOptions & {
     runId: string;
@@ -149,7 +149,8 @@ export async function beginUpdatePluginCohort(
   },
 ): Promise<PluginCohortRecoveryPair> {
   return await withPluginLifecycleLease(
-    { env: params.env, assertCurrent: params.fence.assertCurrent },
+    // Reservation precedes candidate Doctor; lease bookkeeping must not migrate its source.
+    { env: params.env, schemaPolicy: "existing", assertCurrent: params.fence.assertCurrent },
     async (lease) => {
       const fence = {
         assertCurrent: () => {

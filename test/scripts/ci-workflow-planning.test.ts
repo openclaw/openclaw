@@ -176,6 +176,11 @@ describe("PostgreSQL conformance selection", () => {
     );
     expect(Object.keys(workflow.on).toSorted()).toEqual(["schedule", "workflow_dispatch"]);
     expect(workflow.on.schedule).toEqual([{ cron: "17 7 * * *" }, { cron: "43 6 * * 1" }]);
+    expect(workflow.concurrency).toEqual({
+      group: "postgres-conformance-weekly",
+      queue: "max",
+      "cancel-in-progress": false,
+    });
     const versions = workflow.on.workflow_dispatch.inputs.versions;
     expect(versions.default).toBe("all");
     expect(versions.options).toEqual(["all", "pg16", "pg17", "pg18"]);
@@ -6394,6 +6399,8 @@ describe("ci workflow guards", () => {
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
+    const twoCpu = "blacksmith-2vcpu-ubuntu-2404";
+    const fourCpu = "blacksmith-4vcpu-ubuntu-2404";
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
     const plannerRunner = workflow.jobs["check-plan"]["runs-on"];
     const plannerContext = {
@@ -6405,7 +6412,7 @@ describe("ci workflow guards", () => {
     };
     for (const eventName of ["pull_request", "push", "schedule"] as const) {
       expect(evaluateWorkflowExpression(plannerRunner, { ...plannerContext, eventName })).toBe(
-        eventName === "pull_request" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404",
+        eventName === "pull_request" ? "ubuntu-24.04" : fourCpu,
       );
     }
     const typeRunner = workflow.jobs["check-test-types-hosted-core-shard"]["runs-on"];
@@ -6424,7 +6431,7 @@ describe("ci workflow guards", () => {
           override: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
         ) => evaluateWorkflowExpression(runner, { ...fork, ...override });
         for (const runner of [plannerRunner, typeRunner, lintRunner]) {
-          expect(route(runner)).toBe("blacksmith-4vcpu-ubuntu-2404");
+          expect(route(runner)).toBe(runner === typeRunner ? twoCpu : fourCpu);
           for (const override of [
             { runnerBackend: "github" },
             { runAttempt: 2 },
@@ -6434,12 +6441,16 @@ describe("ci workflow guards", () => {
             expect(route(runner, override)).toBe("ubuntu-24.04");
           }
         }
+        const excludedTargets = { frozen_target: "", compatibility_target: "true" };
+        for (const [key, value] of Object.entries(excludedTargets)) {
+          expect(route(typeRunner, { preflightOutputs: { [key]: value } })).toBe(fourCpu);
+        }
         // Frozen defaults retain their historical hosted route; hybrid owns its own layout.
         for (const runner of runnerBackend === "hybrid" ? [lintRunner] : [typeRunner, lintRunner]) {
           expect(route(runner, { frozenTarget: true })).toBe("ubuntu-24.04");
         }
         for (const stripe of [1, 2, 3, 4, 5]) {
-          expect(route(lintRunner, { matrix: { stripe } })).toBe("blacksmith-4vcpu-ubuntu-2404");
+          expect(route(lintRunner, { matrix: { stripe } })).toBe(fourCpu);
         }
       }
     }
@@ -6448,16 +6459,16 @@ describe("ci workflow guards", () => {
       eventName: "workflow_dispatch" as const,
       preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
     };
-    expect(evaluateWorkflowExpression(plannerRunner, qualification)).toBe(
-      "blacksmith-4vcpu-ubuntu-2404",
-    );
-    expect(
-      evaluateWorkflowExpression(plannerRunner, {
-        ...qualification,
-        dispatchId: "full-release-validation-test",
-        releaseRunnerGroup: "test-group",
-      }),
-    ).toEqual({ group: "test-group", labels: "blacksmith-4vcpu-ubuntu-2404" });
+    for (const runner of [plannerRunner, typeRunner]) {
+      expect(evaluateWorkflowExpression(runner, qualification)).toBe(fourCpu);
+      expect(
+        evaluateWorkflowExpression(runner, {
+          ...qualification,
+          dispatchId: "full-release-validation-test",
+          releaseRunnerGroup: "test-group",
+        }),
+      ).toEqual({ group: "test-group", labels: fourCpu });
+    }
     for (const override of [
       { runnerBackend: "github" },
       { runnerBackend: "runson" },
@@ -6472,10 +6483,6 @@ describe("ci workflow guards", () => {
         JSON.stringify(override),
       ).toBe("ubuntu-24.04");
     }
-
-    expect(readFileSync("scripts/ci-build-manifest.mjs", "utf8")).toContain(
-      "createNodeTestShardBundles",
-    );
     const artifactRunner = workflow.jobs["build-artifacts"]["runs-on"];
     for (const frozenTarget of ["false", "true", ""]) {
       const context = {
@@ -6491,7 +6498,7 @@ describe("ci workflow guards", () => {
           expect(
             runOn({ runnerBackend, eventName }),
             `build-artifacts: ${runnerBackend || "default"}/${eventName}/frozen=${frozenTarget}`,
-          ).toBe("blacksmith-4vcpu-ubuntu-2404");
+          ).toBe(fourCpu);
         }
       }
       expect(
@@ -6501,7 +6508,7 @@ describe("ci workflow guards", () => {
           headRepository: "fork/openclaw",
         }),
         "build-artifacts: untrusted fork first attempt",
-      ).toBe("blacksmith-4vcpu-ubuntu-2404");
+      ).toBe(fourCpu);
       for (const override of [
         { runnerBackend: "github" },
         { runnerBackend: "hybrid", runAttempt: 2 },
@@ -6545,9 +6552,7 @@ describe("ci workflow guards", () => {
     ).toBe(
       "${{ github.event_name == 'pull_request' && '--max-old-space-size=8192' || '--max-old-space-size=16384' }}",
     );
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
-      "blacksmith-4vcpu-ubuntu-2404",
-    );
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(fourCpu);
     const fullCheckRows = evaluateWorkflow(workflow.jobs["check-shard"].strategy.matrix, {
       eventName: "workflow_dispatch",
       preflightOutputs: readFullCheckOutputs(),
@@ -6557,7 +6562,7 @@ describe("ci workflow guards", () => {
         check_name: `check-${task}`,
         task,
         runner: "blacksmith-16vcpu-ubuntu-2404",
-        runner_label: "blacksmith-4vcpu-ubuntu-2404",
+        runner_label: fourCpu,
       });
     }
     expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
@@ -6730,31 +6735,38 @@ describe("ci workflow guards", () => {
     ]);
     const coreLint = workflow.jobs["check-lint-hosted-core-shard"];
     expect(coreLint.needs).toEqual(["preflight", "check-plan", "check-extension-package-boundary"]);
-    const coreRestores = coreLint.steps.filter(
-      (step: WorkflowStep) =>
-        step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
-        String(step.with?.mode).startsWith("restore"),
-    );
-    for (const sharing of ["true", "false"]) {
-      for (const needsSdk of [true, false]) {
-        const selected = coreRestores.filter((step: WorkflowStep) =>
-          evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
-            eventName: "pull_request",
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
-            matrix: { requires_sdk_declarations: needsSdk },
-            preflightOutputs: {
-              shared_sdk_declarations: sharing,
-              runner_profile: "github",
-              cache_mode: "read",
-            },
-          }),
-        );
-        expect(selected.map((step: WorkflowStep) => step.with?.mode)).toEqual([
-          sharing === "true" && needsSdk ? "restore-run" : "restore-main",
-        ]);
-        expect(selected[0]?.["continue-on-error"]).not.toBe(true);
-      }
+    const sdkRestores = (steps: WorkflowStep[]) =>
+      steps.filter(
+        (step) =>
+          step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
+          String(step.with?.mode).startsWith("restore"),
+      );
+    const coreRestores = sdkRestores(coreLint.steps);
+    for (const [sharing, needsSdk, selection, modes] of [
+      ["true", true, "", ["restore-run"]],
+      ["true", true, "{}", ["restore-run"]],
+      ["true", undefined, "", ["restore-main"]],
+      ["true", undefined, "{}", []],
+      ["false", true, "", ["restore-main"]],
+      ["false", true, "{}", ["restore-main"]],
+      ["false", undefined, "", ["restore-main"]],
+      ["false", undefined, "{}", ["restore-main"]],
+    ] as const) {
+      const selected = coreRestores.filter((step: WorkflowStep) =>
+        evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { requires_sdk_declarations: needsSdk, lint_selection_json: selection },
+          preflightOutputs: {
+            shared_sdk_declarations: sharing,
+            runner_profile: "github",
+            cache_mode: "read",
+          },
+        }),
+      );
+      expect(selected.map((step: WorkflowStep) => step.with?.mode)).toEqual(modes);
+      expect(selected.some((step: WorkflowStep) => step["continue-on-error"] === true)).toBe(false);
     }
     const steps = producer.steps as WorkflowStep[];
     expect(
@@ -6765,11 +6777,7 @@ describe("ci workflow guards", () => {
     );
     expect(steps.at(-1)?.with?.mode).toBe("publish-run");
     expect(workflow.jobs["ci-gate"].needs).toContain("check-extension-package-boundary");
-    const restoreSteps = workflow.jobs["check-lint-hosted-extension-shard"].steps.filter(
-      (step: WorkflowStep) =>
-        step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
-        String(step.with?.mode).startsWith("restore"),
-    );
+    const restoreSteps = sdkRestores(workflow.jobs["check-lint-hosted-extension-shard"].steps);
     for (const enabled of ["true", "false"]) {
       const selected = restoreSteps.filter((step: WorkflowStep) =>
         evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
@@ -6837,9 +6845,6 @@ describe("ci workflow guards", () => {
     );
     expect(boundaryCache.if).toBe(
       "needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true'",
-    );
-    expect(hostedCoreCache.if).toBe(
-      "(needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate",
     );
     for (const cache of [hostedLintCache, hostedCoreCache]) {
       expect(cache.uses).toBe("./.ci-harness/.github/actions/sdk-declarations");
@@ -11982,6 +11987,76 @@ describe("ci workflow guards", () => {
       }
     },
   );
+
+  it("projects narrow worker archives without changing the selected tests", () => {
+    const tooling = {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      includePatterns: ["test/scripts/test-projects.test.ts"],
+    };
+    const runtime = {
+      configs: ["test/vitest/vitest.runtime-config.config.ts"],
+      includePatterns: ["src/config/io.load-async.test.ts"],
+    };
+    const selections = [
+      tooling,
+      runtime,
+      { groups: [tooling, runtime] },
+      { ...tooling, pretestBuildMode: "runtime" },
+      { groups: [{ ...tooling, requiresDist: true }] },
+      { ...tooling, env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--testNamePattern=proof"]' } },
+      { ...tooling, includePatterns: ["unknown.test.ts"] },
+      { targets: runtime.includePatterns },
+      { configs: tooling.configs },
+      { ...tooling, env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: null } },
+    ];
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "push",
+      nodeTestShards: selections.map((selection, index) => ({
+        checkName: `worker-${index}`,
+        shardName: `worker-${index}`,
+        runner: "ubuntu-24.04",
+        requiresDist: false,
+        ...selection,
+      })),
+    });
+    expect(result.status, result.output).toBe(0);
+    const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
+    expect(rows.map((row: { worker_cache_preset?: string }) => row.worker_cache_preset)).toEqual([
+      "tooling",
+      "runtime",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "runtime",
+      undefined,
+      undefined,
+    ]);
+    for (const [index, row] of rows.entries()) {
+      const selection = selections[index]!;
+      const plans = resolveShardPlans({
+        OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(row.targets),
+        OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(row.configs),
+        OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: row.groups_gzip_base64,
+        OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: JSON.stringify(row.includePatterns),
+      });
+      expect(
+        plans.flatMap((plan) =>
+          plan.kind === "target" ? [plan.target] : (plan.plan.includePatterns ?? []),
+        ),
+      ).toEqual(
+        "groups" in selection
+          ? selection.groups!.flatMap((group) => group.includePatterns)
+          : "targets" in selection
+            ? selection.targets
+            : "includePatterns" in selection
+              ? selection.includePatterns
+              : [],
+      );
+    }
+  });
 
   it("keeps docs i18n CI on the workflow-owned Go toolchain", () => {
     const workflow = readCiWorkflow();

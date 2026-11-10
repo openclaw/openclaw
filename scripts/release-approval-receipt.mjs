@@ -10,6 +10,11 @@ import {
 } from "./lib/actions-artifact-archive.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
+  classifyReleaseTrain,
+  parseReleaseVersion,
+  validateRetiredLineReason,
+} from "./lib/release-version.mjs";
+import {
   runReleaseToolingGh,
   validateReleasePublishParentRun,
 } from "./release-tooling-identity.mjs";
@@ -63,6 +68,7 @@ function npmApprovals(approvals) {
   );
 }
 
+// Keep the artifact transport name stable; the authenticated payload owns its schema version.
 function releaseApprovalArtifactName({ parentRunId, parentRunAttempt }) {
   pattern(parentRunId, ID, "Parent run id");
   pattern(parentRunAttempt, ID, "Parent run attempt");
@@ -72,13 +78,13 @@ function releaseApprovalArtifactName({ parentRunId, parentRunAttempt }) {
 export function validateReleaseApprovalReceipt(value) {
   if (
     !isRecord(value) ||
-    Object.keys(value).length !== RECEIPT_KEYS.length ||
+    Object.keys(value).length !== RECEIPT_KEYS.length + (value.version === 2 ? 1 : 0) ||
     RECEIPT_KEYS.some((key) => !Object.hasOwn(value, key))
   ) {
     throw new Error("Release approval receipt fields are invalid.");
   }
-  if (value.version !== 1) {
-    throw new Error("Release approval receipt version must be 1.");
+  if (![1, 2].includes(value.version)) {
+    throw new Error("Release approval receipt version must be 1 or 2.");
   }
   for (const key of RECEIPT_KEYS.slice(1)) {
     if (typeof value[key] !== "string") {
@@ -106,6 +112,17 @@ export function validateReleaseApprovalReceipt(value) {
     value.toolingFullRef.includes("tideclaw/alpha/")
   ) {
     throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  if (value.version === 2) {
+    validateRetiredLineReason(value.retiredLineReason);
+    const version = parseReleaseVersion(value.releaseTag.slice(1));
+    if (
+      value.npmDistTag !== "extended-stable" ||
+      !version ||
+      classifyReleaseTrain(version) !== "extended-stable"
+    ) {
+      throw new Error("Retired-line approval is only valid for extended-stable.");
+    }
   }
   refIdentity(value.toolingRef, value.toolingFullRef, value.toolingSha);
   pattern(value.releaseTag, RELEASE_TAG, "Release tag");
@@ -139,7 +156,10 @@ export function createReleaseApprovalReceipt(env, runGhJson = api) {
     throw new Error("Release approval requires an approved npm-release environment entry.");
   }
   return validateReleaseApprovalReceipt({
-    version: 1,
+    version: env.RETIRED_LINE_PUBLICATION_REASON ? 2 : 1,
+    ...(env.RETIRED_LINE_PUBLICATION_REASON
+      ? { retiredLineReason: env.RETIRED_LINE_PUBLICATION_REASON }
+      : {}),
     kind: "openclaw-release-approval",
     repository: env.GITHUB_REPOSITORY,
     parentWorkflow: PARENT_WORKFLOW,

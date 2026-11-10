@@ -7,6 +7,10 @@ export type PendingAgentDatabaseInspection = {
   target: { agentId?: string; path: string };
   result: Promise<OpenClawDatabaseSchemaPreflight>;
 };
+export type AgentRestartInputRecovery = {
+  run: () => Promise<void>;
+  sessions: ReadonlyMap<string, Promise<void>>;
+};
 type AgentDatabaseStartupPreparationInput = {
   agentId: string;
   paths: readonly string[];
@@ -19,9 +23,10 @@ export type AgentDatabaseStartupActivation = {
   isCurrent: () => boolean;
   preparationReady: Promise<void>;
   openAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<AsyncDisposable | void>;
-  migrateAgent: (
-    input: AgentDatabaseStartupPreparationInput,
-  ) => Promise<void | { maintain?: () => Promise<void>; recoverInputs?: () => Promise<void> }>;
+  migrateAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void | {
+    maintain?: () => Promise<void>;
+    recoverInputs?: AgentRestartInputRecovery;
+  }>;
   /** Admission may fail after publication; its publisher owns withdrawal of retained inputs. */
   publishAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void | (() => void)>;
   captureReadAdmission?: (input: AgentDatabaseStartupPreparationInput) => () => void;
@@ -45,7 +50,6 @@ export type PendingAgentDatabaseRecovery = {
   refusal: AgentDatabaseAdmissionRefusal;
   completion: Promise<void>;
   readReady?: Promise<void>;
-  inputReady?: Promise<void>;
   startedAt: number;
   phase: AgentDatabaseStartupPreparationPhase;
   phaseStartedAt: number;

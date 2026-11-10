@@ -92,6 +92,7 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.equal": "workspace.manifest",
   "workspace.manifest.snapshot": "workspace.manifest",
   "workspace.manifest.document": "workspace.manifest",
+  "workspace.manifest.template": "workspace.manifest",
   "workspace.manifest.reference": "workspace.manifest",
   "workspace.manifest.parse": "workspace.manifest",
   "workspace.manifest.paths": "workspace.manifest",

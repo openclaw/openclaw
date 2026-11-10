@@ -103,6 +103,38 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   const scratch = tempDirs.make("knowledge-source-scratch-");
   const env = { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch };
   const options = { timeout: 10_000, env };
+  const malformed = Buffer.concat([
+    Buffer.from('{"id":"'),
+    Buffer.from([0xff]),
+    Buffer.from('"}\n'),
+  ]);
+  expect(() =>
+    run(
+      manifestScript,
+      [
+        "snapshot",
+        ...flags({
+          provider: "discord",
+          "source-key": "discord:guild:channel",
+          input: "-",
+          output: "-",
+          "coverage-start": at("000"),
+          "coverage-end": at("010"),
+        }),
+      ],
+      { ...options, input: malformed },
+    ),
+  ).toThrow(/encoded data was not valid/);
+  expect(await readdir(scratch)).toEqual([]);
+  const invalidManifest = path.join(dir, "invalid.manifest.jsonl");
+  await writeFile(
+    invalidManifest,
+    Buffer.concat([Buffer.from(content.split("\n")[0] + "\n"), malformed]),
+  );
+  expect(() => run(manifestScript, ["plan", "--current", invalidManifest], options)).toThrow(
+    /encoded data was not valid/,
+  );
+  expect(await readdir(scratch)).toEqual([]);
   expect(() =>
     run(manifestScript, ["plan", "--current", path.join(scratch, "missing.gz")], options),
   ).toThrow(/ENOENT/);

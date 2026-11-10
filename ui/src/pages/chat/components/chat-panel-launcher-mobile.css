@@ -13,9 +13,9 @@
 .chat-panel-launcher-mobile h3 {
   margin: 2px 0 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
-  line-height: 16px;
+  line-height: var(--control-ui-text-lg);
 }
 
 .chat-panel-launcher-mobile__quick,
@@ -44,8 +44,8 @@
   background: var(--surface-selected);
   color: inherit;
   font: inherit;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--control-ui-text-md);
+  line-height: calc(20px * var(--control-ui-text-scale));
   text-align: left;
   cursor: var(--cursor-action);
 }

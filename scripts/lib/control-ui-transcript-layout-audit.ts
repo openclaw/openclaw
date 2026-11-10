@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
+import type { JSHandle, Page } from "playwright";
+import { observeTranscriptPaint } from "./control-ui-transcript-paint-probe.ts";
 
 /** Diagnostic only: DOM reads and compositor capture invalidate timing comparisons. */
 function observeTranscriptLayout(diagnosticOptions: { paintMarker: boolean }) {
@@ -386,10 +387,15 @@ export async function startTranscriptLayoutAudit(
   prefix: string,
   engine: string,
   paintMarker = false,
+  paintProbe = false,
 ) {
   const frameDirectory = path.join(directory, `${prefix}.transcript-frames`);
   await mkdir(frameDirectory, { recursive: true });
-  const observation = await page.evaluateHandle(observeTranscriptLayout, { paintMarker });
+  const observation: JSHandle<
+    ReturnType<typeof observeTranscriptPaint> | ReturnType<typeof observeTranscriptLayout>
+  > = paintProbe
+    ? await page.evaluateHandle(observeTranscriptPaint)
+    : await page.evaluateHandle(observeTranscriptLayout, { paintMarker });
   const images: unknown[] = [];
   const writes: Promise<void>[] = [];
   const errors: string[] = [];
@@ -432,7 +438,12 @@ export async function startTranscriptLayoutAudit(
       size: { width: 1440, height: 1000 },
     });
   } catch (error) {
-    await observation.evaluate((audit) => audit.finish());
+    await observation.evaluate((audit) => {
+      audit.finish();
+      if ("dispose" in audit) {
+        audit.dispose();
+      }
+    });
     await observation.dispose();
     throw error;
   }
@@ -442,32 +453,77 @@ export async function startTranscriptLayoutAudit(
         const geometry = await observation.evaluate((audit) => audit.finish());
         await page.screencast.stop();
         await Promise.all(writes);
+        const paintCalibrations: {
+          file: string;
+          scrollTop: number;
+          scrollHeight?: number;
+          stable?: boolean;
+          after: { scrollTop: number; scrollHeight: number };
+        }[] = [];
+        if (paintProbe) {
+          for (const offset of [0, 8191, 13979]) {
+            const result = await observation.evaluate(
+              async (audit, top) =>
+                "calibrate" in audit ? audit.calibrate(top) : { scrollTop: 0 },
+              offset,
+            );
+            const file = `calibration-${paintCalibrations.length}.jpg`;
+            await page.screenshot({
+              path: path.join(frameDirectory, file),
+              type: "jpeg",
+              quality: 65,
+            });
+            const after = await page
+              .locator(".chat-pane-cache__pane--active .chat-thread")
+              .evaluate((thread) => ({
+                scrollTop: thread.scrollTop,
+                scrollHeight: thread.scrollHeight,
+              }));
+            paintCalibrations.push({ file, ...result, after });
+          }
+        }
         await writeFile(
           path.join(directory, `${prefix}.transcript-layout.json`),
           JSON.stringify(
             {
               ...geometry,
+              paintCalibrations,
               images,
               imageBytes,
               droppedImages,
               errors,
               captureSource: `${engine}:playwright-screencast`,
-              notes: [
-                "Diagnostic DOM reads and compositor capture add overhead; these results are not timing proof.",
-                "JPEGs come from the browser screencast in every engine; image counts are capture counts, not display refresh counts or blank duration.",
-                "Geometry at is performance.now(); image timestamp is seconds since Unix epoch. Compare timestamp * 1000 - timeOrigin, allowing compositor pipeline delay. Playwright aligns Firefox/WebKit's screencast clock to host wall time at the first frame, so their cross-clock ordering is approximate.",
-                "rAF row, bubble and text rectangles describe DOM layout before paint. They do not establish painted coverage or rule out stale text. Prepared rows with hidden inline styles are excluded before descendant layout reads; visible prepared rows are included. preparingRows counts measurement candidates separately.",
-                "Bubble IDs and bounded text rectangles aid image attribution without retaining message text. Omitted bubble/text counts identify truncated samples; text rectangles are not glyph masks.",
-                "When enabled, the bottom-left pixel marker encodes the latest wrapped JavaScript scroll write revision after two black/white reference cells. Match it to scrollWrites rather than relying on cross-clock ordering. Native compositor scrolls do not increment it; markerScrollTop records the offset when its revision was written. The diagnostic marker itself adds paint work and is excluded from ordinary audits.",
-                "screenDeltaY is visible same-node movement; layoutDeltaY removes native scroll and viewport movement. Compensation can keep screenDeltaY zero while layoutDeltaY changes.",
-                "Mutation ancestry contains identities and text lengths, never message text. Removed nodes may already lack parents at observer delivery.",
-              ],
+              notes: paintProbe
+                ? [
+                    "Capture-only probe: synchronous layout reads and extra paint invalidate timing comparisons.",
+                    "The fixed canvas encodes a snapshot ID. The CSS local background encodes compositor scroll offset independently. Content and marker layers are not an atomic presentation fence.",
+                    "Each snapshot copies the live virtualizer range/offset and the committed active keys alongside mounted row visibility and text geometry. The live range can precede the rendered DOM.",
+                    "JPEG counts are capture counts, not display refresh counts or blank duration. Chromium image timestamps are frame-swap time; they do not identify the DOM revision in each independent layer.",
+                    "Calibration requires stable scroll offset and extent before capture, with both recorded again afterward. Pixel text rectangles are layout bounds, not glyph masks.",
+                  ]
+                : [
+                    "Diagnostic DOM reads and compositor capture add overhead; these results are not timing proof.",
+                    "JPEGs come from the browser screencast in every engine; image counts are capture counts, not display refresh counts or blank duration.",
+                    "Geometry at is performance.now(); image timestamp is seconds since Unix epoch. Compare timestamp * 1000 - timeOrigin, allowing compositor pipeline delay. Playwright aligns Firefox/WebKit's screencast clock to host wall time at the first frame, so their cross-clock ordering is approximate.",
+                    "rAF row, bubble and text rectangles describe DOM layout before paint. They do not establish painted coverage or rule out stale text. Prepared rows with hidden inline styles are excluded before descendant layout reads; visible prepared rows are included. preparingRows counts measurement candidates separately.",
+                    "Bubble IDs and bounded text rectangles aid image attribution without retaining message text. Omitted bubble/text counts identify truncated samples; text rectangles are not glyph masks.",
+                    "When enabled, the bottom-left pixel marker encodes the latest wrapped JavaScript scroll write revision after two black/white reference cells. Match it to scrollWrites rather than relying on cross-clock ordering. Native compositor scrolls do not increment it; markerScrollTop records the offset when its revision was written. The diagnostic marker itself adds paint work and is excluded from ordinary audits.",
+                    "screenDeltaY is visible same-node movement; layoutDeltaY removes native scroll and viewport movement. Compensation can keep screenDeltaY zero while layoutDeltaY changes.",
+                    "Mutation ancestry contains identities and text lengths, never message text. Removed nodes may already lack parents at observer delivery.",
+                  ],
             },
             null,
             2,
           ),
         );
       } finally {
+        if (paintProbe) {
+          await observation.evaluate((audit) => {
+            if ("dispose" in audit) {
+              audit.dispose();
+            }
+          });
+        }
         await observation.dispose();
       }
     },

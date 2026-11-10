@@ -76,6 +76,39 @@ If the Gateway denies the upgrade because it exceeds your assigned operator role
 
 </Note>
 
+## Pair a browser with a code
+
+Use this when your own browser has no Gateway token and you can run a command on the Gateway host, including over SSH. You do not need a browser on the host, and nothing has to be pasted into the page. Approval grants administrator access; this is not a guest invitation.
+
+Code pairing is for a direct connection to the Gateway serving the page, not an OpenClaw ID tunnel or ID owner-browser enrollment. Gateways with `gateway.roles` configured require identity-aware sign-in and refuse this identity-less code flow; use the Gateway's normal sign-in method instead.
+
+<Steps>
+  <Step title="Ask for a code">
+    Open the Gateway in any browser and choose **Pair this browser**. The page shows a code such as `ABCD-EFGH` and the command to run.
+  </Step>
+  <Step title="Approve it on the host">
+    ```bash
+    openclaw pair ABCD-EFGH
+    ```
+
+    The command prints the browser's user agent, address, page, **Browser ID**, and when it asked, then waits for your answer.
+
+  </Step>
+  <Step title="Let the page connect">
+    Keep the page open. It connects by itself within a few seconds of approval. Editing the Gateway URL or choosing **Connect** ends the wait, because an approval only works on the Gateway that issued it.
+  </Step>
+</Steps>
+
+Approval pairs that browser as an operator device with the Control UI's administrator scopes, the same result as approving it with `openclaw devices approve`. It then appears in `openclaw devices list` and the Devices page, where you can remove it. **Only approve a code you requested yourself.** A code is not a secret: it names a waiting browser, and anyone can display one. Running a code someone else sent you gives their browser control of your Gateway, so answer no unless the Browser ID in the terminal matches the page in front of you.
+
+Connection interruptions keep the same request and code while the page shows that it is retrying. Approval can still complete during an interruption; the page checks the recorded result when connectivity returns.
+
+**Cancel** withdraws a pending request on the Gateway. The page confirms cancellation only after the Gateway answers, and that code can no longer be approved. If withdrawal cannot be confirmed, retry cancellation. If approval finished first, the page explains that access was already granted and offers **Continue**; cancellation does not revoke an approved device. Remove the browser in Devices to revoke its access. Leaving the page or switching Gateway URLs only stops local waiting and does not claim to withdraw the request.
+
+Codes expire after ten minutes. Only the browser that asked can collect the result, because the Gateway checks the signature of its device key. The device token it receives is bound to that key when the browser signs in over the Gateway WebSocket, but supported HTTP routes accept the token by itself as bearer auth, so treat it as a secret. The page can collect that token again until the code expires, in case a reply was lost; rotating, revoking or removing the device token ends that. A browser that is already paired with a revoked or narrowed operator token keeps that limit, so the code is refused; use the `openclaw dashboard` owner handoff described below, or remove the device first. If you answer no, the page shows that the request was declined.
+
+The page must be served by the Gateway it is connecting to. Pairing also works on plain `http://` LAN addresses, but anyone on that network can read the Gateway traffic afterwards, so prefer HTTPS. See [`openclaw pair`](/cli/pair) for the command's options.
+
 ## Pair a mobile device
 
 An already paired administrator can create the iOS/Android connection QR without opening a terminal:
