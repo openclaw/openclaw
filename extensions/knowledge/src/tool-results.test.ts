@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { HASH_PREFIX_CHARS, hashMatches } from "./hash-fence.js";
 import plugin from "./index.js";
 import { sessionActions, storeFixture, toolContext, useTestTempDirs } from "./test-support.js";
+import { leanRecord } from "./tool-results.js";
 
 const dirs = useTestTempDirs();
 
@@ -171,6 +172,10 @@ it("connections default to one lean row per connection, with claim text", async 
   // A two-row page carries the snapshot needed to compare the next page.
   const paged = await s.tool("knowledge_connections", { id: s.project.id, limit: 1 });
   expect(paged).toMatchObject({ nextOffset: 1, snapshot: full.snapshot });
+  // The last page still carries it, so a change between pages is detectable.
+  const last = await s.tool("knowledge_connections", { id: s.project.id, limit: 1, offset: 1 });
+  expect(last.nextOffset).toBeUndefined();
+  expect(last.snapshot).toBe(full.snapshot);
 });
 
 it("records return identity, text and full hash; explicit options add what they name", async () => {
@@ -431,4 +436,70 @@ it("lean agent responses are a fraction of the complete ones", async () => {
     const [a, b] = [await s.call(name, lean), await s.call(name, full)];
     expect(a.chars, name).toBeLessThan(b.chars * 0.6);
   }
+});
+
+it("maxChars bounds claim text too, continuing over the stored text", async () => {
+  const s = await seeded();
+  const body = Array.from({ length: 60 }, (_, i) => "Clause " + i + " of the decision.").join(" ");
+  const claim = await s.tool("knowledge_create_claim", {
+    requestId: randomUUID(),
+    expectedOntologyFingerprint: s.meeting.ontologyFingerprint,
+    title: "Long decision",
+    body,
+    claim_kind: "decision",
+    assertion_origin: "source",
+    attribution: "Alex, meeting transcript line 1",
+    evidence: [s.evidence],
+    entities: [s.project.id],
+  });
+  let offset: number | undefined = 0,
+    read = "";
+  while (offset !== undefined) {
+    const page = await s.call("knowledge_record", { id: claim.id, offset, maxChars: 600 });
+    expect(JSON.stringify(page.value).length).toBeLessThanOrEqual(600);
+    read += page.value.record.text;
+    offset = page.value.nextOffset;
+  }
+  expect(read).toBe(body);
+});
+
+it("operator agent queries accept the agent-only detail selector", async () => {
+  const s = await seeded();
+  const result = await s.ui("agent_query", {
+    agent: "main",
+    operation: "grep",
+    input: { query: "option", detail: "full" },
+  });
+  expect(result.hits[0]).toMatchObject({ citation: expect.any(Object) });
+});
+
+it("authored IDs of merged pages count once, as the page they resolve to", () => {
+  const survivor = { id: "survivor-page", title: "Survivor", kind: "page", type: "person" };
+  const lean = leanRecord(
+    {
+      view: "content",
+      record: {
+        ...survivor,
+        id: "claim-0001",
+        kind: "claim",
+        type: "fact",
+        title: "A fact",
+        path: "claims/a.md",
+        lifecycle: "active",
+        revision: 1,
+        valid: true,
+        hash: "a".repeat(64),
+        body: "A fact.",
+        about: [
+          { ...survivor, path: "people/s.md", lifecycle: "active", revision: 3, valid: true },
+        ],
+        metadata: { entities: ["absorbed-page", "survivor-page"] },
+      },
+      content: { offset: 0, totalChars: 7, nextOffset: null },
+      issues: [],
+      redirects: [{ from: "absorbed-page", to: "survivor-page" }],
+    } as any,
+    { id: "claim-0001" },
+  );
+  expect(lean.record?.about).toStrictEqual([{ id: "survivor-page", title: "Survivor" }]);
 });

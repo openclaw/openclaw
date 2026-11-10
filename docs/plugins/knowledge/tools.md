@@ -26,19 +26,20 @@ operator inspection, and commands always receive the complete response.
 - **List rows** (connections, records, search, lookup, timeline) carry the
   record ID, revision, and the first 16 characters of its hash. Pages add title
   and type; claims add kind, one day (occurrence, else recorded), their text
-  without HTML comments, linked page titles, and source page; relationships add
+  without HTML comments (`truncated: true` past 4,000 characters), linked page
+  titles, and source page; relationships add
   `from` and `to`. `lifecycle` and `assertionOrigin` appear only when not
   `active` or `source`.
 - **Single records** (`knowledge_record`) return the full hash, the body or claim
   text, aliases, non-empty domain fields, and linked pages. `maxChars` bounds
-  the whole response.
+  the whole response by shortening the text window; follow `nextOffset`.
 - **Write receipts** return the record `id`, new `revision` and full `hash`,
   and the `ontologyFingerprint` the next write needs. `state` and `message`
   appear only when the receipt is not `published`; changed `items`, `impact`,
   and a page `budget` appear when present. `knowledge_mutation` returns the
   complete receipt.
-- Snapshots and `nextOffset` appear only while another page remains; coverage
-  appears only when incomplete.
+- `nextOffset` appears only while another page remains, and `snapshot` only
+  when paging (including the last page); coverage appears only when incomplete.
 
 Ask for the complete response with `detail: "full"` on `knowledge_record`,
 `knowledge_grep`, `knowledge_lookup`, `knowledge_records`,

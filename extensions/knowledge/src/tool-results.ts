@@ -57,9 +57,12 @@ const MATCH_OFFSET = 100,
 const MIN_BODY_PROGRESS = 256;
 
 const nextOffset = (value: number | null) => (value === null ? {} : { nextOffset: value });
-// Snapshots exist to compare pages; a single page has nothing to compare.
-const paging = (next: number | null, snapshot?: string | null) =>
-  next === null ? {} : { nextOffset: next, ...(snapshot ? { snapshot } : {}) };
+// Snapshots exist to compare pages; a single page has nothing to compare, while a
+// later page, including the last, still carries the snapshot to compare.
+const paging = (next: number | null, offset: number, snapshot?: string | null) => ({
+  ...(next === null ? {} : { nextOffset: next }),
+  ...(snapshot && (next !== null || offset > 0) ? { snapshot } : {}),
+});
 const coverage = (c: { complete: boolean; message: string }) =>
   c.complete ? {} : { coverage: { complete: false as const, message: c.message } };
 // knowledge_record
@@ -100,13 +103,16 @@ export function leanRecord(output: RecordOutput, input: RecordInput): LeanRecord
   }
   const m = r.metadata ?? {};
   const claim = r.kind === "claim";
-  // Linked pages the read summarized come first; further entity IDs follow without titles.
+  // Linked pages the read summarized come first; further entity IDs follow without
+  // titles. Authored IDs of merged pages count as the pages they resolve to.
+  const current = (id: string) => output.redirects?.find((x) => x.from === id)?.to ?? id;
+  const summarized = new Set((r.about ?? []).map((a) => a.id));
   const about = [
     ...(r.about ?? []).map(ref),
-    ...(m.entities ?? [])
-      .filter((id) => !(r.about ?? []).some((a) => a.id === id))
+    ...[...new Set((m.entities ?? []).map(current))]
+      .filter((id) => !summarized.has(id))
       .map((id) => ({ id })),
-  ];
+  ].slice(0, 100);
   const fields = m.fields && Object.keys(m.fields).length ? m.fields : undefined;
   const date = claim ? (m.occurred_at ?? r.occurredAt ?? r.recordedAt) : undefined;
   const fullMetadata = input.metadataView === "full" || input.includeMetadata === true;
@@ -206,22 +212,39 @@ export function leanRecord(output: RecordOutput, input: RecordInput): LeanRecord
   return boundLeanRecord(lean, output, input.maxChars ?? AGENT_RECORD_MAX_CHARS);
 }
 
-// maxChars bounds the complete serialized response, not just the text window.
-// Claim text is shown without comments, so only page bodies and raw text are
-// continued by offset; requested evidence and references keep their own limits.
+// maxChars bounds the complete serialized response, including the continuation
+// fields a cut adds. The text window (page body, raw Markdown or claim text) is
+// what shrinks; requested evidence, references and metadata keep their own limits.
+// A cut claim shows its text as stored, so offsets continue over the stored text.
 function boundLeanRecord(
   lean: LeanRecordOutput,
   output: RecordOutput,
   maxChars: number,
 ): LeanRecordOutput {
-  const record = lean.record,
-    key = record?.raw !== undefined ? "raw" : "body",
-    value = record?.[key];
+  const record = lean.record;
   const size = () => JSON.stringify(lean).length;
-  if (!record || value === undefined || size() <= maxChars) {
+  if (!record || size() <= maxChars) {
     return lean;
   }
+  const key =
+    record.raw !== undefined
+      ? "raw"
+      : record.body !== undefined
+        ? "body"
+        : record.text !== undefined
+          ? "text"
+          : undefined;
+  if (!key) {
+    return lean;
+  }
+  const value = key === "text" ? (output.record?.body ?? "") : record[key]!;
+  const offset = output.content.offset,
+    totalChars = output.content.totalChars,
+    before = { nextOffset: lean.nextOffset, totalChars: lean.totalChars };
+  lean.nextOffset = offset + value.length;
+  lean.totalChars = totalChars;
   let keep = value.length;
+  record[key] = value;
   while (keep > 0 && size() > maxChars) {
     keep = Math.max(0, keep - (size() - maxChars));
     if (splitsPair(value, keep)) {
@@ -229,7 +252,7 @@ function boundLeanRecord(
     }
     record[key] = value.slice(0, keep);
   }
-  // A response that cannot hold any text still advances: identity wins over the bound.
+  // A response whose identity and fields alone exceed the bound still advances.
   if (keep === 0 && value.length) {
     keep = Math.min(value.length, MIN_BODY_PROGRESS);
     if (splitsPair(value, keep)) {
@@ -238,8 +261,17 @@ function boundLeanRecord(
     record[key] = value.slice(0, keep);
   }
   if (keep < value.length) {
-    lean.nextOffset = output.content.offset + keep;
-    lean.totalChars = output.content.totalChars;
+    lean.nextOffset = offset + keep;
+    return lean;
+  }
+  // Nothing was cut: keep only the continuation the read already had.
+  record[key] = key === "text" ? stripComments(value) : value;
+  if (before.nextOffset === undefined) {
+    delete lean.nextOffset;
+    delete lean.totalChars;
+  } else {
+    lean.nextOffset = before.nextOffset;
+    lean.totalChars = before.totalChars;
   }
   return lean;
 }
@@ -276,7 +308,7 @@ export const leanSearch = (o: SearchOutput): Static<typeof LeanSearchOutput> => 
   hits: o.hits.map((h) => leanHit(h, true)),
   resultCount: o.resultCount,
   total: o.total,
-  ...paging(o.nextOffset, o.index.snapshot),
+  ...paging(o.nextOffset, o.offset, o.index.snapshot),
   ...coverage(o.coverage),
   ...(o.index.state === "ready"
     ? {}
@@ -320,7 +352,7 @@ function leanItem(item: Item): Static<typeof LeanChronicleItem> {
 export const leanChronicle = (o: ChronicleOutput): Static<typeof LeanChronicleOutput> => ({
   items: o.items.map(leanItem),
   total: o.total,
-  ...paging(o.nextOffset, o.snapshot),
+  ...paging(o.nextOffset, o.offset, o.snapshot),
   ...coverage(o.coverage),
   ...(o.sources ? { sources: o.sources.map(temporalRow) } : {}),
 });
@@ -416,13 +448,16 @@ export const leanStatus = (o: StatusFull): Static<typeof LeanStatusOutput> => ({
 });
 
 // knowledge_verify
-export const leanVerify = (o: VerifyOutput): Static<typeof LeanVerifyOutput> => ({
+export const leanVerify = (
+  o: VerifyOutput,
+  input: { offset?: number },
+): Static<typeof LeanVerifyOutput> => ({
   checked: o.checked,
   passed: o.passed,
   failed: o.failed,
   ...(o.problems.length ? { problems: o.problems } : {}),
   ...(o.totalProblems > o.problems.length ? { totalProblems: o.totalProblems } : {}),
-  ...paging(o.nextOffset, o.snapshot),
+  ...paging(o.nextOffset, input.offset ?? 0, o.snapshot),
   ...(o.index === "ready" ? {} : { index: "unavailable" as const }),
 });
 

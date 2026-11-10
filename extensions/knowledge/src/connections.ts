@@ -150,8 +150,9 @@ export function connections(
         : {}),
       total: rows.length,
       nextOffset,
-      // Compact responses carry the snapshot only while there is a next page to compare.
-      ...(full || nextOffset !== null ? { snapshot } : {}),
+      // Compact responses carry the snapshot only when paging: a single page has
+      // nothing to compare, while a later page, including the last, does.
+      ...(full || nextOffset !== null || offset > 0 ? { snapshot } : {}),
       ...(redirectedFrom ? { redirectedFrom } : {}),
     };
   };

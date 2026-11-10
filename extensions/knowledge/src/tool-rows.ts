@@ -38,6 +38,7 @@ export const ClaimRow = Type.Object(
     claimKind: text(30),
     date: Type.Optional(text(10)),
     text: text(4000),
+    truncated: Type.Optional(Type.Literal(true)),
     about: Type.Optional(Type.Array(text(200), { maxItems: 2 })),
     source: Type.Optional(Ref),
     lifecycle,
@@ -107,6 +108,8 @@ export function summaryRow(s: Static<typeof CardSummary>, supersededBy?: string)
       claimKind: card?.claimKind ?? s.type,
       ...(date ? { date } : {}),
       text: stripComments(card?.body ?? s.title),
+      // A card holds the first 4,000 characters; knowledge_record reads the rest.
+      ...(card?.truncated ? { truncated: true as const } : {}),
       ...(card?.about?.length ? { about: card.about.map((a) => a.title) } : {}),
       ...(card?.source ? { source: { id: card.source.id, title: card.source.title } } : {}),
       ...inactive(s.lifecycle),

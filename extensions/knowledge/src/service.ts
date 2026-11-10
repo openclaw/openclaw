@@ -565,7 +565,9 @@ export function createKnowledgeService(
         input: unknown,
         context: FeatureInvocationContext,
       ) => Promise<unknown>;
-      const output = await handler(input.input, context);
+      // The response-only detail selector belongs to the agent tool adapter.
+      const { detail: _detail, ...payload } = input.input as Record<string, unknown>;
+      const output = await handler(payload, context);
       if (!Check(operation.output, output)) {
         throw new Error(`Invalid output from ${input.operation}.`);
       }

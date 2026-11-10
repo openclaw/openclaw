@@ -32,8 +32,8 @@ edit.
   `knowledge_record` content read, the replacement, a reason and the
   vault/revision/hash/ontology fences. Equal offsets insert; empty replacement
   deletes.
-- Full replacement: read the entire body first (follow `content.nextOffset`;
-  compare hashes across pages). Never edit from a truncated read.
+- Full replacement: read the entire body first (follow `nextOffset` with
+  `offset`; compare hashes across pages). Never edit from a truncated read.
 - Request `metadataView: "full"` before changing domain fields. Preserve
   unrelated prose and metadata.
 
