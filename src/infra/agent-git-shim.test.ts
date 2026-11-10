@@ -8,6 +8,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { prepareLocalWorkspaceCheckout } from "../gateway/worker-environments/local-workspace-checkout.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { AGENT_GIT_SHIM } from "./agent-git-shim.js";
 import {
   createSourceCliFixture,
   withSourceCliParent,
@@ -19,6 +20,143 @@ import {
 } from "./openclaw-cli-shim.js";
 
 afterEach(clearGatewayAgentCliShim);
+
+it.skipIf(process.platform === "win32")(
+  "negotiates missing revision roots before shared-clone content commands",
+  () =>
+    withTempDir("agent-git-commits-", async (root) => {
+      const env = {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+        ),
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_AUTHOR_NAME: "Fixture",
+        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+        GIT_COMMITTER_NAME: "Fixture",
+        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+        GIT_ALLOW_PROTOCOL: "file",
+      };
+      const git = (cwd: string, ...args: string[]) => {
+        const result = spawnSync("git", ["-C", cwd, ...args], { env, encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(0);
+        return result.stdout.trim();
+      };
+      const origin = path.join(root, "origin");
+      const seed = path.join(root, "seed");
+      const originUrl = pathToFileURL(origin).href;
+      git(root, "init", "--initial-branch=main", origin);
+      git(origin, "config", "uploadpack.allowFilter", "true");
+      await fs.writeFile(path.join(origin, "file.txt"), "base content\n");
+      git(origin, "add", ".");
+      git(origin, "commit", "-m", "base");
+      for (let index = 0; index < 12; index++) {
+        git(origin, "commit", "--allow-empty", "-m", `history ${index}`);
+      }
+      const base = git(origin, "rev-parse", "HEAD");
+      git(root, "clone", "--depth=1", "--filter=blob:none", "--no-checkout", originUrl, seed);
+      git(seed, "fetch", "--unshallow", "origin");
+      expect(git(seed, "rev-parse", "--is-shallow-repository")).toBe("false");
+      await fs.writeFile(path.join(origin, "file.txt"), "remote content\n");
+      git(origin, "commit", "-am", "remote change");
+      const missing = git(origin, "rev-parse", "HEAD");
+      const shim = path.join(root, "git");
+      await fs.writeFile(shim, AGENT_GIT_SHIM, { mode: 0o755 });
+      const packedObjects = (cwd: string) =>
+        Number(git(cwd, "count-objects", "-v").match(/in-pack: (\d+)/)?.[1]);
+      const cases: [string, ...string[]][] = [
+        ["show", `${missing}:file.txt`],
+        ["show", "--cc", `${missing}:file.txt`],
+        ["rev-list", "--header", missing, "--max-count=1"],
+        ["show", "-U", missing],
+        ["show", "-m", `${missing}:file.txt`],
+        ["show", "--pretty", `${missing}:file.txt`],
+        ["diff", `${base}..${missing}`, "--", "file.txt"],
+        ["diff", `${base}...${missing}`, "--", "file.txt"],
+        ["diff", "-b", missing, base],
+        ["log", "-1", "--format=%H", `${missing}~1`],
+        ["blame", "-n", missing, "--", "file.txt"],
+        ["ls-tree", "--name-only", missing],
+        ["format-patch", "-1", "--stdout", missing],
+        ["cat-file", "-p", missing],
+        ["restore", `--source=${missing}`, "--", "file.txt"],
+        ["restore", "-W", "-S", `--source=${missing}`, "--", "file.txt"],
+        ["restore", "--source", missing, "--", "file.txt"],
+        ["checkout", "--detach", missing],
+        ["cherry-pick", "--no-commit", "-s", missing],
+        ["cherry-pick", "-S", missing, "--no-gpg-sign", "--no-commit"],
+        ["merge-base", base, missing],
+        ["show", "refs/heads/remote-tip:file.txt"],
+      ];
+      for (const [index, args] of cases.entries()) {
+        const clone = path.join(root, `clone-${index}`);
+        const linked = path.join(root, `linked ${index}`);
+        await fs.cp(seed, clone, { recursive: true });
+        git(clone, "worktree", "add", "--detach", linked);
+        if (args.includes("refs/heads/remote-tip:file.txt")) {
+          await fs.writeFile(path.join(clone, ".git/refs/heads/remote-tip"), `${missing}\n`);
+        }
+        // Both repository selection and command-local transport configuration must survive prefetch.
+        git(clone, "config", "protocol.file.allow", "never");
+        const before = packedObjects(clone);
+        const packet = path.join(root, `packet-${index}`);
+        const result = spawnSync(
+          shim,
+          ["-C", root, "-C", path.basename(linked), "-c", "protocol.file.allow=always", ...args],
+          {
+            env: { ...env, GIT_ALLOW_PROTOCOL: undefined, GIT_TRACE_PACKET: packet },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status, `${args.join(" ")}\n${result.stderr}`).toBe(0);
+        expect(packedObjects(clone) - before, args.join(" ")).toBeLessThanOrEqual(4);
+        expect(await fs.readFile(packet, "utf8"), args.join(" ")).toMatch(/fetch> have /);
+        if (["show", "diff", "blame", "format-patch"].includes(args[0])) {
+          expect(result.stdout).toContain("remote content");
+        } else if (["restore", "checkout", "cherry-pick"].includes(args[0])) {
+          expect(await fs.readFile(path.join(linked, "file.txt"), "utf8")).toBe("remote content\n");
+        } else if (args[0] === "ls-tree") {
+          expect(result.stdout.trim()).toBe("file.txt");
+        } else if (["log", "merge-base"].includes(args[0])) {
+          expect(result.stdout.trim()).toBe(base);
+        } else {
+          expect(result.stdout).toContain("remote change");
+        }
+      }
+      const linked = path.join(root, "negative");
+      git(seed, "worktree", "add", "--detach", linked);
+      const packet = path.join(root, "negative.packet");
+      const invoke = (...args: string[]) =>
+        spawnSync(shim, ["-C", linked, ...args], {
+          env: { ...env, GIT_TRACE_PACKET: packet },
+          encoding: "utf8",
+        });
+      await fs.writeFile(path.join(linked, missing), "literal filename\n");
+      for (const args of [
+        ["diff", "--no-index", missing, missing],
+        ["log", "-1", `--format=format:${missing}`, "HEAD"],
+        ["log", "-1", "--grep", missing, "HEAD"],
+        ["log", "--find-object", "a".repeat(40), "HEAD"],
+        ["diff", "--", missing],
+      ]) {
+        const result = invoke(...args);
+        expect(result.status, `${args.join(" ")}\n${result.stderr}`).toBe(0);
+      }
+      expect(invoke("--no-lazy-fetch", "show", `${missing}:file.txt`).status).not.toBe(0);
+      expect(invoke("show", "unresolvable-name:file.txt").status).not.toBe(0);
+      await expect(fs.stat(packet)).rejects.toMatchObject({ code: "ENOENT" });
+      const blob = git(origin, "rev-parse", "HEAD:file.txt");
+      expect(invoke("cat-file", "-p", blob).stdout).toBe("remote content\n");
+      await fs.writeFile(packet, "");
+      expect(invoke("cat-file", "-p", blob).stdout).toBe("remote content\n");
+      expect(invoke("cat-file", "-p", `${base}^{tree}`).status).toBe(0);
+      expect(await fs.readFile(packet, "utf8")).toBe("");
+      const rejected = invoke("show", `${"a".repeat(40)}:file.txt`);
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain("OpenClaw:");
+      expect((await fs.readFile(packet, "utf8")).match(/fetch> want /g)).toHaveLength(1);
+    }),
+);
 
 it.skipIf(process.platform === "win32")(
   "keeps probes local, bounds projection fetches, and preserves shared worktree history",
