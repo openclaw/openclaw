@@ -5,6 +5,7 @@ export const ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN =
   "[\\u001B\\u009B][[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]";
 
 const ansiOscAtIndexRegex = new RegExp(ANSI_OSC_PATTERN, "y");
+// eslint-disable-next-line no-control-regex -- ANSI introducers delimit visible text runs.
 const ansiIntroducerRegex = /[\u001b\u009b\u009d]/g;
 
 type AnsiSegment =
