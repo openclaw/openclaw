@@ -52,10 +52,11 @@ const generation = {
 };
 let config: OpenClawConfig;
 let forks: ForkParams[];
-let outcome: Outcome | "refused";
+let outcome: Outcome | "refused" | ((params: ForkParams) => Promise<Outcome>);
 
 beforeEach(() => {
   config = {};
+  generation.sessionId = "session-1";
   forks = [];
   outcome = { runId: "", ok: true, source: { sessionId: "session-1", lifecycleRevision: "rev-2" } };
   mocks.listWorkshopChanges.mockReset().mockResolvedValue([]);
@@ -67,11 +68,12 @@ beforeEach(() => {
     subagent: {
       runForkedTurn: async (params: ForkParams) => {
         forks.push(params);
-        if (outcome === "refused") {
+        const settled = typeof outcome === "function" ? await outcome(params) : outcome;
+        if (settled === "refused") {
           return { status: "refused", reason: "tool_policy" };
         }
         const runId = params.runId ?? "";
-        return { status: "settled", runId, value: await params.onSettled({ ...outcome, runId }) };
+        return { status: "settled", runId, value: await params.onSettled({ ...settled, runId }) };
       },
     },
   } as unknown as PluginRuntime); // SAFETY: the review reads only these runtime members.
@@ -155,11 +157,7 @@ it.each(["off", "replaced", "refused"] as const)("runs nothing visible when %s",
   } else {
     outcome = "refused";
   }
-  try {
-    await runSkillExperienceReview(candidate);
-  } finally {
-    generation.sessionId = "session-1";
-  }
+  await runSkillExperienceReview(candidate);
   expect(forks).toHaveLength(cause === "refused" ? 1 : 0);
   expect(mocks.postWorkshopChangeNotice).not.toHaveBeenCalled();
 });
@@ -169,30 +167,17 @@ it("stops the running review model when learning is turned off", async () => {
   try {
     const started = Promise.withResolvers<void>();
     let stopped: unknown;
-    setWorkshopRuntime({
-      config: { current: () => config },
-      agent: { resolveAgentTimeoutMs: () => 600_000 },
-      system: { captureSessionGeneration: vi.fn(async () => generation) },
-      subagent: {
-        runForkedTurn: async (params: ForkParams) => {
-          forks.push(params);
-          started.resolve();
-          // The model run ends only when its signal aborts.
-          const error = await new Promise<unknown>((resolve) => {
-            params.signal?.addEventListener("abort", () => resolve(params.signal?.reason), {
-              once: true,
-            });
-          });
-          stopped = error;
-          const runId = params.runId ?? "";
-          return {
-            status: "settled",
-            runId,
-            value: await params.onSettled({ runId, ok: false, cancelled: true, error }),
-          };
-        },
-      },
-    } as unknown as PluginRuntime); // SAFETY: the review reads only these runtime members.
+    outcome = async (params) => {
+      started.resolve();
+      // The model run ends only when its signal aborts.
+      const error = await new Promise<unknown>((resolve) => {
+        params.signal?.addEventListener("abort", () => resolve(params.signal?.reason), {
+          once: true,
+        });
+      });
+      stopped = error;
+      return { runId: "", ok: false, cancelled: true, error };
+    };
     const review = runSkillExperienceReview(candidate);
     const settled = expect(review).rejects.toMatchObject({
       name: "AbortError",

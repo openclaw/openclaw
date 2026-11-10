@@ -18,6 +18,7 @@ import { MockResponseStream } from "./providers/mock-openai/mock-openai-stream.j
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const MARKER = "SYNTHETIC_WORKSHOP_DIAGNOSTICS_FINAL";
+const CANCELLED_REVIEW = "skill experience review cancelled:";
 
 // Opt-in E2E proof retains the real idle interval; unit tests own the cheaper predicate matrix.
 it(
@@ -197,7 +198,7 @@ it(
             Object.values(record).some(
               (value) =>
                 typeof value === "string" &&
-                value.includes("skill experience review cancelled:") &&
+                value.includes(CANCELLED_REVIEW) &&
                 value.includes(`source=${fingerprint}`),
             ),
           );
@@ -206,9 +207,10 @@ it(
           const messages = records
             .flatMap(Object.values)
             .filter((value) => typeof value === "string");
-          const cancellations = messages.filter((value) =>
-            value.includes("skill experience review cancelled:"),
-          );
+          const logText = messages.join("\n");
+          const failurePrefix = "skill experience review failed:";
+          const failures = messages.filter((value) => value.includes(failurePrefix));
+          const cancellations = messages.filter((value) => value.includes(CANCELLED_REVIEW));
           console.log(
             "WORKSHOP_ANCHOR_DIAGNOSTIC " +
               JSON.stringify({
@@ -227,33 +229,24 @@ it(
                 matchingCancellationCount: cancellations.filter((value) =>
                   value.includes(`source=${fingerprint}`),
                 ).length,
-                fingerprintInAnyRecord: messages.some((value) =>
-                  value.includes(`source=${fingerprint}`),
-                ),
-                failureWarningCount: messages.filter((value) =>
-                  value.includes("skill experience review failed:"),
-                ).length,
+                fingerprintInAnyRecord: logText.includes(`source=${fingerprint}`),
+                failureWarningCount: failures.length,
                 failureDiagnostics: [
                   ...new Set(
-                    messages
-                      .filter((value) => value.includes("skill experience review failed:"))
-                      .map((value) =>
-                        value
-                          .slice(
-                            value.indexOf("skill experience review failed:") +
-                              "skill experience review failed:".length,
-                          )
-                          .replace(/\s+source=[a-f0-9]{64}\s*$/i, "")
-                          .replaceAll(sessionKey, "<session>")
-                          .replaceAll(history.sessionId, "<session>")
-                          .replaceAll(history.sessionInfo.activeLeafEntryId, "<entry>")
-                          .replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, "<id>")
-                          .replace(/https?:\/\/[^\s"'<>]+/gi, "<url>")
-                          .replace(/(?:[A-Z]:\\|\/)[^\s"'<>]*/gi, "<path>")
-                          .replace(/\s+/g, " ")
-                          .trim()
-                          .slice(0, 400),
-                      ),
+                    failures.map((value) =>
+                      value
+                        .slice(value.indexOf(failurePrefix) + failurePrefix.length)
+                        .replace(/\s+source=[a-f0-9]{64}\s*$/i, "")
+                        .replaceAll(sessionKey, "<session>")
+                        .replaceAll(history.sessionId, "<session>")
+                        .replaceAll(history.sessionInfo.activeLeafEntryId, "<entry>")
+                        .replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, "<id>")
+                        .replace(/https?:\/\/[^\s"'<>]+/gi, "<url>")
+                        .replace(/(?:[A-Z]:\\|\/)[^\s"'<>]*/gi, "<path>")
+                        .replace(/\s+/g, " ")
+                        .trim()
+                        .slice(0, 400),
+                    ),
                   ),
                 ].slice(0, 4),
                 fenceReasons: [
@@ -268,23 +261,17 @@ it(
                   "activeMessagePosition",
                   "storePath",
                 ].filter((field) =>
-                  messages.some((value) =>
-                    value.includes(`Completed-turn transcript anchor changed (${field})`),
-                  ),
+                  logText.includes(`Completed-turn transcript anchor changed (${field})`),
                 ),
-                genericUserAbort: messages.some((value) =>
-                  value.includes("Skill experience review was stopped by the user."),
+                genericUserAbort: logText.includes(
+                  "Skill experience review was stopped by the user.",
                 ),
-                missingInput: messages.some((value) => value.includes("no longer holds the input")),
-                runtimeAbort: messages.some((value) =>
-                  value.includes("Session fork model run aborted."),
+                missingInput: logText.includes("no longer holds the input"),
+                runtimeAbort: logText.includes("Session fork model run aborted."),
+                changedDuringContextRead: logText.includes(
+                  "Session transcript changed during context read",
                 ),
-                changedDuringContextRead: messages.some((value) =>
-                  value.includes("Session transcript changed during context read"),
-                ),
-                forkAuthorityChanged: messages.some((value) =>
-                  value.includes("Session fork authority changed"),
-                ),
+                forkAuthorityChanged: logText.includes("Session fork authority changed"),
               }),
           );
         };
@@ -310,8 +297,7 @@ it(
         const records = await readRecords();
         const cancellation = findCancellation(records);
         const diagnostic = Object.values(cancellation ?? {}).find(
-          (value): value is string =>
-            typeof value === "string" && value.includes("skill experience review cancelled:"),
+          (value): value is string => typeof value === "string" && value.includes(CANCELLED_REVIEW),
         );
         expect(diagnostic).toContain("Completed-turn transcript anchor changed (");
         expect(diagnostic).toContain(`source=${fingerprint}`);
