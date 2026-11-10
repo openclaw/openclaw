@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { JSDOM } from "jsdom";
 import { afterEach, expect, it } from "vitest";
 import { shell } from "./page.js";
@@ -34,9 +35,7 @@ async function openPage({ url = "", stored = "", blocked = false, light = false 
   });
   windows.push(window);
   const headTheme = window.document.documentElement.dataset.theme;
-  await new Promise<void>((resolve) => {
-    window.addEventListener("load", () => resolve(), { once: true });
-  });
+  await once(window, "load");
   return {
     window,
     headTheme,
