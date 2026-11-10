@@ -41,6 +41,7 @@ it("commits a cached run's message body with its row shell", async () => {
       options: {
         streamOptions: {},
         workPreviews: new Map(),
+        partDependencies: (part) => [part],
         renderGroupOptions: () => ({ showReasoning: false }),
         isWorkExpanded: () => false,
         onToggleWork: () => {},
@@ -135,6 +136,7 @@ it("loads stream and run rows without losing the adjacent message or the latest 
       options: {
         streamOptions: {},
         workPreviews: new Map(),
+        partDependencies: (part) => [part],
         renderGroupOptions: () => ({ showReasoning: false }),
         isWorkExpanded: () => false,
         onToggleWork: () => {},

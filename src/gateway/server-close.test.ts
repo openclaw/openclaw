@@ -8,6 +8,7 @@ import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
@@ -26,6 +27,7 @@ import { reserveSessionControllerSource } from "../sessions/session-controller.m
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { registerGatewayCancellationTests } from "./server-close-cancellation.test-support.js";
 import { registerGatewayResourceRetirementTests } from "./server-close-retirement.test-support.js";
@@ -151,7 +153,52 @@ describe("createGatewayCloseHandler", () => {
   registerGatewayResourceRetirementTests(createGatewayCloseHandler, {
     mocks,
     sharedStateLifecycle,
+    resolveGatewayContext: resolveTestGatewayContext,
     createHeldCloseSource: (runId) => createCloseSource(runId, {}, { holdProducer: true }),
+  });
+
+  it("reports fatal database retirement separately from an admissions grace warning", async () => {
+    const { release } = await createCloseSource("summary-warning", {}, { holdProducer: true });
+    const databaseClosing = createDeferredCore();
+    const releaseDatabase = createDeferredCore();
+    const unregister = registerOpenClawAgentDatabaseAsyncResource({
+      agentId: "shutdown-summary",
+      path: "/synthetic/shutdown-summary/openclaw-agent.sqlite",
+      revoke() {},
+      async close() {
+        databaseClosing.resolve();
+        await releaseDatabase.promise;
+      },
+    });
+    const deps = createGatewayCloseTestDeps();
+    vi.useFakeTimers();
+    const closing = createGatewayCloseHandler({
+      closePluginRegistry: async (onRetirement) => {
+        try {
+          return await deps.closePluginRegistry(onRetirement);
+        } catch (error) {
+          throw new PluginRuntimeCloseRetainedError(error);
+        }
+      },
+    })({ exitAfterClose: true }).catch((error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(5_001);
+      release?.();
+      await databaseClosing.promise;
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(await closing).toBeInstanceOf(PluginRuntimeCloseRetainedError);
+      const summary = mocks.logWarn.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.startsWith("shutdown failed in "));
+      expect(summary).toMatch(
+        /shutdown failed in \d+ms: .*agent-databases resources remain after grace; warnings: session-admissions$/,
+      );
+    } finally {
+      release?.();
+      releaseDatabase.resolve();
+      unregister();
+      await closing;
+    }
   });
 
   it.each([false, true])(

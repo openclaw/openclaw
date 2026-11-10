@@ -17,6 +17,13 @@ survives; a lost source produces a visible failure instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
+If the interrupted turn left a managed workspace pending, its recovery input waits
+for the workspace owner to finish preparation before starting the turn. Setup
+failures still produce the ordinary actionable error; pending setup alone does
+not discard the resume input. Setup scripts require the recovered caller's current
+administrator authority. The restart marker remains durable until the resumed
+turn is admitted, so another restart during preparation can recover it again.
+
 During graceful shutdown, interrupted embedded runs have a short abort-settle
 budget (normally two seconds) to deliver their terminal partial reply before their
 writers close. Already accepted transcript writes still drain. A provider that
@@ -248,6 +255,15 @@ also join those resources before reusing the runtime.
 Plugin-origin finalizers retain shared-state admission through this drain so
 worktree run leases and subagent settle records can persist before SDK retirement.
 Final cleanup failures are reported as shutdown failures, not startup failures.
+The failure summary names the fatal cleanup error, including nested resource-owner
+causes; earlier grace warnings are listed separately as `warnings`. An admissions
+grace warning includes a bounded pending snapshot: effect count and the first
+pending effect's phase, source phase, operation phase, interruption and settling
+status. The same facts appear in the pending close span. Session and run identifiers
+and session content are omitted; `none` means the observed owner has no such phase,
+and `null` means its boolean status is unavailable. A zero effect count does not
+mean the full admissions join has settled: it also waits for source, subagent, and
+terminal-persistence cleanup.
 
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.

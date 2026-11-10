@@ -1509,7 +1509,7 @@ try {
                     page,
                     scenario.id === "event-load-unloaded"
                       ? -1
-                      : scenario.id === "event-load-pageup"
+                      : scenario.id === "event-load-pageup" || scenario.id === "event-load-end"
                         ? 0
                         : Number(scenario.id.slice("event-load-".length)),
                     eventLoadTools,
