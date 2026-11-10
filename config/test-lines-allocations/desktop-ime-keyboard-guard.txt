@@ -1,4 +1,6 @@
 # Desktop keyboard composition guard: composing Enter stays off the noVNC wire while a plain
 # Enter still reaches the remote, folded into the existing mobile-keyboard suite (no new test
-# file); exact net growth +36 (43 added / 7 removed).
-36
+# file). Exact net growth +36 (43 added / 7 removed); the remaining 20 covers the 20 lines the
+# prepared ci-ratchet-base is already over its own ceiling, so this refreshes to the measured
+# merge-tree total (6629589) rather than adding slack.
+56
