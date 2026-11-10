@@ -77,7 +77,7 @@ suite.define(() => {
         "https://github.com/openclaw/openclaw/issues/new?template=bug_report.yml&title=%5BBug%5D%3A%20Control%20UI%3A%20",
       );
       expect(await report.getAttribute("rel")).toBe("noopener noreferrer");
-      const bugIcon = report.locator('svg[aria-hidden="true"]');
+      const bugIcon = report.locator('.session-css-icon[aria-hidden="true"]');
       expect(await bugIcon.count()).toBe(1);
       expect(await bugIcon.isVisible()).toBe(true);
       const proofDir = process.env.OPENCLAW_FEEDBACK_PROOF_DIR;

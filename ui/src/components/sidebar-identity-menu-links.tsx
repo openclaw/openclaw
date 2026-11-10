@@ -1,12 +1,8 @@
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { REPORT_BUG_URL, SUGGEST_FEATURE_URL } from "../lib/issue-links.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import {
-  COMMUNITY_DISCORD_URL,
-  OFFICIAL_SUPPORT_URL,
-  REPORT_BUG_URL,
-  SUGGEST_FEATURE_URL,
-} from "../lib/product-links.ts";
+import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../lib/product-links.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
 import type { IconName } from "./icon-data.ts";

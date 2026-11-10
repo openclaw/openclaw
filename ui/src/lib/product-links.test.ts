@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { REPORT_BUG_URL, SUGGEST_FEATURE_URL } from "./product-links.ts";
+import { REPORT_BUG_URL, SUGGEST_FEATURE_URL } from "./issue-links.ts";
 
 describe("public issue form destinations", () => {
   it.each([

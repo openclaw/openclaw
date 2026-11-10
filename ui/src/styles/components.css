@@ -437,6 +437,12 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   text-decoration: underline;
 }
 
+.report-issue-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .card {
   border: 1px solid var(--border);
   background: var(--card);

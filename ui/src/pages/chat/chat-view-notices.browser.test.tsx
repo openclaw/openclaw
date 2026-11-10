@@ -131,7 +131,7 @@ it.each([300, 500])("keeps recovery and reporting clickable at %ipx", async (wid
     ));
     await waitForSolid(() => {
       const recovery = view.container.querySelector<HTMLElement>(".chat-error__refresh")!;
-      const report = view.container.querySelector<HTMLAnchorElement>('a[title*="No diagnostics"]')!;
+      const report = view.container.querySelector<HTMLAnchorElement>("a.report-issue-link")!;
       const a = recovery.getBoundingClientRect(),
         b = report.getBoundingClientRect();
       expect(a.width).toBeGreaterThan(0);

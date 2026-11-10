@@ -83,7 +83,7 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   const onRetry = vi.fn();
   drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
   expect(container.textContent).toContain("Couldn’t finish this reply");
-  const report = container.querySelector<HTMLAnchorElement>('a[title*="No diagnostics"]');
+  const report = container.querySelector<HTMLAnchorElement>("a.report-issue-link");
   expect(report?.textContent).toBe("Report a bug");
   expect(new URL(report!.href).searchParams.get("title")).toBe("[Bug]: Control UI: ");
   expect(report?.rel).toBe("noopener noreferrer");

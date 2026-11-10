@@ -574,7 +574,7 @@ it("offers a static issue form without including error text or diagnostics", asy
     errorDetail: { message: "Synthetic diagnostic", credential: "never-share-this" },
   });
   await waitForSolid(() => {
-    const link = container.querySelector<HTMLAnchorElement>('a[title*="No diagnostics"]');
+    const link = container.querySelector<HTMLAnchorElement>("a.report-issue-link");
     expect(link?.textContent).toBe("Report a bug");
     const url = new URL(link!.href);
     expect(url.origin + url.pathname).toBe("https://github.com/openclaw/openclaw/issues/new");
@@ -586,12 +586,10 @@ it("offers a static issue form without including error text or diagnostics", asy
     expect(link?.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(link?.target).toBe("_blank");
   });
-  const destination = container.querySelector<HTMLAnchorElement>(
-    'a[title*="No diagnostics"]',
-  )!.href;
+  const destination = container.querySelector<HTMLAnchorElement>("a.report-issue-link")!.href;
   publish({ error: "Another synthetic error with private user content", errorDetail: undefined });
   await waitForSolid(() => {
-    expect(container.querySelector<HTMLAnchorElement>('a[title*="No diagnostics"]')?.href).toBe(
+    expect(container.querySelector<HTMLAnchorElement>("a.report-issue-link")?.href).toBe(
       destination,
     );
   });

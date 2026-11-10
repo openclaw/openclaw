@@ -380,7 +380,6 @@ const startupEnglish = {
   common: {
     reportBug: "Report a bug",
     suggestFeature: "Suggest a feature",
-    reportIssuePrivacy: "Public GitHub form. No diagnostics attached.",
     showDetails: "Show details",
     uploadsDisabled: "File and image uploads are disabled.",
     ok: "OK",

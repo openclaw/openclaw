@@ -495,7 +495,7 @@ it("offers a static bug form without attaching connection failure or setup crede
     Codes.AUTH_TOKEN_MISMATCH,
     "synthetic-private-setup-code",
   );
-  const link = element.querySelector<HTMLAnchorElement>('a[title*="No diagnostics"]');
+  const link = element.querySelector<HTMLAnchorElement>("a.report-issue-link");
   expect(link?.textContent).toBe("Report a bug");
   expect(link?.getAttribute("href")).toBe(
     "https://github.com/openclaw/openclaw/issues/new?template=bug_report.yml&title=%5BBug%5D%3A%20Control%20UI%3A%20",
