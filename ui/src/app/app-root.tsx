@@ -537,6 +537,11 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
             onOpenGatewaySettings: context.gateway.hasStoredDeviceToken?.()
               ? () => context.navigate("connection")
               : undefined,
+            onBrowserPaired: (gatewayUrl: string) => {
+              setLoginGatePinned(true);
+              // Empty session credentials let connect select the stored device token.
+              context.gateway.connect({ gatewayUrl, token: "", password: "", bootstrapToken: "" });
+            },
             onConnect: () => {
               setLoginGatePinned(true);
               context.gateway.connect({

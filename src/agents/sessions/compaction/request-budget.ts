@@ -1,11 +1,15 @@
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import type { SessionTreeEntry } from "../../../../packages/agent-core/src/harness/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
 import {
   createFreshLlmBoundaryTokenEstimator,
   type FixedRequestTokenPressure,
 } from "../context-token-pressure.js";
-import type { CompactionRequestBudget } from "./request-budget.types.js";
+import type {
+  CompactionRequestBudget,
+  CompactionRequestConstraints,
+} from "./request-budget.types.js";
 
 const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
 
@@ -84,6 +88,15 @@ export function createCompactionRequestBudget(params: {
   };
 }
 
+/** Legacy standalone compaction relies on its fixed ceiling; opt-in growth needs a window budget. */
+export function createStandaloneCompactionRequestBudget(
+  params: Parameters<typeof createCompactionRequestBudget>[0] & { maxSummaryChars?: number },
+): CompactionRequestBudget | undefined {
+  return (params.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS) > MAX_COMPACTION_SUMMARY_CHARS
+    ? createCompactionRequestBudget(params)
+    : undefined;
+}
+
 /** Reconcile only queued context; prepared user, image, and transient costs stay owned upstream. */
 export function withCompactionQueuedContext(
   budget: CompactionRequestBudget,
@@ -160,6 +173,7 @@ export function assertCompactionRequestCanFit(
 export function resolveCompactionRetentionBudget(
   budget: CompactionRequestBudget,
   messages: Iterable<AgentMessage>,
+  maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
 ) {
   const preferredTokens =
     budget.contextWindow - budget.reserveTokens - budget.fixedTokens - budget.pendingTokens;
@@ -170,13 +184,42 @@ export function resolveCompactionRetentionBudget(
   const summaryTokens = estimateCompactionHistoryTokens([
     {
       role: "compactionSummary",
-      summary: "x".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      summary: "x".repeat(maxSummaryChars),
       tokensBefore: 0,
       timestamp: 0,
     },
   ]);
   return {
-    maxTokens,
+    // The legacy fallback can prefer useful reduction over fitting in one pass.
+    // A raised artifact ceiling must not use that fallback to exceed the window.
+    maxTokens:
+      maxSummaryChars > MAX_COMPACTION_SUMMARY_CHARS
+        ? Math.min(maxTokens, budget.contextWindow - budget.fixedTokens - budget.pendingTokens)
+        : maxTokens,
     reserveTokens: summaryTokens,
   };
+}
+
+/** Locate the admitted pending request before choosing a compaction cut. */
+export function resolveCompactionPendingEntryIndex(
+  pathEntries: SessionTreeEntry[],
+  constraints: CompactionRequestConstraints,
+  pendingUserIdempotencyKey?: string,
+): number {
+  const pendingEntryIndex =
+    constraints.pendingUserEntryId || pendingUserIdempotencyKey
+      ? pathEntries.findLastIndex(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message.role === "user" &&
+            (constraints.pendingUserEntryId
+              ? entry.id === constraints.pendingUserEntryId
+              : "idempotencyKey" in entry.message &&
+                entry.message.idempotencyKey === pendingUserIdempotencyKey),
+        )
+      : -1;
+  if (constraints.pendingUserEntryId && pendingEntryIndex < 0) {
+    throw new Error("Compaction cannot find the admitted pending user request.");
+  }
+  return pendingEntryIndex;
 }

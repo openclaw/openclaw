@@ -88,7 +88,11 @@ export async function runSessionCompactionSource(
       }
       assertCompactionRequestCanFit(context.messages(), requestBudget, true);
       const retention = requestBudget
-        ? resolveCompactionRetentionBudget(requestBudget, context.messages())
+        ? resolveCompactionRetentionBudget(
+            requestBudget,
+            context.messages(),
+            request.settings.maxSummaryChars,
+          )
         : undefined;
       const requestTokenLimit =
         requestBudget && retention
@@ -138,15 +142,20 @@ export async function runSessionCompactionSource(
       if (
         request.manual &&
         !request.requestState &&
-        !requestBudget &&
         !pendingEntryId &&
         planned.ok &&
         !planned.value
       ) {
-        planned = prepareCompactionFromSource(source, measuredContext, {
-          ...request.settings,
-          keepRecentTokens: 0,
-        });
+        planned = prepareCompactionFromSource(
+          source,
+          measuredContext,
+          {
+            ...request.settings,
+            keepRecentTokens: 0,
+          },
+          undefined,
+          constraints,
+        );
       }
       if (!planned.ok) {
         throw planned.error;
@@ -194,6 +203,7 @@ export async function runSessionCompactionSource(
         turnPrefix,
         // A prior summary can anchor tool-only work even when it precedes the new cut.
         currentContextHasRealConversation: hasRealConversation,
+        maxSummaryChars: request.settings.maxSummaryChars,
         isSplitTurn: preparation.isSplitTurn,
         previousSummary: preparation.previousSummary,
         requestSelection: preparation.requestSelection,

@@ -100,9 +100,14 @@ it("does not summarize an orphan-only older slice beside a preserved turn", () =
   expect(source.preservedTurnsSection.text).toContain("Keep working");
 });
 
-it.each([100, 1000])(
-  "reads only bounded retained payloads from a %i-message active window",
-  (count) => {
+it.each([
+  { count: 100, maxSummaryChars: undefined, retained: 12 },
+  { count: 1000, maxSummaryChars: undefined, retained: 12 },
+  { count: 100, maxSummaryChars: 48_000, retained: 38 },
+  { count: 100, maxSummaryChars: 1_000, retained: 0 },
+])(
+  "bounds retained payloads for $count messages and cap $maxSummaryChars",
+  ({ count, maxSummaryChars, retained }) => {
     const messages: AgentMessage[] = [
       { role: "user", content: "First request", timestamp: 0 },
       { role: "user", content: "Second request", timestamp: 1 },
@@ -117,6 +122,7 @@ it.each([100, 1000])(
     ];
     let reads = 0;
     const source = prepareCompactionSafeguardSource({
+      maxSummaryChars,
       history: transientSource(messages, () => {
         reads++;
       }),
@@ -127,20 +133,22 @@ it.each([100, 1000])(
     });
     // Three user turns preserve the entire active window. Rendering must stop at
     // the section budget, not reparse every preserved row or scan backwards for the ask.
-    expect(reads).toBeLessThanOrEqual(30);
+    expect(reads).toBeLessThanOrEqual(retained + 18);
     expect(source.reconciliation.length).toBe(messages.length);
     expect(source.latestUserAsk).toBe("Current request");
     expect(source.hasRealConversation).toBe(true);
     expect(source.preservedTurnsSection.truncatedLoss).toBe("preserved-turn-head");
-    expect(source.preservedTurnsSection.segmentStarts).toHaveLength(12);
-    expect(source.preservedTurnsSection.text).toContain(
-      `row-${(count - 1).toString().padStart(4, "0")}`,
+    expect(source.preservedTurnsSection.segmentStarts).toHaveLength(retained);
+    expect(source.preservedTurnsSection.text.length).toBeLessThanOrEqual(
+      (maxSummaryChars ?? 16_000) / 2,
     );
-    expect(source.preservedTurnsSection.text).toContain(
-      `row-${(count - 12).toString().padStart(4, "0")}`,
-    );
+    if (retained > 0) {
+      expect(source.preservedTurnsSection.text).toContain(
+        `row-${(count - retained).toString().padStart(4, "0")}`,
+      );
+    }
     expect(source.preservedTurnsSection.text).not.toContain(
-      `row-${(count - 13).toString().padStart(4, "0")}`,
+      `row-${(count - retained - 1).toString().padStart(4, "0")}`,
     );
   },
 );

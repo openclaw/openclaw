@@ -186,7 +186,7 @@ export function createRequestNativeSubagentRuntime(
     assertCurrent();
     const prepare = () =>
       withCaller(async () => {
-        const { createOpenClawCodingToolsInternalAsync } = await import("./agent-tools.js");
+        const { createOpenClawCodingToolsInternalAsync } = await import("./agent-tools.async.js");
         assertCurrent();
         if (
           currentConfig &&

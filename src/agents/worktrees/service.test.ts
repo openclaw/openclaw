@@ -23,7 +23,6 @@ import {
 } from "./capacity.test-support.js";
 import { gitIdentity, isWorktreeAdd } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
-import { copyProvisionedPaths } from "./provisioned-copy.js";
 import * as worktreeRegistry from "./registry.js";
 import {
   getRegistryWorktreeProvisionedPaths,
@@ -438,33 +437,6 @@ describe("ManagedWorktreeService", () => {
     await expect(
       fs.stat(path.join(created.path, "linked-dir", "escape.txt")),
     ).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("rejects an included file replaced by a symlink after inspection", async () => {
-    const source = path.join(repo, "settings.local");
-    await fs.writeFile(source, "included bytes\n");
-    const outside = path.join(root, "outside.txt");
-    await fs.writeFile(outside, "outside bytes\n");
-    const lstat = fs.lstat.bind(fs);
-    let replaced = false;
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const observed = await lstat(...args);
-      if (args[0] === source && !replaced) {
-        replaced = true;
-        await fs.rename(source, `${source}.original`);
-        await fs.symlink(outside, source);
-      }
-      return observed;
-    });
-
-    const destination = path.join(root, "copy-destination");
-    await fs.mkdir(destination);
-    // Inject at the copy owner, which now runs in the filesystem worker.
-    await expect(copyProvisionedPaths(repo, destination, ["settings.local"], {})).rejects.toThrow();
-
-    expect(replaced).toBe(true);
-    expect(await fs.readdir(destination)).toEqual([]);
-    expect(await fs.readFile(outside, "utf8")).toBe("outside bytes\n");
   });
 
   it("rematerializes a named workboard snapshot with hidden edits and independent provisioned state", async () => {

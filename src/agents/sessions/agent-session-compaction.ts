@@ -30,14 +30,20 @@ import {
   agentSessionDeferThresholdCompaction,
   agentSessionRunProviderCompaction,
 } from "./agent-session-types.js";
-import { unwrapCoreResult } from "./agent-session-utils.js";
+import {
+  compactionErrorMessage,
+  unwrapCoreResult,
+  projectCompactionReplacement,
+} from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
 import {
   assertCompactionRequestCanFit,
   createCompactionRequestBudget,
+  createStandaloneCompactionRequestBudget,
   estimateCompactedRequestTokens,
   estimateCompactionHistoryTokens,
   resolveCompactionRetentionBudget,
+  resolveCompactionPendingEntryIndex,
 } from "./compaction/request-budget.js";
 import type {
   CompactionRequestBudget,
@@ -62,11 +68,6 @@ type CompactionWorkOutcome =
   | { status: "aborted" }
   | { status: "skipped"; reason: string };
 type SettledCompactionWorkOutcome = Exclude<CompactionWorkOutcome, { status: "aborted" }>;
-
-function compactionErrorMessage(error: unknown, fallback: string): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.trim() ? message : fallback;
-}
 
 /** @internal */
 export const agentSessionAutomaticCompaction: unique symbol = Symbol.for(
@@ -309,42 +310,49 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     const bounded = getPreparedCompaction(this.sessionManager);
     const pathEntries = this.sessionManager.getBranch();
-    const requestBudget = options.requestBudget;
+    const requestBudget =
+      options.requestBudget ??
+      createStandaloneCompactionRequestBudget({
+        maxSummaryChars: options.settings.maxSummaryChars,
+        contextWindow: model.contextWindow ?? 0,
+        reserveTokens: options.settings.reserveTokens,
+        systemPrompt: this.agent.state.systemPrompt,
+        tools: this.agent.state.tools,
+      });
     const pendingUserIdempotencyKey = requestBudget?.pendingTokens
       ? requestBudget.pendingUserIdempotencyKey
       : undefined;
-    const pendingEntryIndex =
-      options.pendingUserEntryId || pendingUserIdempotencyKey
-        ? pathEntries.findLastIndex(
-            (entry) =>
-              entry.type === "message" &&
-              entry.message.role === "user" &&
-              (options.pendingUserEntryId
-                ? entry.id === options.pendingUserEntryId
-                : "idempotencyKey" in entry.message &&
-                  entry.message.idempotencyKey === pendingUserIdempotencyKey),
-          )
-        : -1;
-    if (options.pendingUserEntryId && pendingEntryIndex < 0) {
-      throw new Error("Compaction cannot find the admitted pending user request.");
-    }
+    const pendingEntryIndex = resolveCompactionPendingEntryIndex(
+      pathEntries,
+      options,
+      pendingUserIdempotencyKey,
+    );
     const contextMessages = requestBudget ? buildSessionContext(pathEntries).messages : [];
     assertCompactionRequestCanFit(contextMessages, requestBudget, true);
     const retention = requestBudget
-      ? resolveCompactionRetentionBudget(requestBudget, contextMessages)
+      ? resolveCompactionRetentionBudget(
+          requestBudget,
+          contextMessages,
+          options.settings.maxSummaryChars,
+        )
       : undefined;
-    const requestTokenLimit = bounded
-      ? bounded.requestTokenLimit
-      : requestBudget && retention
+    const requestTokenLimit =
+      bounded?.requestTokenLimit ??
+      (requestBudget && retention
         ? requestBudget.fixedTokens + requestBudget.pendingTokens + retention.maxTokens
-        : undefined;
+        : undefined);
     const requestBoundaryEntryId = options.requestFromEntryId ?? pathEntries[pendingEntryIndex]?.id;
     let preparation: CompactionPreparation | undefined;
     if (bounded) {
       // Only the built-in embedded factories install this source; their safeguard
       // consumes it directly. Other AgentSession extension runners keep the array path.
       preparation = { ...bounded.preparation, messagesToSummarize: [], turnPrefixMessages: [] };
-    } else if (isManual && !options.requestState && !requestBudget && pendingEntryIndex < 0) {
+    } else if (
+      isManual &&
+      !options.requestState &&
+      pendingEntryIndex < 0 &&
+      (!requestBudget || options.summaryOutputPolicy === "none")
+    ) {
       const manualPreflight = preflightManualSessionCompaction(pathEntries, options.settings);
       if (!manualPreflight.compactable) {
         throw new Error(manualPreflight.reason);
@@ -390,19 +398,12 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     const projectReplacement = (
       result: Pick<CompactionResult, "firstKeptEntryId" | "tokensBefore">,
       summary: string,
-    ) =>
-      buildSessionContext([
-        ...pathEntries,
-        {
-          ...result,
-          type: "compaction",
-          id: options.itemId,
-          parentId: pathEntries.at(-1)?.id ?? null,
-          timestamp: new Date().toISOString(),
-          summary,
-        },
-      ]).messages;
-    if (!bounded && requestBudget && requestTokenLimit !== undefined) {
+    ) => projectCompactionReplacement(pathEntries, options.itemId, result, summary);
+    if (
+      (!bounded || bounded.requestTokenLimit === undefined) &&
+      requestBudget &&
+      requestTokenLimit !== undefined
+    ) {
       const remaining =
         requestTokenLimit -
         estimateCompactedRequestTokens(projectReplacement(preparation, ""), requestBudget);
@@ -510,7 +511,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     const completedCompaction = {
       ...compactionResult,
-      summary: capCompactionSummary(compactionResult.summary),
+      summary: capCompactionSummary(compactionResult.summary, options.settings.maxSummaryChars),
     };
 
     // Custom hooks may choose a different retained boundary. Validate their

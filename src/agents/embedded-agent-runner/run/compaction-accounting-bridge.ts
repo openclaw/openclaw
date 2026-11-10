@@ -5,7 +5,7 @@ import type { ContextEngineRuntimeContext } from "../../../context-engine/types.
 import type { CompactionRequestConstraints } from "../../sessions/compaction/request-budget.types.js";
 import type { CompactionAppendPersistenceAsync } from "../../sessions/session-compaction-persistence.js";
 import type { SessionManager } from "../../sessions/session-manager.js";
-import type { NormalizedUsage } from "../../usage.js";
+import { normalizeUsage, type UsageLike, type NormalizedUsage } from "../../usage.js";
 
 export type CompactionAccountingReceipt = {
   tokensBefore: number;
@@ -55,4 +55,17 @@ export function readCompactionAccountingRecorder(
   runtimeContext: object | undefined,
 ): CompactionAccountingRecorder | undefined {
   return runtimeContext ? recorderByRuntimeContext.get(runtimeContext) : undefined;
+}
+
+/** Normalize provider usage at the accounting bridge before publishing its receipt. */
+export function compactionUsageSink(recorder: CompactionAccountingRecorder | undefined) {
+  const recordUsage = recorder?.recordUsage;
+  return recordUsage
+    ? (usage: UsageLike) => {
+        const normalized = normalizeUsage(usage);
+        if (normalized) {
+          recordUsage(normalized);
+        }
+      }
+    : undefined;
 }

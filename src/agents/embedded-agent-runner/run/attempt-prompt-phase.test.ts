@@ -1,9 +1,13 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { Context, Model, SimpleStreamOptions } from "../../../llm/types.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import type { Context, ImageContent, Model, SimpleStreamOptions } from "../../../llm/types.js";
 import type { PluginHookBeforeAgentRunEvent } from "../../../plugins/hook-types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
@@ -26,6 +30,7 @@ import type { CompactionRequestBudget } from "../../sessions/compaction/request-
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
+  createToolResultPromptProjectionState,
   retainEmbeddedSessionPromptState,
   clearEmbeddedSessionPromptStates,
   prepareSessionSystemPrompt,
@@ -71,6 +76,7 @@ afterEach(() => {
 });
 
 registerAgentSessionLoopTestLifecycle();
+const imageDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   clearEmbeddedSessionPromptStates([
     "phase-context-replay",
@@ -81,6 +87,89 @@ afterEach(() => {
 });
 
 describe("runEmbeddedAttemptPromptPhase", () => {
+  it.each([false, true])(
+    "gates prepared prompt-path images before inference (block: %s)",
+    async (block) => {
+      const workspace = imageDirs.make("openclaw-image-gate-");
+      const imagePath = path.join(workspace, "picture.png");
+      const bytes = createSolidPngBuffer(2, 2, { r: 17, g: 33, b: 49 });
+      await fs.writeFile(imagePath, bytes);
+      const image: ImageContent = {
+        type: "image",
+        data: bytes.toString("base64"),
+        mimeType: "image/png",
+      };
+      const fixture = createFixture();
+      const model: Model = { ...testModel, input: ["text", "image"] };
+      const { session, settingsManager, sessionManager } = await createTestSession({ model });
+      const runtime = fixture.input.prepared.sessionRuntime;
+      runtime.agentSession.activeSession = session;
+      runtime.agentSession.settingsManager = settingsManager;
+      runtime.sessionManager = sessionManager;
+      runtime.toolResultPromptProjectionState = createToolResultPromptProjectionState();
+      fixture.input.setup.effectiveWorkspace = workspace;
+      fixture.input.setup.effectiveFsWorkspaceOnly = true;
+      Object.assign(fixture.input.attempt, { model, workspaceDir: workspace });
+      fixture.input.preparedStreamRuntime.promptActiveSession = (prompt, options) =>
+        session.prompt(prompt, options);
+      const context = expectDefined(mocks.preparePromptContext.getMockImplementation(), "context");
+      mocks.preparePromptContext.mockImplementation(() => ({
+        ...context(),
+        promptForModel: "Inspect ./picture.png",
+        promptForSession: "Inspect ./picture.png",
+        runtimeContextMessageForCurrentTurn: undefined,
+        promptSubmission: { prompt: "Inspect ./picture.png", runtimeOnly: false },
+      }));
+      const preparation = await vi.importActual<typeof import("./prompt-image-preparation.js")>(
+        "./prompt-image-preparation.js",
+      );
+      mocks.preparePromptExecution.mockImplementation(
+        preparation.prepareEmbeddedAttemptPromptExecution,
+      );
+      const submission = await vi.importActual<typeof import("./attempt-prompt-submit.js")>(
+        "./attempt-prompt-submit.js",
+      );
+      mocks.submitPrompt.mockImplementation(submission.submitEmbeddedAttemptPrompt);
+      let inspected: ImageContent[] | undefined;
+      mocks.beforeAgentRun.mockImplementation(async (event: PluginHookBeforeAgentRunEvent) => {
+        inspected = structuredClone(event.images);
+        if (event.images?.length && block) {
+          return { outcome: "block", reason: "Image policy", message: "Image blocked." };
+        }
+        // Approval binds prepared bytes, even if the source disappears or a hook edits its copy.
+        await fs.unlink(imagePath);
+        if (event.images?.[0]) {
+          Object.assign(event.images[0], { data: "modified by hook" });
+        }
+        return { outcome: "pass" };
+      });
+      let submittedImages: unknown[] = [];
+      streamMocks.streamSimple.mockImplementation((requestModel: Model, request: Context) => {
+        submittedImages = request.messages.flatMap((message) =>
+          Array.isArray(message.content)
+            ? message.content.filter((part) => part.type === "image")
+            : [],
+        );
+        return createAssistantResultStream(createAssistant(requestModel, "Done."));
+      });
+
+      mocks.handlePromptError.mockImplementation(async ({ error }: { error: unknown }) => {
+        throw error;
+      });
+      await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+      expect(inspected).toEqual([image]);
+      expect(streamMocks.streamSimple).toHaveBeenCalledTimes(block ? 0 : 1);
+      expect(submittedImages).toEqual(block ? [] : [image]);
+      if (block) {
+        expect(fixture.input.state.beforeAgentRunBlockedBy).toBe("policy");
+        expect(JSON.stringify(sessionManager.buildSessionContext().messages)).not.toContain(
+          image.data,
+        );
+      }
+    },
+  );
+
   it("submits an unchanged turn without a registered policy gate", async () => {
     const fixture = createFixture();
     const manager = guardSessionManager(SessionManager.inMemory());
@@ -669,8 +758,8 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(fixture.order).toEqual([
       "assembly",
       "context",
-      "google-cache",
       "images",
+      "google-cache",
       "observe",
       "preflight",
       "submit",

@@ -14,7 +14,6 @@ import {
   type DiagnosticEmbeddedRunOwner,
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { assertSessionControllerOperation } from "../../sessions/session-controller.state.js";
@@ -23,7 +22,6 @@ import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardCancellation,
 } from "../agent-hooks/compaction-safeguard-runtime.js";
-import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import {
   applyAgentAutoCompactionGuard,
   isSilentOverflowProneModel,
@@ -40,13 +38,13 @@ import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
+import { createStandaloneCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { setPreparedCompaction } from "../sessions/prepared-compaction.js";
 import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
-import { normalizeUsage, type UsageLike } from "../usage.js";
 import {
   type BoundedCompactionSession,
   withBoundedCompactionSession,
@@ -64,7 +62,10 @@ import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
-import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
+import {
+  prepareCompactionSessionAgent,
+  createCompactionSessionSettings,
+} from "./compaction-session-agent.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
@@ -72,7 +73,10 @@ import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js
 import { declarePromptHistoryRewrite } from "./prompt-cache-observability.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
-import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
+import {
+  readCompactionAccountingRecorder,
+  compactionUsageSink,
+} from "./run/compaction-accounting-bridge.js";
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
@@ -140,20 +144,7 @@ export async function executePreparedCompactionSession(
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
-    const settingsManager =
-      bounded?.settingsManager ??
-      createPreparedEmbeddedAgentSettingsManager({
-        sessionId: params.sessionId,
-        cwd: effectiveCwd,
-        agentDir,
-        cfg: params.config,
-        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
-          config: params.config,
-          env: process.env,
-          workspaceDir: effectiveWorkspace,
-        }),
-        contextTokenBudget,
-      });
+    const settingsManager = bounded?.settingsManager ?? createCompactionSessionSettings(runtime);
     if (!bounded && !memoryTranscript && usesBoundedCompactionSource(runtime)) {
       return await withBoundedCompactionSession(
         runtime,
@@ -197,14 +188,7 @@ export async function executePreparedCompactionSession(
     if (bounded?.source) {
       setPreparedCompaction(sessionManager, bounded.source);
     }
-    const recordUsage = accountingRecorder?.recordUsage
-      ? (usage: UsageLike) => {
-          const normalized = normalizeUsage(usage);
-          if (normalized) {
-            accountingRecorder.recordUsage?.(normalized);
-          }
-        }
-      : undefined;
+    const recordUsage = compactionUsageSink(accountingRecorder);
     if (recordUsage) {
       setSessionModelUsageSink(sessionManager, recordUsage);
     }
@@ -251,8 +235,7 @@ export async function executePreparedCompactionSession(
       },
       undefined,
     );
-    // The session runtime treats `tools` as a name allowlist during session creation. Pass the
-    // exact OpenClaw-managed registrations so custom tools survive startup.
+    // Session creation takes a name allowlist; retain the exact custom tool registrations.
     const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
 
     const providerStreamFn = registerProviderStreamForModel({
@@ -529,6 +512,17 @@ export async function executePreparedCompactionSession(
                 },
               });
         const activeSession = session;
+        // Raised manual summaries must fit the foreground window, not the summarizer window.
+        const manualRequestBudget =
+          trigger === "manual"
+            ? createStandaloneCompactionRequestBudget({
+                maxSummaryChars: settingsManager.getCompactionSettings().maxSummaryChars,
+                contextWindow: contextTokenBudget,
+                reserveTokens: settingsManager.getCompactionReserveTokens(),
+                systemPrompt: session.agent.state.systemPrompt,
+                tools: session.agent.state.tools,
+              })
+            : undefined;
         let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
         // A timeout after generation is persistence; recovery would discard a real summary.
         let summaryReady = false;
@@ -543,7 +537,7 @@ export async function executePreparedCompactionSession(
                 const requestState =
                   accountingRecorder?.pendingRequestState ??
                   (trigger === "overflow" ? ("unresolved" as const) : undefined);
-                if (trigger === "manual") {
+                if (trigger === "manual" && !manualRequestBudget) {
                   return {
                     status: "completed" as const,
                     result: await activeSession.compact(params.customInstructions),
@@ -552,9 +546,9 @@ export async function executePreparedCompactionSession(
                 return activeSession[agentSessionAutomaticCompaction](
                   params.customInstructions,
                   requestState,
-                  summaryOutputPolicy,
+                  trigger === "manual" ? "none" : summaryOutputPolicy,
                   {
-                    requestBudget: accountingRecorder?.requestBudget,
+                    requestBudget: manualRequestBudget ?? accountingRecorder?.requestBudget,
                     requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
                     onSummaryReady: () => {

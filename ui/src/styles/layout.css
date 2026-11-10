@@ -3717,7 +3717,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
       clip-path: inset(50%);
     }
 
-    :is(.page-subtitle, .page-sub) {
+    .page-subtitle {
       grid-area: 3 / 1 / 4 / -1;
       margin-top: 8px;
     }

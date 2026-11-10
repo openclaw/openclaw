@@ -1,0 +1,3 @@
+# Worker-owned compaction: transient payloads, bounded reads, overflow/cancellation, and snapshot lifecycle.
+# Original PR regression growth only; prepared-summary repair has separate credit and inherited debt remains.
+648

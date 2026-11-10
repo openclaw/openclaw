@@ -1,9 +1,11 @@
 import { resolveOpenAIResponsesCompactEndpointPlan } from "@openclaw/ai/transports";
+import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { readRestoredSessionTranscriptInWorker } from "../../config/sessions/session-cold-storage-read.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { createStandaloneCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import type { PreparedCompaction } from "../sessions/prepared-compaction.types.js";
 import { sessionManagerFromCompactionSource } from "../sessions/session-manager-view-types.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -58,6 +60,20 @@ export async function withBoundedCompactionSession(
 ): Promise<EmbeddedAgentCompactResult> {
   const { params, effectiveCwd } = runtime;
   const settings = settingsManager.getCompactionSettings();
+  // A raised standalone ceiling must constrain the worker's retained tail too,
+  // before a full AgentSession exists to provide its final foreground budget.
+  const requestBudget =
+    accounting?.requestBudget ??
+    ((settings.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS) > MAX_COMPACTION_SUMMARY_CHARS
+      ? createStandaloneCompactionRequestBudget({
+          maxSummaryChars: settings.maxSummaryChars,
+          contextWindow: runtime.contextTokenBudget,
+          reserveTokens: settings.reserveTokens,
+          systemPrompt: await runtime.buildSystemPromptText(),
+          tools: runtime.effectiveTools,
+        })
+      : undefined);
+  assertActive();
   let result: import("./types.js").EmbeddedAgentCompactResult | undefined;
   await withSessionTranscriptReadSource(
     sessionTarget,
@@ -71,7 +87,7 @@ export async function withBoundedCompactionSession(
             settings,
             admission: resolveSessionTranscriptReadFence(sessionTarget),
             manual: runtime.trigger === "manual",
-            requestBudget: accounting?.requestBudget,
+            requestBudget,
             requestFromEntryId: accounting?.requestFromEntryId,
             pendingUserEntryId: accounting?.pendingUserEntryId,
             requestState:

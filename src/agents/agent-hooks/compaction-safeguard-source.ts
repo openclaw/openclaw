@@ -267,6 +267,7 @@ function formatBoundedContextSection(params: {
   heading: string;
   truncatedMarker: string;
   truncatedLoss: NonNullable<ContextSection["truncatedLoss"]>;
+  maxChars: number;
 }): ContextSection {
   const messages = selectSource(params.messages);
   const toolSegments = new Map(
@@ -291,7 +292,7 @@ function formatBoundedContextSection(params: {
     const lines: string[] = [];
     let atomChars = 0;
     for (const resultIndex of [index, ...(toolSegments.get(index) ?? [])]) {
-      if (atomChars > MAX_SPLIT_TURN_CONTEXT_CHARS) {
+      if (atomChars > params.maxChars) {
         break;
       }
       const result = messages.get(resultIndex);
@@ -306,10 +307,10 @@ function formatBoundedContextSection(params: {
     }
     const segment = lines.join("\n");
     const nextChars = chars + segment.length + Number(segments.length > 0);
-    if (prefix.length + nextChars > MAX_SPLIT_TURN_CONTEXT_CHARS) {
+    if (prefix.length + nextChars > params.maxChars) {
       truncated = true;
       prefix += params.truncatedMarker;
-      while (segments.length > 0 && prefix.length + chars > MAX_SPLIT_TURN_CONTEXT_CHARS) {
+      while (segments.length > 0 && prefix.length + chars > params.maxChars) {
         chars -= segments.pop()!.length + Number(segments.length > 0);
       }
       break;
@@ -335,8 +336,10 @@ function formatBoundedContextSection(params: {
 
 export function buildPreservedTurnsSectionFromSource(
   messages: SafeguardMessageSource,
+  maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
 ): ContextSection {
   return formatBoundedContextSection({
+    maxChars,
     messages,
     heading: "\n\n## Recent turns preserved verbatim",
     truncatedMarker: PRESERVED_TURNS_TRUNCATED_MARKER,
@@ -346,8 +349,10 @@ export function buildPreservedTurnsSectionFromSource(
 
 export function buildSplitTurnContextSectionFromSource(
   messages: SafeguardMessageSource,
+  maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
 ): ContextSection {
   return formatBoundedContextSection({
+    maxChars,
     messages,
     heading: "**Turn Context (split turn):**\n",
     truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
@@ -355,11 +360,17 @@ export function buildSplitTurnContextSectionFromSource(
   });
 }
 
-export function buildPreservedTurnsSection(messages: AgentMessage[]): ContextSection {
-  return buildPreservedTurnsSectionFromSource(arraySafeguardSource(messages));
+export function buildPreservedTurnsSection(
+  messages: AgentMessage[],
+  maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
+): ContextSection {
+  return buildPreservedTurnsSectionFromSource(arraySafeguardSource(messages), maxChars);
 }
-export function buildSplitTurnContextSection(messages: AgentMessage[]): ContextSection {
-  return buildSplitTurnContextSectionFromSource(arraySafeguardSource(messages));
+export function buildSplitTurnContextSection(
+  messages: AgentMessage[],
+  maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
+): ContextSection {
+  return buildSplitTurnContextSectionFromSource(arraySafeguardSource(messages), maxChars);
 }
 
 function scanSafeguardMessages(
@@ -403,6 +414,7 @@ export function prepareCompactionSafeguardSource(params: {
   latestUnresolvedUserRequest?: string;
   recentTurnsPreserve: number;
   qualityGuardEnabled: boolean;
+  maxSummaryChars?: number;
 }) {
   let scanned = scanSafeguardMessages(params.history, params.turnPrefix);
   let usedRangeFallback = false;
@@ -444,7 +456,10 @@ export function prepareCompactionSafeguardSource(params: {
     messages: history,
     recentTurnsPreserve: params.recentTurnsPreserve,
   });
-  const preservedTurnsSection = buildPreservedTurnsSectionFromSource(split.preservedMessages);
+  const preservedTurnsSection = buildPreservedTurnsSectionFromSource(
+    split.preservedMessages,
+    Math.floor((params.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS) / 2),
+  );
   const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
   const includePreservedContext =
     !params.latestUnresolvedUserRequest &&

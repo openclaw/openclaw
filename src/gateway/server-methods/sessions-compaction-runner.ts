@@ -1,5 +1,7 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import type { PreparedCompactionSession } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
@@ -106,6 +108,20 @@ export async function runGatewaySessionCompaction(
     storePath: params.storePath,
   };
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  // Capture the foreground window before a separate compaction.model is selected.
+  const configuredWindow = floorPositiveFiniteNumber(
+    resolveContextTokensForModel({
+      cfg: params.cfg,
+      provider: resolvedModel.provider,
+      model: resolvedModel.model,
+      allowAsyncLoad: false,
+    }),
+  );
+  const sessionWindow = floorPositiveFiniteNumber(params.entry.contextTokens);
+  const contextTokenBudget =
+    configuredWindow !== undefined && sessionWindow !== undefined
+      ? Math.min(configuredWindow, sessionWindow)
+      : (configuredWindow ?? sessionWindow);
   const workspaceDir =
     resolveIngressWorkspaceOverrideForSessionRun({
       spawnedBy: params.entry.spawnedBy,
@@ -145,6 +161,7 @@ export async function runGatewaySessionCompaction(
       chatType: primaryConversation?.kind,
       provider: resolvedModel.provider,
       model: resolvedModel.model,
+      contextTokenBudget,
       authProfileId:
         compactionCliTarget.cliSessionBinding?.authProfileId ?? params.entry.authProfileOverride,
       authProfileIdSource: resolveCollapsedSessionAuthPinSource(params.entry),

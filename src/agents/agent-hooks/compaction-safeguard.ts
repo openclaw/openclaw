@@ -42,7 +42,9 @@ import {
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   extractOpaqueIdentifiers,
-  nestRequiredSummaryHeadings,
+  formatGeneratedSplitTurnSection,
+  normalizeLegacySplitTurnSummary,
+  resolveQualityGuardMaxRetries,
   resolveSummaryReserveTokens,
   wrapUntrustedInstructionBlock,
 } from "./compaction-safeguard-quality.js";
@@ -63,14 +65,8 @@ import { readWorkspaceContextForSummary } from "./compaction-workspace-context.j
 const log = createSubsystemLogger("compaction-safeguard");
 
 const missedModelWarningSessions = new WeakSet<object>();
-const SPLIT_TURN_SECTION_HEADING = "**Turn Context (split turn):**";
-// Split-turn context supplements the generated summary and must not claim its
-// guaranteed half of the final artifact before common finalization runs.
-const MAX_SPLIT_TURN_CONTEXT_CHARS = Math.floor(MAX_COMPACTION_SUMMARY_CHARS / 2);
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
-const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
-const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const compactionSafeguardDeps = {
   summarizeCompactionHistory,
 };
@@ -82,21 +78,6 @@ type CompactionLoss =
   | "preserved-turn-head"
   | "identifier-retention"
   | "quality-retention";
-
-function nestMarkdownHeadings(text: string): string {
-  return text.replace(/^##(?=[ \t]+\S)/gmu, "###");
-}
-
-function normalizeLegacySplitTurnSummary(summary: string | undefined): string | undefined {
-  const splitTurnStart = summary?.indexOf(SPLIT_TURN_SECTION_HEADING) ?? -1;
-  if (!summary || splitTurnStart < 0) {
-    return summary;
-  }
-  const splitTurnContentStart = splitTurnStart + SPLIT_TURN_SECTION_HEADING.length;
-  // Shipped safeguard summaries nested a second complete summary after this owned boundary.
-  // Demote its headings only in the next model input; the persisted old boundary stays untouched.
-  return `${summary.slice(0, splitTurnContentStart)}${nestRequiredSummaryHeadings(summary.slice(splitTurnContentStart))}`;
-}
 
 /**
  * The boundary-scoped range a preparation was meant to cover: everything the
@@ -196,25 +177,6 @@ function resolveRecentTurnsPreserve(value: number | undefined): number {
   return clampNonNegativeInt(value, DEFAULT_RECENT_TURNS_PRESERVE, MAX_RECENT_TURNS_PRESERVE);
 }
 
-function resolveQualityGuardMaxRetries(value: number | undefined): number {
-  return clampNonNegativeInt(
-    value,
-    DEFAULT_QUALITY_GUARD_MAX_RETRIES,
-    MAX_QUALITY_GUARD_MAX_RETRIES,
-  );
-}
-
-function formatGeneratedSplitTurnSection(summary: string, onTruncated: () => void): string {
-  const heading = `${SPLIT_TURN_SECTION_HEADING}\n\n`;
-  const summaryBudget = MAX_SPLIT_TURN_CONTEXT_CHARS - heading.length;
-  const nestedSummary = nestMarkdownHeadings(summary);
-  const cappedSummary = capCompactionSummary(nestedSummary, summaryBudget);
-  if (cappedSummary.length < nestedSummary.length) {
-    onTruncated();
-  }
-  return `${heading}${cappedSummary}`;
-}
-
 /** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
@@ -225,6 +187,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       thinkingLevel,
       streamFn,
     } = event;
+    const maxSummaryChars = preparation.settings.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS;
+    const splitTurnContextChars = Math.floor(maxSummaryChars / 2);
     const previousSummary = normalizeLegacySplitTurnSummary(preparation.previousSummary?.trim());
     const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
     const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
@@ -260,6 +224,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             latestUnresolvedUserRequest,
             recentTurnsPreserve,
             qualityGuardEnabled,
+            maxSummaryChars,
           });
       source = bounded ? bounded.safeguard : rawSource!;
       if (source.usedRangeFallback) {
@@ -370,8 +335,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       }
       const suffix: CompactionSuffix = { text, contextRanges };
       const fit = (retention?: SummaryQualityRetention) =>
-        fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
-          budgetCompactionSummary(body, suffix, maxChars, retention),
+        fitCompactionSummary(
+          preparation.summaryTokenBudget,
+          (maxChars) => budgetCompactionSummary(body, suffix, maxChars, retention),
+          maxSummaryChars,
         );
       let fitted = fit(qualityRetention);
       const losses = new Set(producerLosses);
@@ -443,7 +410,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           if (typeof providerResult === "string" && providerResult.trim()) {
             const finalized = await finalizeSummaryText(reconcileRequestSelection(providerResult), {
               splitTurnSection: preparation.isSplitTurn
-                ? buildSplitTurnContextSection(turnPrefixMessages)
+                ? buildSplitTurnContextSection(turnPrefixMessages, splitTurnContextChars)
                 : undefined,
               preservedTurnsSection: source.preservedTurnsSection,
             });
@@ -564,9 +531,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               previousSummary: undefined,
             });
             splitTurnSummaryLocal = prefixSummary;
-            splitTurnSectionLocal = formatGeneratedSplitTurnSection(prefixSummary, () => {
-              producerLosses.add("split-turn-tail");
-            });
+            splitTurnSectionLocal = formatGeneratedSplitTurnSection(
+              prefixSummary,
+              () => {
+                producerLosses.add("split-turn-tail");
+              },
+              splitTurnContextChars,
+            );
           }
         } catch (attemptError) {
           if (signal?.aborted) {
