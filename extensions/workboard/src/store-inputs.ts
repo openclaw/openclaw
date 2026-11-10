@@ -159,6 +159,7 @@ export type WorkboardBoardInput = {
   icon?: unknown;
   color?: unknown;
   clearAppearance?: unknown;
+  columns?: unknown;
   automationJobId?: unknown;
   defaultWorkspace?: unknown;
   orchestration?: unknown;

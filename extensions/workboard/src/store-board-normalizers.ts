@@ -1,5 +1,6 @@
 import {
   createDefaultWorkboardSessionsBoardSpec,
+  parseWorkboardCardsBoardColumns,
   type WorkboardBoardMetadata,
   type WorkboardOrchestrationSettings,
 } from "@openclaw/workboard-contract";
@@ -49,6 +50,14 @@ export function normalizeBoardMetadata(
   const color = clearAppearance.includes("color")
     ? undefined
     : normalizeBoundedString(input.color, fallback?.color, 40, "board color");
+  let columns = fallback?.columns;
+  if (Object.hasOwn(input, "columns")) {
+    if (kind === "sessions") {
+      throw new Error("columns apply only to Cards boards; edit Sessions columns instead.");
+    }
+    // null resets the board to every status in the default order.
+    columns = input.columns === null ? undefined : parseWorkboardCardsBoardColumns(input.columns);
+  }
   let automationJobId = fallback?.automationJobId;
   if (Object.hasOwn(input, "automationJobId")) {
     automationJobId = normalizeOptionalString(input.automationJobId);
@@ -76,6 +85,7 @@ export function normalizeBoardMetadata(
     ...(kind === "sessions"
       ? { sessions: fallback?.sessions ?? createDefaultWorkboardSessionsBoardSpec() }
       : {}),
+    ...(columns ? { columns } : {}),
     ...(name ? { name } : {}),
     ...(description ? { description } : {}),
     ...(icon ? { icon } : {}),
