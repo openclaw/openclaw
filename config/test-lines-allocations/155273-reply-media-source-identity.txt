@@ -1,0 +1,2 @@
+358
+# Regression tests for PR #155273: a reply that re-sends the replied-to Telegram image reaches the agent once (singleton, album, external reply), and a failed current download keeps the replied copy.
