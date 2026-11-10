@@ -111,6 +111,11 @@ openclaw plugins install @openclaw/llama-cpp-provider
 }
 ```
 
+This selects EmbeddingGemma 2 explicitly. Existing managed local-memory routers
+retain their previous embedding model through Doctor; see
+[upgrading local embeddings](/plugins/llama-cpp#upgrading-local-embeddings) before
+changing the model of an existing index.
+
 ## Supported embedding providers
 
 | Provider          | ID                  | Notes                               |

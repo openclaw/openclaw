@@ -26,6 +26,11 @@ import {
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
+import {
+  pinImplicitLlamaCppEmbeddingModel,
+  preserveLlamaCppEmbeddingModel,
+  usesLocalEmbeddings,
+} from "./embedding-config.js";
 import { detectLlamaCppHardware, formatLlamaCppMemory } from "./hardware.js";
 import {
   resolveManagedLlamaServerPaths,
@@ -149,14 +154,21 @@ function buildSetupResult(params: {
   plan: LlamaCppSetupPlan["kind"];
   defaultModel?: string;
   model?: ModelDefinitionConfig;
+  embeddingModel?: string;
 }): ProviderAuthResult {
   const existing = params.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const switchingFromExternal = Boolean(existing && !existing.localService);
+  const compatible = preserveLlamaCppEmbeddingModel(params.config);
+  const explicit = params.embeddingModel
+    ? pinImplicitLlamaCppEmbeddingModel(compatible, params.embeddingModel, true)
+    : compatible;
   return {
     profiles: [],
     ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
     configPatch: {
       ...buildLlamaCppAuthProfileRemovalPatch(params.config),
+      ...(explicit.memory !== params.config.memory ? { memory: explicit.memory } : {}),
+      ...(explicit.agents !== params.config.agents ? { agents: explicit.agents } : {}),
       models: {
         mode: params.config.models?.mode ?? "merge",
         providers: {
@@ -247,7 +259,11 @@ async function resolveEmbeddingOnlyPlan(
   return localMemoryIntent ? { kind: "embedding-only" } : undefined;
 }
 
-export async function runLlamaCppSetup(ctx: LlamaCppSetupContext): Promise<ProviderAuthResult> {
+export async function runLlamaCppSetup(input: LlamaCppSetupContext): Promise<ProviderAuthResult> {
+  const sourceConfig = input.config;
+  // Setup is a config writer too: rerunning it must not opt existing users into
+  // a different embedding space before the normal update-time Doctor runs.
+  const ctx = { ...input, config: preserveLlamaCppEmbeddingModel(sourceConfig) };
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const managedExisting = existing?.localService ? existing : undefined;
   const mediaModels = resolveLlamaCppMediaModels(managedExisting);
@@ -258,7 +274,7 @@ export async function runLlamaCppSetup(ctx: LlamaCppSetupContext): Promise<Provi
     // Match core memory config: each agent field overrides the top-level default.
     if (
       !(override?.enabled ?? defaults?.enabled ?? true) ||
-      (override?.provider ?? defaults?.provider) !== "local"
+      !usesLocalEmbeddings(override, defaults)
     ) {
       return [];
     }
@@ -495,9 +511,10 @@ export async function runLlamaCppSetup(ctx: LlamaCppSetupContext): Promise<Provi
     ctx.signal?.throwIfAborted();
     progress.stop("Managed llama.cpp server prepared");
     return buildSetupResult({
-      config: ctx.config,
+      config: sourceConfig,
       managed,
       plan: plan.kind,
+      embeddingModel: embeddingModel.source,
       ...(plan.kind === "chat"
         ? {
             defaultModel: `${LLAMA_CPP_PROVIDER_ID}/${plan.candidate.model.id}`,

@@ -517,11 +517,13 @@ again to avoid reusing vectors from the previous model.
 
     Install the official [llama.cpp provider](/plugins/llama-cpp), then choose llama.cpp once in
     interactive setup. OpenClaw installs a pinned, verified `llama-server` and
-    writes its loopback `localService` configuration. Default model:
+    writes its loopback `localService` configuration. Fresh setup saves the default
+    model explicitly:
     `embeddinggemma-2-Q8_0.gguf` (~0.3 GB, auto-downloaded, text-only).
-    Existing explicit model selections remain unchanged. See the
-    [managed model upgrade](/plugins/llama-cpp#upgrading-local-embeddings) before
-    rebuilding an index created with the previous default.
+    Doctor preserves an existing managed router's implicit legacy model selection
+    as EmbeddingGemma 300M; explicit selections remain unchanged. See
+    [upgrading local embeddings](/plugins/llama-cpp#upgrading-local-embeddings)
+    to opt into the new model and rebuild the affected indexes.
 
     Use the standalone CLI to verify the same provider path the Gateway uses:
 

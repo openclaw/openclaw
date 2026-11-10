@@ -66,6 +66,18 @@ export function resolveLegacyLlamaCppModelCacheDir(): string {
   return path.join(os.homedir(), ".node-llama-cpp", "models");
 }
 
+export function resolveLlamaCppPresetPath(
+  service: ModelProviderConfig["localService"],
+): string | undefined {
+  const args = service?.args ?? [];
+  const inline = args.find((arg) => arg.startsWith("--models-preset="));
+  return (
+    inline?.slice("--models-preset=".length) ??
+    args.find((_, index) => args[index - 1] === "--models-preset") ??
+    service?.env?.LLAMA_ARG_MODELS_PRESET
+  );
+}
+
 export function resolveLlamaCppEmbeddingModel(
   local: { modelPath?: string; modelCacheDir?: string } = {},
 ) {

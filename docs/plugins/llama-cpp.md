@@ -530,23 +530,34 @@ To choose the embedding model explicitly:
 The default EmbeddingGemma model automatically receives different task prefixes
 for search queries and indexed documents. Existing indexes built without these
 prefixes rebuild once on the next search or sync, without `--force`. Cached raw
-embeddings are not reused, and keyword search remains available during recovery.
+embeddings are not reused. Keyword search remains available during this
+format-compatible recovery when the keyword index is usable; switching to a
+different embedding model instead pauses all memory search until rebuilding.
 Run `openclaw memory status --index` after intentionally changing the embedding
 model.
 
 ### Upgrading local embeddings
 
-The managed default is EmbeddingGemma 2 Q8_0 with 768-dimensional text vectors.
+Fresh managed setup selects EmbeddingGemma 2 Q8_0 and saves the selected model
+explicitly. It produces 768-dimensional text vectors.
 Its text-only download does not include a multimodal projector or enable image,
 audio, or video indexing. The operating context and physical batch remain 2,048
 tokens to preserve memory budgets and support explicitly configured older models.
 
-Normal OpenClaw updates run Doctor, which moves the exact previous managed
-`b10809` executable path to the current verified runtime. Direct package/source
-upgrades must run `openclaw doctor --fix` before restarting. The existing managed
+Normal OpenClaw updates run Doctor. For an existing managed router using
+`--models-preset`, Doctor makes an implicit legacy local-memory selection explicit
+as EmbeddingGemma 300M, preserving its embedding space and usable index without a
+rebuild. Explicit model selections and per-agent overrides remain authoritative.
+This preservation does not depend on the runtime executable path.
+For a newly hand-written router configuration, set the EmbeddingGemma 2 URI
+explicitly; an implicit selection is conservatively treated as an existing setup.
+
+Doctor also moves the exact previous managed `b10809` executable path to the
+current verified runtime. Direct package/source upgrades must run
+`openclaw doctor --fix` before restarting. The existing managed
 installer verifies and prepares the replacement runtime; no additional service is
-created. Custom executable paths are not changed and must already support
-EmbeddingGemma 2, or be upgraded by their operator.
+created. Custom executable paths are not changed; their operator must ensure they
+support the selected model before opting into EmbeddingGemma 2.
 
 Services started with a direct `--model` argument instead of a managed
 `--models-preset` must set `memory.search.local.modelPath` to the model they
@@ -557,7 +568,7 @@ does not replace a model selected by custom service arguments.
 
 An explicit `memory.search.local.modelPath`, including the previous 300M model
 or its cache path, remains authoritative. To opt into the new model, select the
-URI above and rerun managed setup. An unset `modelPath` uses the new default.
+URI above, update any affected per-agent overrides, and rerun managed setup.
 Existing preset context, batch, and slot overrides are retained: the historical
 `embeddinggemma-300m-qat-q8_0` section name is a stable router address, not the
 embedding index's model identity.
@@ -566,8 +577,9 @@ The two models have different vector spaces even though both return 768 numbers.
 Old vectors are never relabeled or reused for the new model. After switching,
 rebuild each affected agent with `openclaw memory index --force --agent <id>`,
 following the [memory CLI's offline maintenance procedure](/cli/memory), then
-verify with `openclaw memory status --deep --agent <id>`. Semantic search remains
-paused until the new index is ready; keyword search and source memories remain.
+verify with `openclaw memory status --deep --agent <id>`. A model mismatch pauses
+all memory search, including keyword results, until rebuilding finishes. Source
+notes remain intact.
 
 ## Troubleshooting
 

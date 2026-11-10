@@ -25,6 +25,7 @@ import {
   resolveHomePath,
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
+  resolveLlamaCppPresetPath,
 } from "./defaults.js";
 import {
   findManagedLlamaServerAsset,
@@ -45,6 +46,8 @@ import {
 } from "./llama-server-preset.js";
 import { resolveLlamaCppMediaArtifact } from "./media-catalog.js";
 import { resolveLlamaCppCatalogArtifact } from "./model-catalog.js";
+
+export { resolveLlamaCppPresetPath } from "./defaults.js";
 
 type ModelArtifact = {
   fileName: string;
@@ -446,18 +449,6 @@ async function findAvailableLlamaServerPort(preferred = LLAMA_CPP_DEFAULT_PORT):
     (await tryPort(preferred)) ??
     (await tryPort(0)) ??
     Promise.reject(new Error("No loopback port is available for llama-server"))
-  );
-}
-
-export function resolveLlamaCppPresetPath(
-  service: ModelProviderConfig["localService"],
-): string | undefined {
-  const args = service?.args ?? [];
-  const inline = args.find((arg) => arg.startsWith("--models-preset="));
-  return (
-    inline?.slice("--models-preset=".length) ??
-    args.find((_, index) => args[index - 1] === "--models-preset") ??
-    service?.env?.LLAMA_ARG_MODELS_PRESET
   );
 }
 
