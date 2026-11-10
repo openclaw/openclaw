@@ -1,0 +1,3 @@
+# Release command proof with real SQLite consent and state-lock custody: release, unconfirmed, and custody lost after confirmation.
+# Pins manifest rejection of tools.exec and tools.message.
+117
