@@ -1,5 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { assert, expect, it } from "vitest";
 import { applyTemplateAddPlanStateless } from "../templates/add-stateless.js";
@@ -179,6 +179,8 @@ process.stdin.on("end", () => {
     expect(await readFile(path.join(record!.installPath!, "index.js"), "utf8")).toBe(
       "Preserve the installed owner's change.\n",
     );
+    await rm(path.join(extracted.packageRoot, "plugins/probe/package.json"));
+    await rm(path.join(extracted.packageRoot, "plugins/probe/openclaw.plugin.json"));
     const bundleManifest = path.join(extracted.packageRoot, "plugins/probe/.codex-plugin");
     await mkdir(bundleManifest);
     await writeFile(path.join(bundleManifest, "plugin.json"), "{}");
