@@ -1,2 +1,2 @@
-# Net test-line growth for the whole-read skill cache reconciliation: hook coverage for the direct read, the nested Code Mode read, and two interleaved attempts.
-124
+# Net test-line growth for the whole-read skill cache reconciliation: hook coverage for the direct read, the nested Code Mode read, two interleaved attempts, and the production coding-tool construction that owns the receipt.
+196

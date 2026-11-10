@@ -188,6 +188,8 @@ type CoreCodingToolsOptions = {
   skillReadResources?: SkillSnapshot["resolvedSkills"];
   skillInstructionPaths?: readonly string[];
   skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
+  /** Attempt that owns these tools; scopes skill delivery bookkeeping. */
+  runId?: string;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
   modelHasVision?: boolean;
@@ -371,6 +373,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             containerWorkdir: sandbox?.containerWorkdir,
             instructionPaths: options.skillInstructionPaths,
             instructionDeliveryCache: options.skillInstructionDeliveryCache,
+            runId: options.runId,
           },
         ),
         "bounded-read",
