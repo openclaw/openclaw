@@ -21,6 +21,22 @@ import {
 
 afterEach(clearGatewayAgentCliShim);
 
+async function createGitExecTool(root: string, cwd: string) {
+  const fixture = await createSourceCliFixture(root);
+  await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, () =>
+    withSourceCliParent(fixture, prepareGatewayAgentCliShim),
+  );
+  return createExecTool({
+    host: "gateway",
+    security: "full",
+    ask: "off",
+    cwd,
+    pathPrepend: mergeGatewayAgentCliPath(),
+    notifyOnExit: false,
+    allowBackground: false,
+  });
+}
+
 it.skipIf(process.platform === "win32")(
   "negotiates missing revision roots before shared-clone content commands",
   () =>
@@ -60,12 +76,21 @@ it.skipIf(process.platform === "win32")(
       await fs.writeFile(path.join(origin, "file.txt"), "remote content\n");
       git(origin, "commit", "-am", "remote change");
       const missing = git(origin, "rev-parse", "HEAD");
+      const blob = git(origin, "rev-parse", "HEAD:file.txt");
+      const tree = git(origin, "rev-parse", "HEAD^{tree}");
+      const tool = await createGitExecTool(root, root);
       const shim = path.join(root, "git");
       await fs.writeFile(shim, AGENT_GIT_SHIM, { mode: 0o755 });
       const packedObjects = (cwd: string) =>
         Number(git(cwd, "count-objects", "-v").match(/in-pack: (\d+)/)?.[1]);
-      const cases: [string, ...string[]][] = [
+      const pythonCommands: [string, string, ...string[]][] = [
         ["show", `${missing}:file.txt`],
+        ["cat-file", "-p", `${missing}:file.txt`],
+        ["rev-parse", `${missing}:file.txt`],
+        ["rev-parse", `${missing}^{tree}`],
+      ];
+      const cases: [string, string, ...string[]][] = [
+        ...pythonCommands,
         ["show", "--cc", `${missing}:file.txt`],
         ["rev-list", "--header", missing, "--max-count=1"],
         ["show", "-U", missing],
@@ -100,18 +125,43 @@ it.skipIf(process.platform === "win32")(
         git(clone, "config", "protocol.file.allow", "never");
         const before = packedObjects(clone);
         const packet = path.join(root, `packet-${index}`);
-        const result = spawnSync(
-          shim,
-          ["-C", root, "-C", path.basename(linked), "-c", "protocol.file.allow=always", ...args],
-          {
-            env: { ...env, GIT_ALLOW_PROTOCOL: undefined, GIT_TRACE_PACKET: packet },
-            encoding: "utf8",
-          },
-        );
+        let result;
+        if (pythonCommands.includes(args)) {
+          const execution = await tool.execute("python-git", {
+            command: `GIT_TRACE_PACKET=${quoteCliArg(packet)} python3 - <<'PY'
+import subprocess
+subprocess.run(${JSON.stringify(["git", "-c", "protocol.file.allow=always", ...args])}, check=True)
+PY`,
+            workdir: clone,
+            yieldMs: 120_000,
+          });
+          const details = execution.details;
+          if (details.status !== "completed" && details.status !== "failed") {
+            throw new Error(`Expected a settled Python command, got ${details.status}`);
+          }
+          result = {
+            status: details.exitCode,
+            stdout: details.aggregated,
+            stderr: details.aggregated,
+          };
+        } else {
+          result = spawnSync(
+            shim,
+            ["-C", root, "-C", path.basename(linked), "-c", "protocol.file.allow=always", ...args],
+            {
+              env: { ...env, GIT_ALLOW_PROTOCOL: undefined, GIT_TRACE_PACKET: packet },
+              encoding: "utf8",
+            },
+          );
+        }
         expect(result.status, `${args.join(" ")}\n${result.stderr}`).toBe(0);
-        expect(packedObjects(clone) - before, args.join(" ")).toBeLessThanOrEqual(4);
-        expect(await fs.readFile(packet, "utf8"), args.join(" ")).toMatch(/fetch> have /);
+        expect.soft(packedObjects(clone) - before, args.join(" ")).toBeLessThanOrEqual(4);
+        expect.soft(await fs.readFile(packet, "utf8"), args.join(" ")).toMatch(/fetch> have /);
         if (["show", "diff", "blame", "format-patch"].includes(args[0])) {
+          expect(result.stdout).toContain("remote content");
+        } else if (args[0] === "rev-parse") {
+          expect(result.stdout.trim()).toBe(args[1].endsWith("^{tree}") ? tree : blob);
+        } else if (args[0] === "cat-file" && args.includes(`${missing}:file.txt`)) {
           expect(result.stdout).toContain("remote content");
         } else if (["restore", "checkout", "cherry-pick"].includes(args[0])) {
           expect(await fs.readFile(path.join(linked, "file.txt"), "utf8")).toBe("remote content\n");
@@ -133,6 +183,9 @@ it.skipIf(process.platform === "win32")(
         });
       await fs.writeFile(path.join(linked, missing), "literal filename\n");
       for (const args of [
+        ["rev-parse", missing],
+        ["rev-parse", "--git-path", `${missing}:cache`],
+        ["rev-parse", "--sq-quote", `${missing}:file.txt`],
         ["diff", "--no-index", missing, missing],
         ["log", "-1", `--format=format:${missing}`, "HEAD"],
         ["log", "-1", "--grep", missing, "HEAD"],
@@ -145,7 +198,6 @@ it.skipIf(process.platform === "win32")(
       expect(invoke("--no-lazy-fetch", "show", `${missing}:file.txt`).status).not.toBe(0);
       expect(invoke("show", "unresolvable-name:file.txt").status).not.toBe(0);
       await expect(fs.stat(packet)).rejects.toMatchObject({ code: "ENOENT" });
-      const blob = git(origin, "rev-parse", "HEAD:file.txt");
       expect(invoke("cat-file", "-p", blob).stdout).toBe("remote content\n");
       await fs.writeFile(packet, "");
       expect(invoke("cat-file", "-p", blob).stdout).toBe("remote content\n");
@@ -192,19 +244,7 @@ it.skipIf(process.platform === "win32")(
       git(root, "clone", "--filter=blob:none", "--no-checkout", pathToFileURL(origin).href, clone);
       git(origin, "commit", "--allow-empty", "-m", "remote only");
       const missing = git(origin, "rev-parse", "HEAD");
-      const fixture = await createSourceCliFixture(root);
-      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, () =>
-        withSourceCliParent(fixture, prepareGatewayAgentCliShim),
-      );
-      const tool = createExecTool({
-        host: "gateway",
-        security: "full",
-        ask: "off",
-        cwd: clone,
-        pathPrepend: mergeGatewayAgentCliPath(),
-        notifyOnExit: false,
-        allowBackground: false,
-      });
+      const tool = await createGitExecTool(root, clone);
       const trace = path.join(root, "probe.trace");
       const command = async (args: string[], workdir = clone) => {
         const result = await tool.execute("git-probe", {

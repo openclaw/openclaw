@@ -68,6 +68,7 @@ is_probe() {
         for arg do case $arg in -e|-t) return 0 ;; esac; done
         return 1 ;;
       rev-parse)
+        prepare_history=1
         shift
         for arg do case $arg in --verify) return 0 ;; esac; done
         return 1 ;;
@@ -123,7 +124,7 @@ revision_roots() {
       checkout:-b|checkout:-B|switch:-c|switch:-C|merge:-m|merge:-F|cherry-pick:-m|revert:-m|log:-n|show:-n|rev-list:-n)
         [ "$#" -gt 0 ] && shift; continue ;;
       cat-file:blob|cat-file:tree|cat-file:commit|cat-file:tag) continue ;;
-      diff:--no-index|archive:--remote|archive:--remote=*) revisions=; return ;;
+      rev-parse:--sq-quote|rev-parse:--parseopt|diff:--no-index|archive:--remote|archive:--remote=*) revisions=; return ;;
       archive:--format|ls-tree:--format|format-patch:-o|format-patch:--cc) [ "$#" -gt 0 ] && shift; continue ;;
       restore:-S|merge:-S|rebase:-S|cherry-pick:-S|revert:-S) continue ;;
     esac
@@ -138,11 +139,15 @@ revision_roots() {
         fi
         [ "$#" -gt 0 ] || break; arg=$1; shift ;;
       -s*) [ "$verb" = restore ] || continue; arg=\${arg#-s} ;;
-      --grep|--grep-reflog|--author|--committer|--since|--since-as-filter|--until|--after|--before|--max-count|--max-count-oldest|--max-age|--min-age|--skip|--output|--output-directory|--path|--pathspec-from-file|--date|--encoding|--diff-filter|--find-object|--strategy|--strategy-option|--message|--file|--mainline|--glob|--exclude|--exclude-hidden|--create|--force-create|--conflict|--contents|--ignore-revs-file|--exec|--into-name|--subject-prefix|--signature|--signature-file|--suffix|--to|--in-reply-to|--add-header|--prefix|--src-prefix|--dst-prefix|--line-prefix|--anchored|--word-diff-regex|-G|-S|-L|-O|-X|--orphan)
+      --grep|--grep-reflog|--author|--committer|--since|--since-as-filter|--until|--after|--before|--max-count|--max-count-oldest|--max-age|--min-age|--skip|--output|--output-directory|--path|--pathspec-from-file|--date|--encoding|--diff-filter|--find-object|--strategy|--strategy-option|--message|--file|--mainline|--glob|--exclude|--exclude-hidden|--create|--force-create|--conflict|--contents|--ignore-revs-file|--git-path|--resolve-git-dir|--exec|--into-name|--subject-prefix|--signature|--signature-file|--suffix|--to|--in-reply-to|--add-header|--prefix|--src-prefix|--dst-prefix|--line-prefix|--anchored|--word-diff-regex|-G|-S|-L|-O|-X|--orphan)
         [ "$#" -gt 0 ] && shift; continue ;;
       -*) continue ;;
       *) [ "$verb" != restore ] || continue ;;
     esac
+    # Bare rev-parse names only print IDs; expressions may need missing objects.
+    if [ "$verb" = rev-parse ]; then
+      case $arg in *:*|*^*|*~*|*..*) ;; *) continue ;; esac
+    fi
     # Paths and revision suffixes are consumed by Git after their root is present.
     arg=\${arg%%:*}
     case $arg in
