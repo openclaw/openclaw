@@ -163,7 +163,11 @@ function QuestionPageContent(
     }
     operationGeneration += 1;
     clientOwner = nextClient;
-    setQuestionPromptClient(questionState, canUseQuestionPrompts(snapshot) ? nextClient : null);
+    setQuestionPromptClient(
+      questionState,
+      canUseQuestionPrompts(snapshot) ? nextClient : null,
+      snapshot.hello?.server?.bootId,
+    );
     if (!nextClient) {
       if (listQuestionPrompts(questionState).some((candidate) => candidate.id === questionId())) {
         failRead("connection");
@@ -236,7 +240,10 @@ function QuestionPageContent(
       {
         answered: "chat.questions.answered",
         cancelled: "chat.questions.skipped",
-        expired: "chat.questions.expired",
+        expired:
+          value.resolvedBy === "gateway-restart"
+            ? "chat.questions.expiredGatewayRestart"
+            : "chat.questions.expired",
         pending: "chat.questions.unavailable",
         unavailable: "chat.questions.unavailable",
       }[value.status],

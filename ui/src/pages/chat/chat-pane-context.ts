@@ -589,7 +589,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       };
       this.connectedClient = startupClient;
       const questionClient = canUseQuestionPrompts(snapshot) ? startupClient : null;
-      setQuestionPromptClient(this.questionPromptState, questionClient);
+      setQuestionPromptClient(
+        this.questionPromptState,
+        questionClient,
+        snapshot.hello?.server?.bootId,
+      );
       if (questionClient) {
         refreshPendingQuestionsWithRetry(this.questionPromptState, questionClient, clientIsCurrent);
       }

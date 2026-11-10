@@ -4,6 +4,8 @@ import { Value } from "typebox/value";
 import {
   QuestionOptionSchema,
   QuestionRequestQuestionSchema,
+  type QuestionAnswers,
+  type QuestionRecord,
   type QuestionRequestQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { questionShapeError } from "../../gateway/question-validation.js";
@@ -15,6 +17,33 @@ const MIN_ASK_USER_TIMEOUT_SECONDS = 30;
 const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
 
 export type NormalizedAskUserParams = ReturnType<typeof normalizeAskUserParams>;
+
+/** Answer lines shared by the waiting tool result and the post-restart continuation. */
+export function formatAskUserAnswerLines(
+  questions: readonly QuestionRequestQuestion[],
+  answers: QuestionAnswers,
+): string {
+  return questions
+    .map((question) => {
+      const values = answers.answers[question.questionId] ?? [];
+      return `${question.header}: ${values.length > 0 ? values.join(", ") : "(no answer)"}`;
+    })
+    .join("\n");
+}
+
+export function formatAskUserNoAnswerNote(status: "cancelled" | "expired" | "pending"): string {
+  return status === "cancelled"
+    ? "The question was cancelled; proceed with best judgment."
+    : "No answer arrived; proceed with best judgment.";
+}
+
+/** Continuation for a question whose waiting tool call ended with the Gateway restart. */
+export function formatRestartedQuestionResult(record: QuestionRecord): string {
+  const heading = "ask_user answer (question asked before the Gateway restarted):\n";
+  return record.status === "answered"
+    ? heading + formatAskUserAnswerLines(record.questions, record.answers ?? { answers: {} })
+    : heading + formatAskUserNoAnswerNote(record.status === "cancelled" ? "cancelled" : "expired");
+}
 
 /** Validates and canonicalizes model-authored ask_user arguments. */
 export function normalizeAskUserParams(value: unknown) {

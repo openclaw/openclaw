@@ -5,6 +5,7 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import * as questionDispatch from "../harness/gateway-question-dispatch.js";
 import type { AgentHarnessQuestionGatewayCall as GatewayCall } from "../harness/gateway-question-dispatch.js";
+import { createAgentRunRestartAbortError } from "../run-termination.js";
 import {
   cancelAskUserPromptDelivery,
   createAskUserTool,
@@ -468,6 +469,37 @@ describe("ask_user", () => {
     controller.abort(new Error("stop"));
     await expect(pending).rejects.toThrow(message);
     expectCancelled(gateway, questionId, "run-abort");
+  });
+
+  it("keeps waiting through a restart drain until the restart abort ends the run", async () => {
+    const controller = new AbortController();
+    const gateway = gatewayStub({
+      "question.request": async ({ id }) => ({ id }),
+      // The draining Gateway refuses the in-flight wait before it aborts the run.
+      "question.waitAnswer": async () => {
+        throw Object.assign(new Error("question.waitAnswer unavailable during gateway restart"), {
+          name: "GatewayClientRequestError",
+          details: { reason: "gateway-restarting" },
+        });
+      },
+      "question.resolve": async () => ({ status: "cancelled" }),
+    });
+    const pending = ask(controller.signal);
+    settleOnCleanup(pending, () => controller.abort());
+    let settled = false;
+    void pending.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await gateway.waitForCall("question.waitAnswer");
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    // No tool result reaches the model: the restored question continues the session.
+    expect(settled).toBe(false);
+    controller.abort(createAgentRunRestartAbortError());
+    await expect(pending).rejects.toThrow();
+    expect(gateway.mock.mock.calls.map(([method]) => method)).not.toContain("question.resolve");
   });
 
   it("does not activate prompt delivery when registration ignores an earlier abort", async () => {

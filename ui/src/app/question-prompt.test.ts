@@ -593,26 +593,33 @@ describe("refreshPendingQuestions", () => {
     });
   });
 
-  it("terminalizes a missing pending question with an unknown outcome after not-found", async () => {
-    const request = vi.fn<RequestFn>(async (method) => {
-      if (method === "question.list") {
-        return { questions: [] };
+  it.each([
+    ["boot-b", "expired", "gateway-restart"],
+    ["boot-a", "unavailable", undefined],
+  ] as const)(
+    "labels a pending question missing after reconnecting to %s as %s",
+    async (bootId, status, resolvedBy) => {
+      const request = vi.fn<RequestFn>(async (method) => {
+        if (method === "question.list") {
+          return { questions: [] };
+        }
+        throw questionNotFoundError();
+      });
+      const { state, client } = createConnectedState(request);
+      setQuestionPromptClient(state, client, "boot-a");
+      setQuestionPromptClient(state, null);
+      setQuestionPromptClient(state, client, bootId);
+
+      refreshPendingQuestionsWithRetry(state, client);
+      await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe(status));
+      expectPrompt(state, { status, resolvedBy, locallyExpired: false, submitting: false });
+      if (resolvedBy) {
+        // Restart resume restores the carried question after this client reconnected.
+        expect(requestQuestion(state)).toBe(true);
+        expectPrompt(state, { status: "pending" });
       }
-      throw questionNotFoundError();
-    });
-    const { state, client } = createConnectedState(request);
-
-    refreshPendingQuestionsWithRetry(state, client);
-    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("unavailable"));
-
-    expectPrompt(state, {
-      status: "unavailable",
-      answeredElsewhere: false,
-      locallyExpired: false,
-      submitting: false,
-      error: null,
-    });
-  });
+    },
+  );
 
   it("stops retrying an unmatched resolution after its gateway tombstone ages out", async () => {
     vi.useFakeTimers();

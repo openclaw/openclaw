@@ -13,10 +13,7 @@ import {
   enqueueSessionEventForHost,
 } from "../auto-reply/reply/session-event-handoff.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  applySessionEntryReplacements,
-  patchSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
 import { interruptOrphanedSessionPendingInputs } from "../config/sessions/session-pending-input-withdrawal.js";
 import {
@@ -57,6 +54,8 @@ import {
 } from "../state/agent-database-preparation-context.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
+import type { ResumableQuestion } from "./question-manager.js";
+import { markerQuestions, questionSessions, restoreMarkerQuestions } from "./question-resume.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -68,6 +67,7 @@ import {
 } from "./session-restart-resume-discovery.js";
 import {
   acceptRestartResumeReceipt,
+  clearRestartResumeMarker,
   recordRestartResumeFailure,
   recordRestartYieldFailure,
 } from "./session-restart-resume-failure.js";
@@ -93,10 +93,15 @@ type SessionIdentity = {
   parked?: boolean;
 };
 
-/** Snapshot only live owners after admission closes, before shutdown aborts them. */
+/**
+ * Snapshot only live owners after admission closes, before shutdown aborts them. Pending
+ * resumable questions ride on the same marker; a crash before this write loses them,
+ * like the rest of the marker.
+ */
 export async function persistRunningSessionsForRestart(params: {
   cfg: OpenClawConfig;
   signal?: AbortSignal;
+  questions?: ResumableQuestion[];
 }): Promise<void> {
   const summary = createRestartResumeSummary("shutdown");
   const publish = () => summary.publish();
@@ -110,7 +115,7 @@ export async function persistRunningSessionsForRestart(params: {
 }
 
 async function persistRunningSessions(
-  params: { cfg: OpenClawConfig; signal?: AbortSignal },
+  params: { cfg: OpenClawConfig; signal?: AbortSignal; questions?: ResumableQuestion[] },
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Promise<void> {
   const assertCurrent = () => params.signal?.throwIfAborted();
@@ -203,6 +208,7 @@ async function persistRunningSessions(
   for (const session of listYieldWaitingSessions()) {
     add(session);
   }
+  questionSessions(params.questions).forEach(add);
   const selectors = new Map<string, { first: SessionIdentity; batch: SessionIdentity[] }>();
   for (const session of sessions.values()) {
     const key = JSON.stringify([session.agentId, session.storePath]);
@@ -253,7 +259,8 @@ async function persistRunningSessions(
               storePath: first.storePath,
               sessionId: entry.sessionId,
             });
-            if (!session.needsResume && queued.queuedInputIds.length === 0) {
+            const questions = markerQuestions(params.questions, sessionKey, entry.sessionId);
+            if (!session.needsResume && queued.queuedInputIds.length === 0 && !questions.length) {
               summary.record(session.agentId, sessionKey, "reply-completed");
               continue;
             }
@@ -264,6 +271,7 @@ async function persistRunningSessions(
                 resumeAfterRestart: {
                   queuedInputIds: queued.queuedInputIds,
                   ...(session.hadBackgroundExec ? { hadBackgroundExec: true } : {}),
+                  ...(questions.length ? { questions } : {}),
                 },
               },
             });
@@ -607,6 +615,8 @@ async function resumeRestartStore(
         } else if (parked === "waiting") {
           // The registry retains the wait; a new requester message owns fresh admission.
           summary.record(agentId, sessionKey, "parked");
+        } else if (restoreMarkerQuestions(context, { ...entry, agentId, sessionKey }, marker)) {
+          summary.record(agentId, sessionKey, "awaiting-question");
         } else {
           try {
             authority = await prepareSessionSystemTurnAuthority({
@@ -691,19 +701,13 @@ async function resumeRestartStore(
               log,
             });
           }
-          await patchSessionEntryCore(
+        }
+        if (!parked || parked === "resume") {
+          // A restored question now owns continuation; its marker is spent like a resume's.
+          await clearRestartResumeMarker(
             { ...target, agentId, sessionKey },
-            (current) =>
-              current.sessionId === entry.sessionId &&
-              current.lifecycleRevision === entry.lifecycleRevision
-                ? { resumeAfterRestart: undefined }
-                : null,
-            {
-              requireWriteSuccess: true,
-              skipMaintenance: true,
-              // Shutdown marks before cancelling recovery; its new marker wins.
-              assertCommitAllowed: assertRecoveryCurrent,
-            },
+            entry,
+            assertRecoveryCurrent,
           );
         }
         // Each accepted sender retains its own admission even when the owner cannot resume.

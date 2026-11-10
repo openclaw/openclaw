@@ -10,6 +10,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import { reserveMcpFormQuestion } from "../mcp-form-resource-context.js";
+import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import {
   getGatewayToolCallerIdentity,
   captureGatewayToolCallerAssertion,
@@ -18,6 +19,7 @@ import {
   createQuestionPromptLifetime,
   isTerminalQuestionResolveError,
   readQuestionRejection,
+  waitThroughGatewayRestart,
   type GatewayQuestionCall,
 } from "../tools/gateway-question-lifecycle.js";
 import {
@@ -588,6 +590,10 @@ async function runScopedAgentHarnessQuestion(
   claim.attachRegistration(registration);
   const cancel = async (resolvedBy: string): Promise<QuestionWaitAnswerResult | undefined> => {
     prompt.close();
+    // A Gateway restart keeps the question answerable; cancelling it would end it for everyone.
+    if (isAgentRunRestartAbortReason(params.signal?.reason)) {
+      return undefined;
+    }
     try {
       return (await gatewayCall(
         "question.resolve",
@@ -646,11 +652,14 @@ async function runScopedAgentHarnessQuestion(
         return !claim.isCancellationRequested();
       },
     });
-    const answer = gatewayCall(
-      "question.waitAnswer",
-      { timeoutMs: params.timeoutMs + QUESTION_RPC_GRACE_MS },
-      { id: questionId, timeoutMs: params.timeoutMs, includeResolutionId: true },
-      params.signal ? { signal: params.signal } : undefined,
+    const answer = waitThroughGatewayRestart(
+      gatewayCall(
+        "question.waitAnswer",
+        { timeoutMs: params.timeoutMs + QUESTION_RPC_GRACE_MS },
+        { id: questionId, timeoutMs: params.timeoutMs, includeResolutionId: true },
+        params.signal ? { signal: params.signal } : undefined,
+      ),
+      params.signal,
     ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
     claim.setAnswer(answer);
     const answerOutcome = answer.then((result) => ({ kind: "answer" as const, result }));

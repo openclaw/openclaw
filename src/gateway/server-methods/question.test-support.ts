@@ -82,6 +82,13 @@ export function installQuestionTestHooks() {
   });
 }
 
+/** Retires the manager and serves RPCs from its successor, as the next Gateway does. */
+export function replaceQuestionManager(next: QuestionManager) {
+  manager.close();
+  manager = next;
+  handlers = createQuestionHandlers(manager, storeWriteService, scheduler);
+}
+
 export async function callQuestionRpc(
   method: string,
   params: Record<string, unknown>,

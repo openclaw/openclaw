@@ -1,4 +1,5 @@
 import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessageWithCode, readErrorName } from "../infra/errors.js";
 import {
@@ -7,6 +8,27 @@ import {
 } from "../sessions/session-run-error-format.js";
 import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
+
+/** Spends the consumed marker of the exact session generation that startup resumed. */
+export async function clearRestartResumeMarker(
+  target: Parameters<typeof patchSessionEntryCore>[0],
+  entry: InternalSessionEntry,
+  assertCurrent: () => void,
+): Promise<void> {
+  await patchSessionEntryCore(
+    target,
+    (current) =>
+      current.sessionId === entry.sessionId && current.lifecycleRevision === entry.lifecycleRevision
+        ? { resumeAfterRestart: undefined }
+        : null,
+    {
+      requireWriteSuccess: true,
+      skipMaintenance: true,
+      // Shutdown marks before cancelling recovery; its new marker wins.
+      assertCommitAllowed: assertCurrent,
+    },
+  );
+}
 
 /** A recorded wait with no surviving source ends through its exact lifecycle owner. */
 export async function recordRestartYieldFailure(params: {

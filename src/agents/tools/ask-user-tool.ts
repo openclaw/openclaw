@@ -20,10 +20,13 @@ import {
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "../harness/host-private-capabilities.js";
+import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import {
   AskUserToolSchema,
   DEFAULT_ASK_USER_TIMEOUT_SECONDS,
+  formatAskUserAnswerLines,
+  formatAskUserNoAnswerNote,
   QUESTION_RPC_GRACE_MS,
   type NormalizedAskUserParams,
   normalizeAskUserParams,
@@ -33,6 +36,7 @@ import {
   createGatewayQuestionCanceller,
   createQuestionPromptLifetime,
   readQuestionRejection,
+  waitThroughGatewayRestart,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
@@ -337,20 +341,16 @@ export function cancelAskUserPromptDelivery(
 
 function answeredResult(questions: readonly QuestionRequestQuestion[], answers: QuestionAnswers) {
   const payload = { status: "answered" as const, answers };
-  const lines = questions.map((question) => {
-    const values = answers.answers[question.questionId] ?? [];
-    return `${question.header}: ${values.length > 0 ? values.join(", ") : "(no answer)"}`;
-  });
-  return textResult(`${lines.join("\n")}\n\n${JSON.stringify(payload, null, 2)}`, payload);
+  const lines = formatAskUserAnswerLines(questions, answers);
+  return textResult(`${lines}\n\n${JSON.stringify(payload, null, 2)}`, payload);
 }
 
 function noAnswerResult(status: Exclude<QuestionWaitAnswerResult["status"], "answered">) {
   const payload = { status: "no_answer" as const };
-  const note =
-    status === "cancelled"
-      ? "The question was cancelled; proceed with best judgment."
-      : "No answer arrived; proceed with best judgment.";
-  return textResult(`${note}\n\n${JSON.stringify(payload, null, 2)}`, payload);
+  return textResult(
+    `${formatAskUserNoAnswerNote(status)}\n\n${JSON.stringify(payload, null, 2)}`,
+    payload,
+  );
 }
 
 async function waitForPromptDelivery(
@@ -496,11 +496,16 @@ export function createAskUserTool(params: {
       );
       using prompt = createQuestionPromptLifetime(signal);
       let registered = false;
-      const cancelPendingQuestion = createGatewayQuestionCanceller({
+      const cancelQuestion = createGatewayQuestionCanceller({
         gatewayCall,
         questionId,
         beforeCancel: prompt.close,
       });
+      // A Gateway restart keeps the question answerable; cancelling it would end it for everyone.
+      const cancelPendingQuestion = (resolvedBy: string) =>
+        isAgentRunRestartAbortReason(signal?.reason)
+          ? Promise.resolve(undefined)
+          : cancelQuestion(resolvedBy);
       const cancelOnAbort = () => {
         prompt.close();
         delivery.release();
@@ -579,11 +584,14 @@ export function createAskUserTool(params: {
           cancelOnAbort();
           signal.throwIfAborted();
         }
-        const answerPromise = gatewayCall(
-          "question.waitAnswer",
-          { timeoutMs: timeoutMs + QUESTION_RPC_GRACE_MS },
-          { id: questionId, timeoutMs, includeResolutionId: true },
-          signal ? { signal } : undefined,
+        const answerPromise = waitThroughGatewayRestart(
+          gatewayCall(
+            "question.waitAnswer",
+            { timeoutMs: timeoutMs + QUESTION_RPC_GRACE_MS },
+            { id: questionId, timeoutMs, includeResolutionId: true },
+            signal ? { signal } : undefined,
+          ),
+          signal,
         ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
         state.claim.setAnswer(answerPromise);
         delivery.markReady();
