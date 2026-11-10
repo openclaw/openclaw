@@ -33,7 +33,7 @@ export async function runTemplatesReleaseCommand(
     params: {},
     target: `Template ownership of agent ${JSON.stringify(agentId)}`,
     onForeignOwner: "refuse",
-    runLocal: async ({ env }) => {
+    runLocal: async ({ env, assertCurrent }) => {
       const config = getRuntimeConfig();
       const agent = listAgentEntries(config).find((entry) => entry.id === agentId);
       if (!agent) {
@@ -107,9 +107,11 @@ export async function runTemplatesReleaseCommand(
             },
           }),
         {
-          createAdmission: createSqliteWorkerWriteAdmission(context.admission.assertCurrent, [
-            context.admission.databasePath,
-          ]),
+          // Offline custody can end during review (signal, lock loss); recheck it at the delete.
+          createAdmission: createSqliteWorkerWriteAdmission(() => {
+            context.admission.assertCurrent();
+            assertCurrent();
+          }, [context.admission.databasePath]),
         },
       );
       if (!released) {

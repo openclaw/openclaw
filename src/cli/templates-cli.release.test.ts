@@ -8,7 +8,12 @@ import {
   seedLegacyTemplateInstall,
 } from "../templates/provenance.test-helpers.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
+import { waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import { runTemplatesReleaseCommand } from "./templates-cli.release.js";
+
+const prompt = vi.hoisted(() => ({ promptYesNo: vi.fn<() => Promise<boolean>>() }));
+// mock-isolation: Stand in for the operator's interactive answer; custody and storage stay real.
+vi.mock("./prompt.js", () => prompt);
 
 describe("templates release", () => {
   const fixture = useLocalStateOwnerFixture();
@@ -73,6 +78,29 @@ describe("templates release", () => {
 
     expect(exit).toHaveBeenCalledWith(1);
     expect(error).toHaveBeenCalledWith(expect.stringContaining("Release not confirmed"));
+    await expect(resolveConsentAfterRestart()).rejects.toThrow(/edited after its Template consent/);
+  });
+
+  it("keeps the Template consent when offline custody ends after confirmation", async () => {
+    const { resolveConsentAfterRestart } = await editedManagedAgent();
+    // The operator confirms, then Ctrl-C reaches the CLI's signal path before the delete commits.
+    prompt.promptYesNo.mockImplementationOnce(async () => {
+      void waitForSignalExitBarriers("SIGINT");
+      return true;
+    });
+    const streams = [process.stdin, process.stdout];
+    for (const stream of streams) {
+      Object.defineProperty(stream, "isTTY", { value: true, configurable: true });
+    }
+    try {
+      await expect(runTemplatesReleaseCommand("worker", {})).rejects.toThrow();
+    } finally {
+      for (const stream of streams) {
+        Reflect.deleteProperty(stream, "isTTY");
+      }
+    }
+
+    expect(prompt.promptYesNo).toHaveBeenCalledOnce();
     await expect(resolveConsentAfterRestart()).rejects.toThrow(/edited after its Template consent/);
   });
 });
