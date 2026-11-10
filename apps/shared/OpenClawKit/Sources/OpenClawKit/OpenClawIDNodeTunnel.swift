@@ -50,13 +50,20 @@ public actor OpenClawIDNodeTunnel {
     /// `verifiedServerKey` runs before every dial and must return K_srv from a binding it has just
     /// re-verified and committed (`OpenClawIDNodeEnrollmentClient.refresh`), so a redial follows a
     /// K_srv rotation or re-bind and never reuses a retired key.
-    public init(endpoint: any OpenClawIDNodeEndpoint, verifiedServerKey: @escaping @Sendable () async throws -> String,
-                relayURL: URL) {
+    public init(
+        endpoint: any OpenClawIDNodeEndpoint,
+        verifiedServerKey: @escaping @Sendable () async throws -> String,
+        relayURL: URL)
+    {
         self.init(endpoint: endpoint, verifiedServerKey: verifiedServerKey, relayURL: relayURL, clock: .init())
     }
 
-    init(endpoint: any OpenClawIDNodeEndpoint, verifiedServerKey: @escaping @Sendable () async throws -> String,
-         relayURL: URL, clock: OpenClawIDNodeClock) {
+    init(
+        endpoint: any OpenClawIDNodeEndpoint,
+        verifiedServerKey: @escaping @Sendable () async throws -> String,
+        relayURL: URL,
+        clock: OpenClawIDNodeClock)
+    {
         self.endpoint = endpoint
         self.serverKey = verifiedServerKey
         self.relayURL = relayURL
@@ -91,9 +98,9 @@ public actor OpenClawIDNodeTunnel {
                 self.closeWatcher?.cancel()
                 self.closeWatcher = nil
                 await active.connection.close(code: 10)
+            }
+            return key
         }
-        return key
-    }
         self.keyLane = task
         return try await task.value
     }
@@ -162,7 +169,7 @@ public actor OpenClawIDNodeTunnel {
             task = pending
         } else {
             task = Task { try await self.installConnection() }
-        self.pending = task
+            self.pending = task
         }
         try await task.value
         try self.checkActive()
@@ -170,41 +177,41 @@ public actor OpenClawIDNodeTunnel {
         return active
     }
 
-    // Every caller joins installation, never a raw dial result. Only this owner may publish a
-    // connection after checking the current lifetime and most recently committed server key.
+    /// Every caller joins installation, never a raw dial result. Only this owner may publish a
+    /// connection after checking the current lifetime and most recently committed server key.
     private func installConnection() async throws {
         defer { self.pending = nil }
         let generation = self.generation
         let (connection, key) = try await self.dial()
-            guard generation == self.generation, !self.stopped, !self.removed else {
-                await connection.close(code: 0)
-                try self.checkActive()
-                throw CancellationError()
+        guard generation == self.generation, !self.stopped, !self.removed else {
+            await connection.close(code: 0)
+            try self.checkActive()
+            throw CancellationError()
+        }
+        guard key == self.latestKey else {
+            await connection.close(code: 0)
+            throw OpenClawIDNodeTransportError.closed
+        }
+        let id = UUID()
+        self.active = (id, connection, key)
+        self.lastReceived = self.clock.now()
+        self.closeWatcher = Task { [weak self] in
+            do {
+                let close = try await connection.closed()
+                await self?.didClose(id: id, close: close)
+            } catch {
+                if !Task.isCancelled { await self?.didClose(id: id, close: .init(code: nil, kind: .transport)) }
             }
-            guard key == self.latestKey else {
-                await connection.close(code: 0)
-                throw OpenClawIDNodeTransportError.closed
-            }
-            let id = UUID()
-            self.active = (id, connection, key)
-            self.lastReceived = self.clock.now()
-            self.closeWatcher = Task { [weak self] in
-                do {
-                    let close = try await connection.closed()
-                    await self?.didClose(id: id, close: close)
-                } catch {
-                    if !Task.isCancelled { await self?.didClose(id: id, close: .init(code: nil, kind: .transport)) }
+        }
+        if self.watchdog == nil {
+            let clock = self.clock
+            self.watchdog = Task { [weak self] in
+                while !Task.isCancelled {
+                    do { try await clock.sleep(.seconds(3)) } catch { return }
+                    await self?.checkSilence()
                 }
             }
-            if self.watchdog == nil {
-                let clock = self.clock
-                self.watchdog = Task { [weak self] in
-                    while !Task.isCancelled {
-                        do { try await clock.sleep(.seconds(3)) } catch { return }
-                        await self?.checkSilence()
-                    }
-                }
-            }
+        }
     }
 
     private func didClose(id: UUID, close: OpenClawIDNodeClose) async {
