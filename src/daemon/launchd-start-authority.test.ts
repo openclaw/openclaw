@@ -9,14 +9,16 @@ const native = vi.hoisted(() => ({
   missingJob: false,
   commands: [] as string[][],
 }));
-vi.mock("./launchd-system.js", () => ({
+vi.mock("./launchd-system.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./launchd-system.js")>()),
   assertNoSystemLaunchDaemonOwnership: async () => {
     await Promise.resolve();
     native.retired = native.retireDuringPreparation;
   },
   isSystemLaunchDaemonOwnershipError: () => false,
 }));
-vi.mock("./exec-file.js", () => ({
+vi.mock("./exec-file.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./exec-file.js")>()),
   execFileUtf8: async (
     _command: string,
     args: string[],
