@@ -21,6 +21,7 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import {
   createLegacyStateMigrationStepReceipt,
@@ -177,6 +178,8 @@ async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairPara
         (params.deferToMediaPreparation ||
           (params.deferSchemaRepair &&
             (error instanceof SqliteSchemaMismatchError ||
+              (error instanceof StartupMaintenanceRequiredError &&
+                error.kind === "state-migrations") ||
               error instanceof AgentDatabaseMaintenanceRequiredError ||
               error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError)))
       ) {
@@ -264,6 +267,7 @@ export async function repairLegacySessionEntryStates(params: {
   ) => void;
 }): Promise<SessionDeliveryStateRepairReport> {
   try {
+    let repairedIsoEndedAt = 0;
     const recoveredTombstones = new Map<string, string>();
     const retainedWarnings = new Map<string, string>();
     const reportRetained = () => {
@@ -286,6 +290,9 @@ export async function repairLegacySessionEntryStates(params: {
           return { entry };
         }
         const next = migrateLegacySessionEntryState(entry, updatedAt);
+        if (next.repairedIsoEndedAt) {
+          repairedIsoEndedAt += 1;
+        }
         const tombstone = inspectLegacyRestartTombstone(entry);
         retainedWarnings.delete(sessionKey);
         if (tombstone?.retire) {
@@ -337,6 +344,12 @@ export async function repairLegacySessionEntryStates(params: {
       assertCurrent();
       note(backup.changes.map((change) => `- ${change}`).join("\n"), "Session SQLite backups");
       report.repaired = plan.apply(assertTargetCurrent);
+      if (repairedIsoEndedAt > 0) {
+        note(
+          `Normalized ISO-8601 endedAt timestamps for ${repairedIsoEndedAt} durable session row(s).`,
+          "Session recovery warning",
+        );
+      }
       reportRetained();
       for (const warning of recoveredTombstones.values()) {
         note(warning, "Session recovery warning");

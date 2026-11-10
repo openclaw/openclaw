@@ -1520,9 +1520,11 @@ AFTER_CD
             eventName: "pull_request",
             repository: "openclaw/openclaw",
             runAttempt: 1,
+            failed: true,
             preflightOutputs: { run_docs_content: enabled },
             steps: {
               node_setup: { outcome: "success", outputs: {} },
+              bun_setup: { outcome: "failure", outputs: {} },
               clawhub_docs: { outcome: "success", outputs: {} },
             },
           }),
@@ -1532,15 +1534,20 @@ AFTER_CD
     }
     const format = job.steps.find((step: WorkflowStep) => step.name === "Check formatting");
     expect(format.if).not.toContain("run_docs_content");
-    expect(
-      evaluateWorkflowCondition(format.if, {
-        eventName: "pull_request",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        preflightOutputs: { run_docs_content: "false", run_format_check: "true" },
-        steps: { node_setup: { outcome: "success", outputs: {} } },
-      }),
-    ).toBe(true);
+    for (const outcome of ["success", "failure"] as const) {
+      expect(
+        evaluateWorkflowCondition(format.if, {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          preflightOutputs: { run_docs_content: "false", run_format_check: "true" },
+          steps: {
+            node_setup: { outcome: "success", outputs: {} },
+            bun_setup: { outcome, outputs: {} },
+          },
+        }),
+      ).toBe(outcome === "success");
+    }
     const preflight = readCiWorkflow().jobs.preflight;
     expect(preflight.outputs.run_docs_content).toBe(
       "${{ steps.manifest.outputs.run_docs_content }}",
@@ -2685,6 +2692,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     const suite = "ui/src/e2e/stale-build-recovery.production.e2e.test.ts";
     mkdirSync(bin);
     mkdirSync(vitest, { recursive: true });
+    mkdirSync(path.join(root, "test/vitest"), { recursive: true });
+    symlinkSync(
+      path.resolve("test/vitest/vitest.pattern-file.ts"),
+      path.join(root, "test/vitest/vitest.pattern-file.ts"),
+    );
     mkdirSync(path.dirname(path.join(root, suite)), { recursive: true });
     writeFileSync(path.join(root, suite), "");
     writeFileSync(
@@ -2727,6 +2739,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           SELECT_RUNTIME: selected,
           PREPARE_EXIT: exit,
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
+          OPENCLAW_VITEST_INCLUDE_FILE: "",
           VITEST_SHARD_INDEX: "1",
           VITEST_SHARD_COUNT: "1",
         },
@@ -3216,7 +3229,7 @@ process.exit(JSON.parse(process.env.RECIPE_EXITS)[count] ?? 99);
           cwd: workspace,
           encoding: "utf8",
           env: {
-            PATH: process.env.PATH,
+            PATH: `${bin}${path.delimiter}${process.env.PATH}`,
             NODE_BIN: bin,
             GITHUB_ACTION_PATH: path.resolve(".github/actions/setup-node-env"),
             GITHUB_WORKSPACE: workspace,
@@ -3661,6 +3674,34 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  it("keeps each compiled worker preset in a separate archive", () => {
+    const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
+    const steps = setup.runs.steps as WorkflowStep[];
+    const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");
+    expect(restore.with?.path).toBe("${{ steps.vitest-worker-cache-meta.outputs.path }}");
+    expect(restore.with?.["restore-keys"]).toBe(
+      "${{ steps.vitest-worker-cache-meta.outputs.prefix }}-${{ steps.vitest-worker-cache-meta.outputs.preset }}-\n",
+    );
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const warmSteps = warmer.jobs.warm.steps as WorkflowStep[];
+    for (const preset of ["full", "runtime", "tooling"]) {
+      const save = requiredWorkflowStep(
+        warmSteps,
+        preset === "full"
+          ? "Save compiled Vitest workers"
+          : `Save ${preset} compiled Vitest workers`,
+      );
+      expect(save.with?.path).toBe(
+        `.artifacts/vitest-worker-cache/run-cache${preset === "full" ? "" : `-${preset}`}-0`,
+      );
+      expect(save.with?.key).toBe(
+        preset === "full"
+          ? "${{ steps.setup-node-env.outputs.vitest-worker-cache-key }}"
+          : `\${{ steps.setup-node-env.outputs.vitest-worker-cache-prefix }}-${preset}-\${{ github.run_id }}-\${{ github.run_attempt }}`,
+      );
+    }
+  });
+
   it("warms full builds with the release runtime without changing test cache selectors", () => {
     const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
     const npm = readWorkflow(".github/workflows/openclaw-npm-preflight.yml");
@@ -3797,6 +3838,152 @@ server.listen(0, "127.0.0.1", () => {
         "retention-days": 14,
       },
     });
+  });
+
+  it("keeps pinned Bun cache publication with the protected warmer", () => {
+    const action = readWorkflow(".github/actions/setup-test-bun/action.yml");
+    const restore = requiredWorkflowStep(action.runs.steps, "Restore pinned Bun release assets");
+    const save = requiredWorkflowStep(action.runs.steps, "Save pinned Bun release assets");
+    const identity = requiredWorkflowStep(action.runs.steps, "Resolve pinned Bun cache identity");
+    expect(identity.run).toContain("$GITHUB_ACTION_PATH/../../..");
+    expect(identity.run).toContain('sha256sum "$pin"');
+    expect(identity.run).toContain("path=~/.cache/openclaw-bun/$tag");
+    const install = requiredWorkflowStep(action.runs.steps, "Install pinned Bun test runtime");
+    expect(install.run).toContain('echo "OPENCLAW_BUN_PATH=$bun_dir/bin/bun" >> "$GITHUB_ENV"');
+    expect(restore.uses).toBe(CACHE_V5);
+    expect(restore.with).not.toHaveProperty("restore-keys");
+    expect(save.uses).toBe(CACHE_SAVE_V5);
+    expect(save.with).toEqual(restore.with);
+    const publisher = {
+      eventName: "schedule" as const,
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/main",
+      workflow: "Vitest Cache Warm",
+      inputs: { "cache-mode": "read-write" },
+      steps: { cache: { outputs: { "cache-hit": "false" } } },
+      runAttempt: 1,
+    };
+    expect(evaluateWorkflowCondition(save.if, publisher)).toBe(true);
+    for (const rejected of [
+      { repository: "contributor/openclaw" },
+      { ref: "refs/pull/123/merge" },
+      { workflow: "CI" },
+      { inputs: { "cache-mode": "restore" } },
+      { steps: { cache: { outputs: { "cache-hit": "true" } } } },
+      { failed: true },
+    ]) {
+      expect(evaluateWorkflowCondition(save.if, { ...publisher, ...rejected })).toBe(false);
+    }
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const publish = requiredWorkflowStep(
+      warmer.jobs.dependencies.steps,
+      "Warm pinned Bun release assets",
+    );
+    expect(publish).toMatchObject({
+      if: "runner.os == 'Linux'",
+      uses: "./.github/actions/setup-test-bun",
+      with: { "cache-mode": "read-write" },
+    });
+    for (const name of ["checks-node-core-test-nondist-shard", "checks-ui"]) {
+      const reader = requiredWorkflowStep(
+        readCiWorkflow().jobs[name].steps,
+        "Setup pinned Bun test runtime",
+      );
+      expect(reader.with?.["cache-mode"]).toBe("${{ needs.preflight.outputs.cache_mode }}");
+    }
+    for (const [name, condition] of [
+      ["check-docs", "needs.preflight.outputs.run_format_check == 'true'"],
+      ["check-additional-shard", "matrix.group == 'boundaries'"],
+    ] as const) {
+      const reader = requiredWorkflowStep(
+        readCiWorkflow().jobs[name].steps,
+        "Setup pinned Bun parity runtime",
+      );
+      expect(reader).toMatchObject({
+        id: "bun_setup",
+        if: condition,
+        uses: "./.ci-harness/.github/actions/setup-test-bun",
+        with: { "cache-mode": "${{ needs.preflight.outputs.cache_mode }}" },
+      });
+      for (const enabled of [true, false]) {
+        expect(
+          evaluateWorkflowCondition(reader.if, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: { run_format_check: String(enabled) },
+            matrix: { group: enabled ? "boundaries" : "source-contracts" },
+          }),
+        ).toBe(enabled);
+      }
+    }
+  });
+
+  it("prepares Bun once for lint consumers and prevents restaging after setup failure", () => {
+    const workflow = readCiWorkflow();
+    const context = {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+    } as const;
+    for (const [name, task] of [
+      ["check-shard", "lint"],
+      ["checks-fast-core", "release-lint-core-1"],
+      ["check-lint-hosted-core-shard", ""],
+      ["check-lint-hosted-extension-shard", ""],
+    ] as const) {
+      const reader = requiredWorkflowStep(
+        workflow.jobs[name].steps,
+        "Setup pinned Bun parity runtime",
+      );
+      expect(reader).toMatchObject({
+        id: "bun_setup",
+        uses: "./.ci-harness/.github/actions/setup-test-bun",
+        with: { "cache-mode": "${{ needs.preflight.outputs.cache_mode }}" },
+      });
+      if (task) {
+        for (const selected of [true, false]) {
+          expect(
+            evaluateWorkflowCondition(reader.if, {
+              ...context,
+              matrix: { task: selected ? task : "npm-lock" },
+            }),
+          ).toBe(selected);
+        }
+      } else {
+        expect(reader.if).toBeUndefined();
+      }
+    }
+    for (const [job, name] of [
+      ["check-shard", "Run changed lint"],
+      ["check-shard", "Run check shard"],
+      ["check-lint-hosted-core-shard", "Run shared central lint"],
+    ] as const) {
+      const step = requiredWorkflowStep(workflow.jobs[job].steps, name);
+      expect(
+        evaluateWorkflowCondition(step.if, {
+          ...context,
+          failed: true,
+          steps: {
+            check_setup: { outputs: {}, outcome: "success" },
+            bun_setup: { outputs: {}, outcome: "failure" },
+          },
+          matrix: { task: "lint", shared_central_lint_selection_json: "{}" },
+          preflightOutputs: { central_lint_selection_json: name === "Run check shard" ? "" : "{}" },
+        }),
+      ).toBe(false);
+    }
+    const otherCheck = requiredWorkflowStep(workflow.jobs["check-shard"].steps, "Run check shard");
+    expect(
+      evaluateWorkflowCondition(otherCheck.if, {
+        ...context,
+        steps: {
+          check_setup: { outputs: {}, outcome: "success" },
+          bun_setup: { outputs: {}, outcome: "skipped" },
+        },
+        matrix: { task: "npm-lock" },
+      }),
+    ).toBe(true);
   });
 
   it("persists isolated transform and compile caches through immutable protected archives", () => {
@@ -7409,15 +7596,23 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     const steps = job.steps as WorkflowStep[];
     const checkout = requiredWorkflowStep(steps, "Checkout selected tag");
     expect(job.permissions, jobName).toEqual({ contents: "read" });
-    expect(checkout.with?.["persist-credentials"], jobName).toBe(false);
     const jobJson = JSON.stringify(job);
     expect(jobJson, jobName).not.toContain("${{ secrets.");
     for (const envName of tauriSigningEnvNames) {
       expect(jobJson, jobName).not.toContain(envName);
     }
     if (jobName === "validate_release") {
+      expect(checkout.uses).toBeUndefined();
+      expect(checkout.env).toEqual({
+        RELEASE_TAG: "${{ steps.request.outputs.release_tag }}",
+      });
+      expect(checkout.run).toContain('f"+refs/tags/{release_tag}:refs/tags/{release_tag}"');
+      expect(checkout.run).toContain("for attempt in range(1, 4):");
+      expect(checkout.run).toContain("timeout=120");
+      expect(checkout.run).toContain('git_output(workspace, "rev-parse", "HEAD")');
       continue;
     }
+    expect(checkout.with?.["persist-credentials"], jobName).toBe(false);
     const checkoutIndex = steps.indexOf(checkout);
     expect(checkout.with?.ref).toBe("${{ needs.validate_release.outputs.tag_sha }}");
     expect(checkoutIndex, `${jobName} selected checkout order`).toBeGreaterThan(0);

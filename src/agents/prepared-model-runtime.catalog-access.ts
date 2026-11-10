@@ -305,6 +305,15 @@ export async function createFullModelCatalogAccess(
       );
       const completedProviders = new Map(
         [...scope].map((provider) => {
+          const source =
+            providerSources.get(provider) ??
+            preparedProviderCatalogSource(
+              params.agentFacts,
+              params.pluginGeneration,
+              provider,
+              normalizeProvider,
+            );
+          providerSources.set(provider, source);
           const expiresAt = providerExpiries.get(provider);
           const failed = workerCatalog.providerOutcomes?.some(
             (outcome) =>
@@ -313,12 +322,7 @@ export async function createFullModelCatalogAccess(
           return [
             provider,
             {
-              source: preparedProviderCatalogSource(
-                params.agentFacts,
-                params.pluginGeneration,
-                provider,
-                normalizeProvider,
-              ),
+              source,
               credentials: preparedProviderCatalogCredentials(auth, provider, normalizeProvider),
               ...retry.discoveryDeadline(failed, expiresAt, retained?.providers.get(provider)),
               ...(legacyProviders.has(provider) ? { legacyAcquired: true } : {}),
@@ -328,6 +332,7 @@ export async function createFullModelCatalogAccess(
       );
       const acquired = {
         ...publication,
+        ...(!providerIds ? { fullProviderDiscovery: true as const } : {}),
         key: inventoryKey,
         pluginFingerprint,
         nativeSource,
@@ -493,6 +498,9 @@ export async function createFullModelCatalogAccess(
               nativeSource,
               providers: latestInventory?.providers ?? new Map(),
               discoveryOrigins: latestInventory?.discoveryOrigins ?? [],
+              ...(latestInventory?.fullProviderDiscovery
+                ? { fullProviderDiscovery: true as const }
+                : {}),
             }
           : latestInventory;
       if (nextInventory) {
@@ -594,6 +602,7 @@ export async function createFullModelCatalogAccess(
       !options.refresh &&
       !options.changedOnly &&
       published.catalog &&
+      (options.providerIds || published.inventory?.fullProviderDiscovery) &&
       eligibleProviders.every((provider) => published.inventory?.providers.has(provider))
     ) {
       refreshExpiredModelCatalog();
@@ -612,10 +621,10 @@ export async function createFullModelCatalogAccess(
           options.providerIds,
         )
       : requestedProviders;
-    // A changed-only pass without provider inventory is a cold start: acquire what a refresh
-    // would, including hosted rows for providers without credentials.
+    // Native and scoped acquisitions do not cover hosted rows for uncredentialed providers.
+    // The first unscoped demand must still acquire complete provider inventory.
     const fullRefresh =
-      !options.providerIds && (!options.changedOnly || !published.inventory?.providers.size);
+      !options.providerIds && (!options.changedOnly || !published.inventory?.fullProviderDiscovery);
     const includeNative = trigger === "request" && hasNativeCatalog && !options.changedOnly;
     const nativeScope = options.providerIds ? requestedProviders : undefined;
     const nativeProviders = includeNative ? nativeScope : [];

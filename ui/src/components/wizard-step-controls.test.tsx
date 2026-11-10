@@ -1,4 +1,4 @@
-import { createSignal, merge, type ComponentProps } from "solid-js";
+import { action, createOptimistic, createSignal, merge, type ComponentProps } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { WizardStep } from "../api/types.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -139,6 +139,67 @@ it("preserves model paragraphs, cancellation, and object-valued choices", () => 
   expect(firstChoice.hasAttribute("autofocus")).toBe(true);
   firstChoice.click();
   expect(answer).toHaveBeenCalledWith(selected);
+});
+
+it("keeps a model setup choice usable when a text answer advances during a busy transition", async () => {
+  const initialStep: WizardStep = {
+    id: "key-storage",
+    type: "select",
+    message: "How do you want to provide this API key?",
+    options: [option("Paste API key now", "paste"), option("Environment variable", "env")],
+  };
+  const [currentStep, setStep] = createSignal(initialStep);
+  const next = Promise.withResolvers<void>();
+  const answer = vi.fn();
+  let saving = Promise.resolve();
+  const { container } = mountStep(initialStep, () => {
+    const [busy, setBusy] = createOptimistic(false);
+    const save = action(function* () {
+      setBusy(true);
+      yield next.promise.then(() =>
+        setStep({
+          id: "compatibility",
+          type: "select",
+          message: "Endpoint compatibility",
+          options: [
+            option("OpenAI-compatible", "openai"),
+            option("Anthropic", "anthropic"),
+            option("Other", "other"),
+          ],
+        }),
+      );
+    });
+    return {
+      presentation: "model-setup",
+      value: "synthetic-key",
+      get step() {
+        return currentStep();
+      },
+      get busy() {
+        return busy();
+      },
+      onAnswer: (value) => {
+        answer(value);
+        if (currentStep().type === "text") {
+          saving = save();
+        }
+      },
+    };
+  });
+  setStep({ id: "api-key", type: "text", title: "API key", sensitive: true });
+  flush();
+  submit(container.querySelector("form")!);
+  flush();
+  expect(container.querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
+  next.resolve();
+  await saving;
+  flush();
+  await updatePickers(container);
+  const picker = container.querySelector<HTMLElement>("openclaw-select-picker")!;
+  expect(picker.querySelector<HTMLButtonElement>("button")!.disabled).toBe(false);
+  await choosePickerValue(picker, "0");
+  container.querySelector<HTMLButtonElement>("openclaw-modal-actions button")!.click();
+  expect(answer).toHaveBeenLastCalledWith("openai");
 });
 
 it.each([false, true])(

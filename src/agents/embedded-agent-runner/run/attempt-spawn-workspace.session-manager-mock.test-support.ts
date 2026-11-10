@@ -3,6 +3,10 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import type { Mock } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
 import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
+import {
+  sessionManagerReadToolResultProjectionEntries,
+  sessionManagerReadTranscriptBranch,
+} from "../../sessions/session-manager-view-types.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
@@ -90,6 +94,9 @@ export function resetSessionManagerMocks(
   // Orphan repair reads the model window; it follows per-test buildSessionContext overrides.
   Object.assign(sessionManager, {
     [sessionManagerReadInitialContext]: async () => sessionManager.buildSessionContext(),
+    [sessionManagerReadTranscriptBranch]: () => sessionManager.getBranch(),
+    [sessionManagerReadToolResultProjectionEntries]: () =>
+      sessionManager.getToolResultProjectionEntries(),
   });
   sessionManager.appendThinkingLevelChange.mockReset();
   sessionManager.appendModelChange.mockReset();
@@ -99,9 +106,4 @@ export function resetSessionManagerMocks(
   sessionManager.appendLabelChangeAsync.mockReset();
   sessionManager.flushPendingPersistence.mockReset();
   sessionManager.reloadPersistedTranscriptAsync.mockReset();
-  // The fake has no persistence target, so like the real manager its initial model
-  // context falls back to buildSessionContext(), keeping repair fixtures authoritative.
-  Object.assign(sessionManager, {
-    [sessionManagerReadInitialContext]: async () => sessionManager.buildSessionContext(),
-  });
 }

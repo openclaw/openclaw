@@ -30,6 +30,7 @@ type Step = {
   "working-directory"?: string;
 };
 type Job = {
+  outputs?: Record<string, string>;
   env?: Record<string, string>;
   name?: string;
   environment?: string;
@@ -56,6 +57,42 @@ type Workflow = {
   };
   jobs?: Record<string, Job>;
 };
+
+it("uses live evidence when a failed-job rerun retains an earlier preview", () => {
+  const jobs = workflow().jobs!;
+  expect(jobs.preview_plugins_npm?.outputs?.evidence_attempt).toBe(
+    "${{ steps.prepared_plan.outputs.evidence_attempt }}",
+  );
+  expect(step(jobs.preview_plugins_npm, "Read qualified npm preparation").run).toContain(
+    'echo "evidence_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"',
+  );
+  for (const [previewAttempt, currentAttempt, expectedId] of [
+    ["1", "1", "900"],
+    ["1", "2", ""],
+    ["2", "2", "900"],
+  ]) {
+    for (const [key, value] of Object.entries({
+      PREPARED_NPM_EVIDENCE_ID: "900",
+      PREPARED_NPM_EVIDENCE_DIGEST: "digest",
+    })) {
+      const expression = jobs.publish_plugins_npm!.env![key]!;
+      expect(
+        runInNewContext(expression.slice(3, -2), {
+          github: { run_attempt: currentAttempt },
+          needs: {
+            preview_plugins_npm: {
+              outputs: {
+                evidence_attempt: previewAttempt,
+                evidence_id: "900",
+                evidence_digest: "digest",
+              },
+            },
+          },
+        }),
+      ).toBe(expectedId ? value : "");
+    }
+  }
+});
 
 function workflow(): Workflow {
   return parse(readFileSync(workflowPath, "utf8")) as Workflow;

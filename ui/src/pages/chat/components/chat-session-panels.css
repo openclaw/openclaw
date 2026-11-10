@@ -39,7 +39,6 @@ openclaw-chat-subagents-panel {
   background: var(--bg-hover);
 }
 
-.chat-processes__heading,
 .chat-subagents__item-heading {
   display: flex;
   align-items: center;

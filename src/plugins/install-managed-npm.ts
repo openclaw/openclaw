@@ -9,11 +9,7 @@ import {
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import { withInstallActivity } from "../infra/install-progress.js";
-import {
-  buildNpmResolutionFields,
-  formatNpmCommandFailureOutput,
-  type NpmSpecResolution,
-} from "../infra/install-source-utils.js";
+import { formatNpmCommandFailureOutput } from "../infra/install-source-utils.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
 import {
   listMissingRequiredPlatformPackages,
@@ -24,6 +20,7 @@ import {
   upsertManagedNpmRootDependency,
   type ManagedNpmRootInstalledDependency,
 } from "../infra/npm-managed-root.js";
+import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,

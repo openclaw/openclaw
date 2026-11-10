@@ -22,7 +22,10 @@ import {
 } from "./lib/npm-publish-plan.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { isPluginPublicationEnabled } from "./lib/plugin-publication-target.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
+import { createReleaseEvidenceReplay } from "./lib/release-evidence-replay.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
+import { loadNpmEvidenceReplay, npmEvidenceBinding } from "./plugin-npm-evidence-reuse.mjs";
 import {
   inspectPackageTarballBytes,
   verifyPluginPublicationArtifact,
@@ -162,6 +165,13 @@ export function validatePreparedNpmArtifactDescriptor(value, expected) {
 // P consumes Q's bytes as data. Neither a caller-supplied Q SHA nor a matching
 // artifact name grants authority: the original successful FRV attempt owns it.
 export async function authenticatePreparedNpmArtifact(params) {
+  return authenticatePreparedNpmArtifactEvidence(params, true);
+}
+
+// Only the CLI owns the deferred boundary: every successful load, consume or
+// authorize below revalidates after its last acquisition and before its output.
+// Public callers retain the return-time authority check.
+async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnReturn) {
   const { repository, sourceSha, workflowSha, artifact } = params;
   if (!params.fullReleaseValidationRunId && !params.fullReleaseValidationRunAttempt) {
     return {
@@ -180,7 +190,9 @@ export async function authenticatePreparedNpmArtifact(params) {
   const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
   const { authenticateFullReleaseValidationEvidence } =
     await import("./validate-full-release-validation-evidence.mjs");
-  const client = params.evidenceClient ?? createReleaseEvidenceClient(repository);
+  const client =
+    params.evidenceClient ??
+    createReleaseEvidenceClient(repository, { immutableReads: params.immutableReads });
   const runId = String(params.fullReleaseValidationRunId);
   const runAttempt = Number(params.fullReleaseValidationRunAttempt);
   const { manifest } = await client.loadManifest(runId, runAttempt);
@@ -230,11 +242,16 @@ export async function authenticatePreparedNpmArtifact(params) {
     client,
   );
   const current = authenticated.evidence.current;
-  const producerSha = current.manifest.workflowSha;
+  const producerSha =
+    retainedPublicationArtifactSource(current.manifest)?.workflow.sha ??
+    current.manifest.workflowSha;
   if (producerSha !== workflowSha) {
     requireValue(
       producerSha === sourceSha &&
-        current.workflowRefProof === "candidate-owned-admission-v1" &&
+        current.workflowRefProof ===
+          (current.manifest.receiptRecovery
+            ? "receipt-backed-recovery-v1"
+            : "candidate-owned-admission-v1") &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",
     );
@@ -257,15 +274,31 @@ export async function authenticatePreparedNpmArtifact(params) {
     );
   }
   const publisherPolicySha256 =
-    producerSha === workflowSha && params.publisherPolicySha256
+    producerSha === workflowSha && params.publisherPolicySha256 && !params.immutableReads
       ? params.publisherPolicySha256
       : sha256(client.getWorkflowSource(producerSha, WORKFLOW_PATH));
-  authenticated.revalidateAuthority?.();
+  if (params.immutableReads && producerSha === workflowSha && params.publisherPolicySha256) {
+    requireValue(
+      publisherPolicySha256 === params.publisherPolicySha256,
+      "Prepared npm publisher policy differs from immutable source",
+    );
+  }
+  // Replay validation is asynchronous; live qualification authority is synchronous.
+  /** @type {(() => void | Promise<void>) | undefined} */
+  const revalidateAuthority = params.immutableReads
+    ? async () => {
+        await params.immutableReads.revalidate(client);
+        authenticated.revalidateAuthority?.();
+      }
+    : authenticated.revalidateAuthority;
+  if (revalidateOnReturn) {
+    await revalidateAuthority?.();
+  }
   return {
     artifact: descriptor,
     workflowSha: producerSha,
     publisherPolicySha256,
-    revalidateAuthority: authenticated.revalidateAuthority,
+    revalidateAuthority,
   };
 }
 
@@ -689,7 +722,7 @@ function outputValues(file, values) {
   );
 }
 
-async function main(argv) {
+export async function main(argv) {
   const [command, ...args] = argv;
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
@@ -713,8 +746,9 @@ async function main(argv) {
     token: process.env.GH_TOKEN,
   };
   let adoption;
+  let writeEvidenceOutput;
   if (["load", "consume", "authorize"].includes(command)) {
-    adoption = await authenticatePreparedNpmArtifact({
+    const adoptionParams = {
       ...common,
       selectionMode: common.selectionMode ?? process.env.PREPARED_NPM_SELECTION_MODE,
       plugins: options["--plugins"] ?? process.env.PREPARED_NPM_PLUGINS ?? "",
@@ -722,14 +756,36 @@ async function main(argv) {
       workflowFullRef: process.env.GITHUB_REF,
       fullReleaseValidationRunId: process.env.PREPARED_NPM_FRV_RUN_ID,
       fullReleaseValidationRunAttempt: process.env.PREPARED_NPM_FRV_RUN_ATTEMPT,
-    });
+    };
+    if (options["--evidence-output"] || process.env.PREPARED_NPM_EVIDENCE_ID) {
+      const binding = npmEvidenceBinding(adoptionParams);
+      const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
+      adoptionParams.immutableReads = options["--evidence-output"]
+        ? createReleaseEvidenceReplay(binding)
+        : await loadNpmEvidenceReplay({
+            binding,
+            artifactId: process.env.PREPARED_NPM_EVIDENCE_ID,
+            artifactDigest: process.env.PREPARED_NPM_EVIDENCE_DIGEST,
+            token: common.token,
+            archivePath: process.env.RUNNER_TEMP + "/plugin-npm-evidence.zip",
+            client: createReleaseEvidenceClient(common.repository),
+          });
+    }
+    adoption = await authenticatePreparedNpmArtifactEvidence(adoptionParams, false);
+    if (options["--evidence-output"]) {
+      requireValue(command === "load", "Only trusted preview load can write an evidence handoff");
+      writeEvidenceOutput = () =>
+        writeFileSync(options["--evidence-output"], adoptionParams.immutableReads.serialize(), {
+          flag: "wx",
+        });
+    }
     Object.assign(common, {
       workflowSha: adoption.workflowSha,
       publisherPolicySha256: adoption.publisherPolicySha256,
     });
   }
   if (command === "authorize") {
-    adoption.revalidateAuthority?.();
+    await adoption.revalidateAuthority?.();
   } else if (command === "seal") {
     const producer = {
       repository: common.repository,
@@ -763,7 +819,8 @@ async function main(argv) {
       artifact: adoption.artifact,
       archivePath: options["--archive-path"],
     });
-    adoption.revalidateAuthority?.();
+    await adoption.revalidateAuthority?.();
+    writeEvidenceOutput?.();
     writeFileSync(options["--output"], JSON.stringify(manifest));
     outputValues(options["--github-output"], {
       has_candidates: true,
@@ -787,7 +844,7 @@ async function main(argv) {
       outputDir: options["--output-dir"],
       verificationOutput: options["--verification-output"],
     });
-    adoption.revalidateAuthority?.();
+    await adoption.revalidateAuthority?.();
     outputValues(options["--github-output"], {
       package_name: result.manifest.package.name,
       package_version: result.manifest.package.version,
@@ -839,11 +896,10 @@ async function main(argv) {
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  try {
-    await main(process.argv.slice(2));
-  } catch (error) {
+  // Let this module finish evaluating before a lazy import cycles back to it.
+  void main(process.argv.slice(2)).catch((/** @type {unknown} */ error) => {
     console.error(error instanceof Error ? error.message : String(error));
     console.error("[plugin-npm-prepared-release] FAILED (exit 1)");
     process.exitCode = 1;
-  }
+  });
 }

@@ -83,7 +83,10 @@ const TemplatesCatalogContentsSchema = closedObject({
   ),
 });
 
-export const TemplatesCatalogDetailParamsSchema = TemplateCatalogCoordinateSchema;
+export const TemplatesCatalogDetailParamsSchema = closedObject({
+  packageName: TemplatePackageName,
+  version: Type.Optional(NonEmptyString),
+});
 export const TemplatesCatalogDetailSchema = closedObject({
   ...TemplatesCatalogEntrySchema.properties,
   version: NonEmptyString,

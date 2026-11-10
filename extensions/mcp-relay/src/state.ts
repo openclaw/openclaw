@@ -50,11 +50,26 @@ function parseAuthority(value: Record<string, unknown>): RelayGrantAuthority {
   if (principal.kind === "owner") {
     parsedPrincipal = { kind: "owner" };
   } else if (
-    principal.kind === "person" &&
+    (principal.kind === "person" || principal.kind === "delegated-person") &&
     typeof principal.profileId === "string" &&
     principal.profileId.trim()
   ) {
-    parsedPrincipal = { kind: "person", profileId: principal.profileId };
+    if (principal.kind === "delegated-person") {
+      if (
+        typeof principal.admission !== "string" ||
+        !principal.admission ||
+        principal.admission.length > 4096
+      ) {
+        throw stateError();
+      }
+      parsedPrincipal = {
+        kind: "delegated-person",
+        profileId: principal.profileId,
+        admission: principal.admission,
+      };
+    } else {
+      parsedPrincipal = { kind: "person", profileId: principal.profileId };
+    }
   } else {
     throw stateError();
   }

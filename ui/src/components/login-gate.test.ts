@@ -225,13 +225,9 @@ describe("login gate failure recovery", () => {
     expect(element.querySelector('label[for="login-gate-credential"]')?.textContent).toBe(
       "Gateway secret",
     );
-    expect(input).toMatchObject({
-      placeholder: "Paste the token or type the password",
-      type: "password",
-      value: "old-secret",
-    });
+    expect(input).toMatchObject({ type: "password", value: "old-secret" });
+    expect(input.placeholder).toBe("Paste the token or type the password");
     expect(element.querySelector('[role="radiogroup"]')).toBeNull();
-
     input.value = "";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     element.props = { ...element.props, secret: "" };
@@ -240,7 +236,6 @@ describe("login gate failure recovery", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(element.props.onSecretChange).toHaveBeenNthCalledWith(1, "");
     expect(element.props.onSecretChange).toHaveBeenNthCalledWith(2, "replacement-secret");
-
     element
       .querySelector<HTMLButtonElement>('[aria-label="Toggle Gateway secret visibility"]')
       ?.click();
@@ -248,7 +243,11 @@ describe("login gate failure recovery", () => {
     element.props = { ...element.props, secret: "replacement-secret", showGatewaySecret: true };
     await element.updateComplete;
     expect(input).toMatchObject({ type: "text", value: "replacement-secret" });
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    for (const isComposing of [true, false]) {
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing }),
+      );
+    }
     expect(element.props.onConnect).toHaveBeenCalledOnce();
   });
 
@@ -274,7 +273,7 @@ describe("login gate failure recovery", () => {
     const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
     const replace = vi.fn();
     vi.stubGlobal("window", { location: { href: "https://gateway.example/chat", replace } });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response()));
 
     const failure = part(element, 'failure[data-kind="protocol-mismatch"]');
     const refresh = part(failure, "failure-refresh");
@@ -488,4 +487,19 @@ describe("login gate failure recovery", () => {
     expect(writeText).toHaveBeenCalledTimes(2);
     expect(execCommand).toHaveBeenCalledOnce();
   });
+});
+
+it("offers a static bug form without attaching connection failure or setup credentials", async () => {
+  const element = await mountFailure(
+    "Synthetic private connection failure",
+    Codes.AUTH_TOKEN_MISMATCH,
+    "synthetic-private-setup-code",
+  );
+  const link = element.querySelector<HTMLAnchorElement>("a.report-issue-link");
+  expect(link?.textContent).toBe("Report a bug");
+  expect(link?.getAttribute("href")).toBe(
+    "https://github.com/openclaw/openclaw/issues/new?template=bug_report.yml&title=%5BBug%5D%3A%20Control%20UI%3A%20",
+  );
+  expect(link?.rel).toBe("noopener noreferrer");
+  expect(link?.getAttribute("referrerpolicy")).toBe("no-referrer");
 });

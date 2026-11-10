@@ -13,6 +13,7 @@ export const nativeProcessTestEntrypoints = {
   diagnosticsTimeline: entrypoint("diagnostics-timeline"),
   fsSafeCore: entrypoint("fs-safe"),
   fsSafeEnv: entrypoint("fs-safe-env"),
+  configEnvVars: entrypoint("../config/config-env-vars", "config/config-env-vars.js"),
   memoryFsUtils: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../../packages/memory-host-sdk/src/host/fs-utils",
