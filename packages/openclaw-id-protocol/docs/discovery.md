@@ -235,6 +235,13 @@ match `code` only.
 | `rate_limited`       | 429  | per claw / account / address limit                                          |
 | `unavailable`        | 503  | temporary failure                                                           |
 
+A descriptor publish refused with `stale_binding`, or with `conflict` for a different binding at
+the same binding_seq, carries `binding`: the ServerBinding Discovery publishes. Only a caller
+whose binding verified under the claw's root and who signs with its K_gw gets this far. The
+Gateway verifies it under the root: naming other keys, this machine is `binding_superseded`
+(restored from an older backup, or someone with the kit moved the claw); not verifying, it is
+an integrity error.
+
 ## Open questions
 
 - Should `getDescriptor` be readable without a session (invite links before sign-in)? v1:

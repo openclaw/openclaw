@@ -57,7 +57,16 @@ type PeopleLink = {
     kGw: Ed25519PublicKey;
     publishedBindingSeq: number;
   };
-  publication?: { state?: string; code?: string };
+  publication?: {
+    state?: string;
+    code?: string;
+    superseded?: {
+      bindingSeq: number;
+      publishedBindingSeq: number;
+      kSrv: IrohEndpointKey;
+      kGw: Ed25519PublicKey;
+    };
+  };
 };
 
 async function readPeopleLink(opts: IdCliOpts): Promise<PeopleLink | undefined> {
@@ -162,7 +171,16 @@ async function runStatus(opts: IdCliOpts) {
       `Gateway key: ${await displayKey(link.binding.kGw)}`,
     );
   }
-  if (link?.publication?.code === "needs_link_code") {
+  const superseded = link?.publication?.superseded;
+  if (link?.publication?.code === "binding_superseded" && superseded) {
+    lines.push(
+      `Publication: Discovery lists newer keys for this claw (binding ${superseded.publishedBindingSeq}; this computer has ${superseded.bindingSeq}) that this computer doesn't have.`,
+      `  Published endpoint key: ${await displayKey(superseded.kSrv)}`,
+      `  Published Gateway key: ${await displayKey(superseded.kGw)}`,
+      "  If you restored this computer from a backup, run openclaw id rebind.",
+      "  If you didn't, someone may have your recovery kit: run openclaw id rebind now. If that fails because your account is also compromised, relink this claw as a new claw from this computer.",
+    );
+  } else if (link?.publication?.code === "needs_link_code") {
     lines.push(
       "Publication: the new keys wait for a link code from your OpenClaw ID account: openclaw id publish --code <link-code>",
     );
