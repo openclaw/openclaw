@@ -83,6 +83,7 @@ suite.define(() => {
       const childRow = sessionRow(childKey, "Background research", baseTime - 1, {
         spawnedBy: parentKey,
         hasActiveRun: true,
+        status: "running",
         startedAt: baseTime,
       });
       await withPage(
