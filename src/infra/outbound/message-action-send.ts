@@ -19,9 +19,9 @@ import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import { assertMessagePresentationTablesHaveCaptions } from "../../interactive/payload-presentation-tables.js";
 import {
-  assertMessagePresentationTablesHaveCaptions,
-  hasLegacyInteractiveReplyBlocks,
+  hasLegacyInteractiveRepl  yBlocks,
   hasMessagePresentationBlocks,
   hasReplyPayloadContent,
   normalizeLegacyInteractiveReply,
