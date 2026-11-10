@@ -95,7 +95,9 @@ export default function SidebarSessionRename(props: {
           return current.allowed ? undefined : current.reason;
         })()}
         onRenameInput={(next) => setValue(next)}
-        onCommitRename={commit}
+        onCommitRename={() => {
+          void commit();
+        }}
         onCancelRename={close}
       />
     </Show>
