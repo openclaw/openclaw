@@ -61,3 +61,17 @@ test("saved freshness keeps the K_gw its snapshot order belongs to", () => {
     }),
   ).toThrow("freshness");
 });
+
+test("a saved high-water above the pinned binding is capped on load (J5)", () => {
+  const saved = normalizeGatewayConfig({
+    kind: "openclaw-id",
+    openclawId: {
+      ...target,
+      freshness: {
+        claw_id: target.pin.claw_id,
+        snapshot: { seq: 3, issued_at: 1, binding_seq: 50 },
+      },
+    },
+  })?.openclawId;
+  expect(saved?.freshness?.snapshot?.binding_seq).toBe(1);
+});

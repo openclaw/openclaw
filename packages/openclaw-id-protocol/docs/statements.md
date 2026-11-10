@@ -261,20 +261,29 @@ opens, the client runs `assessFreshness({ snapshot }, { binding, stored, now, po
 Discovery's snapshot (`getSnapshot`, untrusted):
 
 1. Verify the snapshot under the binding's K_gw (`verifyMembershipSnapshot`).
-2. A verified snapshot (served now or stored earlier) names a higher binding_seq than the binding
-   served -> `stale_binding`. This is how a replaced server key is retired: the new binding's
-   higher binding_seq, not a revocation list.
-3. The binding is fresh when a verified snapshot names exactly its binding_seq, was issued at most
+2. A verified snapshot names a higher binding_seq than the binding it verified under ->
+   `snapshot_ahead`, and nothing of it is stored: only R-signed bindings raise the binding_seq
+   high-water. A re-bind always replaces K_gw, so an honest K_gw never names a binding beyond
+   its own; a stolen one must not be able to retire every binding a client can still verify.
+3. A binding below the highest binding_seq this client verified -> `stale_binding`. This is
+   how a replaced server key is retired: the new binding's higher binding_seq, not a
+   revocation list. A replayed old binding the client never saw replaced is still refused by
+   rule 4 (its snapshots age out, and a newer one by the same K_gw is a replay).
+4. The binding is fresh when a verified snapshot names exactly its binding_seq, was issued at most
    `SNAPSHOT_MAX_AGE_SECONDS` (3 h) ago and at most `SNAPSHOT_CLOCK_SKEW_SECONDS` (300 s) ahead,
    and is not older by (seq, issued_at) than the newest snapshot stored for this origin.
-4. Not fresh: `enforce` refuses with `freshness_unavailable` (no socket, no credential); `report`
-   dials and records the gap. Rule 2 applies under both policies.
+5. Not fresh: `enforce` refuses with `freshness_unavailable` (no socket, no credential); `report`
+   dials and records the gap. Rules 2 and 3 apply under both policies.
 
-Retained state keeps two independent high-water facts from verified snapshots: the newest
-`(seq, issued_at)` and the highest `binding_seq`. Keep both even when refusing a refresh;
-a later signed snapshot with a newer membership order must not erase earlier evidence
-that a server binding was retired. This local marker is not a signed snapshot and never
-supplies membership or protocol authorization.
+Retained state keeps two independent high-water facts: the newest `(seq, issued_at)` among
+verified snapshots signed by one K_gw (with that `k_gw`), and the highest binding_seq of an
+R-signed binding verified with one. Keep both even when refusing a refresh; a later signed
+snapshot with a newer membership order must not erase earlier evidence that a server binding
+was retired. When the pin's K_gw changes (a re-bind), the snapshot order restarts with the
+first snapshot verified under the newer binding; the binding_seq high-water carries over. A
+marker stored before these rules is loaded through `clampFreshnessState`, capping its
+binding_seq at the pin's. This local marker is not a signed snapshot and never supplies
+membership or protocol authorization.
 
 A snapshot from the future is never stored. The Gateway re-signs at least every
 `SNAPSHOT_REPUBLISH_SECONDS` (1 h), so an honest claw's snapshot is always well inside the 3 h
@@ -288,8 +297,9 @@ K_gw. Closing it needs evidence of the current binding that does not depend on t
 keys, which v1 does not have. If the attacker can also choose what the client reads from
 Discovery, the old K_gw can sign a RootReset to a root of the attacker's choosing, so a browser
 whose pin stored that K_gw gets `owner_reset` and is asked to set itself up again. That browser
-opens no connection and releases no credential. A K_gw holder can also deny service to an origin for good by signing an inflated
-binding_seq; K_gw can already refuse service.
+opens no connection and releases no credential. A K_gw holder can refuse service while it is
+current, but can no longer retire bindings for good: an inflated binding_seq in a snapshot is
+`snapshot_ahead` and is never stored.
 
 ## Test vectors
 
