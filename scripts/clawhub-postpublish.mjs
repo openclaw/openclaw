@@ -355,6 +355,23 @@ function identityFromReceipt(receipt) {
 // current parent admission against the original identity and selected versions.
 // It is awaited immediately before each recovery POST and before completion;
 // neither this callback nor the selected view replaces the original sealed roster.
+/**
+ * @param {object} options
+ * @param {{ workflow_run?: unknown, recovery_manifest?: unknown }} options.event
+ * @param {unknown} [options.parent]
+ * @param {string} [options.parentStatePolicy]
+ * @param {string} options.verifierSha
+ * @param {string} options.token
+ * @param {string} options.outputDir
+ * @param {typeof fetch} [options.fetchImpl]
+ * @param {Parameters<typeof verifyReleaseToolingIdentity>[0]["runGh"]} [options.runGh]
+ * @param {boolean} [options.verifyPublication]
+ * @param {unknown} [options.recoveryManifest]
+ * @param {string} [options.plugins]
+ * @param {Omit<Parameters<typeof executeClawHubRecoveryManifest>[0], "manifest" | "revalidateAuthority"> & {
+ *   revalidateAuthority: (manifest: ReturnType<typeof validateClawHubRecoveryManifest>) => void | Promise<void>
+ * }} [options.recover]
+ */
 export async function verifyClawHubPostpublish({
   event,
   parent: suppliedParent = event?.workflow_run,
@@ -366,8 +383,8 @@ export async function verifyClawHubPostpublish({
   runGh,
   verifyPublication = true,
   recoveryManifest = event?.recovery_manifest,
-  plugins = undefined,
-  recover = undefined,
+  plugins,
+  recover,
 }) {
   if (recover && (!verifyPublication || typeof recover.revalidateAuthority !== "function")) {
     throw new Error("ClawHub recovery requires public readback and current parent authority.");
@@ -820,12 +837,20 @@ export async function verifyClawHubPostpublish({
 
 // The request is the ordinary workflow_dispatch transport, authenticated by its
 // exact parent artifact, not a second admission or a replacement roster.
+/**
+ * @param {object} options
+ * @param {{ inputs?: Record<string, string> }} options.event
+ * @param {NodeJS.ProcessEnv} [options.env]
+ * @param {typeof fetch} [options.fetchImpl]
+ * @param {Parameters<typeof verifyReleaseToolingIdentity>[0]["runGh"]} [options.runGh]
+ * @param {ReturnType<typeof import("./release-ci-summary.mjs").createReleaseEvidenceClient>} [options.evidenceClient]
+ */
 export async function recoverClawHubFromParent({
   event,
   env = process.env,
   fetchImpl = fetch,
   runGh,
-  evidenceClient = undefined,
+  evidenceClient,
 }) {
   const inputs = event?.inputs;
   const fields = [
@@ -1037,7 +1062,7 @@ export async function recoverClawHubFromParent({
       const { manifest } = await client.loadManifest(runId, runAttempt);
       authenticated = await authenticateFullReleaseValidationEvidence(
         {
-          run: await client.getRunAttempt(runId, runAttempt),
+          run: client.getRunAttempt(runId, runAttempt),
           manifest,
           expectedRepository: REPOSITORY,
           expectedRunId: runId,

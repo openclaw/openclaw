@@ -332,6 +332,18 @@ async function waitForPublicationState(
   }
 }
 
+/**
+ * @param {object} options
+ * @param {unknown} options.manifest
+ * @param {string} options.reason
+ * @param {string} [options.registry]
+ * @param {string} options.token
+ * @param {typeof fetch} [options.fetchImpl]
+ * @param {(milliseconds: number) => Promise<void>} [options.wait]
+ * @param {number} [options.timeoutMilliseconds]
+ * @param {(message: string) => void} [options.report]
+ * @param {() => void | Promise<void>} [options.revalidateAuthority]
+ */
 export async function executeClawHubRecoveryManifest({
   manifest: rawManifest,
   reason,
@@ -344,7 +356,7 @@ export async function executeClawHubRecoveryManifest({
     }),
   timeoutMilliseconds = 30 * 60 * 1000,
   report = console.error,
-  revalidateAuthority = undefined,
+  revalidateAuthority,
 }) {
   const manifest = validateClawHubRecoveryManifest(rawManifest);
   const trimmedReason = reason?.trim();

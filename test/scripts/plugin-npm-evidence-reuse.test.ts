@@ -413,7 +413,13 @@ async function carrierFixture(prepare?: (source: ReturnType<typeof fixture>) => 
       ...params,
       ...adopted,
       token: "synthetic-token",
-      fetchImpl: async () => new Response(Uint8Array.from(source.archives.get(9001)!)),
+      fetchImpl: async (input: string | URL | Request) => {
+        const url = new URL(input instanceof Request ? input.url : input.toString());
+        const body = await transport.read(["api", url.pathname.slice(1) + url.search]);
+        return body instanceof Uint8Array
+          ? new Response(Uint8Array.from(body))
+          : new Response(String(body));
+      },
     });
   }
   const payload = JSON.parse(writer.serialize());

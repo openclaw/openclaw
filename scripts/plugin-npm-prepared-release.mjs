@@ -535,7 +535,7 @@ export function createPreparedNpmCapacityObserver(fetchImpl = fetch) {
     report(packages) {
       console.error(
         JSON.stringify({
-          githubCapacity: { phase: "after", ...(after ?? {}) },
+          githubCapacity: { phase: "after", ...after },
           githubRequestAccounting: { scope: "fetch-metadata-only", ...requests, packages },
         }),
       );

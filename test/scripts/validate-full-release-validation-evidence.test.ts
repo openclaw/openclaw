@@ -252,8 +252,8 @@ describe("full release validation evidence", () => {
         : {
             version: "2026.9.9",
             packages: [
+              { name: "@openclaw/test", version: "2026.9.9", targets: ["clawhub", "npm"] },
               { name: "openclaw", version: "2026.9.9", targets: ["npm"] },
-              { name: "@openclaw/test", version: "2026.9.9", targets: ["npm", "clawhub"] },
             ],
             platforms: [],
           },

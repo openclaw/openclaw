@@ -361,9 +361,9 @@ function captureQualificationIdentity(params: ReleaseInventorySource, runGh: Run
       if (actor === null || typeof actor !== "object" || Array.isArray(actor)) {
         throw new Error("Invalid admission actor");
       }
-      const fields = new Map<string, unknown>(Object.entries(actor));
-      const login = fields.get("login");
-      const id = fields.get("id");
+      const operatorFields = new Map<string, unknown>(Object.entries(actor));
+      const login = operatorFields.get("login");
+      const id = operatorFields.get("id");
       if (
         typeof login !== "string" ||
         !/^[A-Za-z0-9-]{1,39}$/u.test(login) ||

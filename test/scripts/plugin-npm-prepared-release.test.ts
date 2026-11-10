@@ -290,8 +290,10 @@ function descriptor(artifact: ReturnType<typeof metadata>) {
   };
 }
 
-function artifactFetch(artifact: ReturnType<typeof metadata>, bytes: Buffer) {
-  return async (input: string) => {
+function artifactFetch(artifact: ReturnType<typeof metadata>, bytes: Buffer): typeof fetch {
+  return async (request) => {
+    const input =
+      typeof request === "string" ? request : request instanceof URL ? request.href : request.url;
     if (input.endsWith(`/artifacts/${artifact.id}/zip`)) {
       return new Response(new Uint8Array(bytes));
     }
@@ -482,9 +484,10 @@ it.each([false, true])(
     };
     const capacity = vi.spyOn(console, "error").mockImplementation(() => {});
     const requests: string[] = [];
-    const observation = createPreparedNpmCapacityObserver(async (url: string) => {
+    const observation = createPreparedNpmCapacityObserver(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       requests.push(url);
-      const response = await download.fetchImpl(url);
+      const response = await download.fetchImpl(input, init);
       response.headers.set("x-ratelimit-limit", "1000");
       response.headers.set("x-ratelimit-remaining", String(701 - requests.length));
       response.headers.set("x-ratelimit-reset", "1794310000");
@@ -589,9 +592,11 @@ it("consumes the original qualified package in another run without a source inst
   expect(result.producerRunId).toBe(producer.runId);
   expect(result.producerRunAttempt).toBe(producer.runAttempt);
   const registry = npmRegistryPackument(entry.packageName, version, readFileSync(tarballPath));
+  let verificationAttempt = 0;
   const verify = (requirePublished: boolean) =>
     selectUnpublishedPreparedNpmPackages({
       ...consumeParams,
+      outputDir: join(root, `registry-verification-${++verificationAttempt}`),
       sourceRoot: root,
       packages: [consumeParams.package],
       requirePublished,

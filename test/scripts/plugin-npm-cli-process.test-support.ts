@@ -99,7 +99,8 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
   };
   producer.artifactName = preparedNpmArtifactName(f.q, producer);
   const policy = "name: immutable npm policy\n";
-  const version = f.source.projection!.version;
+  const projection = expectDefined(f.source.projection, "publication source projection");
+  const version = expectDefined(projection.version, "publication source version");
   const packages: Array<{
     extensionId: string;
     packageDir: string;
@@ -194,9 +195,11 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
       request,
       { packages: [], platforms: [] },
       {
-        ...f.source.projection,
+        ...projection,
+        version,
+        platforms: expectDefined(projection.platforms, "publication source platforms"),
         packages: [
-          ...f.source.projection!.packages,
+          ...projection.packages,
           ...packages.map((entry) => ({
             name: entry.packageName,
             version: entry.version,
