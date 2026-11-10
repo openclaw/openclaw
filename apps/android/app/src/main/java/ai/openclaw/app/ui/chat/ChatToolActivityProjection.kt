@@ -57,6 +57,7 @@ internal fun projectToolActivity(
           toolKeys = previous.toolKeys + group.toolKeys,
           knownRunIds = previous.knownRunIds + group.knownRunIds,
           settledToolKeys = previous.settledToolKeys + group.settledToolKeys,
+          timestampMs = listOfNotNull(previous.timestampMs, group.timestampMs).maxOrNull(),
         )
       }
   }
