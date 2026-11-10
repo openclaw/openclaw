@@ -214,7 +214,9 @@ it("fails over to the fallback provider's recorded account when the primary is o
       provider: "openai",
       profileId: "openai:primary",
       source: "user",
-      fallbackAccounts: [{ provider: "backup", profileId: "backup:main", runtime: "openclaw" }],
+      fallbackAccounts: [
+        { provider: "backup", profileId: "backup:main", runtime: "openclaw", source: "auto" },
+      ],
     });
     // Interactive defaults move to another backup account; the job keeps the recorded one.
     await setAuthProfileOrder({
@@ -444,14 +446,24 @@ it("records fallback accounts through Gateway create/update and fails over after
   });
 });
 
-it.each(["unbound legacy job", "10.10 binding without fallback accounts"] as const)(
-  "Doctor records fallback accounts for a %s and the job then fails over",
+it.each([
+  ["unbound legacy job", "two eligible backup accounts"],
+  ["10.10 binding", "one eligible backup account"],
+] as const)(
+  "Doctor records fallback accounts for a %s (%s) and the job then fails over",
   async (kind) => {
     await withFallbackFixture(async ({ cfg, hits, run, storePath }) => {
       const { maybeRepairCronInferenceBindings } =
         await import("../commands/doctor/cron/inference-binding-migration.js");
       const { withDoctorConfigMaintenance } =
         await import("../commands/doctor-config-flow.test-support.js");
+      if (kind === "10.10 binding") {
+        // Spec D2: Doctor fills a bound job's fallback only when exactly one account fits.
+        expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["backup:other"] })).toBe(
+          true,
+        );
+        clearRuntimeAuthProfileStoreSnapshots();
+      }
       const job =
         kind === "unbound legacy job"
           ? storedJob("doctor-legacy")
@@ -476,7 +488,7 @@ it.each(["unbound legacy job", "10.10 binding without fallback accounts"] as con
       expect(repaired?.inferenceBinding).toMatchObject({
         provider: "openai",
         profileId: "openai:primary",
-        fallbackAccounts: [{ provider: "backup", profileId: "backup:main" }],
+        fallbackAccounts: [{ provider: "backup", profileId: "backup:main", source: "auto" }],
       });
       if (kind !== "unbound legacy job") {
         // The recorded primary account is never rewritten.
@@ -497,3 +509,59 @@ it.each(["unbound legacy job", "10.10 binding without fallback accounts"] as con
     });
   },
 );
+
+it("Doctor never chooses among several eligible fallback accounts for an already-bound job", async () => {
+  await withFallbackFixture(async ({ cfg, hits, run, state, storePath }) => {
+    const { maybeRepairCronInferenceBindings } =
+      await import("../commands/doctor/cron/inference-binding-migration.js");
+    const { withDoctorConfigMaintenance } =
+      await import("../commands/doctor-config-flow.test-support.js");
+    const job = await boundJob(cfg, "doctor-ambiguous", { recordFallbacks: false });
+    await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
+    // The order flipped after the job was bound; current order is not the owner's consent.
+    await setAuthProfileOrder({
+      agentDir: state.agentDir(),
+      provider: "backup",
+      order: ["backup:other", "backup:main"],
+    });
+    const fixed = await withDoctorConfigMaintenance(() =>
+      maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
+    );
+    const warnings = fixed.warnings.join("\n");
+    expect(warnings).toContain("several accounts are eligible (backup:main, backup:other)");
+    expect(warnings).toContain("--fallbacks backup/gpt-4.1@<profileId>");
+    const [unchanged] = (await loadCronJobsStore(storePath)).jobs;
+    expect(unchanged?.inferenceBinding).toEqual(job.inferenceBinding);
+    const result = await run(unchanged!);
+    expect(result.status).toBe("error");
+    expect(hits.backup).toEqual([]);
+  });
+});
+
+it("honors an explicit fallback account written as model@profile", async () => {
+  await withFallbackFixture(async ({ cfg, hits, reload, run }) => {
+    const model = "openai/gpt-4.1@openai:primary";
+    const fallbacks = ["backup/gpt-4.1@backup:other"];
+    const binding = (await captureCronInferenceBinding({ cfg, agentId: "main", model }))!;
+    const { accounts, unrecorded } = await captureCronFallbackInferenceAccounts({
+      cfg,
+      agentId: "main",
+      primaryProvider: "openai",
+      model,
+      fallbacks,
+    });
+    expect(unrecorded).toEqual([]);
+    // Default order prefers backup:main; the owner's explicit choice wins and is marked as theirs.
+    expect(accounts).toMatchObject([
+      { provider: "backup", profileId: "backup:other", source: "user" },
+    ]);
+    binding.fallbackAccounts = accounts;
+    const job = await reload({
+      ...storedJob("explicit", { model, fallbacks }),
+      inferenceBinding: binding,
+    });
+    const result = await run(job);
+    expect(result.status, result.error).toBe("ok");
+    expect(hits.backup).toEqual(["Bearer key-backup-other"]);
+  });
+});

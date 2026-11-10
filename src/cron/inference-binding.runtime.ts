@@ -4,6 +4,7 @@ import {
   type AuthProfileAuthorization,
 } from "../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
+import { isStoredCredentialCompatibleWithAuthProvider } from "../agents/auth-profiles/order.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import {
@@ -12,15 +13,18 @@ import {
 } from "../agents/cli-execution-auth.js";
 import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
 import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   type CronInferenceAccount,
   type CronInferenceBinding,
@@ -297,10 +301,24 @@ type CronFallbackChainParams = {
   isGmailHook?: boolean;
 };
 
+/** A fallback candidate to record: its model ref and any account the owner named with `@profile`. */
+export type CronFallbackCandidate = { provider: string; model: string; profileId?: string };
+
+// The chain builder drops `@profile`; recover the owner's explicit choice from the raw entries.
+function explicitFallbackProfile(rawEntries: string[], provider: string, model: string) {
+  for (const raw of rawEntries) {
+    const split = splitTrailingAuthProfile(raw);
+    if (split.profile && split.model === `${provider}/${model}`) {
+      return split.profile;
+    }
+  }
+  return undefined;
+}
+
 /** The first fallback model of each provider other than the primary's, in run order. */
 export async function resolveCronFallbackProviderModels(
   params: CronFallbackChainParams,
-): Promise<Array<{ provider: string; model: string }>> {
+): Promise<CronFallbackCandidate[]> {
   const owner = await resolveCronModelSelectionOwner({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -340,18 +358,46 @@ export async function resolveCronFallbackProviderModels(
     useSubagentFallbacks: primary.useSubagentFallbacks,
     inheritDefaultFallbacksForAgentStringModel: primary.inheritDefaultFallbacksForAgentStringModel,
   });
+  const rawEntries = [
+    ...(params.fallbacks ?? []),
+    ...resolveAgentModelFallbackValues(resolveAgentConfig(cfg, agentId)?.model),
+    ...resolveAgentModelFallbackValues(cfg.agents?.defaults?.model),
+  ];
   const seen = new Set([params.primaryProvider]);
-  const models: Array<{ provider: string; model: string }> = [];
+  const models: CronFallbackCandidate[] = [];
   for (const candidate of chain) {
     if (!seen.has(candidate.provider)) {
       seen.add(candidate.provider);
+      const profileId = explicitFallbackProfile(rawEntries, candidate.provider, candidate.model);
       models.push({
         provider: candidate.provider,
         model: `${candidate.provider}/${candidate.model}`,
+        ...(profileId ? { profileId } : {}),
       });
     }
   }
   return models;
+}
+
+/** Shared (non-personal) stored accounts whose credential can serve `provider`. */
+async function listEligibleSharedAccounts(
+  cfg: OpenClawConfig,
+  agentId: string,
+  provider: string,
+): Promise<string[]> {
+  const owner = await resolveCronModelSelectionOwner({ cfg, agentId, requiredAgentId: agentId });
+  const store = await ensureAuthProfileStoreAsync(owner.agentDir, {
+    allowKeychainPrompt: false,
+    config: owner.config,
+  });
+  return Object.entries(store.profiles)
+    .filter(
+      ([profileId, credential]) =>
+        !isUserModelAuthProfileId(profileId) &&
+        isStoredCredentialCompatibleWithAuthProvider({ cfg: owner.config, provider, credential }),
+    )
+    .map(([profileId]) => profileId)
+    .toSorted();
 }
 
 /** A fallback provider whose account could not be recorded; its candidates are refused. */
@@ -368,6 +414,11 @@ export async function captureCronFallbackInferenceAccounts(
     /** Fallback accounts recorded before this edit keep their captured runtime. */
     recordedAccounts?: CronInferenceAccount[];
     authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
+    /**
+     * Doctor on an already-bound job: without an explicit `@profile`, record a fallback only
+     * when exactly one shared stored account is eligible; never choose among several.
+     */
+    requireUnambiguous?: boolean;
   },
 ): Promise<{
   accounts: CronInferenceAccount[];
@@ -375,12 +426,32 @@ export async function captureCronFallbackInferenceAccounts(
 }> {
   const accounts: CronInferenceAccount[] = [];
   const unrecorded: CronUnrecordedFallbackAccount[] = [];
-  for (const { provider, model } of await resolveCronFallbackProviderModels(params)) {
+  for (const {
+    provider,
+    model,
+    profileId: explicitProfileId,
+  } of await resolveCronFallbackProviderModels(params)) {
     try {
+      let profileId = explicitProfileId;
+      if (!profileId && params.requireUnambiguous) {
+        const eligible = await listEligibleSharedAccounts(params.cfg, params.agentId, provider);
+        if (eligible.length !== 1) {
+          unrecorded.push({
+            provider,
+            model,
+            reason:
+              eligible.length === 0
+                ? "no shared stored account is available for this provider"
+                : `several accounts are eligible (${eligible.join(", ")}); choose one with openclaw automations edit <jobId> --fallbacks ${model}@<profileId>`,
+          });
+          continue;
+        }
+        profileId = eligible[0];
+      }
       const captured = await captureCronInferenceBinding({
         cfg: params.cfg,
         agentId: params.agentId,
-        model,
+        model: profileId ? `${model}@${profileId}` : model,
         isGmailHook: params.isGmailHook,
         runtimeSessionEntry: params.runtimeSessionEntry,
         recordedRuntime: params.recordedAccounts?.find((account) => account.provider === provider)
@@ -404,6 +475,8 @@ export async function captureCronFallbackInferenceAccounts(
         authorizationId: captured.authorizationId,
         authRequirement: captured.authRequirement,
         ...(captured.runtime !== undefined ? { runtime: captured.runtime } : {}),
+        // Only an `@profile` the owner wrote is their explicit choice.
+        source: explicitProfileId ? "user" : "auto",
       });
     } catch (error) {
       unrecorded.push({

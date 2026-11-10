@@ -13,6 +13,11 @@ export type CronInferenceAccount = {
    * from the cron session entry; bindings captured before it existed keep that derivation.
    */
   runtime?: string;
+  /**
+   * Fallback accounts only: `user` when the owner named it with `@profile`, `auto` when it was
+   * recorded on their behalf. The primary's source lives on the binding.
+   */
+  source?: "auto" | "user";
 };
 
 /** Scheduler-owned identity, not a user model pin or a copy of credential material. */
@@ -52,6 +57,15 @@ function normalizeAccount(value: unknown): CronInferenceAccount {
   };
 }
 
+function normalizeFallbackAccount(value: unknown): CronInferenceAccount {
+  const account = normalizeAccount(value);
+  const source = isRecord(value) ? value.source : undefined;
+  if (source !== undefined && source !== "auto" && source !== "user") {
+    throw invalidBinding();
+  }
+  return source ? { ...account, source } : account;
+}
+
 /** Stored bindings are private scheduler state, never accepted from public job input. */
 export function normalizeCronInferenceBinding(value: unknown): CronInferenceBinding | undefined {
   if (value === undefined) {
@@ -69,7 +83,7 @@ export function normalizeCronInferenceBinding(value: unknown): CronInferenceBind
     if (!Array.isArray(value.fallbackAccounts)) {
       throw invalidBinding();
     }
-    fallbackAccounts = value.fallbackAccounts.map(normalizeAccount);
+    fallbackAccounts = value.fallbackAccounts.map(normalizeFallbackAccount);
     const providers = new Set([primary.provider]);
     for (const account of fallbackAccounts) {
       if (providers.has(account.provider)) {

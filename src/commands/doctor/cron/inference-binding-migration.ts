@@ -58,8 +58,9 @@ import { inspectCronJobsForDoctor, repairCronInferenceBindingsForDoctor } from "
 
 /**
  * Record accounts for fallback providers the binding lacks, so a provider outage can still fail
- * over. Existing accounts are never replaced. Lint only names the missing providers. Returns
- * undefined when nothing new is (or would be) recorded.
+ * over. Existing accounts are never replaced. For an already-bound job Doctor never chooses among
+ * several eligible accounts; the owner names one with `--fallbacks <model>@<profileId>`. Lint only
+ * names the missing providers. Returns undefined when nothing new is (or would be) recorded.
  */
 async function recordCronFallbackAccountsForDoctor(params: {
   cfg: OpenClawConfig;
@@ -70,6 +71,8 @@ async function recordCronFallbackAccountsForDoctor(params: {
   isGmailHook: boolean;
   binding: CronInferenceBinding;
   shouldRepair: boolean;
+  /** Already-bound jobs: record only unambiguous fallback accounts (spec D2). */
+  requireUnambiguous: boolean;
   warnings: string[];
 }): Promise<{ binding: CronInferenceBinding; providers: string[] } | undefined> {
   const known = params.binding.fallbackAccounts ?? [];
@@ -93,6 +96,7 @@ async function recordCronFallbackAccountsForDoctor(params: {
   const { accounts, unrecorded } = await captureCronFallbackInferenceAccounts({
     ...chainParams,
     recordedAccounts: known,
+    requireUnambiguous: params.requireUnambiguous,
     authorizeProfile: async (profileId) => {
       if (isUserModelAuthProfileId(profileId)) {
         throw new Error(
@@ -185,6 +189,7 @@ export async function maybeRepairCronInferenceBindings(params: {
             isGmailHook: job.payload.externalContentSource === "gmail",
             binding,
             shouldRepair: params.shouldRepair,
+            requireUnambiguous: true,
             warnings,
           });
           if (!recorded) {
@@ -540,6 +545,8 @@ export async function maybeRepairCronInferenceBindings(params: {
           isGmailHook: job.payload.externalContentSource === "gmail",
           binding: adopted,
           shouldRepair: true,
+          // A legacy job adopts the accounts its next unbound run would have used (#173509).
+          requireUnambiguous: false,
           warnings,
         });
         changes.push({ job: stored, binding: withFallbacks?.binding ?? adopted });
