@@ -196,7 +196,13 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
           directAnnounceResult?.meta?.yielded === true ||
           directAnnounceResult?.meta?.continuationPending === true)
       ) {
-        return missingVisibleReplyResult(requesterCompletedSuccessfully);
+        // A yielded or still-continuing response is not settled: another attempt may
+        // still produce its visible reply, so only a finished response is permanent.
+        return missingVisibleReplyResult(
+          requesterCompletedSuccessfully &&
+            directAnnounceResult?.meta?.yielded !== true &&
+            directAnnounceResult?.meta?.continuationPending !== true,
+        );
       }
       return {
         delivered: false,
