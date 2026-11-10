@@ -63,6 +63,22 @@ function refuse(
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
+it.each(["selected-profile", null])(
+  "retains the explicit profile precondition %s on retry",
+  async (expectedProfileId) => {
+    const { requests, sender, frames, frame, accept } = fixture();
+    const result = requests.request(sender, "cron.add", {}, { expectedProfileId });
+    expect(frame().expectedProfileId).toBe(expectedProfileId);
+    refuse(requests, frame(), "startup-sidecars");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(frames).toHaveLength(2);
+    expect(frame(1).expectedProfileId).toBe(expectedProfileId);
+    accept(frame(1), "scheduled");
+    await expect(result).resolves.toEqual({ runId: "scheduled" });
+    expectSettled(requests);
+  },
+);
+
 it("backs off repeated startup refusals without shortening server hints", async () => {
   const { requests, sender, frames, frame } = fixture();
   const result = requests.request(sender, "models.list", {}, { timeoutMs: 60_000 });

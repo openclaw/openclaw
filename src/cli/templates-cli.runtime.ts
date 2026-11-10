@@ -54,6 +54,7 @@ import {
   formatTemplateDiagnostics,
   logTemplateAgentConfiguration,
 } from "./templates-cli-output.js";
+import { captureTemplateCronOwner } from "./templates-cli.cron-owner.js";
 import type { TemplatesAddOptions, TemplatesInspectOptions } from "./templates-cli.js";
 
 type TemplateCliSkillWarning =

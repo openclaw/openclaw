@@ -185,7 +185,7 @@ export const RequestFrameSchema = closedObject({
   method: NonEmptyString,
   params: Type.Optional(Type.Unknown()),
   traceparent: Type.Optional(Type.String({ maxLength: 128 })),
-  expectedProfileId: Type.Optional(UserProfileIdSchema),
+  expectedProfileId: Type.Optional(Type.Union([UserProfileIdSchema, Type.Null()])),
 });
 
 export const ResponseFrameSchema = closedObject({
