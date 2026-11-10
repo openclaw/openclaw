@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { exportTrajectoryCommand } from "./export-trajectory.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";

@@ -5,7 +5,6 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { request } from "node:http";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   ConnectErrorDetailCodes,
@@ -18,6 +17,7 @@ import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   connectHotReloadClient,
+  createHotReloadConfigPatcher,
   waitForHotReloadFact,
   type HotReloadConnection,
 } from "./gateway-config-hot-reload-fixtures.js";
@@ -214,27 +214,7 @@ export async function proveHotReloadServicePolicy({
       assert(pid && bootId);
       const rpc = <T>(method: string, params: unknown = {}) =>
         primary.client.request<T>(method, params, { timeoutMs: 40_000 });
-      const patch = async (change: unknown) => {
-        const { hash } = await rpc<{ hash: string }>("config.get");
-        const apply = () =>
-          rpc<{ sentinel: { payload: { stats: { requiresRestart: boolean } } } }>("config.patch", {
-            baseHash: hash,
-            raw: JSON.stringify(change),
-          });
-        const result = await apply().catch(async (error: unknown) => {
-          if (
-            !(error instanceof GatewayClientRequestError) ||
-            !error.retryable ||
-            typeof error.retryAfterMs !== "number" ||
-            !error.message.startsWith("rate limit exceeded for config.patch")
-          ) {
-            throw error;
-          }
-          await delay(error.retryAfterMs);
-          return await apply();
-        });
-        assert.equal(result.sentinel.payload.stats.requiresRestart, false);
-      };
+      const patch = createHotReloadConfigPatcher(primary);
       const record = async (prefix: string, observation: string) => {
         assert.equal((await rpc<{ pid: number }>("system.info")).pid, pid);
         assert.equal(primary.hellos, 1);

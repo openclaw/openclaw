@@ -99,6 +99,32 @@ describe("ui.command gateway method", () => {
     expectRejected(result, undefined, "UNAVAILABLE");
   });
 
+  it("requires action-level support for GitHub identity settings", async () => {
+    const requester = client("older-ui");
+    const unsupported = await call(
+      { command: { kind: "agent-github-settings" } },
+      [requester],
+      requester,
+    );
+    expectRejected(unsupported, undefined, "UNAVAILABLE");
+
+    const capable = client("current-ui", GATEWAY_CLIENT_IDS.CONTROL_UI, [
+      GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+      GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS,
+    ]);
+    const supported = await call(
+      { command: { kind: "agent-github-settings" } },
+      [capable],
+      capable,
+    );
+    expect(supported.respond).toHaveBeenCalledWith(true, { ok: true });
+    expect(supported.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      "ui.command",
+      { command: { kind: "agent-github-settings" } },
+      new Set(["current-ui"]),
+    );
+  });
+
   it("navigates only the requester, even when another user and another tab share the session", async () => {
     const params = {
       command: { kind: "navigate", sessionKey: "agent:main:other" },
@@ -127,6 +153,33 @@ describe("ui.command gateway method", () => {
       new Set(["alice-tab-one"]),
     );
     expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
+  });
+
+  it("routes chat-created Template review only to its requester with the source conversation intact", async () => {
+    const requester = client("creator-tab", undefined, undefined, "creator");
+    const results = captureScreenRequests([
+      requester,
+      client("other-tab", undefined, undefined, "creator"),
+      client("bystander"),
+    ]);
+    const sessionKey = "agent:main:dashboard:template-request";
+    const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
+    const screen = createGatewayToolCallerWrapper("main", {
+      agentSessionKey: sessionKey,
+      gatewayUiCommandTarget: { connId: requester.connId!, profileId: "creator" },
+    })(createScreenTool({ agentSessionKey: sessionKey, agentId: "main" }));
+    await screen.execute("review", { action: "template_review", draftId });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.respond).toHaveBeenCalledWith(true, { ok: true });
+    expect(results[0]!.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      "ui.command",
+      {
+        command: { kind: "template-review", draftId },
+        agentId: "main",
+        sessionKey,
+      },
+      new Set(["creator-tab"]),
+    );
   });
 
   it("keeps the agent screen tool bound to its requesting browser across async execution", async () => {

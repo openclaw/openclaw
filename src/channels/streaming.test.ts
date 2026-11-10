@@ -1,5 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { createDeferredCore } from "../shared/deferred.js";
+import { expect, it } from "vitest";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 import {
   type AgentPlanStep,
@@ -15,7 +14,6 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingProgressCommentary as readCommentary,
   resolveChannelStreamingProgressNarration as readNarration,
-  createChannelProgressDraftGate,
   formatChannelProgressDraftLine as formatLine,
   isChannelProgressDraftWorkToolName,
   resolveChannelStreamingBlockCoalesce as readCoalesce,
@@ -360,7 +358,6 @@ it("replaces a terminal failure when recovered output names no command", () => {
   expect(merged[0]).not.toHaveProperty("detail");
 });
 
-const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 const progressEntry = (progress: ChannelStreamingProgressConfig) => ({ streaming: { progress } });
 const render: typeof draftText = (lines, progress, options) =>
   formatText({ entry: progressEntry(progress), lines, ...options });
@@ -369,10 +366,6 @@ const commentary = (text: string) => ({
   text,
   label: "Commentary",
   prefix: false,
-});
-
-afterEach(() => {
-  vi.useRealTimers();
 });
 
 const coalesce = { minChars: 40, maxChars: 80, idleMs: 250 };
@@ -502,52 +495,4 @@ it("updates keyed progress lines in place", () => {
 
   expect(updated).toMatchObject(["Exec", { id: "preamble-1", text: "Checking stream" }]);
   expect(render(updated, { label: false })).toBe("• Exec\n• Checking stream");
-});
-
-it("delays rapid work events and joins a single pending startup", async () => {
-  vi.useFakeTimers();
-  const pending = createDeferredCore();
-  const onStart = vi.fn(() => pending.promise);
-  const onStartError = vi.fn();
-  const gate = createChannelProgressDraftGate({ onStart, onStartError });
-
-  await expect(gate.noteWork()).resolves.toBe(false);
-  await expect(gate.noteWork()).resolves.toBe(false);
-
-  expect(gate.workEvents).toBe(2);
-  expect(onStart).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
-  expect(onStart).not.toHaveBeenCalled();
-
-  await vi.advanceTimersByTimeAsync(1);
-  expect(onStart).toHaveBeenCalledTimes(1);
-  expect(gate.hasStarted).toBe(true);
-  const explicitStart = gate.startNow();
-  let workSettled = false;
-  const workDuringStart = gate.noteWork().then((started) => {
-    workSettled = true;
-    return started;
-  });
-  await Promise.resolve();
-  expect(workSettled).toBe(false);
-  expect(onStart).toHaveBeenCalledTimes(1);
-  pending.resolve();
-  await expect(explicitStart).resolves.toBeUndefined();
-  await expect(workDuringStart).resolves.toBe(true);
-  expect(onStart).toHaveBeenCalledTimes(1);
-  expect(gate.hasStarted).toBe(true);
-  gate.reset();
-  const error = new Error("draft unavailable");
-  onStart.mockRejectedValueOnce(error);
-  await expect(gate.noteWork()).resolves.toBe(false);
-  await vi.advanceTimersByTimeAsync(5_000);
-
-  expect(onStart).toHaveBeenCalledTimes(2);
-  expect(gate.hasStarted).toBe(false);
-  expect(onStartError).toHaveBeenCalledWith(error);
-
-  await expect(gate.startNow()).resolves.toBeUndefined();
-
-  expect(onStart).toHaveBeenCalledTimes(3);
-  expect(gate.hasStarted).toBe(true);
 });

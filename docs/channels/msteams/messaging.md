@@ -128,11 +128,11 @@ Authorization headers are only attached for hosts in `channels.msteams.mediaAuth
 
 Bots can send files in DMs using the built-in FileConsentCard flow. **Sending files in group chats/channels** requires additional setup:
 
-| Context                  | How files are sent                           | Setup needed                                    |
-| ------------------------ | -------------------------------------------- | ----------------------------------------------- |
-| **DMs**                  | FileConsentCard → user accepts → bot uploads | Works out of the box                            |
-| **Group chats/channels** | Upload to SharePoint → native file card      | Requires `sharePointSiteId` + Graph permissions |
-| **Images (any context)** | Base64-encoded inline                        | Works out of the box                            |
+| Context                  | How files are sent                           | Setup needed                                              |
+| ------------------------ | -------------------------------------------- | --------------------------------------------------------- |
+| **DMs**                  | FileConsentCard → user accepts → bot uploads | Works out of the box                                      |
+| **Group chats/channels** | Upload to SharePoint → native file card      | Graph permissions; group chats require `sharePointSiteId` |
+| **Images (any context)** | Base64-encoded inline                        | Works out of the box                                      |
 
 ### Why group chats need SharePoint
 
@@ -144,6 +144,10 @@ Bots use an application identity, while Microsoft Graph's `/me` resource [requir
    - `Sites.ReadWrite.All` (Application) - upload files to SharePoint.
    - `ChatMember.Read.All` (Application) - least-privileged tenant-wide permission for group-chat file sends. `Chat.Read.All` also works and already covers this when group-chat history is enabled. As a per-chat alternative, use the `ChatMember.Read.Chat` [resource-specific consent permission](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent).
 2. **Grant admin consent** for the tenant.
+   Standard channels automatically resolve their team's SharePoint site when `sharePointSiteId` is omitted. Discovery uses `GET /groups/{groupId}/sites/root` with the existing `Sites.ReadWrite.All` grant. The channel check uses the existing `ChannelSettings.Read.Group` RSC grant from the [Teams app manifest](/channels/msteams/manifest-and-permissions#current-teams-rsc-permissions-manifest); no additional Graph permissions are required. Site IDs are cached per account, tenant, bot, and team, up to 500 entries, and refreshed on restart.
+
+Group chats and private/shared channels require an explicit site. An explicit `sharePointSiteId` always takes precedence; choose a site whose membership includes the intended recipients. To configure one:
+
 3. **Get your SharePoint site ID:**
 
    ```bash
@@ -183,14 +187,15 @@ Per-user sharing is more secure since only chat participants can access the file
 
 ### Fallback behavior
 
-| Scenario                                                         | Result                                           |
-| ---------------------------------------------------------------- | ------------------------------------------------ |
-| Group chat + file + SharePoint and member permissions configured | Upload to SharePoint, send a native file card    |
-| Group chat + file + missing SharePoint or member permissions     | Fail with an actionable configuration error      |
-| Channel + file + `sharePointSiteId` configured                   | Upload to SharePoint, send a native file card    |
-| Personal chat + file                                             | FileConsentCard flow (works without SharePoint)  |
-| Any context + image                                              | Base64-encoded inline (works without SharePoint) |
+| Scenario                                                         | Result                                            |
+| ---------------------------------------------------------------- | ------------------------------------------------- |
+| Group chat + file + SharePoint and member permissions configured | Upload to SharePoint, send a native file card     |
+| Group chat + file + missing SharePoint or member permissions     | Fail with an actionable configuration error       |
+| Standard channel + file + no `sharePointSiteId`                  | Resolve the team site and send a native file card |
+| Channel + file + `sharePointSiteId` configured                   | Upload to SharePoint, send a native file card     |
+| Personal chat + file                                             | FileConsentCard flow (works without SharePoint)   |
+| Any context + image                                              | Base64-encoded inline (works without SharePoint)  |
 
 ### Files stored location
 
-Uploaded files are stored in a `/OpenClawShared/` folder in the configured SharePoint site's default document library.
+Uploaded files are stored in a `/OpenClawShared/` folder in the resolved or configured SharePoint site's default document library.

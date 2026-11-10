@@ -183,7 +183,7 @@ it("retains chart bars across conversation changes and updates chart modes", asy
     current.forEach((bar, index) => expect(bar).toBe(bars[index]));
   };
 
-  usageButton(page, "Expand All", ".session-logs-header button").click();
+  usageButton(page, "Expand all", ".session-logs-header button").click();
   await page.updateComplete;
   expect(
     [...page.querySelectorAll<HTMLDetailsElement>(".session-log-tools")].every(
@@ -208,7 +208,7 @@ it("retains chart bars across conversation changes and updates chart modes", asy
   await page.updateComplete;
   expect(page.querySelectorAll(".ts-bar")[2]?.getAttribute("aria-label")).toContain("300 tokens");
   expect(page.querySelector(".ts-bar.usage-token-input")).toBeNull();
-  usageButton(page, "Per Turn", ".timeseries-controls button").click();
+  usageButton(page, "Per reply", ".timeseries-controls button").click();
   await page.updateComplete;
   expect(page.querySelectorAll(".ts-bar")[2]?.getAttribute("aria-label")).toContain("100 tokens");
   expect(page.querySelectorAll(".ts-bar.usage-token-input")).toHaveLength(3);

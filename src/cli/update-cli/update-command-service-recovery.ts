@@ -507,6 +507,16 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       await before.windowsTaskAutoStartRecovery?.restore(true, checkOriginal, assertOriginal);
       await checkOriginal();
     } else {
+      // Final recovery may be the first admitted activation after verification
+      // failed. Restore the task under the same ownership guard before /Run.
+      await before.windowsTaskAutoStartRecovery?.restore(
+        true,
+        async () => {
+          await readCurrentService();
+        },
+        assertCurrent,
+      );
+      assertCurrent();
       await runUpdatedInstallGatewayCommand(
         {
           onGatewayStartAttempted: params.onGatewayStartAttempted,

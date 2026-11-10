@@ -245,12 +245,20 @@ final class GatewayProcessManager {
             do {
                 _ = try GatewayEndpointStore.localEndpoint(
                     hostingBesideRemotePrimary: self.hostsLocalGatewayWithRemotePrimary)
-            } catch {
+            } catch let error as GatewayEndpointStore.LocalPortConflict {
                 let conflict = error.localizedDescription
                 if self.desiredActive { self.stop() }
                 self.desiredActive = false
                 self.recordProfilePortConflict(conflict)
                 Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(conflict) }
+                return
+            } catch {
+                // Configuration can recover from a file edit. Only an ownership
+                // conflict may latch endpoint unavailability and withdraw activation intent.
+                if self.desiredActive { self.stop(preservingActivationIntent: true) }
+                self.desiredActive = true
+                self.fail(error.localizedDescription)
+                Task { await GatewayEndpointStore.shared.refresh() }
                 return
             }
         }
@@ -383,16 +391,18 @@ final class GatewayProcessManager {
         if let restoration = request.serviceForRestoration {
             let cli = restoration.retained
             do { try await request.mutationCheck?() } catch { return .failed(error.localizedDescription) }
-            guard self.isCurrentGatewayStart(request.generation), let bun = cli.prefix.first else { return .skipped }
-            let runtime = BundledRuntime(root: URL(fileURLWithPath: bun)
-                .deletingLastPathComponent().deletingLastPathComponent())
+            guard self.isCurrentGatewayStart(request.generation), let bun = cli.prefix.first,
+                  let runtime = cli.prefix.last.flatMap(BundledRuntime.init(serviceEntrypoint:))
+            else { return .skipped }
+            // Restoration keeps the retained executable; only the stable path needs this build's Bun.
             error = await GatewayLaunchAgentManager.runDaemonCommand(
                 GatewayLaunchAgentManager.installArguments(
                     port: request.port,
                     allowUnconfigured: request.allowUnconfigured,
-                    runtime: runtime,
-                    launchAgentExists: false),
+                    runtime: nil,
+                    launchAgentExists: false) + ["--runtime", "bun", "--runtime-path", bun],
                 runtime: restoration.installer,
+                serviceRuntime: bun == runtime.serviceBun.path ? runtime : nil,
                 restoring: cli,
                 expectedServiceAuthority: request.expectedServiceAuthority,
                 checkCurrent: request.mutationCheck)

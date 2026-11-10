@@ -18,6 +18,7 @@ const queueSubmission = {
   response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
 };
 const videoUrl = "https://fal.run/files/video.mp4";
+const rawVideoUrl = "https://fal.run/files/raw-output.mp4";
 const referenceModel = "bytedance/seedance-2.0/fast/reference-to-video";
 const mediaCap = { agents: { defaults: { mediaMaxMb: 0.000001 } } };
 const references = (kind: string, count: number) =>
@@ -151,22 +152,46 @@ describe("fal video generation provider", () => {
     fetchGuardMock.mockReset();
   });
 
-  it("parses raw fal queue result payloads with top-level video output", async () => {
-    const prompt = "A calm harbor at sunrise";
-    mockQueueResult({
-      video: { url: "https://fal.run/files/raw-output.mp4" },
-      prompt,
-      seed: 443600358,
-    });
+  it.each([
+    {
+      shape: "top-level video",
+      payload: { video: { url: rawVideoUrl }, prompt: "A calm harbor at sunrise", seed: 443600358 },
+    },
+    {
+      shape: "top-level videos",
+      payload: {
+        video: {},
+        videos: [{}, { url: rawVideoUrl }],
+        prompt: "A calm harbor at sunrise",
+        seed: 443600358,
+      },
+    },
+    {
+      shape: "response envelope with competing top-level output",
+      payload: {
+        video: { url: "https://fal.run/files/ignored-raw.mp4" },
+        prompt: "Ignored outer prompt",
+        seed: 1,
+        response: {
+          video: { url: rawVideoUrl },
+          videos: [{ url: "https://fal.run/files/ignored-list.mp4" }],
+          prompt: "A calm harbor at sunrise",
+          seed: 443600358,
+        },
+      },
+    },
+  ])("parses completed fal queue results with $shape", async ({ payload }) => {
+    mockQueueResult(payload);
     fetchGuardMock.mockResolvedValueOnce(releasedVideo());
 
-    const result = await generateVideo({
-      model: "fal-ai/wan/v2.2-a14b/image-to-video",
-      prompt,
-    });
+    const result = await generateVideo({ model: "fal-ai/wan/v2.2-a14b/image-to-video" });
 
-    expect(result.videos[0]?.url).toBe("https://fal.run/files/raw-output.mp4");
-    expect(result.metadata).toEqual({ requestId: "req-123", prompt, seed: 443600358 });
+    expect(result.videos[0]?.url).toBe(rawVideoUrl);
+    expect(result.metadata).toEqual({
+      requestId: "req-123",
+      prompt: "A calm harbor at sunrise",
+      seed: 443600358,
+    });
   });
 
   it("returns URL-only videos when generated video downloads exceed the configured media cap", async () => {
@@ -244,10 +269,17 @@ describe("fal video generation provider", () => {
     expect(fetchGuardMock).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects malformed fal completed result payloads", async () => {
-    mockQueueResult({ status: "COMPLETED", response: [] });
+  it.each([
+    [{ status: "COMPLETED", response: [], video: { url: videoUrl } }, "malformed"],
+    [{ videos: [null] }, "malformed"],
+    [{ error: "invalid queue error" }, "malformed"],
+    [{}, "missing output URL"],
+    [{ response: {} }, "missing output URL"],
+  ])("rejects unusable fal completed results %j", async (payload, detail) => {
+    mockQueueResult(payload);
 
-    await expect(generateVideo()).rejects.toThrow("fal video generation response malformed");
+    await expect(generateVideo()).rejects.toThrow(`fal video generation response ${detail}`);
+    expect(fetchGuardMock).toHaveBeenCalledTimes(3);
   });
 
   it("drops unsupported Seedance 2 duration values before queue submission", async () => {

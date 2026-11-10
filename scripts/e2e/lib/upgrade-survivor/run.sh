@@ -584,7 +584,7 @@ trap 'on_signal SIGINT 130' INT
 trap 'on_signal SIGTERM 143' TERM
 
 phase() {
-  local name="$1" phase_status previous_phase="$CURRENT_PHASE"
+  local name="$1" phase_status previous_phase="$CURRENT_PHASE" phase_started="$SECONDS"
   shift
   CURRENT_PHASE="$name"
   echo "==> upgrade-survivor:$name" >&3
@@ -592,6 +592,8 @@ phase() {
   "$@"
   phase_status=$?
   [ "$phase_status" -eq 0 ] || return "$phase_status"
+  # Timed-out containers lose phases.jsonl; the streamed log keeps the budget breakdown.
+  echo "==> upgrade-survivor:$name passed $((SECONDS - phase_started))s (total ${SECONDS}s)" >&3
   json_event "$name" passed
   CURRENT_PHASE="$previous_phase"
 }
@@ -692,13 +694,39 @@ wait_for_fixture_port() {
 configure_clawhub_fixture() {
   unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
   [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] && return 0
-  local fixture_root="$ARTIFACT_ROOT/clawhub-fixture" port_file log_file
+  local stage="${1:-candidate}" manifest="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json"
+  local fixture_root="$ARTIFACT_ROOT/clawhub-fixture" port_file log_file port=0
   port_file="$fixture_root/port"
-  log_file="$fixture_root/server.log"
+  log_file="$fixture_root/$stage-server.log"
+  if [ -n "$clawhub_fixture_pid" ]; then
+    # Recorded ClawHub sources retain this URL across the baseline/candidate handoff.
+    port="$(cat "$port_file")"
+    node --input-type=module - "http://127.0.0.1:$port" "$fixture_root/requests-baseline.json" <<'NODE'
+import fs from "node:fs";
+const response = await fetch(new URL("/__fixture__/requests", process.argv[2]));
+if (!response.ok) throw new Error(`ClawHub fixture ledger HTTP ${response.status}`);
+fs.writeFileSync(process.argv[3], `${JSON.stringify(await response.json(), null, 2)}\n`);
+NODE
+    openclaw_e2e_stop_process "$clawhub_fixture_pid"
+  fi
+  if [ "$stage" = "baseline" ]; then
+    [ -n "$baseline_plugin_tarball" ] || return 0
+    manifest="$(dirname "$baseline_plugin_tarball")/clawhub-baseline.json"
+    node --input-type=module - "$baseline_plugin_tarball" "$baseline_plugin_version" "$manifest" <<'NODE'
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+const [archive, version, manifest] = process.argv.slice(2);
+fs.writeFileSync(manifest, `${JSON.stringify({ packages: [{
+  name: "@openclaw/discord", version, tarball: path.basename(archive),
+  sha256: createHash("sha256").update(fs.readFileSync(archive)).digest("hex"),
+}] }, null, 2)}\n`);
+NODE
+  fi
   mkdir -p "$fixture_root" && rm -f "$port_file"
   node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
     prepublish-artifacts "$port_file" \
-    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json" >"$log_file" 2>&1 &
+    "$manifest" "$port" >"$log_file" 2>&1 &
   clawhub_fixture_pid="$!"
   wait_for_fixture_port "$clawhub_fixture_pid" "$port_file" "$log_file" "ClawHub fixture"
   export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
@@ -876,6 +904,9 @@ NODE
     plugin_registry_pid \
     ${registry_args[@]+"${registry_args[@]}"} || return "$?"
   candidate_selector_registry="$selector_registry"
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    configure_clawhub_fixture "$stage"
+  fi
 }
 
 seed_legacy_runtime_deps_symlink() {
@@ -1687,6 +1718,9 @@ update_candidate() {
   # classifying the result; an unreadable package must not retain the baseline.
   installed_version="$(read_installed_version)" || installed_version=""
   update_exit_code="$update_status"
+  node -e 'const steps = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).steps ?? [];
+    console.log(`update steps: ${steps.map((s) => `${s.name}=${Math.round(s.durationMs / 1000)}s`).join(", ")}`);' \
+    "$update_json" >&3 2>/dev/null || true
   # A nonzero command never runs the JSON assertion and must not be labeled as one.
   if [ "$after_repair" = "1" ] && [ "$update_status" -eq 0 ]; then
     CURRENT_PHASE="recovery-update-result-assertion"
@@ -2751,7 +2785,7 @@ if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$baseline_version" = "2026.9.
   phase prepare-native-assignment-proof prepare_native_assignment_proof
 fi
 if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ] &&
-  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ]; }; then
+  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "legacy-operator-state" ]; }; then
   phase candidate-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
     candidate "$(package_root)" "$CANDIDATE_SPEC"
 fi
@@ -2762,6 +2796,7 @@ if [ "$SCENARIO" = "missing-configured-plugin-migration" ]; then
   exit 0
 fi
 if companion_survivor_scenario || [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # Legacy binds ClawHub after acquiring the independent published companion.
   unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
 else
   phase configure-clawhub-fixture configure_clawhub_fixture
@@ -2874,7 +2909,7 @@ if [ "$native_assignment_enabled" = "1" ]; then
   phase assert-native-assignment-first-hop node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs post-update "$candidate_version"
 fi
 if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ] &&
-  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ]; }; then
+  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "legacy-operator-state" ]; }; then
   phase installed-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
     installed "$(package_root)" "$CANDIDATE_SPEC"
 fi

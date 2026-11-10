@@ -12,6 +12,9 @@ import type { CachedGitHubIdentity, CachedGitHubIdentityBinding } from "./user-p
 
 type ProfileReadOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
 
+/** A profile merge or identity change raced a disclosure read; a fresh read can succeed. */
+export class UserProfileDisclosureChangedError extends Error {}
+
 /** Fresh identity snapshots avoid foreign-process catalog reuse; local mutations fence consumption. */
 export async function prepareCurrentUserProfileIdentity(
   profileId: string,
@@ -29,7 +32,9 @@ export async function prepareCurrentUserProfileIdentity(
   const isCurrent = authority.bind([profileId, profile?.profileId ?? profileId]);
   const assertCurrent = () => {
     if (!isCurrent?.()) {
-      throw new Error("Profile identity changed while preparing disclosure. Retry the request.");
+      throw new UserProfileDisclosureChangedError(
+        "Profile identity changed while preparing disclosure. Retry the request.",
+      );
     }
   };
   assertCurrent();
@@ -56,7 +61,9 @@ export async function prepareCurrentUserProfileAliases(
   const isCurrent = authority.bind([profileId, profile?.profileId ?? profileId]);
   const assertCurrent = () => {
     if (!isCurrent?.()) {
-      throw new Error("Profile aliases changed while preparing disclosure. Retry the request.");
+      throw new UserProfileDisclosureChangedError(
+        "Profile aliases changed while preparing disclosure. Retry the request.",
+      );
     }
   };
   assertCurrent();

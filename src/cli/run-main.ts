@@ -606,7 +606,7 @@ async function resolveExpectedPluginPolicyError(params: {
   if (!message) {
     return undefined;
   }
-  const { ExpectedCliError } = await import("./failure-output.js");
+  const { ExpectedCliError } = await import("./expected-cli-error.js");
   return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
 
@@ -635,16 +635,18 @@ export async function runCli(
           try {
             const invokeCommand = () =>
               withGatewayServiceInstallation(serviceInstallation, () =>
-                runCliWithPreparedOutputMode(originalArgv, {
-                  ...options,
-                  runtimeRecoveryEnv,
-                  builtInMachineOutput,
-                  harnessCleanup,
-                  serviceInstallation,
-                  onGatewayResourcesSettled: (outcome) => {
-                    gatewayCleanup = outcome;
-                  },
-                }),
+                withSnapshotReuseForMaintenance(originalInvocation.primary, () =>
+                  runCliWithPreparedOutputMode(originalArgv, {
+                    ...options,
+                    runtimeRecoveryEnv,
+                    builtInMachineOutput,
+                    harnessCleanup,
+                    serviceInstallation,
+                    onGatewayResourcesSettled: (outcome) => {
+                      gatewayCleanup = outcome;
+                    },
+                  }),
+                ),
               );
             const resources = harnessCleanup?.pluginResources;
             return await (resources ? resources.run(invokeCommand) : invokeCommand());
@@ -691,6 +693,17 @@ export async function runCli(
     ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
     ? await withDeferredDebugProxyCapture(invoke)
     : await invoke();
+}
+
+async function withSnapshotReuseForMaintenance<T>(
+  primary: string | null | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (primary !== "doctor" && primary !== "update") {
+    return run();
+  }
+  const { withSqliteSnapshotReuse } = await import("../infra/sqlite-snapshot-reuse.js");
+  return withSqliteSnapshotReuse(run);
 }
 
 async function runCliWithPreparedOutputMode(

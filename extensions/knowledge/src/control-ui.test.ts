@@ -22,18 +22,20 @@ const answers: Record<string, unknown> = {
 function mount(held: string[] = [], failing: string[] = []) {
   const calls: string[] = [];
   const gates = new Map(held.map((name) => [name, Promise.withResolvers<void>()]));
-  const request = vi.fn(async (method: string, params?: { actionId?: string }) => {
-    const name = method === "cron.list" ? "scribes" : (params?.actionId ?? method);
-    calls.push(name);
-    await gates.get(name)?.promise;
-    gates.delete(name);
-    if (method !== "plugins.sessionAction") {
-      return method === "cron.list" ? { jobs: [] } : { sessions: [] };
-    }
-    return name in answers && !failing.includes(name)
-      ? { ok: true, result: answers[name] }
-      : { ok: false, error: `${name} failed` };
-  });
+  const request = vi.fn(
+    async (method: string, params?: { actionId?: string; payload?: unknown }) => {
+      const name = method === "cron.list" ? "scribes" : (params?.actionId ?? method);
+      calls.push(name);
+      await gates.get(name)?.promise;
+      gates.delete(name);
+      if (method !== "plugins.sessionAction") {
+        return method === "cron.list" ? { jobs: [] } : { sessions: [] };
+      }
+      return name in answers && !failing.includes(name)
+        ? { ok: true, result: answers[name] }
+        : { ok: false, error: `${name} failed` };
+    },
+  );
   const registerPage = vi.fn<(page: UI.ControlUiPage) => () => void>(() => () => {});
   const controller = new AbortController();
   const host = {
@@ -62,7 +64,7 @@ function mount(held: string[] = [], failing: string[] = []) {
     document.body.replaceChildren();
   });
   const release = (name: string) => gates.get(name)?.resolve();
-  return { calls, release, gates };
+  return { calls, release, gates, request };
 }
 
 const $ = (selector: string) => document.querySelector<HTMLElement>(selector);
@@ -74,8 +76,11 @@ const shows = (text: string) =>
   vi.waitFor(() => expect($(".knowledge-content")!.textContent).toContain(text));
 
 it("checks status beside store facts and shows both tab counts at once", async () => {
-  const { calls, release } = mount(["stores_snapshot", "status", "scribes"]);
+  const { calls, release, request } = mount(["stores_snapshot", "status", "scribes"]);
   await vi.waitFor(() => expect(calls.toSorted()).toEqual(["status", "stores_snapshot"]));
+  expect(
+    request.mock.calls.find(([, params]) => params?.actionId === "stores_snapshot")?.[1]?.payload,
+  ).toEqual({ includeRecordCounts: false });
   expect($(".knowledge-status")!.hidden).toBe(true);
   expect($(".knowledge-copy-pending")).not.toBeNull();
   release("stores_snapshot");
@@ -116,4 +121,47 @@ it("gives Browse its page types before the Scribes count arrives", async () => {
   tab("Browse").click();
   await shows("Nothing here yet");
   expect($('[data-facet="person"]')).not.toBeNull();
+});
+
+it("lets Browse follow every returned page beyond offset 500", async () => {
+  const { request } = mount();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (method, params) => {
+    if (method !== "plugins.sessionAction" || params?.actionId !== "records") {
+      return original(method, params);
+    }
+    const { offset = 0 } = params.payload as { offset?: number };
+    const count = Math.min(50, 551 - offset);
+    return {
+      ok: true,
+      result: {
+        records: Array.from({ length: count }, (_, index) => ({
+          id: `project_${offset + index}`,
+          lifecycle: "active",
+          title: `Fictional project ${offset + index}`,
+          kind: "page",
+          type: "project",
+        })),
+        total: 551,
+        offset,
+        nextOffset: offset + count < 551 ? offset + count : null,
+      },
+    };
+  });
+  await shows("No recent activity");
+  tab("Browse").click();
+  const next = () =>
+    [...document.querySelectorAll<HTMLButtonElement>(".knowledge-pagination button")].find(
+      (button) => button.textContent === "Next",
+    )!;
+  for (let offset = 0; offset <= 550; offset += 50) {
+    await shows(`${offset + 1}–${Math.min(offset + 50, 551)} of 551`);
+    expect(next().disabled).toBe(offset === 550);
+    if (offset < 550) {
+      next().click();
+    }
+  }
+  expect($(".knowledge-content")!.textContent).toContain("Fictional project 550");
+  expect($(".knowledge-pagination")!.textContent).toContain("complete list");
+  expect($(".knowledge-content")!.textContent).not.toContain("cannot page beyond");
 });

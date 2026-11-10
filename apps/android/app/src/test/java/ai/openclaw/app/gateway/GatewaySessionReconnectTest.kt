@@ -966,6 +966,95 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun pairingChangedCloseAutomaticallyReauthenticatesWithoutReplayingRejectedEvent() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val ready = Channel<GatewaySession.RequestLease>(Channel.UNLIMITED)
+      val disconnected = CompletableDeferred<Pair<Boolean, Boolean>>()
+      val originalLease = AtomicReference<GatewaySession.RequestLease>()
+      val eventCount = AtomicInteger()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          when (method) {
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+            }
+
+            "node.event" -> {
+              if (eventCount.incrementAndGet() == 1) {
+                webSocket.send(
+                  """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"node pairing changed; reconnect","details":{"code":"PAIRING_CHANGED"}}}""",
+                )
+                webSocket.close(4001, "node pairing changed; reconnect")
+              } else {
+                webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
+              }
+            }
+          }
+        }
+      lateinit var session: GatewaySession
+      val harness =
+        createReconnectHarness(
+          onDisconnected = {
+            originalLease.get()?.let { lease ->
+              disconnected.complete(session.isReady() to lease.isCurrent())
+            }
+          },
+        )
+      session = harness.session
+
+      try {
+        connectSession(session, server.port, onReady = {
+          ready.trySend(requireNotNull(session.captureRequestLease()))
+        })
+        originalLease.set(withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() })
+        val rejected = session.sendNodeEventDetailedForEndpoint(null, "node.host.stats", """{"cpuCount":4,"memoryTotalBytes":8192,"memoryFreeBytes":1024}""")
+        assertFalse(rejected.ok)
+        assertEquals("UNAVAILABLE", rejected.error?.code)
+        assertEquals("PAIRING_CHANGED", rejected.error?.details?.code)
+        assertEquals(false to false, withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { disconnected.await() })
+        val replacement = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        assertFalse(originalLease.get().isCurrent())
+        assertTrue(replacement.isCurrent())
+        assertTrue(session.isReady())
+        assertTrue(session.sendNodeEventDetailedForEndpoint(null, "node.host.stats", """{"cpuCount":4,"memoryTotalBytes":8192,"memoryFreeBytes":6144}""").ok)
+
+        val handshakes = server.requestFrames.filter { it["method"]?.jsonPrimitive?.content == "connect" }
+        assertEquals(2, handshakes.size)
+        val devices =
+          handshakes.map {
+            it
+              .getValue("params")
+              .jsonObject
+              .getValue("device")
+              .jsonObject
+          }
+        assertEquals(devices[0].getValue("id"), devices[1].getValue("id"))
+        devices.forEach {
+          assertTrue(
+            it
+              .getValue("signature")
+              .jsonPrimitive.content
+              .isNotBlank(),
+          )
+        }
+        val events = server.requestFrames.filter { it["method"]?.jsonPrimitive?.content == "node.event" }
+        assertEquals(
+          listOf("""{"cpuCount":4,"memoryTotalBytes":8192,"memoryFreeBytes":1024}""", """{"cpuCount":4,"memoryTotalBytes":8192,"memoryFreeBytes":6144}"""),
+          events.map {
+            it
+              .getValue("params")
+              .jsonObject
+              .getValue("payloadJSON")
+              .jsonPrimitive.content
+          },
+        )
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun capturedRequestLeaseRejectsReplacementSocketBeforeEnqueue() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }

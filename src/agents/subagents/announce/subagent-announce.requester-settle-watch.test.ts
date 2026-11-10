@@ -57,6 +57,8 @@ describe("requester settle watch admission", () => {
     const context = createContext();
     context.agentDatabaseStartup = {
       hasPendingAgents: true,
+      registerInputRecovery: () => {},
+      isAgentInputRecoveryPending: () => false,
       waitForAgentPreparation: (agentId) => {
         expect(agentId).toBe("main");
         preparationObserved.resolve();

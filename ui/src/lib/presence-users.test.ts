@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   hasSessionPresenceViewers,
   presenceUserLabel,
+  profilePresenceViewer,
   presenceViewerActivity,
   projectOnlinePresenceViewers,
   projectPresencePayload,
@@ -14,8 +15,9 @@ it.each([
   [{ id: "gateway-owner", name: "  " }, "Shared owner", true],
   [{ id: "gateway-owner", email: "shared@example.test" }, "Shared owner", true],
   [{ id: "person", name: "Example person", email: "person@example.test" }, "Example person", false],
-  [{ id: "person", email: "person@example.test" }, "person@example.test", false],
-  [{ id: "person" }, "person", false],
+  [{ id: "person", email: "person@example.test" }, "Person", false],
+  [{ id: "person@example.test", email: "person@example.test" }, "Person", false],
+  [{ id: "person" }, "Person", false],
 ] as const)(
   "labels presence without presenting the shared identity as a person: %j",
   (user, name, isSharedOwner) => {
@@ -135,4 +137,29 @@ it("ages person interaction independently of connection beacons and native input
   expect(activity(at(119_999))).toBe("active");
   expect(activity(at(600_000), at(5_000), { ts: now })).toBe("active");
   expect(activity(at(600_000), { ...at(0), reason: "disconnect" })).toBe("idle");
+});
+
+it.each([
+  { id: "person", login: "octocat", name: "octocat" },
+  { id: "person", login: null, name: "Person person" },
+  { id: "gateway-owner", login: null, name: undefined },
+])("uses one person identity for offline People ($id, $login)", ({ id, login, name }) => {
+  const person = profilePresenceViewer({
+    id,
+    displayName: null,
+    avatarMime: null,
+    hasAvatar: false,
+    githubIdentity: login
+      ? {
+          login,
+          profileUrl: "https://github.com/octocat",
+          avatarUrl: "https://avatars.githubusercontent.com/u/42?v=4",
+        }
+      : null,
+    emails: [],
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  expect(person).toMatchObject({ name, avatarUrl: "/api/users/" + id + "/avatar?v=1" });
 });

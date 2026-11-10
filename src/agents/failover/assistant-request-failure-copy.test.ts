@@ -22,6 +22,23 @@ describe("renderAssistantRequestFailureCopy", () => {
     formatUserFacingAssistantErrorText(assistant),
     renderRecordedAssistantFailureCopy(assistant),
   ];
+  it("preserves safe expired-key recovery in terminal output and history", () => {
+    const raw = "401 PRIVATE_PROVIDER_DETAIL Authorization: Bearer synthetic-secret-canary";
+    const expiredKeyCopy =
+      "⚠️ This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key.";
+    expectBoth(expiredKeyCopy, {
+      provider: "opencode",
+      stopReason: "error",
+      errorCode: "api_key_expired",
+      errorType: "authentication_error",
+      errorMessage: raw,
+      errorBody: JSON.stringify({ error: { code: "api_key_expired", message: raw } }),
+    });
+    expect(renderRecordedAssistantFailureCopy({ errorMessage: expiredKeyCopy })).toBe(
+      expiredKeyCopy,
+    );
+  });
+
   const loading = (fields: Parameters<typeof makeAssistant>[0]) =>
     makeAssistant({
       errorCode: "model_load_failed",
@@ -39,6 +56,13 @@ describe("renderAssistantRequestFailureCopy", () => {
     const errorMessage = message + " | INVALID_REQUEST";
     expectBoth(`⚠️ ${message}`, { errorMessage, errorCode: "INVALID_REQUEST" });
     expect(isAuthErrorMessage(errorMessage)).toBe(false);
+  });
+
+  it("keeps structured failure guidance when error text is missing", () => {
+    expect(renderRecordedAssistantFailureCopy({ errorCode: "context_overflow" })).toBe(
+      "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+    );
+    expect(renderRecordedAssistantFailureCopy({})).toBeUndefined();
   });
 
   it.each([

@@ -98,12 +98,14 @@ export async function readUpdateStoreSchemaVersion(
   file: string,
   input: StateInput & { stagingRoot?: string; preserveSourceArtifacts?: boolean },
 ): Promise<{ userVersion: number }> {
-  const { inspectSqliteSchemaHeaderInProcess } = await import("./sqlite-readonly-location.js");
+  const { inspectSqliteSchemaHeaderInProcess } =
+    await import("./sqlite-schema-header-inspection.js");
   const { userVersion } = await inspectSqliteSchemaHeaderInProcess(
     file,
     input.stagingRoot,
     undefined,
     input.preserveSourceArtifacts,
+    { cleanupFailure: "warn" },
   );
   if (userVersion === 0) {
     const { readBackupEngine } = await import("./database-engine/physical-store.js");
@@ -123,7 +125,7 @@ export async function collectSupplementalStateDatabasePaths(
   const knownRealpaths = new Set(
     await Promise.all([...files.keys()].map((file) => fs.realpath(file).catch(ignoreMissingPath))),
   );
-  // The private snapshot below owns registry reads, including legacy schemas.
+  // The caller owns registry reads, including legacy schemas.
   // Include declared retained plugin databases on either physical engine here.
   // Prepared lists, including [], already own discovery; workers must not reload its graph.
   const additionalPaths =

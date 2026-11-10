@@ -66,7 +66,7 @@ describe("bounded remote workspace files", () => {
     const f = fixture();
     const file = path.join(f.workspaceRoot, "oversized.txt");
     await fs.writeFile(file, "too many bytes");
-    await expect(f.read({ path: file, maxBytes: 3 })).rejects.toThrow("limit of 3 bytes");
+    await expect(f.read({ path: file, maxBytes: 3 })).rejects.toMatchObject({ code: "too-large" });
   });
 
   it.each(["leaf", "parent"] as const)(

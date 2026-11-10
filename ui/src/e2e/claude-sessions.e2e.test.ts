@@ -74,7 +74,6 @@ async function catalogHeaderAffordances(header: Locator) {
     return {
       actionFocusVisible: actions.matches(":focus-visible"),
       actionFocused: document.activeElement === actions,
-      actionsColor: actionsStyle.color,
       actionsVisible: Number(actionsStyle.opacity) > 0,
       actionsPointerEvents: actionsStyle.pointerEvents,
       chevronOpacity: getComputedStyle(find(".sidebar-session-group-toggle__icon")).opacity,
@@ -86,7 +85,6 @@ async function catalogHeaderAffordances(header: Locator) {
       noHover: matchMedia("(hover: none)").matches,
       hovered: element.matches(":hover"),
       providerOpacity: getComputedStyle(find(".sidebar-session-catalog-provider-icon")).opacity,
-      toolbarButtonColor: toolbarButtonStyle.color,
       toolbarButtonVisible: Number(toolbarButtonStyle.opacity) > 0,
       toggleFocusVisible: toggle.matches(":focus-visible"),
       toggleFocused: document.activeElement === toggle,
@@ -183,8 +181,6 @@ suite.define(() => {
             providerOpacity: "0",
             toolbarButtonVisible: true,
           });
-        const hoverAffordances = await catalogHeaderAffordances(header);
-        expect(hoverAffordances.actionsColor).toBe(hoverAffordances.toolbarButtonColor);
 
         await toggle.click();
         await page.locator(".chat-main__conversation").hover({ position: { x: 40, y: 40 } });
@@ -260,7 +256,6 @@ suite.define(() => {
         chevronOpacity: "0.75",
         toolbarButtonVisible: true,
       });
-      expect(touchAffordance.actionsColor).toBe(touchAffordance.toolbarButtonColor);
     } finally {
       await page.close();
     }

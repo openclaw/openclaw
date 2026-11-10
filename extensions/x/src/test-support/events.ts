@@ -27,7 +27,10 @@ export function budgetApi(
       }
       if (url.pathname.endsWith("/subscriptions")) {
         return Response.json({
-          data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
+          data: ["post.mention.create", "post.reply.create"].map((event_type) => ({
+            event_type,
+            filter: { user_id: "9" },
+          })),
         });
       }
       return respond(url, init);

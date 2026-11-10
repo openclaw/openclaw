@@ -20,6 +20,18 @@ import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
 import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
 import {
+  MAX_TOOL_SEARCH_BATCH_QUERIES,
+  MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
+  MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
+  MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
+  MAX_TOOL_SEARCH_RESULTS,
+  TOOL_CALL_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
+  TOOL_SEARCH_RAW_TOOL_NAME,
+  type ToolSearchMode,
+} from "./tool-search-protocol.js";
+import {
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
   readToolSearchId,
@@ -30,20 +42,7 @@ import {
   formatToolSearchControlResult,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
-import {
-  MAX_TOOL_SEARCH_BATCH_QUERIES,
-  MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
-  MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
-  MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
-  MAX_TOOL_SEARCH_RESULTS,
-  TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  type ToolSearchCatalogRef,
-  type ToolSearchMode,
-  type ToolSearchToolContext,
-} from "./tool-search-types.js";
+import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
 import { textResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 export {
@@ -62,12 +61,12 @@ export {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
-} from "./tool-search-types.js";
+} from "./tool-search-protocol.js";
+export type { ToolSearchConfig } from "./tool-search-protocol.js";
 export type {
   ToolSearchCatalogEntry,
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
-  ToolSearchConfig,
   ToolSearchToolContext,
 } from "./tool-search-types.js";
 
@@ -384,10 +383,12 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           }
           // Invocation results need identity, not another copy of the discovery metadata.
           // Keep the full target result in details; forward its already-projected images as content.
+          // Compact: indenting would escape and re-indent target text the model already reads,
+          // spending the shared output cap on whitespace.
           const controlResult = formatToolSearchControlResult(
             { tool: { id, name, source }, result: modelResult },
             runtime,
-            { parentToolCallId: toolCallId, images },
+            { parentToolCallId: toolCallId, images, compact: true },
           );
           const failureKind = resolveToolResultFailureKind(callResult.result);
           // Keep the model-visible `{ tool, result }` envelope stable while the

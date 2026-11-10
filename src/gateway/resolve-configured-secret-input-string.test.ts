@@ -61,66 +61,53 @@ async function createWindowsAclUnavailableConfig() {
 }
 
 describe("resolveCanonicalConfiguredSecretInputWithFallback", () => {
-  it("returns plaintext config value when present", async () => {
+  it.each([
+    [
+      "returns plaintext config value when present",
+      {
+        value: "config-token",
+        env: {},
+        fallback: "env-token",
+        expected: { value: "config-token", source: "config", secretRefConfigured: false },
+      },
+    ],
+    [
+      "ignores blank fallback values when no SecretRef is configured",
+      {
+        value: "",
+        env: {},
+        fallback: "   ",
+        expected: { secretRefConfigured: false },
+      },
+    ],
+    [
+      "normalizes fallback values when no SecretRef is configured",
+      {
+        value: "",
+        env: {},
+        fallback: "  env-token  ",
+        expected: { value: "env-token", source: "fallback", secretRefConfigured: false },
+      },
+    ],
+    [
+      "returns resolved SecretRef value with fallback metadata",
+      {
+        value: "${CUSTOM_GATEWAY_TOKEN}",
+        env: { CUSTOM_GATEWAY_TOKEN: "resolved-token" },
+        fallback: undefined,
+        expected: { value: "resolved-token", source: "secretRef", secretRefConfigured: true },
+      },
+    ],
+  ] as const)("%s", async (_name, { value, env, fallback, expected }) => {
     const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
-      config: createConfig("config-token"),
-      env: {} as NodeJS.ProcessEnv,
-      value: "config-token",
+      config: createConfig(value),
+      env: { ...env } as NodeJS.ProcessEnv,
+      value,
       path: "gateway.auth.token",
-      readFallback: () => "env-token",
+      readFallback: () => fallback,
     });
 
-    expect(resolved).toEqual({
-      value: "config-token",
-      source: "config",
-      secretRefConfigured: false,
-    });
-  });
-
-  it("ignores blank fallback values when no SecretRef is configured", async () => {
-    const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
-      config: createConfig(""),
-      env: {} as NodeJS.ProcessEnv,
-      value: "",
-      path: "gateway.auth.token",
-      readFallback: () => "   ",
-    });
-
-    expect(resolved).toEqual({
-      secretRefConfigured: false,
-    });
-  });
-
-  it("normalizes fallback values when no SecretRef is configured", async () => {
-    const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
-      config: createConfig(""),
-      env: {} as NodeJS.ProcessEnv,
-      value: "",
-      path: "gateway.auth.token",
-      readFallback: () => "  env-token  ",
-    });
-
-    expect(resolved).toEqual({
-      value: "env-token",
-      source: "fallback",
-      secretRefConfigured: false,
-    });
-  });
-
-  it("returns resolved SecretRef value with fallback metadata", async () => {
-    const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
-      config: createConfig("${CUSTOM_GATEWAY_TOKEN}"),
-      env: { CUSTOM_GATEWAY_TOKEN: "resolved-token" } as NodeJS.ProcessEnv,
-      value: "${CUSTOM_GATEWAY_TOKEN}",
-      path: "gateway.auth.token",
-      readFallback: () => undefined,
-    });
-
-    expect(resolved).toEqual({
-      value: "resolved-token",
-      source: "secretRef",
-      secretRefConfigured: true,
-    });
+    expect(resolved).toEqual({ ...expected });
   });
 
   it.each([

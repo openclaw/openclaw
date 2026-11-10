@@ -77,6 +77,10 @@ Doctor prints this one-time note when migration completes:
 
 > Migrated heartbeats now use standard Automations delivery. Heartbeat-specific duplicate suppression and no-route skipping were removed: repeated updates can be delivered, and a missing route no longer skips the run before execution. Delivery failures follow ordinary automation handling. Review the migrated jobs' delivery settings if you relied on either behavior.
 
+When an alert includes an edge `HEARTBEAT_OK` acknowledgement, delivery removes
+the token without flattening the alert's line breaks or indentation. Paragraphs,
+lists, and fenced code blocks retain their formatting.
+
 Migrated model overrides follow the agent's existing model policy. If a heartbeat
 model is outside that policy, Doctor drops the job's model override and reports
 the affected agent, job, dropped model, and configured default. The job then uses

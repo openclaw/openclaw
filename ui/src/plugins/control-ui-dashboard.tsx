@@ -20,6 +20,7 @@ import {
   boardProviderCacheKey,
   type BoardViewCallbacks,
 } from "../lib/board/provider.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
@@ -203,7 +204,7 @@ function PluginSessionDashboardContent(
           fallback={(error, reset) => {
             const message = () => {
               const failure = error();
-              return failure instanceof Error ? failure.message : String(failure);
+              return formatUiError(failure);
             };
             return (
               <Show when={!isPending(() => content())}>

@@ -227,7 +227,7 @@ it("uses the exact target's live status even when it is outside the roster", asy
   );
 
   owner.disconnect();
-  await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.offline")));
+  await vi.waitFor(() => expect(runtime()).toContain("Disconnected · Activity may be outdated"));
   expect(owner.subscriptions()[0]).toBe(0);
   unavailable = true;
   owner.connect();

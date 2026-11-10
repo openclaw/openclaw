@@ -61,7 +61,7 @@ export async function reviewRetainedFileDrafts(target?: {
     );
   } catch (error) {
     if (!target || target.isCurrent()) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     }
   } finally {
     reviewingDrafts = false;
@@ -111,6 +111,8 @@ function syncReloadGuard() {
       () => retainedFileDrafts.size === 0,
       () =>
         showToast({
+          severity: "error",
+          actionPrimary: true,
           message: t("chat.detailPanel.reloadBlocked"),
           actionLabel: t("chat.detailPanel.draftRecovery.review"),
           onAction: () => void reviewRetainedFileDrafts(),

@@ -9,22 +9,30 @@ import type { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 
 export type TranscriptContent = GuardedTranscriptItem | JSX.Element;
 
-export type TranscriptRow<T = unknown> =
+export type TranscriptRow<T = unknown> = {
+  estimatedSize?: number;
+  retainDom?: boolean;
+  /** Prepare Markdown data while idle; visited DOM can still be retained. */
+  prewarm?: boolean;
+  streaming?: boolean;
+} & (
   | { kind: "item"; key: string; item: T; revision?: string }
-  | { kind: "content"; key: string; content: TranscriptContent };
+  | { kind: "content"; key: string; content: TranscriptContent }
+);
 
 export type TranscriptLayoutProps = {
   applicationContext?: ApplicationContext;
   messageElements: TranscriptMessageElements;
   rows: readonly TranscriptRow[];
   getContent: (index: number) => TranscriptContent;
+  activeRowKeys: ReadonlySet<string>;
+  preparingRowKey?: string;
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
   overlay: JSX.Element;
   header: JSX.Element;
   scrollElementRef: (element?: Element) => void;
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;
-  measureRows: boolean;
   initialPositionPending: () => boolean;
   layout: TranscriptLayoutOwner;
   headerHeight: number;

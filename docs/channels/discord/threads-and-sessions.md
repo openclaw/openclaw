@@ -131,6 +131,7 @@ failed chunk may have been delivered, so inspect the thread before retrying.
     - `defaultSpawnContext` controls native subagent context for thread-bound spawns. Default: `"fork"`.
     - Deprecated `spawnSubagentSessions`/`spawnAcpSessions` keys are migrated by `openclaw doctor --fix`.
     - If thread bindings are disabled, thread-bound spawns are unavailable.
+    - Bindings to ordinary OpenClaw sessions remain ordinary after reload or restart; ACP startup cleanup does not remove them for missing ACP metadata. Idle and maximum-age expiry still apply.
 
     See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
 

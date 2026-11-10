@@ -5,6 +5,7 @@ import type {
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { validatePluginStateComparison } from "./plugin-state-observation.js";
@@ -342,8 +343,12 @@ function createAsyncKeyedStore<T>(
       });
     },
     entries: async () => {
+      const entries = await listPluginStateInWorker({
+        ...scope,
+        signal: getAsyncWorkSignal(),
+      });
       // SAFETY: Entries come from this namespace and retain the caller's JSON value type.
-      return (await listPluginStateInWorker(scope)) as PluginStateEntry<T>[];
+      return entries as PluginStateEntry<T>[];
     },
     entriesInKeyRange: async (range) => {
       const params = {
@@ -619,7 +624,7 @@ export function createCorePluginStateKeyedStoreV2<T>(
 
 /** Bind a core catalog read and its later replacement to the same physical store. */
 export function prepareCorePluginStateReplacement<T>(
-  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+  options: OpenAsyncKeyedStoreOptions & { ownerId: `core:${string}` },
 ) {
   const prepared = prepareKeyedStoreOptions(options.ownerId, options);
   const context = captureOpenClawStateWorkerContext({ env: prepared.env });

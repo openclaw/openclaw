@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtraGatewayService } from "../../daemon/inspect.js";
+import { createServiceRuntimeInspectionFailure } from "../../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import type { GatewayCrashRecord } from "../../infra/gateway-crash.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
@@ -267,6 +269,25 @@ describe("printDaemonStatus", () => {
     },
   );
 
+  it.each([false, true])("prints unclassified launcher failure details (deep=%s)", (deep) => {
+    const detail =
+      "Launcher line 7: multiple commands. Review the launcher and use literal values with a single Gateway command before retrying.";
+    printDaemonStatus(
+      {
+        service: {
+          label: "Scheduled Task",
+          loadedText: "registered",
+          runtime: createServiceRuntimeInspectionFailure(new Error(detail)),
+        },
+      },
+      { json: false, deep },
+    );
+    expect(output()).toContain("Service: Scheduled Task (registered)");
+    expect(output()).not.toContain(detail);
+    expect(output(runtime.error)).toContain(`Service inspection failed: ${detail}`);
+    expect(output(runtime.error)).toContain("openclaw gateway status --deep");
+  });
+
   it("uses service command env for WSL systemd unavailable hints", () => {
     withMockedPlatform("linux", () => {
       isSystemdUnavailableDetailMock.mockReturnValue(true);
@@ -332,10 +353,10 @@ describe("printDaemonStatus", () => {
     expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
   });
 
-  it("prints stale updater launchd job guidance", () => {
-    printDaemonStatus({
-      service: {
-        runtime: { status: "running", pid: 8000 },
+  it.each([
+    {
+      label: "detected jobs",
+      serviceState: {
         staleUpdateLaunchdJobs: [
           {
             label: "ai.openclaw.update.2026.5.12",
@@ -347,14 +368,35 @@ describe("printDaemonStatus", () => {
           },
         ],
       },
+      expected: [
+        "Stale OpenClaw updater launchd job(s) detected.",
+        "ai.openclaw.update.2026.5.12",
+        "ai.openclaw.manual-update.1717168800",
+        "launchctl remove <label>",
+        formatCliCommand("openclaw gateway restart"),
+      ],
+    },
+    {
+      label: "failed inspection",
+      serviceState: {
+        staleLaunchdInspectionError: "launchctl list failed (exit 1): Operation not permitted",
+      },
+      expected: [
+        "Could not inspect stale OpenClaw updater launchd jobs",
+        "launchctl list failed (exit 1): Operation not permitted",
+        "NOT checked",
+        formatCliCommand("openclaw doctor"),
+      ],
+    },
+  ])("prints stale updater $label guidance", ({ serviceState, expected }) => {
+    printDaemonStatus({
+      service: { runtime: { status: "running", pid: 8000 }, ...serviceState },
       gateway,
     });
 
-    expectMockLineContains(runtime.error, "Stale OpenClaw updater launchd job(s) detected.");
-    expectMockLineContains(runtime.error, "ai.openclaw.update.2026.5.12");
-    expectMockLineContains(runtime.error, "ai.openclaw.manual-update.1717168800");
-    expectMockLineContains(runtime.error, "launchctl remove <label>");
-    expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
+    for (const line of expected) {
+      expectMockLineContains(runtime.error, line);
+    }
   });
 
   it("points macOS launchd stdout and stderr at one log when gateway is not listening", () => {
@@ -386,6 +428,23 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("suppressed");
     expect(errors.match(/Recent Gateway log error/g)).toHaveLength(1);
     expect(errors).toContain("may be from an earlier run");
+  });
+
+  it("names the installed service's journal instead of the caller's profile", () => {
+    withMockedPlatform("linux", () =>
+      withEnv({ OPENCLAW_PROFILE: "isolated" }, () => {
+        printDaemonStatus({
+          service: {
+            ...runningService,
+            command: { programArguments: ["node", "openclaw.mjs", "gateway"], environment: {} },
+          },
+          gateway,
+          port: emptyPort("free"),
+        });
+        expect(output(runtime.error)).toContain("journalctl --user -u openclaw-gateway.service");
+        expect(output(runtime.error)).not.toContain("openclaw-gateway-isolated.service");
+      }),
+    );
   });
 
   it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
@@ -490,33 +549,33 @@ describe("printDaemonStatus", () => {
     });
   });
 
-  it("prints extra gateways as warnings with cleanup scoped to the detected gateway", () => {
-    const extraService = {
-      platform: "darwin" as const,
-      label: "com.example.openclaw-gateway",
-      scope: "user" as const,
-      detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    };
-    renderGatewayServiceCleanupHintsMock.mockReturnValue([
-      "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    ]);
-
-    printDaemonStatus({
-      service: runningService,
-      extraServices: [extraService],
-    });
-
-    expect(runtime.error).not.toHaveBeenCalled();
-    expectMockLineContains(runtime.log, "Other gateway-like services detected");
-    expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
-    expectMockLineContains(
-      runtime.log,
-      "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway",
-    );
-    expect(output()).not.toContain("ai.openclaw.gateway");
-  });
-
+  it.each([undefined, "external", " ExTeRnAl "])(
+    "prints extra gateways with scoped cleanup and supervision-appropriate advice (%s)",
+    (mode) =>
+      withEnv({ OPENCLAW_SUPERVISOR_MODE: mode }, () => {
+        const extraService = {
+          platform: "darwin" as const,
+          label: "com.example.openclaw-gateway",
+          scope: "user" as const,
+          detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+        };
+        renderGatewayServiceCleanupHintsMock.mockReturnValue([
+          "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+          "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+        ]);
+        printDaemonStatus({ service: runningService, extraServices: [extraService] });
+        expect(runtime.error).not.toHaveBeenCalled();
+        expectMockLineContains(runtime.log, "Other gateway-like services detected");
+        expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
+        expectMockLineContains(
+          runtime.log,
+          "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway",
+        );
+        expect(output()).not.toContain("ai.openclaw.gateway");
+        expect(output().includes("Recommendation: run a single gateway per machine")).toBe(!mode);
+        expect(output().includes("If you need multiple gateways")).toBe(!mode);
+      }),
+  );
   registerServiceInspectionHintTests({
     renderHints: renderGatewayServiceCleanupHintsMock,
     output,
@@ -677,5 +736,26 @@ describe("printDaemonStatus", () => {
     });
     expectMockLineContains(runtime.log, "Gateway service version: 2026.6.35");
     expect(output(runtime.error)).not.toContain("installed Gateway service is version");
+  });
+  it("prints recorded crashes even when the successor is running", () => {
+    const crash: GatewayCrashRecord = {
+      bootId: "previous-run",
+      pid: 42,
+      startedAtMs: 1_000,
+      detectedAtMs: 3_000,
+      signal: "SIGSEGV",
+      version: "2026.11.6",
+    };
+    printDaemonStatus({ service: runningService, gateway: { ...gateway, recentCrashes: [crash] } });
+    expect(output(runtime.error)).toContain("Previous Gateway run ended unexpectedly");
+    expect(output(runtime.error)).toContain("SIGSEGV");
+    expect(output(runtime.error)).toContain("2026.11.6");
+    printDaemonStatus(
+      { service: runningService, gateway: { ...gateway, recentCrashes: [crash] } },
+      { json: true },
+    );
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ gateway: expect.objectContaining({ recentCrashes: [crash] }) }),
+    );
   });
 });

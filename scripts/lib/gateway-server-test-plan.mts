@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isGatewayServerTestFile } from "../../test/vitest/vitest.gateway-server-paths.mjs";
 import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
+import { splitTestTargetChunks } from "./test-target-chunks.mts";
 import {
   collectVitestFileFilters,
   hasNonRunVitestSubcommand,
@@ -56,23 +57,6 @@ function listGatewayServerTestTargets(cwd = process.cwd()): string[] {
   return (listGatewayFilesFromGit(cwd) ?? listRepoFilesRecursive(gatewayDir, cwd))
     .filter(isGatewayServerTestFile)
     .toSorted((a, b) => a.localeCompare(b));
-}
-
-export function splitTestTargetChunks(targets: string[], chunkCount: number): string[][] {
-  if (targets.length === 0) {
-    return [];
-  }
-  const normalizedChunkCount = Math.min(chunkCount, targets.length);
-  const baseSize = Math.floor(targets.length / normalizedChunkCount);
-  const remainder = targets.length % normalizedChunkCount;
-  const chunks: string[][] = [];
-  let offset = 0;
-  for (let index = 0; index < normalizedChunkCount; index += 1) {
-    const chunkSize = baseSize + (index < remainder ? 1 : 0);
-    chunks.push(targets.slice(offset, offset + chunkSize));
-    offset += chunkSize;
-  }
-  return chunks;
 }
 
 export function createGatewayServerTestTargetChunks(

@@ -1,3 +1,4 @@
+import type { ChatAppContextAttachment } from "../../../../packages/gateway-protocol/src/chat-app-context.js";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   ChatSendIntent,
@@ -24,6 +25,7 @@ export async function requestChatSend(
   state: ChatState,
   params: {
     message: string;
+    appContext?: ChatAppContextAttachment[];
     workContext?: ChatWorkContext;
     mentions?: readonly HumanMention[];
     attachments?: ChatAttachment[];
@@ -86,6 +88,7 @@ export async function requestChatSend(
         ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
         message: params.message,
         ...(params.workContext ? { workContext: params.workContext } : {}),
+        ...(params.appContext ? { appContext: params.appContext } : {}),
         ...(params.mentions?.length ? { mentions: params.mentions } : {}),
         ...(params.intent ? { intent: params.intent } : {}),
         deliver: false,

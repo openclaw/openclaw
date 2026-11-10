@@ -64,8 +64,8 @@ it("keeps a persisted attachment when its kind is not a string", () => {
 
 it.each([
   {
-    path: `media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.backup---${UUID}.pdf`,
-    label: "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.backup.pdf",
+    path: `media://inbound/%E9%9B%AA---a1b2c3d4-e5f6-7890-abcd-ef1234567890.backup---${UUID}.pdf`,
+    label: "雪---a1b2c3d4-e5f6-7890-abcd-ef1234567890.backup.pdf",
   },
   { path: "https://example.com/files/report---old.pdf", label: "report---old.pdf" },
 ])("preserves the original filename for $path", ({ label, ...media }) => {

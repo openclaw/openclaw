@@ -1,5 +1,8 @@
 import { isProxy } from "node:util/types";
-import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
+import {
+  markModelPayloadObserver,
+  modelRequestBodyState,
+} from "@openclaw/ai/internal/model-request-body";
 import {
   responsesPromptObserver,
   type ResponsesPromptObservation,
@@ -254,6 +257,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
         await options?.onResponse?.(response, responseModel);
       },
     };
+    markModelPayloadObserver(observedOptions.onPayload!, originalOnPayload);
     modelRequestBodyState(observedOptions).encode = async (payload) => {
       const encoded = await recordProviderPrompt({
         state: params.state,

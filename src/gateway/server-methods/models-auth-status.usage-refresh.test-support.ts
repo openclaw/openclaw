@@ -25,7 +25,7 @@ export function registerModelAuthStatusUsageRefreshTests({
   };
   readAuthStatus: (params?: Record<string, unknown>) => Promise<ModelAuthStatusResult>;
   warmOAuthUsage: () => Promise<void>;
-  createOptions: (params?: Record<string, unknown>) => RespondOptions;
+  createOptions: (params?: Record<string, unknown>, scopes?: string[]) => RespondOptions;
 }) {
   const handler = expectDefined(
     modelsAuthStatusHandlers["models.authStatus"],
@@ -50,6 +50,34 @@ export function registerModelAuthStatusUsageRefreshTests({
       mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
       await warmOAuthUsage();
     });
+    it("exposes measured account identity only in the admin auth projection", async () => {
+      mocks.loadProviderUsageSummary.mockResolvedValue({
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: windows(25),
+            authProfileId: "openai:work",
+            accountEmail: "work@example.test",
+          },
+        ],
+      });
+      expireUsage();
+      const admin = createOptions({ refreshUsage: true });
+      await handler(admin);
+      expect(firstRespondCall(admin)?.[1]?.providers[0]?.usage).toMatchObject({
+        authProfileId: "openai:work",
+        accountEmail: "work@example.test",
+      });
+      const reader = createOptions({}, ["operator.read"]);
+      await handler(reader);
+      expect(firstRespondCall(reader)?.[1]?.providers[0]?.usage).not.toHaveProperty(
+        "authProfileId",
+      );
+      expect(firstRespondCall(reader)?.[1]?.providers[0]?.usage).not.toHaveProperty("accountEmail");
+    });
+
     it.each([false, true])(
       "shares refreshes while ordinary reads stay nonblocking (await usage: %s)",
       async (waits) => {

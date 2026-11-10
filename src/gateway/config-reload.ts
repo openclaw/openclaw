@@ -147,6 +147,10 @@ export function startGatewayConfigReloader(
   const activeReloads = new Set<Promise<unknown>>();
   let pluginOperationTail: Promise<unknown> = Promise.resolve();
   let missingConfigRetries = 0;
+  // Observation, source acceptance, and runtime application advance independently.
+  // These slots own queued, running, and retry work; receipts follow candidates
+  // only while their saved values survive. A failed receipt does not undo persistence,
+  // and restart intent can outlive the write that requested it.
   let pendingInProcessConfig: GatewayConfigReloadCandidate | null = null;
   let activeConfigCandidate: GatewayConfigReloadCandidate | null = null;
   let retryCandidate: GatewayConfigReloadCandidate | null = null;
@@ -304,8 +308,22 @@ export function startGatewayConfigReloader(
     };
     let nextPluginInstallRecords = currentPluginInstallRecords;
     let committedRuntimeConfig: OpenClawConfig | null = null;
-    // The reload queue serializes application. New observations belong to the next pass.
-    const isCurrent = () => !stopped;
+    const isCurrent = () => {
+      if (stopped) {
+        return false;
+      }
+      const pendingWrite = pendingInProcessConfig;
+      // A watcher can see the rename before its RPC writer publishes the receipt.
+      // Let that exact write own precommit reload so drain excludes its waiting root.
+      return !(
+        committedRuntimeConfig === null &&
+        !pluginLifecycle &&
+        candidate?.origin !== "write" &&
+        pendingWrite?.origin === "write" &&
+        (pendingWrite.application || pendingWrite.carriedApplications?.length) &&
+        configSourceSnapshotsMatch(sourceSnapshot, pendingWrite.snapshot)
+      );
+    };
     const assertInvokerOwned = () => {
       // Published work must finish its cleanup and receipt even if its invoker closes.
       if (!committedRuntimeConfig) {
@@ -648,7 +666,9 @@ export function startGatewayConfigReloader(
     run: () => Promise<void>,
     candidate?: GatewayConfigReloadCandidate,
   ) => {
-    const runTransaction = candidate?.application?.runTransaction ?? opts.runTransaction;
+    // Writer continuations identify roots waiting for this receipt, not the reload's
+    // lifecycle owner. Always restore the Gateway context before borrowing those roots.
+    const runTransaction = opts.runTransaction;
     const transaction = () => runWithCandidateWaitingRoots(run, candidate);
     await runOutsideSetupCredentialAccess(() =>
       runTransaction ? runTransaction(transaction) : transaction(),
@@ -848,19 +868,17 @@ export function startGatewayConfigReloader(
       }
       acceptedSourceSnapshot = undefined;
       if (!snapshot.valid) {
+        const issues = formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true });
         if (newObservedRawHash) {
           await appendExternalAudit({
             detectedBy: "watch",
             previousHash: previousObservedRawHash,
             nextHash: observedRawHash,
             valid: false,
-            issues: capConfigAuditIssues(
-              formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }),
-            ),
+            issues: capConfigAuditIssues(issues),
           });
         }
-        const issues = formatConfigIssueLines(snapshot.issues, "").join(", ");
-        opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+        opts.log.warn(`config reload skipped (invalid config): ${issues.join(", ")}`);
         await appliedRevision.flush(currentConfig);
         return;
       }

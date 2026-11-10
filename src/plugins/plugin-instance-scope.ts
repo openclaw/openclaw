@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { createPluginValueInstances } from "./plugin-instance-owned-values.js";
 import type {
@@ -17,6 +18,19 @@ import type {
 import type { PluginReplacementOperation } from "./plugin-replacement-operation.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
+export type PluginInstanceCall = {
+  registry?: PluginRegistry;
+  cleanup: boolean;
+  ownerJoined: boolean;
+  ownerLifetime?: true;
+};
+
+export type PluginInstanceConsumerState = {
+  active: boolean;
+  registry?: PluginRegistry;
+  kind: "work" | "custody";
+};
+
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
   readonly disposing: boolean;
@@ -26,6 +40,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   readonly owner?: PluginInstanceOwner;
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
+  retainOwnerWork(): { run<T>(run: () => T): T; release(this: void): void };
   adopt<T>(value: T): T;
   admitFactory(
     factory: (...args: never[]) => unknown,
@@ -35,6 +50,8 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   retentionSnapshot(options?: { limit?: number; includeOwners?: boolean }): PluginRetentionSnapshot;
   readonly retainedWorkCount: number;
   readonly ordinaryCallCount: number;
+  readonly admittedWorkCount: number;
+  waitForAdmittedWork(signal: AbortSignal): Promise<void>;
   waitForRetainedWork(
     signal: AbortSignal,
     options?: { includeConsumers?: boolean; includeCalls?: boolean },
@@ -58,6 +75,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
     signal?: AbortSignal;
   }): Promise<PluginInstanceDisposalResult>;
   resume(): void;
+  onResume(wake: () => void): () => void;
 }
 
 export type PluginInvocationBinding = {
@@ -146,10 +164,38 @@ export function hasCurrentPluginInstanceAuthority(pluginId: string): boolean {
   return (
     instance?.pluginId === pluginId &&
     instance.hasActiveCall &&
-    instance.acceptingCalls &&
     !instance.owner?.revoked &&
     !instance.lifecycle.signal.aborted
   );
+}
+
+/**
+ * Captures the plugin instance carrying runtime scope for a multi-step effect: its registry
+ * record (manifest facts) and a guard that throws once that instance is replaced, revoked,
+ * or disposed, or when called from another instance's scope. Undefined outside a plugin call.
+ */
+export function captureCurrentPluginInstanceAuthority():
+  | { record: PluginRecord; assertCurrent: () => void }
+  | undefined {
+  // SAFETY: PluginInstance is the only producer of this private invocation scope.
+  const instance = pluginInstanceInvocation.getStore()?.instance as
+    | PluginInstanceHandle
+    | undefined;
+  const record = instance?.owner?.record;
+  if (!instance || !record) {
+    return undefined;
+  }
+  return {
+    record,
+    assertCurrent: () => {
+      if (
+        pluginInstanceInvocation.getStore()?.instance !== instance ||
+        !hasCurrentPluginInstanceAuthority(instance.pluginId)
+      ) {
+        throw new PluginInstanceUnavailableError(instance.pluginId);
+      }
+    },
+  };
 }
 
 /** Direct SDK registrars retain the same owner as registrations made through api. */

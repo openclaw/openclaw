@@ -5,10 +5,20 @@ import { readRequestText } from "../../test/helpers/gateway-integration-fixtures
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
+import {
+  getSubagentRunByRunId,
+  resetSubagentRegistryForTests,
+  testing,
+} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
-import { createSubagentModelConfig } from "./server.subagent-stop-settlement.product.test-support.js";
+import {
+  createSubagentModelConfig,
+  findSubagentSpawnReceipt,
+  type SpawnReceipt,
+} from "./server.subagent-stop-settlement.product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
 const rootPrompt = "Run the route through a middle runner and report its result.";
@@ -18,6 +28,7 @@ const LEAF_ANSWER = "LEAF-ANSWER-7d1c";
 const MIDDLE_DONE = "MIDDLE-DONE";
 const HANDOFF = "Handoff: middle runner\nPending: leaf check";
 const PAUSE_NOTICE = "A child is paused awaiting a continuation";
+const FOLLOWUP = "Continue with the follow-up check after requester completion.";
 
 function promptStrings(value: unknown): string[] {
   if (typeof value === "string") {
@@ -65,19 +76,36 @@ function toolOutput(body: unknown, name: string): string | undefined {
  * A root session spawns a middle runner, which spawns its own leaf child and then
  * yields for it with waitFor "message", as pstack route runners did.
  */
-async function startModelServer() {
+async function startModelServer(requesterCompletes = false) {
   const rootSettlements: string[] = [];
   const middleDone = createDeferred<string>();
   const middleYieldResult = createDeferred<string>();
+  const spawned = createDeferred<SpawnReceipt>();
+  const finishRequester = createDeferred();
+  const allowMessageWait = createDeferred();
   async function handleRequest(request: IncomingMessage, response: ServerResponse) {
     const raw = await readRequestText(request);
     const body = JSON.parse(raw) as unknown;
     const reply = (text: string, id: string) =>
       writeOpenAiResponsesText(response, { text, messageId: id, responseId: `${id}_response` });
+    if (raw.includes(FOLLOWUP)) {
+      reply("FOLLOWUP-DONE", "followup_done");
+      return;
+    }
     const calls = calledTools(body);
     if (raw.includes(rootPrompt)) {
       if (!calls.includes("sessions_spawn")) {
         writeToolCall(response, "sessions_spawn", { task: middleTask, context: "isolated" });
+        return;
+      }
+      if (requesterCompletes) {
+        const receipt = findSubagentSpawnReceipt(toolOutput(body, "sessions_spawn"));
+        if (!receipt) {
+          throw new Error("Requester did not receive its child spawn receipt");
+        }
+        spawned.resolve(receipt);
+        await finishRequester.promise;
+        reply("REQUESTER-DONE", "requester_done");
         return;
       }
       if (!calls.includes("sessions_yield")) {
@@ -97,6 +125,14 @@ async function startModelServer() {
       return;
     }
     if (raw.includes(middleTask)) {
+      if (requesterCompletes) {
+        await allowMessageWait.promise;
+        writeToolCall(response, "sessions_yield", {
+          waitFor: "message",
+          acknowledgment: "Waiting for my requester to continue me.",
+        });
+        return;
+      }
       if (!calls.includes("sessions_spawn")) {
         writeToolCall(response, "sessions_spawn", { task: leafTask, context: "isolated" });
         return;
@@ -138,6 +174,9 @@ async function startModelServer() {
     rootSettlements,
     middleDone: middleDone.promise,
     middleYieldResult: middleYieldResult.promise,
+    spawned: spawned.promise,
+    finishRequester: finishRequester.resolve,
+    allowMessageWait: allowMessageWait.resolve,
     close: server.close,
   };
 }
@@ -221,3 +260,110 @@ it("treats a subagent's waitFor yield for its own children as a child wait, not 
     await state.cleanup();
   }
 });
+
+it.each(["before", "after"] as const)(
+  "closes a child's message wait when its requester finishes %s it parks",
+  async (order) => {
+    const model = await startModelServer(true);
+    const state = await createOpenClawTestState({ label: "subagent-message-wait-requester-done" });
+    const gateway = await startGatewayWithClient({
+      cfg: {
+        ...createSubagentModelConfig(state.workspaceDir, {
+          baseUrl: model.url,
+          modelId: "yield-wait-scope",
+          runtime: true,
+        }),
+        gateway: { controlUi: { enabled: false } },
+      },
+      configPath: state.configPath,
+      token: "yield-wait-scope-token",
+    });
+    const parked = createDeferred();
+    const closed = createDeferred();
+    let child: SpawnReceipt | undefined;
+    const observeChild = () => {
+      const row = child && getSubagentRunByRunId(child.runId);
+      if (row?.pauseReason === "sessions_yield") {
+        parked.resolve();
+      }
+      if (row?.execution.outcome && !row.pauseReason) {
+        closed.resolve();
+      }
+    };
+    const stop = subscribeSubagentRunChanges("persistence", observeChild);
+    try {
+      await gateway.server.startupSettled;
+      const requester = await gateway.client.request<{ runId: string }>("chat.send", {
+        sessionKey: "main",
+        message: rootPrompt,
+        idempotencyKey: `message-wait-${randomUUID()}`,
+        deliver: false,
+      });
+      child = await within(model.spawned, 30_000, () => "requester never spawned the child");
+      observeChild();
+      const finishRequester = async () => {
+        model.finishRequester();
+        await expect(
+          gateway.client.request("agent.wait", { runId: requester.runId, timeoutMs: 30_000 }),
+        ).resolves.toMatchObject({ status: "ok" });
+      };
+      if (order === "before") {
+        await finishRequester();
+      }
+      model.allowMessageWait();
+      await expect(
+        gateway.client.request("agent.wait", { runId: child.runId, timeoutMs: 30_000 }),
+      ).resolves.toMatchObject({ status: "ok" });
+      await within(parked.promise, 5_000, () => "child never published its accepted message wait");
+      expect(getSubagentRunByRunId(child.runId)).toMatchObject({
+        pauseReason: "sessions_yield",
+        execution: { status: "terminal" },
+      });
+      expect(getSubagentRunByRunId(child.runId)?.execution.outcome).toBeUndefined();
+
+      if (order === "before") {
+        await testing.sweepOnceForTests();
+      } else {
+        await finishRequester();
+      }
+      await within(
+        closed.promise,
+        5_000,
+        () =>
+          `finished requester left child parked: ${JSON.stringify(getSubagentRunByRunId(child!.runId)?.execution)}`,
+      );
+      expect(getSubagentRunByRunId(child.runId)?.execution.outcome).toMatchObject({
+        status: "error",
+        error: expect.stringMatching(/requester/i),
+      });
+      const entry = await readSessionEntryReadOnlyInWorker({
+        agentId: "main",
+        sessionKey: child.childSessionKey,
+      });
+      expect(entry).toBeDefined();
+      expect(entry?.lifecycleRunId).toBeUndefined();
+      // The durable writer fence stays until new admission replaces it; prove the
+      // completed wait does not prevent another ordinary turn in this session.
+      const followup = await gateway.client.request<{ runId: string; status: string }>(
+        "sessions.send",
+        {
+          key: child.childSessionKey,
+          message: FOLLOWUP,
+          idempotencyKey: `message-wait-followup-${randomUUID()}`,
+        },
+      );
+      expect(followup.status).toBe("started");
+      await expect(
+        gateway.client.request("agent.wait", { runId: followup.runId, timeoutMs: 30_000 }),
+      ).resolves.toMatchObject({ status: "ok" });
+    } finally {
+      stop();
+      model.finishRequester();
+      model.allowMessageWait();
+      await disconnectGatewayClient(gateway.client);
+      await gateway.server.close({ reason: "message wait requester completion proof complete" });
+      await model.close();
+      await state.cleanup();
+    }
+  },
+);

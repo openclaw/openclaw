@@ -227,7 +227,7 @@ const waitForRelease=()=>new Promise(resolve=>{
       return;
     }
     if(borrowerClosed && !idle) {idle=true;publish('owner-idle',{owner:process.pid});}
-    if(!responsive && fs.existsSync(${JSON.stringify(loopRequest)})) {
+    if(!responsive && fs.existsSync(${JSON.stringify(loopRequest)}) && !(${route === "ci-disconnect"} && process.connected)) {
       responsive=true;publish('loop-responsive',{owner:process.pid});
     }
     if(fs.existsSync(${JSON.stringify(released)})) {
@@ -289,6 +289,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
           args,
           preparedScriptWrapperEnv(preparedModules, {
             PATH: process.env.PATH,
+            OPENCLAW_VITEST_RUNTIME: "node",
             HOME: root,
             USERPROFILE: root,
             TMPDIR: root,

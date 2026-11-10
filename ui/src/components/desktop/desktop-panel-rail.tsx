@@ -519,7 +519,7 @@ export function DesktopSizing(
       when={props.presentation === "menu"}
       fallback={
         <select
-          class="desktop-sizing"
+          class="settings-select desktop-sizing"
           aria-label={t("desktop.sizing")}
           title={t("desktop.matchRequirement")}
           onChange={(event) => {

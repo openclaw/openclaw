@@ -212,9 +212,10 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     await git(repo, "commit", "-m", "invalidate template");
     const third = await create("third");
     expect(await read(third.path, "README.md")).toBe("new source\n");
-    expect((await listTemplatesAsync(env))[0]?.sourceCommit).toBe(
-      await git(repo, "rev-parse", "HEAD"),
-    );
+    expect(
+      (await listTemplatesAsync(env)).find((record) => record.cacheKey === template.cacheKey)
+        ?.sourceCommit,
+    ).toBe(await git(repo, "rev-parse", "HEAD"));
     await ageManagedWorktreeTemplates(env, Date.now() - IDLE_GC_MS - 1);
     expect((await service.gc()).removed).toEqual([]);
     expect(await listTemplatesAsync(env)).toEqual([]);

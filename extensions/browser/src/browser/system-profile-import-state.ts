@@ -25,8 +25,13 @@ type ImportStateStore = Pick<
 
 let importStateStore: ImportStateStore | undefined;
 
-export function configureSystemProfileImportStateStore(store: ImportStateStore): void {
+export function configureSystemProfileImportStateStore(store: ImportStateStore): () => void {
   importStateStore = store;
+  return () => {
+    if (importStateStore === store) {
+      importStateStore = undefined;
+    }
+  };
 }
 
 export async function readSystemProfileImportState(): Promise<
