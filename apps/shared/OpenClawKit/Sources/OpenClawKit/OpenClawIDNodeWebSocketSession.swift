@@ -40,7 +40,7 @@ public final class OpenClawIDNodeWebSocketSession: WebSocketSessioning, Sendable
     public func shutdown() async { await self.tunnel.shutdown() }
 }
 
-private actor OpenClawIDNodeWebSocketIO {
+actor OpenClawIDNodeWebSocketIO {
     private let tunnel: OpenClawIDNodeTunnel
     private let origin: URL
     private let request: URLRequest
@@ -128,6 +128,16 @@ private actor OpenClawIDNodeWebSocketIO {
     }
 
     func send(_ message: URLSessionWebSocketTask.Message, lifetime: WebSocketRequestLifetime? = nil) async throws {
+        let task = try self.enqueue(message, lifetime: lifetime)
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func enqueue(_ message: URLSessionWebSocketTask.Message,
+                 lifetime: WebSocketRequestLifetime? = nil) throws -> Task<Void, Error> {
         if self.stopped { throw OpenClawIDNodeTransportError.closed }
         let payload: OpenClawIDNodeTunnelCodec.Message
         let data: Data
@@ -165,11 +175,7 @@ private actor OpenClawIDNodeWebSocketIO {
             }
         }
         self.writer = task
-        try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
-        }
+        return task
     }
 
     private func abort() async {
@@ -223,9 +229,16 @@ private actor OpenClawIDNodeWebSocketIO {
             // Reset is the cancellation fallback; it must release a stalled write's lock.
             do {
                 try await openClawIDNodeDeadline(.seconds(1), clock: .init()) {
-                    if let previous { _ = try? await previous.value }
-                    try await stream.write(OpenClawIDNodeTunnelCodec.message(.close(code, reason)))
-                    try await stream.finish()
+                    try await withTaskCancellationHandler {
+                        if let previous { _ = try? await previous.value }
+                        try Task.checkCancellation()
+                        try await stream.write(OpenClawIDNodeTunnelCodec.message(.close(code, reason)))
+                        try await stream.finish()
+                    } onCancel: {
+                        // A queued writer may be waiting for an earlier, uncanceled write.
+                        // Interrupt the stream before the deadline joins that writer chain.
+                        Task { await stream.reset(code: 4) }
+                    }
                 }
             } catch {
                 await stream.reset(code: 4)

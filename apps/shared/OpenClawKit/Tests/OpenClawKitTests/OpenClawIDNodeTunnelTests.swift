@@ -139,6 +139,36 @@ import Testing
         await tunnel.shutdown()
     }
 
+    @Test func closeInterruptsBlockedWriterBeforeJoiningQueuedWriter() async throws {
+        let stream = NodeTestStream(input: try OpenClawIDNodeTunnelCodec.frame(Data(#"{"status":101}"#.utf8)))
+        let tunnel = self.tunnel(NodeTestEndpoint(stream: stream))
+        let url = try #require(URL(string: "wss://claw.example/"))
+        let io = OpenClawIDNodeWebSocketIO(tunnel: tunnel, origin: url, request: URLRequest(url: url), role: "node")
+        try await io.send(.string(#"{"type":"req","method":"connect","params":{"role":"node"}}"#))
+        await stream.blockNextWrite()
+        let first = try await io.enqueue(.string(#"{"method":"first"}"#))
+        try await stream.writeStarted.wait()
+        // Enqueue returns only after the owner installs the second writer behind the blocked first.
+        let second = try await io.enqueue(.string(#"{"method":"second"}"#))
+        let watchdog = Task {
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            Issue.record("Close did not interrupt its writer chain within the one-second close deadline")
+            await stream.reset(code: 4)
+        }
+        await io.close(code: 1000, reason: "done")
+        watchdog.cancel()
+        await watchdog.value
+        await #expect(throws: CancellationError.self) { try await first.value }
+        await #expect(throws: CancellationError.self) { try await second.value }
+        #expect(await stream.resets.contains(4))
+        #expect(await stream.writes.count == 2) // HEAD and connect only; neither blocked nor queued data escaped.
+        #expect(await stream.finishes == 0)
+        await #expect(throws: OpenClawIDNodeTransportError.closed) {
+            try await io.send(.string(#"{"method":"late"}"#))
+        }
+        await tunnel.shutdown()
+    }
+
     @Test func cancelingHTTPHeadInterruptsUnderlyingRead() async throws {
         let stream = NodeBlockedReadStream()
         let tunnel = self.tunnel(NodeTestEndpoint(stream: stream))
@@ -246,7 +276,10 @@ private actor NodeTestStream: OpenClawIDNodeStream {
         self.writes.append(bytes)
     }
     func finish() async throws { self.finishes += 1 }
-    func reset(code: Int64) async { self.resets.append(code) }
+    func reset(code: Int64) async {
+        self.resets.append(code)
+        self.writeRelease.reject(CancellationError())
+    }
     func stop(code: Int64) async {}
 }
 
@@ -278,11 +311,13 @@ private final class NodeTestWaiter<Value: Sendable>: Sendable {
         var continuation: CheckedContinuation<Value, Error>?
     }
     private let state = Mutex(State())
-    func resolve(_ value: Value) {
+    func resolve(_ value: Value) { self.complete(.success(value)) }
+    func reject(_ error: Error) { self.complete(.failure(error)) }
+    private func complete(_ result: Result<Value, Error>) {
         self.state.withLock { state in
             guard state.result == nil else { return }
-            state.result = .success(value)
-            state.continuation?.resume(returning: value)
+            state.result = result
+            state.continuation?.resume(with: result)
             state.continuation = nil
         }
     }
@@ -295,12 +330,7 @@ private final class NodeTestWaiter<Value: Sendable>: Sendable {
                 }
             }
         } onCancel: {
-            self.state.withLock { state in
-                guard state.result == nil else { return }
-                state.result = .failure(CancellationError())
-                state.continuation?.resume(throwing: CancellationError())
-                state.continuation = nil
-            }
+            self.reject(CancellationError())
         }
     }
 }

@@ -80,9 +80,10 @@ public enum OpenClawIDNodeTrust {
         let response = try OpenClawIDCanonicalJSON.parse(response).fields(["descriptor", "snapshot"])
         let descriptor = try response["descriptor"]!.fields([
             "v", "claw_id", "transport", "relay_url", "root_pub", "binding", "published_at",
-        ])
+        ], optional: ["reset"])
         try version(descriptor["v"]!)
         guard try descriptor["transport"]!.text() == "iroh" else { throw OpenClawIDNodeEnrollmentError.malformed }
+        if let reset = descriptor["reset"] { try validateReset(reset) }
         let claw = try identifier(descriptor["claw_id"]!)
         guard claw == clawID else { throw OpenClawIDNodeEnrollmentError.wrongClaw }
         let root = try key(descriptor["root_pub"]!, prefix: "ed25519:")
@@ -226,6 +227,40 @@ public enum OpenClawIDNodeTrust {
             }
         }
         return fields
+    }
+
+    // Match parseClawDescriptor's reset schema only. Reset metadata never authorizes a pin change;
+    // dialing still requires the descriptor root to match the invitation or retained fingerprint.
+    private static func validateReset(_ value: OpenClawIDCanonicalJSON) throws {
+        let reset = try value.fields(["previous_root_pub", "previous_binding", "statement"])
+        _ = try key(reset["previous_root_pub"]!, prefix: "ed25519:")
+        let previous = try resetStatementBody(reset["previous_binding"]!, type: "ServerBinding").fields([
+            "claw_id", "hostname", "k_srv", "k_gw", "binding_seq", "root_epoch", "issued_at",
+        ])
+        _ = try identifier(previous["claw_id"]!)
+        guard try OpenClawIDNodeEnrollmentLink.validHostname(previous["hostname"]!.text()),
+              try previous["root_epoch"]!.number() == 1 else { throw OpenClawIDNodeEnrollmentError.malformed }
+        _ = try key(previous["k_srv"]!, prefix: "iroh:")
+        _ = try key(previous["k_gw"]!, prefix: "ed25519:")
+        _ = try previous["binding_seq"]!.number(minimum: 1)
+        _ = try previous["issued_at"]!.number()
+        let statement = try resetStatementBody(reset["statement"]!, type: "RootReset").fields([
+            "claw_id", "new_root_pub", "binding_seq", "issued_at",
+        ])
+        _ = try identifier(statement["claw_id"]!)
+        _ = try key(statement["new_root_pub"]!, prefix: "ed25519:")
+        _ = try statement["binding_seq"]!.number(minimum: 1)
+        _ = try statement["issued_at"]!.number()
+    }
+
+    private static func resetStatementBody(_ value: OpenClawIDCanonicalJSON, type: String) throws -> OpenClawIDCanonicalJSON {
+        let fields = try value.fields(["v", "type", "body", "signer", "alg", "sig"])
+        try version(fields["v"]!)
+        guard try fields["type"]!.text() == type, try fields["alg"]!.text() == "ed25519",
+              try OpenClawIDNodeEnrollmentLink.matches(fields["sig"]!.text(), "^[A-Za-z0-9_-]{86}$")
+        else { throw OpenClawIDNodeEnrollmentError.malformed }
+        _ = try key(fields["signer"]!, prefix: "ed25519:")
+        return fields["body"]!
     }
 
     private static func version(_ value: OpenClawIDCanonicalJSON) throws {

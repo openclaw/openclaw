@@ -122,5 +122,91 @@
     }
   },
   "gateway_seed_hex": "e29c858ede994e3ff5c1cac2230b9fd16d166301ce33ecec340533290ffe0743",
-  "discovery_get_signature": "keyid=ed25519:26967efd78f039ced804eb5f0e9294fd8663367b20dc61681b631c58f3b046c4,ts=1793318400,sig=pIxsGV6tvaWigSX4Z1K5pNM_PX5PNnwBgmXrzZDWlpi8WyIDQjy79g-HKDwxa5c59ETIsBFJSQxyZqH3LH1PBA"
+  "discovery_get_signature": "keyid=ed25519:26967efd78f039ced804eb5f0e9294fd8663367b20dc61681b631c58f3b046c4,ts=1793318400,sig=pIxsGV6tvaWigSX4Z1K5pNM_PX5PNnwBgmXrzZDWlpi8WyIDQjy79g-HKDwxa5c59ETIsBFJSQxyZqH3LH1PBA",
+  "reset_invite_link": "openclaw-node://join#i=ffeeddccbbaa99887766554433221100.KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio&c=0123456789abcdef0123456789abcdef&r=a2691072fb09ac2459baceeea0603ed1c41c4562c0697d0b0edb2ca512165925&h=studio-k7x2q.crabd.me&relay=https%3A%2F%2Frelay.example.test%2F",
+  "reset_response": {
+    "descriptor": {
+      "v": 1,
+      "claw_id": "0123456789abcdef0123456789abcdef",
+      "transport": "iroh",
+      "relay_url": "https://relay.example.test/",
+      "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+      "binding": {
+        "v": 1,
+        "type": "ServerBinding",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "hostname": "studio-k7x2q.crabd.me",
+          "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+          "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+          "binding_seq": 3,
+          "root_epoch": 1,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+        "alg": "ed25519",
+        "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+      },
+      "published_at": 1793318400,
+      "reset": {
+        "previous_root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+        "previous_binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 2,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+          "alg": "ed25519",
+          "sig": "QaXvZ1rIgj-6xBGQ38xuebkWhGAfjcbUcNy1pkImb3J8bEkxnXCoof8dh9ReTiQfnczsIC2T2V01Tz6wwCn1CQ"
+        },
+        "statement": {
+          "v": 1,
+          "type": "RootReset",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+            "binding_seq": 3,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+          "alg": "ed25519",
+          "sig": "BrbI3Er5bXQdcDgyWMvIzu9az-KF4xisVXQDiFJ01fLPOV2D54AXRnJRDT5f_WQS9ZjRO6XJMqH0Wd0xROc5Ag"
+        }
+      }
+    },
+    "snapshot": {
+      "v": 1,
+      "type": "MembershipSnapshot",
+      "body": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "seq": 3,
+        "binding_seq": 3,
+        "owner_devices": [],
+        "owner_peer_keys": [],
+        "node_peer_keys": [
+          "iroh:26967efd78f039ced804eb5f0e9294fd8663367b20dc61681b631c58f3b046c4"
+        ],
+        "members": [],
+        "protocols": {
+          "statement": [
+            1
+          ],
+          "descriptor": [
+            1
+          ]
+        },
+        "issued_at": 1793318400
+      },
+      "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+      "alg": "ed25519",
+      "sig": "fcT9JQfjMCfJwSfd3ePrLGOXN9w5k7KfCM0tUfoitS4fNCe0i3SmpoJypW7gfc7EdhsLewShloEohg-Sy3vBAA"
+    }
+  }
 }
