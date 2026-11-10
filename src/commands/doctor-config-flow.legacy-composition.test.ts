@@ -53,6 +53,28 @@ describe("Doctor legacy config composition", () => {
     });
   });
 
+  it("preserves restrictive skill and egress allowlists through Doctor persistence", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const configPath = await writeOpenClawConfig(home, {
+          agents: { list: [{ id: "main" }] },
+          gateway: { mode: "local" },
+          skills: { allowBundled: ["nano-banana-pro"] },
+          secrets: { egressProxy: { allowedHosts: ["https://invalid.example"] } },
+          plugins: { enabled: false },
+        });
+        await repairConfig(configPath);
+        const first = await fs.readFile(configPath, "utf8");
+        const saved = JSON.parse(first);
+        expect(saved.skills.allowBundled).toEqual([]);
+        expect(saved.secrets.egressProxy.allowedHosts).toEqual([]);
+        expect((await readConfigFileSnapshot()).valid).toBe(true);
+        expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
+        expect(await fs.readFile(configPath, "utf8")).toBe(first);
+      });
+    });
+  });
+
   it("preserves the July TTS preference locator before retiring its config keys", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       // This migration is core-owned; bundled plugin discovery belongs to the CLI fixture below.
