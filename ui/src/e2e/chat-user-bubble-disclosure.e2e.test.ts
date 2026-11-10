@@ -476,6 +476,7 @@ suite.define(() => {
         ),
         "Final prompt tail: the complete request remains available.",
       ];
+      const message = [...paragraphs, "```\n" + paragraphs[0] + "\n```"].join("\n\n");
       const context = await suite.newBrowserContext({
         locale: "en-US",
         colorScheme: "light",
@@ -485,7 +486,7 @@ suite.define(() => {
       const page = await context.newPage();
       await installMockGateway(page, {
         historyMessages: [
-          { role: "user", content: paragraphs.join("\n\n"), timestamp: 1 },
+          { role: "user", content: message, timestamp: 1 },
           { role: "user", content: "Short follow-up request.", timestamp: 2 },
           { role: "assistant", content: "The sample review is complete.", timestamp: 3 },
         ],
@@ -576,6 +577,11 @@ suite.define(() => {
         const tail = markdown.locator("p").last();
         await tail.scrollIntoViewIfNeeded();
         expect(await tail.textContent()).toBe(paragraphs.at(-1));
+        const code = markdown.locator("pre").last();
+        expect(
+          await code.evaluate((element) => element.scrollWidth - element.clientWidth),
+        ).toBeLessThanOrEqual(1);
+        expect(await code.textContent()).toBe(paragraphs[0] + "\n");
         if (captureUiProofEnabled) {
           await page.screenshot({
             path: path.join(

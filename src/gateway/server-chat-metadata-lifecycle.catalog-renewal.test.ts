@@ -140,9 +140,9 @@ it("retains the published model owner across metadata reads and catalog renewal"
   const metadata = await harness.lifecycle.read({ agentId: "main" });
   expect(modelIds(metadata.models ?? [])).toEqual(modelIds(next.entries));
   expect(owner.isCurrent()).toBe(true);
-  expect(harness.broadcast).toHaveBeenCalledOnce();
+  expect(harness.broadcast).toHaveBeenCalledTimes(2);
   await harness.lifecycle.read({ agentId: "main" });
-  expect(harness.broadcast).toHaveBeenCalledOnce();
+  expect(harness.broadcast).toHaveBeenCalledTimes(2);
   expect(owner.isCurrent()).toBe(true);
 });
 
@@ -217,17 +217,32 @@ it.for(["usage", "removed", "failed"] as const)(
         event.phase === "catalog-published" ? [event] : [],
       );
       expect(published).toEqual(change === "failed" ? [] : [publication(change !== "usage")]);
-      expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
-        "chat.metadata.changed",
-        {
-          modelCatalogChanged: change !== "usage",
-          ...(change === "usage" ? { modelCatalogStatusChanged: true } : {}),
-          authChanged: change === "removed",
-          commandsChanged: false,
-        },
-        { dropIfSlow: true },
+      const changes = [
+        ...(change === "usage"
+          ? []
+          : [
+              {
+                agentId: "main",
+                modelCatalogChanged: true,
+                authChanged: change === "removed",
+                commandsChanged: false,
+              },
+            ]),
+        ...(change === "failed"
+          ? []
+          : [
+              {
+                modelCatalogChanged: false,
+                modelCatalogStatusChanged: true,
+                authChanged: false,
+                commandsChanged: false,
+              },
+            ]),
+      ];
+      expect(harness.broadcast.mock.calls).toEqual(
+        changes.map((payload) => ["chat.metadata.changed", payload, { dropIfSlow: true }]),
       );
-      expect(harness.observedCatalogs).toHaveLength(1);
+      expect(harness.observedCatalogs).toHaveLength(changes.length);
       const observedCatalog = harness.observedCatalogs[0]!;
       expect(observedCatalog.pendingProviders).toBeUndefined();
       // The pending reply remains pending until the consumer receives the settlement signal.
@@ -249,7 +264,7 @@ it.for(["usage", "removed", "failed"] as const)(
         await nextEventLoopTurn();
         await harness.lifecycle.read({ agentId: "main" });
         expect(owner.readFullModelCatalog!()?.refreshFailed).toBeUndefined();
-        expect(harness.broadcast).toHaveBeenCalledTimes(2);
+        expect(harness.broadcast).toHaveBeenCalledTimes(3);
         expect(buildCommands).toHaveBeenCalledTimes(2);
         expect(publications).toHaveBeenLastCalledWith(publication(false));
       }

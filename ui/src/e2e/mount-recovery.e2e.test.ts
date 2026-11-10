@@ -64,7 +64,7 @@ suite.define(() => {
           )?.status(),
         ).toBe(200);
         await page.locator("openclaw-app-shell").waitFor();
-        await page.locator(".agent-chat__welcome").waitFor();
+        await page.locator(".agent-chat__empty").waitFor();
 
         expect(documentRequests).toBe(2);
         expect(failedModuleRequests).toBe(1);

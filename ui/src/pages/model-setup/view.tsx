@@ -3,13 +3,16 @@ import { createMemo, Errored, For, isPending, Loading, Match, Show, Switch } fro
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import "../../styles/model-setup.css";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { JSX } from "../../types/solid-elements.js";
 import {
   renderMutationMessage,
@@ -256,9 +259,9 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
             <span>{t("modelSetup.manual.verifyHint")}</span>
           </div>
           {props.manualError ? (
-            <div id={`${manualId()}-error`} class="callout danger" role="alert">
+            <InlineAlert tone="danger" id={`${manualId()}-error`} role="alert">
               {props.manualError}
-            </div>
+            </InlineAlert>
           ) : undefined}
           <button
             type="button"
@@ -297,8 +300,7 @@ function NativeSessionDiscovery(
         <p class="muted">{t("modelSetup.nativeDiscovery.body")}</p>
         <p>{props.result.nativeSessionCatalogs?.map((option) => option.label).join(", ")}</p>
         <label>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={props.nativeSessionCatalogsEnabled === true}
             disabled={props.actionsDisabled}
             onChange={(event) => props.onNativeSessionCatalogsChange?.(event.currentTarget.checked)}
@@ -313,9 +315,9 @@ function NativeSessionDiscovery(
 
 function renderSetupAccessWarning(canAdmin: boolean) {
   return (
-    <div class="callout warning" role="note">
+    <InlineAlert tone="warning" role="note">
       {t(canAdmin ? "modelSetup.access.gatewayTooOld" : "modelSetup.access.adminRequired")}
-    </div>
+    </InlineAlert>
   );
 }
 
@@ -367,9 +369,9 @@ function ModelSetupBody(props: ModelSetupViewProps & { detection: () => null }) 
           <Errored
             fallback={(error) => (
               <>
-                <div class="callout danger" role="alert">
+                <InlineAlert tone="danger" role="alert">
                   {formatModelSetupError(error())}
-                </div>
+                </InlineAlert>
                 <button
                   type="button"
                   class="btn"
@@ -434,19 +436,11 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
     >
       <div class="model-setup__intro">
         <div>
-          {props.embedded ? (
-            <>
-              {" "}
-              <h2>{t("modelSetup.discovery.title")}</h2>
-              <p>{t("modelSetup.discovery.description", { agent: props.agentLabel ?? "" })}</p>{" "}
-            </>
-          ) : (
-            <>
-              {" "}
-              <h1>{t("modelSetup.heading")}</h1>
-              <p>{t("modelSetup.intro")}</p>{" "}
-            </>
-          )}
+          {/* An embedded view gets its title and description from the dialog. */}
+          <Show when={!props.embedded}>
+            <h1>{t("modelSetup.heading")}</h1>
+            <p>{t("modelSetup.intro")}</p>
+          </Show>
         </div>
         <Show when={Boolean(props.connection)}>
           <ModelProviderConnectAction
@@ -480,9 +474,9 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
         ? renderActivationFeedback(props.activation, props.onFeedback)
         : undefined}
       {props.refreshWarning ? (
-        <div class="callout warning" role="alert">
+        <InlineAlert tone="warning" role="alert">
           {props.refreshWarning}
-        </div>
+        </InlineAlert>
       ) : undefined}
       <Show
         when={Boolean(
@@ -515,9 +509,9 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
         <Show keyed when={props.detectionIdentity()}>
           <Errored
             fallback={(error) => (
-              <div class="callout warning" role="alert">
+              <InlineAlert tone="warning" role="alert">
                 {formatModelSetupError(error())}
-              </div>
+              </InlineAlert>
             )}
           >
             <Loading on={props.detectionIdentity()} fallback={<DetectionProgress />}>
@@ -596,13 +590,22 @@ function EmbeddedModelSetup(props: {
           event.target === event.currentTarget ? props.view.onDiscoveryShown?.() : undefined
         }
       >
-        <div class="model-setup-wizard model-setup-discovery">
-          <div class="model-setup-wizard__body">{props.content}</div>
-          <openclaw-modal-actions class="model-setup-wizard__footer">
-            <button class="btn" onClick={() => props.view.onClose?.()}>
-              {t("common.close")}
-            </button>
-          </openclaw-modal-actions>
+        <div class="oc-dialog model-setup-wizard model-setup-discovery">
+          <div class="oc-dialog__header">
+            <h2 class="oc-dialog__title">{t("modelSetup.discovery.title")}</h2>
+            <IconButton
+              size={28}
+              class="oc-dialog__close"
+              icon="x"
+              label={t("common.close")}
+              tooltip={false}
+              onClick={() => props.view.onClose?.()}
+            />
+            <div class="oc-dialog__description">
+              <p>{t("modelSetup.discovery.description", { agent: props.view.agentLabel ?? "" })}</p>
+            </div>
+          </div>
+          <div class="oc-dialog__body model-setup-wizard__body">{props.content}</div>
         </div>
       </openclaw-modal-dialog>{" "}
     </>

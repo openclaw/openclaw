@@ -1,7 +1,10 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import {
+  assertUpdateRecoveryAdmission,
+  inspectPluginCohortRecoveryAdmission,
+} from "../../infra/update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -9,6 +12,7 @@ import { ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
+import { runMutableUpdateRecovery } from "./update-command-mutable-signals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   createUpdateCommandFailureResult,
@@ -47,10 +51,19 @@ export async function withUpdateCommandRecoveryUnwind(
           }),
           runId: run.runId,
         });
-  const pendingFailure = (cause: unknown, original: unknown) =>
-    new UpdateCommandPendingRecoveryFailure(primaryResult(original), formatErrorMessage(cause), {
-      cause,
-    });
+  const pendingFailure = (cause: unknown, original: unknown, nextStep?: string) =>
+    new UpdateCommandPendingRecoveryFailure(
+      primaryResult(original),
+      [
+        formatErrorMessage(cause),
+        // The refusal describes retained state; only this line names what went wrong.
+        ...(original === cause
+          ? []
+          : [`First failure: ${createUpdateErrorFact("update", original, run.env).message}`]),
+        ...(nextStep ? [nextStep] : []),
+      ].join("\n"),
+      { cause },
+    );
   const settlePending = async (error: UpdateCommandFailure) => {
     if (opts.recovery) {
       return error;
@@ -138,6 +151,18 @@ export async function withUpdateCommandRecoveryUnwind(
   if (!recoveryState.ledgerHandoffOwned) {
     // The admitted newer runtime owns canonical history after handoff. The old
     // process must not reopen a database that it may no longer understand.
+    // Successful foreground activation keeps its pair for the post-ready owner.
+    // Unwind precedes terminal preparation, so retain that same live continuation
+    // here without admitting failure compensation or Windows autostart effects.
+    const pluginCohort =
+      !failure &&
+      !recoveryState.windowsTaskAutoStartRecovery &&
+      run.completionOwner === "gateway-restart" &&
+      run.gatewayRestartRequired === true &&
+      hasDeferredUpdateCommandTerminalResult(run) &&
+      run.executorFence
+        ? { runId: run.runId, fence: run.executorFence }
+        : undefined;
     const admitRecovery = async () => {
       // A lost live context or a successful callback is not fresh-install proof.
       // Reconcile all affected state roots read-only before native compensation.
@@ -148,13 +173,23 @@ export async function withUpdateCommandRecoveryUnwind(
           continue;
         }
         paths.add(file);
-        await assertUpdateRecoveryAdmission({ env });
+        await assertUpdateRecoveryAdmission({ env, pluginCohort });
       }
     };
     try {
-      await admitRecovery();
+      await runMutableUpdateRecovery(admitRecovery);
     } catch (error) {
-      const pending = pendingFailure(error, failure?.error ?? error);
+      // Repair settles a matching cohort pair; other retained recovery keeps its original owner.
+      const repairable =
+        error instanceof UpdateRecoveryRequiredError &&
+        (await runMutableUpdateRecovery(() =>
+          inspectPluginCohortRecoveryAdmission({ env: run.env }, error.record.runId),
+        ).catch(() => undefined));
+      const pending = pendingFailure(
+        error,
+        failure?.error ?? error,
+        repairable ? "Run `openclaw update repair` to finish this recovery." : undefined,
+      );
       if (
         failure &&
         !(failure.error instanceof UpdateCommandFailure) &&
@@ -189,12 +224,16 @@ export async function withUpdateCommandRecoveryUnwind(
     }
   }
   try {
-    await recoveryState.windowsTaskAutoStartRecovery?.restore();
-    await recoveryState.windowsTaskAutoStartRecovery?.complete();
+    await runMutableUpdateRecovery(async () => {
+      await recoveryState.windowsTaskAutoStartRecovery?.restore();
+      await recoveryState.windowsTaskAutoStartRecovery?.complete();
+    });
   } catch (restoreError) {
     let error = restoreError;
     try {
-      await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
+      await runMutableUpdateRecovery(async () => {
+        await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
+      });
     } catch (compensationError) {
       error = new AggregateError(
         [error, compensationError],
@@ -213,7 +252,10 @@ export async function withUpdateCommandRecoveryUnwind(
       if (failure.error instanceof UpdateCommandFailure) {
         completeUpdateCommandRun(failure.error.result, run);
       } else {
-        failure.error = await prepareUnexpectedUpdateCommandFailure(failure.error, opts);
+        const original = failure.error;
+        failure.error = await runMutableUpdateRecovery(() =>
+          prepareUnexpectedUpdateCommandFailure(original, opts),
+        );
       }
     }
     throw failure.error;

@@ -440,6 +440,17 @@ async function deliverReplyWithNormalization(
       await prepareAnswerLaneForToolProgress(turn);
     }
 
+    if (
+      turn.streamMode === "progress" &&
+      info.kind === "block" &&
+      effectivePayload.isCompactionNotice === true
+    ) {
+      // Compaction notices are standalone messages. Held as an interim answer, the
+      // final would replace them; let past the hold, they would stream into the
+      // progress card and be deleted with it.
+      const delivery = await sendPayload(turn, effectivePayload);
+      return toTelegramReplyDeliveryResult(turn, delivery.visibleReplySent);
+    }
     const ownedByQueuedRotation = isQueuedAnswerBlock(
       turn,
       lanePayload,

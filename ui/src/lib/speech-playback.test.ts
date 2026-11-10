@@ -9,6 +9,13 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import { GatewaySpeechPlayback, resolveSpeechTextLimit } from "./speech-playback.ts";
 
+const chunking = vi.hoisted(() => ({ loaded: false }));
+vi.mock("../../../packages/markdown-core/src/chunk-text.js", async (importOriginal) => {
+  chunking.loaded = true;
+  return importOriginal<typeof import("../../../packages/markdown-core/src/chunk-text.js")>();
+});
+const chunkingLoadedAtBoot = chunking.loaded;
+
 let started = createDeferred();
 const audio: FakeAudio[] = [];
 const players: GatewaySpeechPlayback[] = [];
@@ -62,8 +69,10 @@ it.each(["tts.speak", "talk.speak"] as const)(
     const request = createGatewayRequestMock(async () => speechResult);
     const client = createTestGatewayClient(request);
     const playback = player();
+    expect(chunkingLoadedAtBoot).toBe(false);
     const speaking = playback.speak(client, "a".repeat(5000), method);
     await started.promise;
+    expect(chunking.loaded).toBe(true);
     expect(request).toHaveBeenCalledExactlyOnceWith(method, { text: "a".repeat(4096) });
     const element = expectDefined(audio[0], "first speech element");
     started = createDeferred();
@@ -98,9 +107,15 @@ it("uses the configured speech bound and stops before another chunk is requested
 
 it("releases a cancelled pending synthesis without playing its late result", async () => {
   const pending = createDeferred<typeof speechResult>();
-  const request = createGatewayRequestMock(() => pending.promise);
+  const requested = createDeferred();
+  const request = createGatewayRequestMock(() => {
+    requested.resolve();
+    return pending.promise;
+  });
   const playback = player();
   const speaking = playback.speak(createTestGatewayClient(request), "Pending speech");
+  await requested.promise;
+  expect(request).toHaveBeenCalledOnce();
   playback.stop();
   await speaking;
   pending.resolve(speechResult);

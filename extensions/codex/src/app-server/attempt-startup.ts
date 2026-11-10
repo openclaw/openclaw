@@ -76,6 +76,7 @@ export async function startCodexAttemptThread(params: {
   assertCurrentAsync?: () => Promise<void>;
   authority?: CodexBindingAuthority;
   attemptClientFactory: CodexAppServerClientFactory;
+  callerOwnedAttemptClient?: boolean;
   bindingStore: CodexAppServerBindingStore;
   runtime?: PluginRuntime;
   appServer: CodexAppServerRuntimeOptions;
@@ -104,6 +105,7 @@ export async function startCodexAttemptThread(params: {
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
   onDeveloperInstructions?: Parameters<typeof startOrResumeThread>[0]["onDeveloperInstructions"];
+  systemPromptReplaced?: boolean;
   refreshableInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
@@ -265,7 +267,10 @@ export async function startCodexAttemptThread(params: {
                 return;
               }
               startupClientLeaseReleased = true;
-              if (params.attemptClientFactory === createIsolatedCodexAppServerClient) {
+              if (
+                params.callerOwnedAttemptClient ||
+                params.attemptClientFactory === createIsolatedCodexAppServerClient
+              ) {
                 activeStartupClient.close();
               } else {
                 releaseLeasedSharedCodexAppServerClient(activeStartupClient);
@@ -363,6 +368,7 @@ export async function startCodexAttemptThread(params: {
                 sandbox: params.sandbox,
                 nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
                 sandboxExecServerEnabled: params.sandboxExecServerEnabled,
+                pluginConfig: params.pluginConfig,
               });
               enterStartupStage("sandbox-environment");
               startupSandboxEnvironment = sandboxEnvironmentRequired
@@ -456,6 +462,7 @@ export async function startCodexAttemptThread(params: {
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
                 onDeveloperInstructions: params.onDeveloperInstructions,
+                systemPromptReplaced: params.systemPromptReplaced,
                 refreshableInstructions: params.refreshableInstructions,
                 agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
                 config: threadConfig,

@@ -107,6 +107,7 @@ export type GitHubPublicationCoordinator = ReturnType<typeof createGitHubPublica
 
 export function createGitHubPublicationCoordinator(params: {
   placements: WorkerSessionPlacementStore;
+  environments?: Parameters<typeof createRepositoryGitHubPublicationCoordinator>[0]["environments"];
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent?: () => void;
   signal?: AbortSignal;
@@ -650,7 +651,9 @@ export function createGitHubPublicationCoordinator(params: {
     async deferOrphanedRequestsAsync(
       isPendingEmpty?: (kind: "shared" | "repository") => boolean,
     ): Promise<void> {
-      await methods.deferOrphanedRequestsAsync();
+      if (!isPendingEmpty?.("shared")) {
+        await methods.deferOrphanedRequestsAsync();
+      }
       if (!isPendingEmpty?.("repository")) {
         await repository.deferOrphanedRequestsAsync();
       }

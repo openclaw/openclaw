@@ -3,11 +3,16 @@ import {
   hasSqliteDatabaseSchemaAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
 } from "../../infra/sqlite-database-admission.js";
+import { getArtifactPreservingSqliteRead } from "../../infra/sqlite-snapshot-source.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runWithAgentDatabaseReadAdmissionTurn } from "../../state/agent-database-admission.js";
+import {
+  captureAgentDatabaseAdmission,
+  runWithAgentDatabaseReadAdmissionTurn,
+} from "../../state/agent-database-admission.js";
+import { getAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -137,6 +142,10 @@ export function retainSessionHistoryWorkerDatabase(
 ) {
   const owned = acquireHistoryDatabaseResource(options);
   const { database } = owned;
+  const assertAgentAdmitted = captureAgentDatabaseAdmission(database.agentId, {
+    env: options.env,
+    access: "read",
+  });
   let knownSource = false;
   const assertCurrent = () => {
     if (owned.revoked) {
@@ -250,19 +259,25 @@ export function retainSessionHistoryWorkerDatabase(
         };
         try {
           const reply = await admit((requestSignal, remaining) => {
-            // A writer ahead of this read can renew the receipt during admission.
-            const validation = preserveSourceArtifacts
-              ? undefined
-              : captureOpenClawAgentDatabaseReadValidation(
-                  database,
-                  owned.nativeLanes.has(requestLane) ? "retained" : "admission",
-                );
             return runWithAgentDatabaseReadAdmissionTurn(
               [database.path],
-              () =>
-                requestLane.pool.run(
+              () => {
+                // A preceding writer can renew this physical proof while admission waits.
+                const validation = preserveSourceArtifacts
+                  ? undefined
+                  : captureOpenClawAgentDatabaseReadValidation(
+                      database,
+                      owned.nativeLanes.has(requestLane) ? "retained" : "admission",
+                    );
+                return requestLane.pool.run(
                   () => {
                     assertCurrent();
+                    const cleanup = getAgentDeletionDatabaseCleanup(readOptions);
+                    if (cleanup) {
+                      cleanup.assertCurrentHost();
+                    } else if (!preserveSourceArtifacts) {
+                      assertAgentAdmitted();
+                    }
                     options.prepareRead?.();
                     const input = prepare();
                     if (preserveSourceArtifacts && input.kind === "session-exact-entries") {
@@ -280,6 +295,7 @@ export function retainSessionHistoryWorkerDatabase(
                         );
                       }
                       input.preserveSourceArtifacts = true;
+                      input.inspectionSnapshot = getArtifactPreservingSqliteRead(database.path);
                       input.inspectionSourcePath = options.readSourcePath;
                       inspectionIdentity ??= input.expectedIdentity;
                       if (inspectionIdentity) {
@@ -303,12 +319,16 @@ export function retainSessionHistoryWorkerDatabase(
                       ...input,
                       database,
                       validation: validation?.validation,
-                      projectionReceipt: projectionReceipt && {
-                        ...projectionReceipt,
-                        ...(input.kind === "history-page" && !projectionReceipt.entrySessionKey
-                          ? { contextOnly: true }
-                          : {}),
-                      },
+                      projectionReceipt:
+                        projectionReceipt &&
+                        (input.kind === "history-page"
+                          ? {
+                              ...projectionReceipt,
+                              entrySessionKey: undefined,
+                              facts: undefined,
+                              contextOnly: true,
+                            }
+                          : projectionReceipt),
                     } satisfies SessionTranscriptWorkerRequest;
                   },
                   {
@@ -339,7 +359,8 @@ export function retainSessionHistoryWorkerDatabase(
                       }
                     },
                   },
-                ),
+                );
+              },
               [],
               requestSignal,
               readAdmissionOptions,

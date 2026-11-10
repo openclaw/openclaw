@@ -24,8 +24,12 @@ Enable **Templates** in **Settings → Labs** before adding one. On a headless i
 `gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
 Authoring and inspecting local Template packages do not require the Labs toggle.
 
-The CLI accepts a local package directory, `CLAW.md`, or grouped JSON manifest.
-JSON manifests, `package.json`, and OpenClaw YAML profiles must contain valid UTF-8.
+`templates add` accepts a ClawHub package name, a canonical local package directory,
+or `CLAW.md` with YAML frontmatter. Other source-reading commands remain local-only.
+Packages must declare `package.json.openclaw.template` as a safe package-relative
+path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
+`openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
+`CLAW.md`, `package.json`, and OpenClaw YAML profiles must contain valid UTF-8.
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
 Add refuses it before creating an agent or workspace.
 Publishing and searching Templates through ClawHub use the separate registry
@@ -84,6 +88,13 @@ starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
 deterministic `.tgz` and refuses to overwrite an existing file.
 
+`validate` and `build` accept a project-directory symlink and resolve the
+canonical project root. Manifest confinement and managed source-file checks
+remain unchanged.
+
+For `create`, omit `--name` and `--agent-id` to use default identities. Explicitly
+empty values are invalid and fail before project files are written.
+
 A minimal `package.json` identifies the package and its manifest:
 
 ```json
@@ -109,7 +120,7 @@ workspace:
   bootstrapFiles: {}
 packages: []
 mcpServers: {}
-cronJobs: []
+automations: []
 ---
 
 # Incident triage
@@ -168,13 +179,17 @@ mcpServers:
     args: ["--yes", "@acme/statuspage-mcp@1.0.0"]
     env:
       STATUSPAGE_TOKEN: "${STATUSPAGE_TOKEN}"
-cronJobs:
+automations:
   - id: daily-summary
     name: Daily incident summary
     schedule: { cron: "0 9 * * *", timezone: UTC }
     session: isolated
     message: Summarize active incidents.
 ```
+
+Use `automations` for scheduled work. Older published manifests using `cronJobs`
+remain readable and are normalized to `automations`. Declaring both keys is an
+error; move the declarations to `automations` and remove `cronJobs`.
 
 Environment values remain unresolved references; never package credentials.
 Shared plugins and MCP servers must match existing declarations exactly or Add
@@ -228,14 +243,39 @@ Add it to create a new ordinary agent:
 openclaw templates add ./incident-triage
 ```
 
+Add a published ClawHub Template directly, or preview the same flow first:
+
+```bash
+openclaw templates add @openclaw/api-integration-engineer --dry-run --json
+openclaw templates add @openclaw/api-integration-engineer
+```
+
+A registry name resolves the latest published release to an exact version and
+immutable artifact digest before planning. OpenClaw uses its existing registry
+trust checks, verifies the downloaded artifact, and safely extracts it under
+bounded package limits. The extracted source is temporary and is cleaned up
+after planning or Add; it is not an installed Template lifecycle. An existing
+local path takes precedence over a registry name; use `./name` to make a local
+source explicit.
+
+Registry previews require network access but do not create an agent, workspace,
+installed dependency, or retained Template source. Review the exact version,
+digest, requirements, and trust warnings in `--dry-run --json` output. A warned
+Template release requires `--acknowledge-clawhub-risk` when adding it. Template
+approval never approves its skill or plugin dependencies: their existing trust
+acknowledgments and `--accept-capabilities` checks still apply independently.
+
 Each Add chooses an unused agent ID. The CLI reports that ID so you can open
 or configure the agent afterward. The Control UI opens the new agent's chat
 and starts with "What can you do?" after a successful Add.
 
-`--dry-run --json` remains available for automation or offline inspection.
+`--dry-run --json` remains available for automation or local-source inspection.
 `--agent-id` and `--workspace` override the default destination with an
 unused ID or new path. Ordinary Add does not require a separate plan or
 review token. Exceptional trust warnings can still require explicit consent.
+
+For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
+to use the default unused ID.
 
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
@@ -270,7 +310,7 @@ There is no Template ownership record or reverse-install operation.
 | `templates validate [path]`          | Validate project inputs and package contents.    |
 | `templates dev [path]`               | Build and preview locally without mutation.      |
 | `templates build [path] --out <tgz>` | Build a deterministic package artifact.          |
-| `templates inspect <source>`         | Inspect a package or grouped manifest.           |
+| `templates inspect <source>`         | Inspect a canonical package or `CLAW.md`.        |
 | `templates add <source>`             | Create a new agent and install its requirements. |
 
 Use `--json` for experimental machine-readable output. Validation errors,

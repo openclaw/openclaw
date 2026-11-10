@@ -4,6 +4,8 @@ import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
+import { registryFor } from "../../components/overlay-registry.ts";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
@@ -35,9 +37,12 @@ const MobileHostPage = lazy(() => import("./chat-mobile-host.runtime.tsx"), {
   export: "MobileHostPage",
 });
 
-const ChatSidebarRegion = lazy(() => import("./components/chat-sidebar-region.runtime.tsx"), {
-  export: "ChatSidebarRegion",
-});
+export const ChatSidebarRegion = lazy(
+  () => import("./components/chat-sidebar-region.runtime.tsx"),
+  {
+    export: "ChatSidebarRegion",
+  },
+);
 
 function MobileHostBoundary(props: { children: Element; fallback?: Element }) {
   return (
@@ -89,6 +94,21 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
     (previous) => previous === true || Boolean(props.mobileHost),
   );
   const mobileVisible = () => Boolean(props.mobileHost?.open && !props.mobileHost.suspended);
+  // Direction of the latest in-sheet navigation: 1 pushes deeper, -1 pops back.
+  const mobileNavigation = createMemo<{ depth: number; push?: 1 | -1 } | undefined>((previous) => {
+    const destination = props.mobileHost?.destination;
+    if (!destination || !mobileVisible()) {
+      return undefined;
+    }
+    let depth = destination.page ? 1 : 0;
+    for (let entry = destination.backTo; entry; entry = entry.backTo) {
+      depth += 1;
+    }
+    if (!previous || depth === previous.depth) {
+      return { depth };
+    }
+    return { depth, push: depth > previous.depth ? 1 : -1 };
+  });
   const panelsVisible = () => props.mobileHost?.destination.area === "panels";
   const detailsChild = () => Boolean(props.mobileHost?.destination.page);
   const column = () => props.layout.columns[0];
@@ -126,7 +146,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
                   <header class="rail-header">
                     <strong>{definition().label}</strong>
                     <button
-                      class="rail-header__action"
+                      class="oc-icon-button oc-icon-button--28 rail-header__action"
                       type="button"
                       aria-label={t("chat.sidebarColumns.close", { panel: definition().label })}
                       onClick={() => props.callbacks.closeSlot(panel().slot)}
@@ -196,6 +216,44 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
   return (
     <div
       ref={[(element) => (region = element), elementRef(props.onRegionElementRef)]}
+      onKeyDown={(event) => {
+        // Portalled panels skip the physical host in Solid's delegated event path.
+        // Stay after child handlers so their Escape handling takes precedence.
+        if (
+          event.key !== "Escape" ||
+          event.isComposing ||
+          event.keyCode === 229 ||
+          event.defaultPrevented
+        ) {
+          return;
+        }
+        const host = props.mobileHost;
+        // Document-bubble overlays (including a menu focused on its trigger) own Escape first.
+        if (
+          host &&
+          event.composedPath().includes(shell) &&
+          !registryFor(shell.ownerDocument).stack.length
+        ) {
+          event.preventDefault();
+          host.close();
+        }
+      }}
+      onFocusIn={(event) => {
+        const host = props.mobileHost;
+        if (host?.mode !== "dock" || !event.composedPath().includes(shell)) {
+          return;
+        }
+        const target = event.target;
+        if (
+          target instanceof HTMLElement &&
+          (target.matches(
+            "textarea:not([readonly]):not([disabled]), input:not([readonly]):not([disabled]):not([type=button]):not([type=submit]):not([type=reset]):not([type=color]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file])",
+          ) ||
+            target.isContentEditable)
+        ) {
+          host.toggleExpanded(shell.getBoundingClientRect().height);
+        }
+      }}
       data-mobile-open={props.mobileHost && mobileVisible() ? "" : undefined}
       class={[
         "sidebar-region",
@@ -266,17 +324,14 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       </div>
       <Show when={props.externalPanelsToggle}>
         <div class="sidebar-region__panels-toggle">
-          <openclaw-tooltip prop:content={t("chat.sessionHeader.panels")}>
-            <button
-              type="button"
-              class="btn btn--ghost btn--icon chat-icon-btn chat-pane__panels-toggle"
-              aria-label={t("chat.sessionHeader.panels")}
-              aria-expanded={sideVisible() ? "true" : "false"}
-              onClick={() => props.callbacks.setOpen(!sideVisible())}
-            >
-              <Icon name={sideVisible() ? "sessionPanelsActive" : "sessionPanels"} />
-            </button>
-          </openclaw-tooltip>
+          <IconButton
+            size={28}
+            class="chat-pane__panels-toggle"
+            label={t("chat.sessionHeader.panels")}
+            icon={sideVisible() ? "sessionPanelsActive" : "sessionPanels"}
+            aria-expanded={sideVisible() ? "true" : "false"}
+            onClick={() => props.callbacks.setOpen(!sideVisible())}
+          />
         </div>
       </Show>
       <div
@@ -302,29 +357,10 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         data-mode={props.mobileHost?.mode}
         data-presentation={props.mobileHost?.destination.page?.presentation}
         data-mobile-page={props.mobileHost?.destination.page?.key}
+        style={{ "--mobile-push": mobileNavigation()?.push }}
         hidden={Boolean(props.mobileHost) && !mobileVisible()}
         inert={Boolean(props.mobileHost) && !mobileVisible()}
         aria-label={props.mobileHost ? t("chat.sessionHeader.panels") : undefined}
-        onKeyDown={(event) => {
-          // Keep delegated ordering: an open menu consumes Escape before its host closes.
-          if (event.key === "Escape" && !event.defaultPrevented && props.mobileHost) {
-            event.preventDefault();
-            props.mobileHost.close();
-          }
-        }}
-        onFocusIn={(event) => {
-          const target = event.target;
-          if (
-            props.mobileHost?.mode === "dock" &&
-            target instanceof HTMLElement &&
-            (target.matches(
-              "textarea:not([readonly]):not([disabled]), input:not([readonly]):not([disabled]):not([type=button]):not([type=submit]):not([type=reset]):not([type=color]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file])",
-            ) ||
-              target.isContentEditable)
-          ) {
-            props.mobileHost.toggleExpanded(shell.getBoundingClientRect().height);
-          }
-        }}
       >
         <Show when={mobileActivated()}>
           <MobileHostBoundary

@@ -869,6 +869,97 @@ console.log("relocated Bash parser works without native grammar package");
     }
   });
 
+  it("highlights from one bundled chunk in a relocated package", async () => {
+    const root = fs.realpathSync(createTempDir("openclaw-highlight-package-"));
+    const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    expect(selected).toBeDefined();
+    const outDir = path.join(root, "build");
+    const entry = "extensions/fixture/highlighter";
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      entry: { [entry]: path.resolve("src/agents/utils/syntax-highlight.ts") },
+      outDir,
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      const installed = path.join(root, "installed package");
+      fs.mkdirSync(installed);
+      fs.writeFileSync(path.join(installed, "package.json"), JSON.stringify({ type: "module" }));
+      fs.renameSync(outDir, path.join(installed, "dist"));
+      const require = createRequire(import.meta.url);
+      // Install only the entity decoder the highlighter keeps external.
+      fs.cpSync(
+        fs.realpathSync(path.resolve("node_modules/entities")),
+        path.join(installed, "node_modules/entities"),
+        { recursive: true },
+      );
+      expect(fs.readFileSync(path.join(installed, "dist/highlight.js.LICENSE"))).toEqual(
+        fs.readFileSync(
+          path.join(path.dirname(require.resolve("highlight.js/package.json")), "LICENSE"),
+        ),
+      );
+      const samples = [
+        ["typescript", "const answer: number = 42; // done"],
+        ["python", "def f(x):\n    return f'{x!r}'"],
+        ["bash", 'echo "$(whoami)" | grep -v root'],
+        ["json", '{"a": [1, true, null]}'],
+        ["rust", "fn main() { let v: Vec<u8> = vec![]; }"],
+      ] as const;
+      const script = `
+import assert from "node:assert/strict";
+import { createRequire, registerHooks } from "node:module";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const [entryPath, samplesJson] = process.argv.slice(1);
+const entry = pathToFileURL(entryPath);
+// The relocated package must not reach the source checkout's highlight.js.
+const packageRoot = pathToFileURL(process.cwd() + path.sep).href;
+registerHooks({ resolve(specifier, context, nextResolve) {
+  const resolved = nextResolve(specifier, context);
+  if (resolved.url.startsWith("file:") && !resolved.url.startsWith(packageRoot)) {
+    throw Object.assign(new Error("Dependency escaped relocated package: " + specifier), { code: "MODULE_NOT_FOUND" });
+  }
+  return resolved;
+} });
+assert.throws(() => createRequire(entry).resolve("highlight.js"), { code: "MODULE_NOT_FOUND" });
+const { highlight, supportsLanguage } = await import(entry.href);
+const theme = new Proxy({}, { get: (_, scope) => (text) => "<" + String(scope) + ">" + text + "</>" });
+console.log(JSON.stringify(JSON.parse(samplesJson).map(([language, code]) => [supportsLanguage(language), highlight(code, language, theme)])));
+`;
+      const result = await runNodeFixture(
+        [
+          "--input-type=module",
+          "--eval",
+          script,
+          path.join(installed, "dist", `${entry}.js`),
+          JSON.stringify(samples),
+        ],
+        { cwd: installed, timeout: 30_000 },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      const { highlight, supportsLanguage } =
+        await import("../../src/agents/utils/syntax-highlight.js");
+      const theme = new Proxy(
+        {},
+        { get: (_, scope) => (text: string) => `<${String(scope)}>${text}</>` },
+      );
+      const rendered = JSON.parse(result.stdout);
+      expect(rendered[0]).toEqual([true, expect.stringContaining("<keyword>const</>")]);
+      expect(rendered).toEqual(
+        samples.map(([language, code]) => [
+          supportsLanguage(language),
+          highlight(code, language, theme),
+        ]),
+      );
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it("renders session cards with fonts from a relocated package", async () => {
     const root = fs.realpathSync(createTempDir("openclaw-session-card-package-"));
     const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
@@ -1361,6 +1452,7 @@ console.log("relocated session card renders with bundled fonts");
       "sdk",
       "retry",
       "normalization-core",
+      "model-catalog-core",
       "net-policy",
       "media-understanding-common",
       "media-generation-core",
@@ -1491,7 +1583,7 @@ console.log("relocated session card renders with bundled fonts");
       declarationSources.filter(
         (source) => source.startsWith("src/") && !source.startsWith("src/plugin-sdk/"),
       ),
-    ).toEqual(["src/index.ts"]);
+    ).toEqual(["src/index.ts", "src/runtime-artifacts.ts"]);
     expect(
       declarationSources.filter((source) => source.startsWith("extensions/anthropic/")).toSorted(),
     ).toEqual(["extensions/anthropic/api.ts", "extensions/anthropic/contract-api.ts"]);

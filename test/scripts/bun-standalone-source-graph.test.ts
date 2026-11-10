@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,17 +8,12 @@ import { createStandaloneSourceGraph } from "../../scripts/lib/bun-standalone-so
 import { prepareStandaloneWorkers } from "../../scripts/lib/bun-standalone-workers.mjs";
 import { collectNativeTypeScriptDiagnostics } from "../../scripts/lib/native-typescript-diagnostics.mts";
 import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-source-graph-"));
-  roots.push(root);
+  const root = tempDirs.make("openclaw-source-graph-");
   const sourceRoot = path.join(root, "source");
   const outputRoot = path.join(root, "output");
   const runtimeRoot = path.join(outputRoot, "runtime");

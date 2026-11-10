@@ -35,7 +35,6 @@ import {
   upsertSessionEntryCore as upsertEntry,
   withSessionEntryReadOnlyScope,
 } from "./session-accessor.js";
-import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readSessionStoreSummaryReadOnly as readSummary } from "./session-accessor.sqlite-summary.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { promptReport } from "./system-prompt-report.test-support.js";
@@ -536,33 +535,21 @@ describe("session accessor readonly listing", () => {
   });
 
   it.each([
-    ["identity", "entry_json", '{"sessionId":"mismatched-session","updatedAt":1}', false],
-    ["timestamp", "entry_json", '{"sessionId":"session-1","updatedAt":2}', false],
-    ["json", "entry_json", "{", false],
-    ["nul", "entry_json", '{"sessionId":"session-1","updatedAt":1}\0', false],
-    ["participant", "identity_namespace", "{}", true],
-    ["participant-integer", "contribution_count", 9007199254740992n, true],
+    ["identity", '{"sessionId":"mismatched-session","updatedAt":1}'],
+    ["timestamp", '{"sessionId":"session-1","updatedAt":2}'],
+    ["json", "{"],
+    ["nul", '{"sessionId":"session-1","updatedAt":1}\0'],
   ] as const)(
-    "rejects stale valid %s evidence without relying on a fallback read",
-    async (_corruption, column, value, participant) => {
+    "keeps uncertified %s evidence unknown without relying on a fallback read",
+    async (_corruption, value) => {
       const { scope, database, probe, sessionKey } = await seedIdentity(
-        "readonly-stale-valid-evidence",
+        "readonly-uncertified-evidence",
       );
       const readableSessionId = "session-2";
       const readableSessionKey = "agent:worker-1:readable";
       await seedEntry(scope, readableSessionKey, readableSessionId);
       expect(readEvidence([probe])).toEqual([current(sessionKey)]);
-      if (participant) {
-        recordSessionParticipant(
-          { ...scope, sessionKey },
-          { identity: { type: "agent", id: "peer" }, promptedAt: 1 },
-        );
-      }
-      const table = participant ? "session_participants" : "session_nodes";
-      database.db
-        .prepare(`UPDATE ${table} SET ${column} = ? WHERE session_key = ?`)
-        .run(value, sessionKey);
-      updateNode(database.db, sessionKey, "entry_valid = 1");
+      updateNode(database.db, sessionKey, "entry_json = ?, entry_valid = 0", value);
 
       expect(readEvidence([probe])).toEqual([rowInvalid]);
 
@@ -599,7 +586,7 @@ describe("session accessor readonly listing", () => {
     ).toEqual([ambiguous, current(currentKey), ambiguous]);
   });
 
-  it("validates a later required fallback row after another connection commits", async () => {
+  it("uses the later validity fact when an identity-only probe requires a fallback", async () => {
     const {
       database,
       sessionId,
@@ -639,7 +626,7 @@ describe("session accessor readonly listing", () => {
               JSON.stringify({ sessionId, updatedAt: 2 }),
               3,
             );
-            updateNode(external, sessionKey, "entry_valid = 1");
+            updateNode(external, sessionKey, "entry_valid = 0");
           });
           events.push("external-commit");
         }

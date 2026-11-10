@@ -34,6 +34,7 @@ import {
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 export { createCodexDynamicToolBridge };
+export type { JsonObject };
 
 /** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */
 export async function createCodexSessionInitializationFixtureForTest(params: {
@@ -162,7 +163,13 @@ export const loadCodexDynamicToolBuildTestFixture = () =>
 
 export const loadCodexNativeWebSearchTestFixture = () => import("./native-web-search.test-api.js");
 
+export const loadCodexNativeSearchAuthorityTestFixture = () =>
+  import("./src/app-server/native-search-authority.test-support.js");
+
 export const loadCodexAccountUsageTestFixture = () => import("./src/account-usage.test-support.js");
 
 export const loadCodexSubscriptionRoutingTestFixture = () =>
   import("./src/app-server/subscription-routing.test-support.js");
+
+export const loadNativeCommandGatewayTestFixture = () =>
+  import("./src/app-server/native-command-auth.test-support.js");

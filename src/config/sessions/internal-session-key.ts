@@ -39,3 +39,15 @@ export function isInternalSessionEffectsKey(sessionKey: string): boolean {
   const agentEnd = sessionKey.indexOf(":", 6);
   return agentEnd >= 0 && sessionKey.startsWith(INTERNAL_SESSION_EFFECTS_REST_PREFIX, agentEnd + 1);
 }
+
+/**
+ * The stable part of an internal-effects key: its per-run suffix is dropped, so every hidden run
+ * of one agent shows the same session identity. Undefined for other keys.
+ */
+export function internalSessionEffectsBaseKey(sessionKey: string): string | undefined {
+  if (!isInternalSessionEffectsKey(sessionKey)) {
+    return undefined;
+  }
+  const agentEnd = sessionKey.indexOf(":", 6);
+  return sessionKey.slice(0, agentEnd + 1 + INTERNAL_SESSION_EFFECTS_SEGMENT.length);
+}

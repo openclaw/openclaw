@@ -101,27 +101,43 @@ export async function cleanupOpenShellWorkspace(params: {
     runCommand({ command, env, args, timeoutMs });
   const runSandbox = (args: string[]) => run(["--workspace", workspace, "sandbox", ...args]);
   const ownedNames = new Set(sandboxNames);
-  const inventoryLimit = String(ownedNames.size + 1);
+  const inventoryPageSize = String(ownedNames.size + 1);
   const listNames = async () => {
-    const result = await runSandbox(["list", "--limit", inventoryLimit, "--output", "json"]);
-    remainingMs();
-    const sandboxes = z
-      .array(z.object({ name: z.string().min(1) }))
-      .parse(JSON.parse(result.stdout));
-    const names = sandboxes.map((sandbox) => sandbox.name);
-    // This isolated workspace contains only the fixture's owned sandboxes. An extra
-    // row or unexpected name must fail, never masquerade as a complete inventory.
-    if (new Set(names).size !== names.length || names.some((name) => !ownedNames.has(name))) {
-      throw new Error("Unexpected sandbox inventory in OpenShell fixture workspace");
-    }
-    return names;
+    const names = new Set<string>();
+    let pageToken = "";
+    do {
+      const result = await runSandbox([
+        "list",
+        "--page-size",
+        inventoryPageSize,
+        ...(pageToken ? ["--page-token", pageToken] : []),
+        "--output",
+        "json",
+      ]);
+      remainingMs();
+      const page = z
+        .object({
+          sandboxes: z.array(z.object({ name: z.string().min(1) })),
+          next_page_token: z.string(),
+        })
+        .parse(JSON.parse(result.stdout));
+      // Validate the complete inventory before deleting any owned sandbox.
+      for (const { name } of page.sandboxes) {
+        if (names.has(name) || !ownedNames.has(name)) {
+          throw new Error("Unexpected sandbox inventory in OpenShell fixture workspace");
+        }
+        names.add(name);
+      }
+      pageToken = page.next_page_token;
+    } while (pageToken);
+    return [...names];
   };
   const presentNames = await listNames();
   const failures: unknown[] = [];
   for (const sandboxName of [...ownedNames].filter((name) => presentNames.includes(name))) {
     try {
       await runSandbox(["delete", sandboxName]);
-      // OpenShell v0.0.109 acknowledges deletion before its controller removes the
+      // OpenShell acknowledges deletion before its controller removes the
       // durable row. Observe absence before deleting the workspace; never retry errors.
       while (failures.length === 0 && (await listNames()).includes(sandboxName)) {
         await delay(Math.min(250, remainingMs()));

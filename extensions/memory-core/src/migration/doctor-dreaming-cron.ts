@@ -196,7 +196,7 @@ export const dreamingCronMigration: PluginDoctorStateMigration = {
               : `Retired ${result.changed} managed dreaming cron row(s) because dreaming is disabled. SQLite backup: ${result.backupPath}.`,
           ]
         : [],
-      warnings: plan.warnings,
+      warnings: [...plan.warnings, ...(result.warnings ?? [])],
       warningDisposition: "recoverable",
     };
   },

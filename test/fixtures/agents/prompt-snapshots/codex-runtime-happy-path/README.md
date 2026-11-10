@@ -8,7 +8,7 @@ These fixtures capture the default OpenAI/Codex happy path for prompt review:
 - Codex harness default coverage for tool-only visible source replies.
 - Telegram direct chat and Discord group chat with ordinary visible replies through the message tool.
 
-The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.
+The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: OpenClaw base instructions, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.
 
 The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how managed OpenClaw inference adds profile files to parent-only request instructions and keeps `MEMORY.md` in turn input. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.
 
@@ -26,13 +26,7 @@ node --import tsx scripts/generate-prompt-snapshots.ts --materialize discord-gro
 
 Use `telegram-direct` to inspect the complete base catalog.
 
-The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from Codex's runtime cache or, when present, a local Codex checkout with:
-
-```sh
-pnpm prompt:snapshots:sync-codex-model
-```
-
-These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native `AGENTS.md`, environment context, memories, and app/plugin instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params. Ordinary managed sessions suppress native Default-mode rendering; the snapshots include the managed collaboration policy in OpenClaw developer instructions.
+These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.
 
 Regenerate with:
 
@@ -52,8 +46,3 @@ Snapshots:
 - discord-group-codex-message-tool.md.diff
 - codex-dynamic-tools.telegram-direct.json
 - codex-dynamic-tools.discord-group.json
-
-Codex model prompt fixtures:
-
-- ../codex-model-catalog/gpt-5.5.pragmatic.instructions.md
-- ../codex-model-catalog/gpt-5.5.pragmatic.source.json

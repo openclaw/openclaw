@@ -94,7 +94,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
                 String.raw`^invalid sessions\.github\.action params:.*unexpected property '${Object.keys(extra)[0]}'`,
                 "u",
               )
-            : "request_review only posts the fixed ClawSweeper command on the current session PR.",
+            : /request_review only posts the fixed ClawSweeper command/u,
         );
       }
     }

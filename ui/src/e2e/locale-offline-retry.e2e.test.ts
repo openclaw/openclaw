@@ -73,6 +73,10 @@ suite.define(() => {
     await expect.poll(() => heading.textContent()).toBe("外观");
     expect(localeRequests).toBe(1);
 
+    await selectPickerValue(picker, "ca");
+    await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("ca");
+    expect(await picker.locator(".picker-select__trigger").textContent()).toContain("Català");
+
     await selectPickerValue(picker, "en");
     await expect.poll(() => heading.textContent()).toBe("Appearance");
     expect(new URL(page.url()).pathname).toBe("/settings/appearance");

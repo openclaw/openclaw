@@ -34,6 +34,7 @@ import {
   runNativeTurn,
   sendNativeResponse,
 } from "./thread-native.test-support.js";
+import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 import { buildCodexThreadConfiguration } from "./thread-requests.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -253,6 +254,109 @@ it(
       expect(await successor.closeAndWait()).toMatchObject({ exited: true });
       shared.liveClients.delete(old);
       shared.entriesByClient.delete(old);
+    }
+  },
+);
+
+it(
+  "takes the writer from a live previous owner before resuming on another client",
+  { timeout: 30_000 },
+  async (context) => {
+    const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+      context.onTestFinished(async () => {
+        await closeOpenClawStateDatabaseAsync();
+        cleanup();
+      }),
+    );
+    const root = await fs.realpath(tempDirs.make("codex-handoff-live-owner-"));
+    const native = await createCodexNativeTestState(root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("HOME", native.env.HOME);
+    vi.stubEnv("CODEX_HOME", native.codexHome);
+    let providerRequests = 0;
+    const port = await listenForNativeResponses(context, (request, response) => {
+      request.resume();
+      request.on("end", () => {
+        if (request.method !== "POST" || request.url !== "/v1/responses") {
+          response.writeHead(404).end();
+          return;
+        }
+        providerRequests += 1;
+        sendNativeResponse(response, "live-owner-response-" + providerRequests, {
+          type: "message",
+          role: "assistant",
+          id: "live-owner-answer-" + providerRequests,
+          content: [{ type: "output_text", text: "NATIVE_HANDOFF_OK" }],
+        });
+      });
+    });
+    await fs.writeFile(
+      path.join(native.codexHome, "config.toml"),
+      nativeProviderConfig(
+        "handoff-proof",
+        port,
+        ['sandbox_mode="read-only"', "allow_login_shell=false", "thread_unload_delay_secs=0"],
+        ["shell_snapshot=false"],
+      ),
+    );
+    const appServer = { ...nativeAppServerOptions(native), sandbox: "read-only" as const };
+    const owner = await CodexAppServerClient.start(appServer.start);
+    await owner.initialize();
+    ensureCodexAppServerClientRuntime(owner, { agentDir: path.join(root, "agent") });
+    // A command connection that attached the thread stays live and keeps its subscription.
+    const shared = getSharedCodexAppServerClientState();
+    const entry = getOrCreateSharedClientEntry(shared, "native-live-owner");
+    entry.client = owner;
+    shared.liveClients.add(owner);
+    shared.entriesByClient.set(owner, entry);
+    const releaseOwner = retainSharedClientEntry(entry);
+    const successor = await createIsolatedCodexAppServerClient({
+      startOptions: appServer.start,
+      agentDir: path.join(root, "agent"),
+      authProfileId: null,
+      config: {},
+      timeoutMs: 10_000,
+    });
+    try {
+      const params = {
+        ...createParams(path.join(root, "session.jsonl"), native.cwd),
+        agentId: "main",
+        agentDir: path.join(root, "agent"),
+        modelId: "gpt-5.6-luna",
+        disableTools: false,
+      };
+      const common = {
+        bindingStore: createCodexAppServerBindingStore(createCodexTestBindingStateStore()),
+        params,
+        cwd: native.cwd,
+        dynamicTools: [],
+        appServer,
+        userMcpServersEnabled: false,
+        signal: AbortSignal.timeout(20_000),
+      };
+      const target = await startOrResumeThread({ ...common, client: owner });
+      await expect(
+        runNativeTurn(owner, target.threadId, "Start this conversation."),
+      ).resolves.toMatchObject({ status: "completed" });
+      // The finished turn hands its claim to the owner's warm retention, as `/codex resume` does.
+      await expect(
+        retainCodexAppServerBindingSubscription(owner, target.threadId, target.liveThreadOwnership),
+      ).resolves.toBe(true);
+      const resumed = await startOrResumeThread({ ...common, client: successor });
+      expect(resumed).toMatchObject({
+        threadId: target.threadId,
+        lifecycle: { action: "resumed" },
+      });
+      await expect(
+        runNativeTurn(successor, resumed.threadId, "Continue on the turn connection."),
+      ).resolves.toMatchObject({ status: "completed" });
+      expect(owner.getCloseError()).toBeUndefined();
+    } finally {
+      releaseOwner();
+      shared.liveClients.delete(owner);
+      shared.entriesByClient.delete(owner);
+      await owner.closeAndWait();
+      await successor.closeAndWait();
     }
   },
 );

@@ -54,6 +54,24 @@ struct TalkModeGatewayConfigState {
     let defaultOutputFormat: String?
     let realtimeModelId: String?
     let rawConfigApiKey: String?
+
+    /// Settings a prefetched realtime session is bound to; a change makes that session stale.
+    struct RealtimeSessionIdentity: Equatable {
+        let route: TalkModeRuntimeRoute
+        let provider: String?
+        let model: String?
+        let voice: String?
+        let providerConfig: [String: AnyCodable]?
+    }
+
+    var realtimeSessionIdentity: RealtimeSessionIdentity {
+        RealtimeSessionIdentity(
+            route: self.route,
+            provider: self.snapshot.realtime.provider,
+            model: self.realtimeModelId,
+            voice: self.snapshot.realtime.voice,
+            providerConfig: self.snapshot.realtime.providerConfig)
+    }
 }
 
 enum TalkModeGatewayConfigParser {

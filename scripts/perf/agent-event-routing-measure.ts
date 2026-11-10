@@ -4,7 +4,7 @@
 // --events 20000 [--allocation]. Run CPU and sampled-allocation passes separately.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import {
@@ -18,7 +18,7 @@ import {
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../src/infra/agent-run-registry.js";
-import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -61,9 +61,6 @@ function batch(count: number) {
     emitAgentEvent(inputs[index % runs.length]![phase === 0 ? 1 : phase === 99 ? 2 : 0]!);
   }
 }
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async () => {
   for (const runId of runs) {
     registerAgentRunContext(runId, {
@@ -95,7 +92,7 @@ await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async 
   let allocatedBytes: number | undefined;
   if (values.allocation) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
-    allocatedBytes = allocated(profile.head);
+    allocatedBytes = sumSampledHeapBytes(profile.head);
     inspector.disconnect();
   }
   assert.equal(deliveries, events * 64);

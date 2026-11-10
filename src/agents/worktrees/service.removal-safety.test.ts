@@ -29,7 +29,8 @@ import { readExactStateSnapshot } from "./snapshot-exact-state.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 describe("managed removal custody", () => {
-  const read = (directory: string) => fs.readFile(path.join(directory, "README.md"), "utf8");
+  const read = (directory: string, file = "README.md") =>
+    fs.readFile(path.join(directory, file), "utf8");
   const write = (directory: string, content: string) =>
     fs.writeFile(path.join(directory, "README.md"), content);
 
@@ -164,21 +165,15 @@ describe("managed removal custody", () => {
     expect(await read(created.path)).toBe("hidden change\n");
   });
 
-  it.each([
-    { missing: false, outcome: "archives" },
-    { missing: true, outcome: "preserves" },
-  ])("$outcome a clean partial worktree (missing=$missing)", async ({ missing }) => {
+  it.each(["local", "promisor", "unavailable", "corrupt"])("removal (%s)", async (state) => {
     const source = repo;
+    await fs.writeFile(path.join(source, "second.txt"), "second blob\n");
+    await git(source, "add", ".");
+    await git(source, "commit", "-m", "two promised blobs");
     await git(source, "config", "uploadpack.allowFilter", "true");
     repo = path.join(root, "partial");
-    await git(
-      root,
-      "clone",
-      "--filter=blob:none",
-      "--no-checkout",
-      pathToFileURL(source).href,
-      repo,
-    );
+    const url = pathToFileURL(source).href;
+    await git(root, "clone", "--filter=blob:none", "--no-checkout", url, repo);
     const packDirectory = path.join(repo, ".git", "objects", "pack");
     const initialPacks = new Set(await fs.readdir(packDirectory));
     await git(repo, "checkout", "main");
@@ -189,38 +184,42 @@ describe("managed removal custody", () => {
     const created = await materialize("missing-clean-blob", "session");
     const head = await git(created.path, "rev-parse", "HEAD");
     const tree = await git(created.path, "rev-parse", "HEAD^{tree}");
-    // Give Git an unambiguously non-racy stat entry before losing the promised pack.
-    await fs.utimes(path.join(created.path, "README.md"), 1_600_000_000, 1_600_000_000);
+    for (const name of ["README.md", "second.txt"]) {
+      await fs.utimes(path.join(created.path, name), 1_600_000_000, 1_600_000_000);
+    }
     await git(created.path, "update-index", "--refresh");
-    if (missing) {
+    if (state !== "local") {
       for (const pack of blobPacks) {
         await fs.unlink(path.join(packDirectory, pack));
         await fs.unlink(path.join(packDirectory, pack.replace(/\.pack$/, ".idx")));
       }
     }
-    await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable"));
-    expect(await read(created.path)).toBe("base\n");
-
-    if (missing) {
-      const failure: unknown = await service
-        .remove({ id: created.id, reason: "archive" })
-        .catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(Error);
-      expect(failure).toMatchObject({
-        message: expect.stringMatching(
-          /missing blob [a-f0-9]{40,64}; repair the repository before retrying cleanup/,
-        ),
-      });
-      expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
+    await git(repo, "config", "remote.origin.promisor", String(state !== "corrupt"));
+    if (state === "unavailable" || state === "local") {
+      await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable"));
+    }
+    const trace = path.join(root, "snapshot-git.trace");
+    vi.stubEnv("GIT_TRACE", trace);
+    if (state === "unavailable" || state === "corrupt") {
+      await expect(remove(created.id)).rejects.toThrow(/missing blob [a-f0-9]{40,64}/);
+      expect(registry(created.id)?.snapshotRef).toBeUndefined();
+      expect(registry(created.id)?.removedAt).toBeUndefined();
       expect(await read(created.path)).toBe("base\n");
+      expect(await read(created.path, "second.txt")).toBe("second blob\n");
     } else {
-      const removed = await service.remove({ id: created.id, reason: "archive" });
+      const removed = await remove(created.id);
       expect(removed.removed).toBe(true);
       expect(await git(repo, "rev-parse", `${removed.snapshotRef}^{tree}`)).toBe(tree);
       expect(await git(repo, "rev-parse", `${removed.snapshotRef}^`)).toBe(head);
-      expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe("base");
       await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+      vi.stubEnv("GIT_ALLOW_PROTOCOL", "");
+      const restored = await service.restore({ id: created.id });
+      expect(await read(restored.path)).toBe("base\n");
+      expect(await read(restored.path, "second.txt")).toBe("second blob\n");
     }
+    expect((await fs.readFile(trace, "utf8")).match(/built-in: git fetch /g) ?? []).toHaveLength(
+      state === "promisor" || state === "unavailable" ? 1 : 0,
+    );
   });
 
   it("finalizes source-only deletion after its producer and command scope are revoked", async () => {
@@ -371,7 +370,7 @@ describe("managed removal custody", () => {
     expect((await service.gc()).snapshotsPruned).toBe(1);
     expect(registry(created.id)).toBeUndefined();
     await expect(git(repo, "show-ref", "--verify", pendingRef)).rejects.toThrow();
-    expect(await git(repo, "rev-parse", created.branch)).toBe(head);
+    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
   });
 });
 
@@ -455,21 +454,53 @@ describe("managed exact-state retirement", () => {
     return { created, retired, head };
   }
 
+  it("retains the detached branch through recovery and deletes it at expiry", async () => {
+    const { created, head } = await retiredFixture("expiry");
+    expect(await exactGit(repo, "rev-parse", created.branch)).toBe(head);
+    await service.gc();
+    expect(await exactGit(repo, "rev-parse", created.branch)).toBe(head);
+    await updateRegistryWorktree(env, created.id, {
+      removedAt: Date.now() - 31 * 24 * 60 * 60 * 1000 - 1,
+    });
+    const lock = path.join(repo, ".git", `refs/heads/${created.branch}.lock`);
+    await fs.writeFile(lock, "", { flag: "wx" });
+    try {
+      const failed = await service.gc();
+      expect(failed.snapshotsPruned).toBe(0);
+      expect(failed.issues).toContainEqual(
+        expect.objectContaining({
+          reason: expect.stringContaining("Managed branch cleanup failed"),
+        }),
+      );
+      expect(getRegistryWorktree(env, created.id)).toBeDefined();
+    } finally {
+      await fs.unlink(lock);
+    }
+    expect((await service.gc()).snapshotsPruned).toBe(1);
+    expect(await exactGit(repo, "branch", "--list", created.branch)).toBe("");
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+  });
+
   it("round-trips detached HEAD, separate branch, split index and work bytes from snapshot objects", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "saved.secret\ncache.tmp\n");
+    await fs.writeFile(path.join(repo, ".gitignore"), "saved.secret\ncache.tmp\nnode_modules/\n");
     await exactGit(repo, "add", ".gitignore");
     await exactGit(repo, "commit", "-m", "ignore fixture data");
     await fs.writeFile(path.join(repo, "saved.secret"), "provisioned secret\n");
+    await fs.mkdir(path.join(repo, "node_modules/pkg"), { recursive: true });
+    await fs.writeFile(path.join(repo, "node_modules/pkg/data"), "exact dependency bytes\n");
     const created = await fixture("exact-state", {
       ownerKind: "session",
       ownerId: "exact-state-owner",
-      provisionedPaths: ["saved.secret"],
+      provisionedPaths: ["saved.secret", "node_modules/pkg/data"],
     });
     const branchHead = await exactGit(created.path, "rev-parse", "HEAD");
     await exactGit(created.path, "checkout", "--detach", "HEAD~1");
     const head = await exactGit(created.path, "rev-parse", "HEAD");
     // Keep native ignore/provisioning policy while HEAD differs from the recorded branch.
-    await fs.writeFile(path.join(created.path, ".gitignore"), "saved.secret\ncache.tmp\n");
+    await fs.writeFile(
+      path.join(created.path, ".gitignore"),
+      "saved.secret\ncache.tmp\nnode_modules/\n",
+    );
     await fs.writeFile(
       path.join(created.path, ".gitattributes"),
       "*.txt text eol=crlf\n*.utf16 working-tree-encoding=UTF-16LE\n",
@@ -531,6 +562,7 @@ describe("managed exact-state retirement", () => {
       code: "ENOENT",
     });
     expect(await read(restored.path, "saved.secret")).toBe("saved ignored bytes\n");
+    expect(await read(restored.path, "node_modules/pkg/data")).toBe("exact dependency bytes\n");
     expect(await read(restored.path, "cache.tmp").catch(() => undefined)).toBeUndefined();
     if (process.platform !== "win32") {
       expect((await fs.stat(path.join(restored.path, "untracked.sh"))).mode & 0o777).toBe(0o751);

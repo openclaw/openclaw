@@ -2,6 +2,7 @@ import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protoc
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import {
   AgentDatabaseAdmissionError,
   assertAgentDatabaseAdmitted,
@@ -16,37 +17,51 @@ export function createAgentDatabaseStartupObservation(
   pendingAgents: ReadonlyMap<string, PendingAgentDatabaseRecovery>,
   lifetime: AbortSignal,
 ): AgentDatabasePreparation {
+  const inputs = new Map<
+    string,
+    { sessions: ReadonlyMap<string, Promise<void>>; completion: Promise<void> }
+  >();
   return {
     get hasPendingAgents() {
-      return pendingAgents.size > 0;
+      return pendingAgents.size > 0 || inputs.size > 0;
+    },
+    registerInputRecovery(agentId, recovery) {
+      const key = normalizeAgentId(agentId);
+      inputs.set(key, recovery);
+      const retire = () => {
+        if (inputs.get(key) === recovery) {
+          inputs.delete(key);
+        }
+      };
+      void recovery.completion.then(retire, retire);
     },
     isAgentInputRecoveryPending(agentId) {
-      return pendingAgents.get(normalizeAgentId(agentId))?.inputReady !== undefined;
+      return inputs.has(normalizeAgentId(agentId));
     },
     /** Join only the current agent preparation, without holding channel startup or healthy agents. */
-    waitForAgentPreparation(
-      agentId: string,
-      options: {
-        env?: NodeJS.ProcessEnv;
-        signal?: AbortSignal;
-        forWrite?: boolean;
-        forInput?: boolean;
-      } = {},
-    ): Promise<void> | undefined {
-      const pending = pendingAgents.get(normalizeAgentId(agentId));
-      if (
-        !pending ||
-        (readAgentDatabaseAdmissionRefusal(agentId, options) !== pending.refusal &&
-          !(options.forInput && pending.inputReady))
-      ) {
+    waitForAgentPreparation(agentId, options = {}) {
+      const key = normalizeAgentId(agentId);
+      const pending = pendingAgents.get(key);
+      if (!pending && !options.forInput) {
         return undefined;
       }
       const signal = options.signal ? AbortSignal.any([lifetime, options.signal]) : lifetime;
-      if (
-        options.forInput &&
-        readAgentDatabaseAdmissionRefusal(agentId, options) !== pending.refusal
-      ) {
-        return pending.inputReady && racePromiseWithAbortSignal(pending.inputReady, signal);
+      const waitForInputs = () => {
+        const recovery = options.forInput ? inputs.get(key) : undefined;
+        const selected = options.sessionKey
+          ? recovery?.sessions.get(normalizeSessionKeyPreservingOpaquePeerIds(options.sessionKey))
+          : recovery?.completion;
+        return selected && recovery
+          ? racePromiseWithAbortSignal(
+              selected === recovery.completion
+                ? selected
+                : Promise.race([selected, recovery.completion]),
+              signal,
+            )
+          : undefined;
+      };
+      if (!pending || readAgentDatabaseAdmissionRefusal(agentId, options) !== pending.refusal) {
+        return waitForInputs();
       }
       if (!options.forWrite && !options.forInput) {
         const readiness = options.forWrite === false ? pending.readReady : pending.completion;
@@ -69,10 +84,20 @@ export function createAgentDatabaseStartupObservation(
         { signal, ref: false },
       ).then(() => {
         assertAgentDatabaseAdmitted(agentId, options);
-        return options.forInput && pending.inputReady
-          ? racePromiseWithAbortSignal(pending.inputReady, signal)
-          : undefined;
+        return waitForInputs();
       });
+    },
+  };
+}
+
+export function recoveryTiming(recovery: PendingAgentDatabaseRecovery, now = performance.now()) {
+  return {
+    elapsedMs: Math.round(now - recovery.startedAt),
+    phaseDurationsMs: {
+      ...recovery.phaseDurationsMs,
+      [recovery.phase]: Math.round(
+        (recovery.phaseDurationsMs[recovery.phase] ?? 0) + now - recovery.phaseStartedAt,
+      ),
     },
   };
 }

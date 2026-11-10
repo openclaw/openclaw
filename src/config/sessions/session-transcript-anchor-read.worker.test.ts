@@ -666,7 +666,11 @@ it("reuses bounded message payloads for presence without treating an omitted mes
           },
         },
         undefined,
-        { runNativeSection: async (run) => run(), throwIfCancelled() {} },
+        {
+          signal: new AbortController().signal,
+          runNativeSection: async (run) => run(),
+          throwIfCancelled() {},
+        },
       );
       if (result.kind !== "bounded") {
         throw new Error("Expected bounded transcript hydration");

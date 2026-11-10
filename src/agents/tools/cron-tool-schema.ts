@@ -431,7 +431,12 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
             Type.Null(),
           ]),
         ),
-        idleOnly: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+        idleOnly: Type.Optional(
+          Type.Union([Type.Boolean(), Type.Null()], {
+            description:
+              "True waits for agent-wide quiet, including other cron jobs and foreground sessions, not just the target session; continuations may defer indefinitely on busy shared agents. False/unset uses normal admission; null clears.",
+          }),
+        ),
         ...(triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),
         sessionTarget: Type.Optional(
           Type.String({
@@ -492,10 +497,11 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       ),
       limit: optionalPositiveIntegerSchema({
         maximum: CRON_TOOL_LIST_MAX_LIMIT,
-        description: 'Maximum jobs returned by action="list"',
+        description: 'Maximum jobs or runs returned by action="list" or action="runs"',
       }),
       offset: optionalNonNegativeIntegerSchema({
-        description: 'Job offset for action="list"; use nextOffset to load the next page',
+        description:
+          'Offset for action="list" or action="runs"; use nextOffset to load the next page',
       }),
       job: managementOnly ? Type.Optional(Type.Omit(job, ["declarationKey", "owner"])) : job,
       toolsAllowMode: Type.Optional(

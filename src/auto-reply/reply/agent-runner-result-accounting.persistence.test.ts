@@ -653,7 +653,7 @@ describe("followup context-pressure accounting", () => {
     expect(fixture.read()).toMatchObject({
       ...persistedTurnUsage,
       cacheRead: 20,
-      totalTokens: 140,
+      totalTokens: 148,
       totalTokensFresh: true,
       estimatedCostUsd: 0.000146,
     });

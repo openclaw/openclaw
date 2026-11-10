@@ -54,7 +54,9 @@ export function withPromiseModalHost<T>(
         modal.settled = true;
         cleanup();
         reject(
-          error instanceof Error ? error : new Error("Unable to open dialog", { cause: error }),
+          error instanceof Error
+            ? error
+            : new Error("Couldn’t open this dialog. Try opening it again.", { cause: error }),
         );
       }
     };

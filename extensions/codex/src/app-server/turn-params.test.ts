@@ -338,6 +338,9 @@ describe("Codex app-server turn params", () => {
         sandbox: "danger-full-access",
         serviceTier: "flex",
         personality: "none",
+        baseInstructions: expect.stringContaining(
+          "You are a personal assistant running inside OpenClaw.",
+        ),
         developerInstructions: resumeParams.developerInstructions,
       });
       expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);

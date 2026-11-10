@@ -426,7 +426,7 @@ it("keeps the fixed physical owner and current precedence across canonical and m
       { status: "current", sessionKey: "agent:ops:main" },
     ]);
     database.db
-      .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 1 WHERE session_key = ?")
+      .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?")
       .run("{", "agent:main:main");
     expect(await resolveEvidence(subject)).toBe("current");
   }));

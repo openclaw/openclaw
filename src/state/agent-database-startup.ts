@@ -7,21 +7,27 @@ import { retryAsync } from "../infra/retry.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   prepareSqliteDatabaseAdmission,
+  readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
-import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
-import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import {
+  AgentDatabaseSchemaAdmissionChangedError,
+  AgentDatabaseStartupPublicationError,
+} from "./agent-database-admission-error.js";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseDeletionRefusal,
   createAgentDatabaseInspectionRefusal,
   failPendingAgentDatabase,
+  isAgentDatabasePreparationRetryable,
   listAgentDatabaseAdmissionRefusals,
   preparePendingAgentDatabase,
   preparePendingAgentDatabaseRead,
@@ -30,11 +36,18 @@ import {
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
 import { withAgentDatabasePreparationContext } from "./agent-database-preparation-context.js";
-import { createAgentDatabaseStartupObservation } from "./agent-database-startup-observation.js";
+import { prepareAgentDatabaseStartupVerification } from "./agent-database-startup-integrity.js";
+import {
+  createAgentDatabaseStartupObservation,
+  recoveryTiming,
+} from "./agent-database-startup-observation.js";
 import type {
+  PreparedSchemaHeader,
+  PreparedSchemaHeaders,
   PendingAgentDatabaseInspection as PendingInspection,
   AgentDatabaseStartupActivation as Activation,
   AgentDatabaseStartupPreparationPhase as PreparationPhase,
+  AgentRestartInputRecovery,
   PendingAgentDatabaseRecovery as PendingRecovery,
 } from "./agent-database-startup.types.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
@@ -45,50 +58,12 @@ import {
 } from "./openclaw-agent-db-contract.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
-  isSameOpenClawAgentDatabasePath,
+  includesOpenClawAgentDatabasePath,
 } from "./openclaw-agent-db.paths.js";
-import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const PREPARATION_PROGRESS_INTERVAL_MS = 60_000;
-const STARTUP_PUBLICATION_ATTEMPTS = 4;
-
-function recoveryTiming(recovery: PendingRecovery, now = performance.now()) {
-  return {
-    elapsedMs: Math.round(now - recovery.startedAt),
-    phaseDurationsMs: {
-      ...recovery.phaseDurationsMs,
-      [recovery.phase]: Math.round(
-        (recovery.phaseDurationsMs[recovery.phase] ?? 0) + now - recovery.phaseStartedAt,
-      ),
-    },
-  };
-}
-type PreparedSchemaHeader = Pick<
-  AgentSchemaInspection,
-  "version" | "writerAppVersion" | "agentSchemaMeta"
->;
-type PreparedSchemaHeaders = {
-  statePath: string;
-  headers: Map<string, PreparedSchemaHeader>;
-  state?: { identity: string; schemaAdmissionId: string };
-};
-
-function matchesInspectionPath(
-  paths: readonly string[],
-  target: string,
-  samePath = isSameOpenClawAgentDatabasePath,
-): boolean {
-  return paths.some((pathname) => {
-    try {
-      return samePath(pathname, target);
-    } catch {
-      // An uncertain sibling cannot classify this target; its own inspection reports the failure.
-      return false;
-    }
-  });
-}
 
 const log = createSubsystemLogger("state/agent-admission");
 const startupAdmission = new AsyncLocalStorage<AgentDatabaseStartupAdmission>();
@@ -105,6 +80,7 @@ class AgentDatabaseStartupAdmission {
   constructor(private readonly deferInspections = true) {}
 
   private readonly controller = new AbortController();
+  readonly signal = this.controller.signal;
   private readonly activation = createDeferredCore<Activation | undefined>();
   private readonly work = new Set<Promise<unknown>>();
   private readonly pending = new Map<string, PendingRecovery>();
@@ -118,13 +94,10 @@ class AgentDatabaseStartupAdmission {
   private progressTimer?: ReturnType<typeof setInterval>;
   private readonly opening = createPermitPool(AGENT_DATABASE_PREFLIGHT_CONCURRENCY);
   private readonly migrating = createPermitPool(AGENT_DATABASE_PREPARATION_CONCURRENCY);
+  private readonly verifying = createPermitPool(2);
   // Readiness releases the whole fleet; leave room for other shared-state readers.
   private readonly journalReads = createPermitPool(8);
   private preparedSchemaHeaders?: PreparedSchemaHeaders;
-
-  get signal(): AbortSignal {
-    return this.controller.signal;
-  }
 
   get isStopped(): boolean {
     return this.stopped;
@@ -148,11 +121,6 @@ class AgentDatabaseStartupAdmission {
     this.progressTimer.unref();
   }
 
-  private clearProgress(): void {
-    clearInterval(this.progressTimer);
-    this.progressTimer = undefined;
-  }
-
   /** Bootstrap reuses this startup's compatibility headers; writable opens retain admission. */
   prepareSchemaHeaders(env: NodeJS.ProcessEnv) {
     const prepared: PreparedSchemaHeaders = {
@@ -160,8 +128,8 @@ class AgentDatabaseStartupAdmission {
       headers: new Map(),
     };
     this.preparedSchemaHeaders = prepared;
-    return (pathname: string) => {
-      return ({ version, writerAppVersion, agentSchemaMeta }: PreparedSchemaHeader) => {
+    return (pathname: string) =>
+      ({ version, writerAppVersion, agentSchemaMeta }: PreparedSchemaHeader) => {
         if (
           !this.stopped &&
           this.preparedSchemaHeaders === prepared &&
@@ -170,7 +138,6 @@ class AgentDatabaseStartupAdmission {
           prepared.headers.set(pathname, { version, writerAppVersion, agentSchemaMeta });
         }
       };
-    };
   }
 
   takePreparedSchemaHeaders(env: NodeJS.ProcessEnv) {
@@ -235,20 +202,12 @@ class AgentDatabaseStartupAdmission {
     return this.work.size > 0 ? Promise.allSettled(this.work) : undefined;
   }
 
-  get hasPendingAgents(): boolean {
-    return this.pending.size > 0;
-  }
-
-  readonly waitForAgentPreparation = this.observation.waitForAgentPreparation.bind(
-    this.observation,
-  );
+  readonly waitForAgentPreparation = this.observation.waitForAgentPreparation;
 
   track(work: Promise<unknown>): void {
     this.work.add(work);
-    void work.then(
-      () => this.work.delete(work),
-      () => this.work.delete(work),
-    );
+    const settled = () => this.work.delete(work);
+    void work.then(settled, settled);
   }
 
   scheduling(
@@ -263,7 +222,15 @@ class AgentDatabaseStartupAdmission {
         this.deferInspections &&
         target.agentId !== undefined &&
         runtimeAgentIds.has(target.agentId) &&
-        matchesInspectionPath(runtimePaths, target.path, samePath),
+        includesOpenClawAgentDatabasePath(runtimePaths, target.path, samePath),
+      cleanClose: (target: PendingInspection["target"]) => {
+        // Ordering only: an unreadable store is inspected (and reported) on the normal path.
+        try {
+          return readSqliteDatabaseCleanClose(target.path);
+        } catch {
+          return false;
+        }
+      },
       track: (work: Promise<unknown>) => this.track(work),
       defer: (inspections: PendingInspection[], reason: string) =>
         this.defer({ env, inspections, reason }),
@@ -304,7 +271,7 @@ class AgentDatabaseStartupAdmission {
     priorRefusals?: ReadonlyMap<string, AgentDatabaseAdmissionRefusal>,
   ): boolean {
     const refusal = target.agentId && priorRefusals?.get(target.agentId);
-    if (!refusal || !matchesInspectionPath(refusal.paths, target.path)) {
+    if (!refusal || !includesOpenClawAgentDatabasePath(refusal.paths, target.path)) {
       return false;
     }
     (inspection.agentRefusals ??= []).push(refusal);
@@ -356,7 +323,8 @@ class AgentDatabaseStartupAdmission {
           this.pending.delete(agentId);
         }
         if (this.pending.size === 0) {
-          this.clearProgress();
+          clearInterval(this.progressTimer);
+          this.progressTimer = undefined;
         }
       };
       const phase = (name: PreparationPhase) => {
@@ -383,9 +351,19 @@ class AgentDatabaseStartupAdmission {
       const work = runInDetachedAsyncContext(async () => {
         const preparation: {
           maintenance?: () => Promise<void>;
-          recoverInputs?: () => Promise<void>;
+          recoverInputs?: AgentRestartInputRecovery;
+          withdraw?: () => void;
         } = {};
         let revokeReadAdmission: (() => void) | undefined;
+        const publicationComplete = createDeferredCore();
+        const releasePublication = () => {
+          if (this.publishingAgentId === agentId) {
+            this.publishingAgentId = undefined;
+          }
+          publicationComplete.resolve();
+        };
+        let integrity: ReturnType<typeof prepareAgentDatabaseStartupVerification>;
+        let preparedSuccessfully = false;
         try {
           const results = await checked;
           phase("activation");
@@ -408,35 +386,27 @@ class AgentDatabaseStartupAdmission {
               readSqliteIntegrityFileIdentity(witness.pathname, witness.identity);
             }
           };
+          const capacityRetry = {
+            attempts: 4,
+            minDelayMs: 500,
+            maxDelayMs: 8000,
+            jitter: 0.2,
+            sleep: (ms: number) => sleepWithAbort(ms, this.signal),
+            shouldRetry: isAgentDatabasePreparationRetryable,
+          };
           const assertNotDeleted = async () => {
-            const deletion = await retryAsync(
-              async () => {
-                const release = await this.journalReads.acquire({ signal: this.signal });
-                try {
-                  assertCurrent();
-                  return await readAgentDeletionJournalStatusInWorker(
-                    agentId,
-                    { env },
-                    this.signal,
-                  );
-                } finally {
-                  release?.();
-                }
-              },
-              {
-                attempts: 4,
-                minDelayMs: 500,
-                maxDelayMs: 8000,
-                jitter: 0.2,
-                sleep: (ms) => sleepWithAbort(ms, this.signal),
-                // Other producers can still saturate the shared pool after our permit wait.
-                shouldRetry: (error) =>
-                  error instanceof WorkerTaskError && error.code === "overloaded",
-              },
-            );
+            const deletion = await retryAsync(async () => {
+              const release = await this.journalReads.acquire({ signal: this.signal });
+              try {
+                assertCurrent();
+                return await readAgentDeletionJournalStatusInWorker(agentId, { env }, this.signal);
+              } finally {
+                release?.();
+              }
+            }, capacityRetry);
             assertCurrent();
             if (deletion !== "absent") {
-              throw new Error(`Agent ${agentId} was deleted during startup inspection`);
+              throw new AgentDatabaseAdmissionError(createAgentDatabaseDeletionRefusal(refusal));
             }
           };
           assertCurrent();
@@ -445,15 +415,17 @@ class AgentDatabaseStartupAdmission {
               throw result.reason;
             }
             const inspection = result.value;
+            const inspectionRefusal = inspection.agentRefusals?.[0];
+            if (inspectionRefusal) {
+              throw new AgentDatabaseAdmissionError(inspectionRefusal);
+            }
             if (
               inspection.incompatible.length ||
               inspection.indeterminate.length ||
-              inspection.agentRefusals?.length ||
               inspection.pendingMigrations?.length
             ) {
               throw new Error(
-                inspection.agentRefusals?.map((entry) => entry.reason).join("; ") ||
-                  inspection.indeterminate.map((entry) => entry.reason).join("; ") ||
+                inspection.indeterminate.map((entry) => entry.reason).join("; ") ||
                   `Agent ${agentId} database requires Doctor before preparation`,
               );
             }
@@ -462,81 +434,96 @@ class AgentDatabaseStartupAdmission {
             const result = results[index];
             return (
               result?.status === "fulfilled" &&
-              matchesInspectionPath(result.value.readReadyAgentPaths ?? [], target.path)
+              includesOpenClawAgentDatabasePath(result.value.readReadyAgentPaths ?? [], target.path)
             );
           });
           phase("readiness");
           await racePromiseWithAbortSignal(activation.preparationReady, this.signal);
           assertCurrent();
+          if (canReadBeforeOpen) {
+            integrity = prepareAgentDatabaseStartupVerification(
+              { agentId, paths, env, signal: this.signal },
+              activation,
+              this.verifying,
+            );
+          }
+          const preparationOptions = { env, assertCurrent, signal: this.signal };
           await withSqliteReadOnlyWorkerScope(
             async () => {
               await assertNotDeleted();
-              await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
+              await preparePendingAgentDatabase(refusal, preparationOptions, async () => {
                 await using prepared = new AsyncDisposableStack();
-                const input = {
-                  agentId,
-                  paths,
-                  env,
-                  signal: this.signal,
-                  assertCurrent,
-                  phase,
-                };
+                const input = { agentId, paths, env, signal: this.signal, assertCurrent, phase };
                 const publish = async () => {
-                  const publicationComplete = createDeferredCore();
                   phase("publication-wait");
                   const previous = this.publication;
                   this.publication = publicationComplete.promise;
                   try {
-                    await previous;
+                    await racePromiseWithAbortSignal(previous, this.signal);
                     assertCurrent();
                     this.publishingAgentId = agentId;
                     for (let attempt = 1; ; attempt++) {
                       try {
-                        await activation.publishAgent(input);
+                        preparation.withdraw = (await activation.publishAgent(input)) || undefined;
                         break;
                       } catch (error) {
-                        const retryable =
+                        const superseded =
                           error instanceof AgentDatabaseStartupSupersededError ||
                           error instanceof AgentDatabaseSchemaAdmissionChangedError;
-                        if (!retryable || attempt >= STARTUP_PUBLICATION_ATTEMPTS) {
-                          throw error;
+                        if (
+                          (!superseded && !capacityRetry.shouldRetry(error)) ||
+                          attempt >= capacityRetry.attempts
+                        ) {
+                          // Runtime churn needs its own restart guidance, not database repair.
+                          throw superseded
+                            ? new AgentDatabaseStartupPublicationError(error)
+                            : error;
                         }
-                        log.warn("agent database startup preparation was superseded; retrying", {
+                        log.warn("agent database startup publication interrupted; retrying", {
                           agentId,
                           attempt,
                         });
+                        // A reload may still be replacing the plugins this publication borrows.
+                        await capacityRetry.sleep(capacityRetry.minDelayMs * 2 ** (attempt - 1));
                         await assertNotDeleted();
                       }
                     }
                     phase("publication");
                     await assertNotDeleted();
-                  } finally {
-                    if (this.publishingAgentId === agentId) {
-                      this.publishingAgentId = undefined;
+                    if (activation.captureReadAdmission) {
+                      // Publish only prepared inputs. Sibling auth/model refreshes must see
+                      // this agent before physical cleanup, which can stall independently.
+                      revokeReadAdmission = publishPendingAgentDatabaseReadAdmission(refusal, {
+                        env,
+                        paths: canReadBeforeOpen
+                          ? results.flatMap((result) =>
+                              result.status === "fulfilled"
+                                ? (result.value.readReadyAgentPaths ?? [])
+                                : [],
+                            )
+                          : paths,
+                        assertCurrent: activation.captureReadAdmission({
+                          ...input,
+                          assertCurrent: assertLifetimeCurrent,
+                        }),
+                      });
+                      releasePublication();
+                      recovery.readReady = undefined;
+                      readReady.resolve();
                     }
-                    publicationComplete.resolve();
+                  } catch (error) {
+                    // Refuse failed publication before cleanup can block its handoff.
+                    if (!this.stopped) {
+                      failPendingAgentDatabase(refusal, error, { env });
+                    }
+                    releasePublication();
+                    throw error;
                   }
                 };
                 if (canReadBeforeOpen && activation.captureReadAdmission) {
                   // Exact existing schemas can serve committed snapshots while full integrity
                   // gates writes. Native readers retain schema, file, and quarantine checks.
-                  const assertReadCurrent = activation.captureReadAdmission({
-                    ...input,
-                    assertCurrent: assertLifetimeCurrent,
-                  });
-                  assertReadCurrent();
                   await preparePendingAgentDatabaseRead(refusal, { env, assertCurrent }, publish);
-                  assertReadCurrent();
-                  assertCurrent();
-                  revokeReadAdmission = publishPendingAgentDatabaseReadAdmission(refusal, {
-                    env,
-                    paths: results.flatMap((result) =>
-                      result.status === "fulfilled" ? (result.value.readReadyAgentPaths ?? []) : [],
-                    ),
-                    assertCurrent: assertReadCurrent,
-                  });
-                  recovery.readReady = undefined;
-                  readReady.resolve();
                   log.info("agent database reads ready while writable inspection continues", {
                     agentId,
                     ...recoveryTiming(recovery),
@@ -545,7 +532,7 @@ class AgentDatabaseStartupAdmission {
                     sessionChanges.emit({ all: true, scope: { agentId, topology: true } }),
                   );
                 }
-                const retryLockedPreparation = async (run: () => Promise<void>) => {
+                const retryPreparation = async (run: () => Promise<void>) => {
                   let preparationAttempts = 0;
                   await retryAsync(
                     async () => {
@@ -556,23 +543,19 @@ class AgentDatabaseStartupAdmission {
                       await run();
                     },
                     {
-                      attempts: 4,
-                      minDelayMs: 500,
-                      maxDelayMs: 8000,
-                      jitter: 0.2,
-                      sleep: (ms) => sleepWithAbort(ms, this.signal),
-                      // Mixed cleanup failures and uncertain outcomes must not replay preparation.
-                      shouldRetry: isSqliteLockError,
-                      onRetry: ({ attempt }) =>
-                        log.warn("agent database startup locked; retrying preparation", {
+                      ...capacityRetry,
+                      onRetry: ({ attempt, err }) => {
+                        const reason = isSqliteLockError(err) ? "locked" : "capacity reached";
+                        log.warn(`agent database startup ${reason}; retrying preparation`, {
                           agentId,
                           phase: recovery.phase,
                           attempt,
-                        }),
+                        });
+                      },
                     },
                   );
                 };
-                await retryLockedPreparation(async () => {
+                await retryPreparation(async () => {
                   phase("open-wait");
                   const release = await this.opening.acquire({ signal: this.signal });
                   try {
@@ -580,13 +563,19 @@ class AgentDatabaseStartupAdmission {
                     phase("open");
                     const opened = await activation.openAgent(input);
                     if (opened) {
-                      prepared.use(opened);
+                      // Release keeps custody of unfinished native cleanup after shutdown.
+                      prepared.defer(() =>
+                        racePromiseWithAbortSignal(
+                          Promise.resolve(opened[Symbol.asyncDispose]()),
+                          this.signal,
+                        ),
+                      );
                     }
                   } finally {
                     release?.();
                   }
                 });
-                await retryLockedPreparation(async () => {
+                await retryPreparation(async () => {
                   phase("migration-wait");
                   const releaseMigration = await this.migrating.acquire({ signal: this.signal });
                   try {
@@ -596,9 +585,12 @@ class AgentDatabaseStartupAdmission {
                     preparation.maintenance = migrated ? migrated.maintain : undefined;
                     preparation.recoverInputs = migrated ? migrated.recoverInputs : undefined;
                     // Install input readiness before native write admission is published.
-                    recovery.inputReady = preparation.recoverInputs
-                      ? inputReady.promise
-                      : undefined;
+                    if (preparation.recoverInputs) {
+                      this.observation.registerInputRecovery(agentId, {
+                        sessions: preparation.recoverInputs.sessions,
+                        completion: inputReady.promise,
+                      });
+                    }
                   } finally {
                     releaseMigration?.();
                   }
@@ -617,10 +609,14 @@ class AgentDatabaseStartupAdmission {
             paths,
             ...recoveryTiming(recovery),
           });
+          preparedSuccessfully = true;
         } catch (error) {
           if (!this.stopped) {
             const reason = formatErrorMessage(error);
             failPendingAgentDatabase(refusal, error, { env });
+            if (this.pending.get(agentId) === recovery) {
+              preparation.withdraw?.();
+            }
             log.warn("agent database remains degraded", {
               agentId,
               paths,
@@ -630,10 +626,12 @@ class AgentDatabaseStartupAdmission {
             });
           }
         } finally {
-          revokeReadAdmission?.();
-          if (this.publishingAgentId === agentId) {
-            this.publishingAgentId = undefined;
+          if (!preparedSuccessfully) {
+            integrity?.revoke();
           }
+          revokeReadAdmission?.();
+          // Failed publication releases only after its per-agent refusal is recorded.
+          releasePublication();
           readReady.resolve();
           completion.resolve();
           if (
@@ -644,13 +642,16 @@ class AgentDatabaseStartupAdmission {
             finishInputs();
           }
         }
+        if (preparedSuccessfully && integrity) {
+          this.track(runInDetachedAsyncContext(integrity.verify));
+        }
         try {
           // Recovery enters ordinary queues after the temporary database borrow has ended.
           // Its failure must not turn an admitted database into an inspection refusal.
           if (!readAgentDatabaseAdmissionRefusal(agentId, { env }) && !this.stopped) {
             if (preparation.recoverInputs) {
               phase("input-recovery");
-              await preparation.recoverInputs();
+              await preparation.recoverInputs.run();
             }
           }
         } catch (error) {
@@ -708,7 +709,7 @@ class AgentDatabaseStartupAdmission {
   stop(): Promise<void> {
     return (this.stopping ??= (async () => {
       this.stopped = true;
-      this.clearProgress();
+      clearInterval(this.progressTimer);
       this.preparedSchemaHeaders = undefined;
       this.controller.abort(new Error("Gateway stopped during agent database inspection"));
       this.activation.resolve(undefined);

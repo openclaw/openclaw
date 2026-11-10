@@ -91,12 +91,11 @@ function fixture(provenance = true, refusePublication = false) {
 }
 
 function expectCanonical(db: EngineConnection) {
-  expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(36);
-  expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(36);
+  expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
   expect(
     db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-  ).toEqual({ schema_version: 36 });
-  expect(readStateSchemaContentVersion(db)).toBe(36);
+  ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+  expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
   expect(
     db
       .prepare(

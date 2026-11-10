@@ -14,6 +14,7 @@ function createChatComposerState(): ChatComposerState {
   const [presentation, updatePresentation] = createStore<ChatComposerState["presentation"]>({
     dictationError: null,
     goalExpandedId: null,
+    queuedSubmit: null,
   });
   return {
     // Admission survives composer remounts while the same goal mode is pending.
@@ -71,6 +72,13 @@ export function commitComposerDraft(
   }
   getChatComposerState(props.paneId).editRevision += 1;
   props.onDraftChange(value, mentions);
+}
+
+/** Enter before the session is ready submits this exact draft once the composer can. */
+export function queueComposerSubmit(state: ChatComposerState, draft: string | null): void {
+  state.updatePresentation((presentation) => {
+    presentation.queuedSubmit = draft;
+  });
 }
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {

@@ -1,8 +1,10 @@
 // One lifecycle owner for interactive Markdown in transcripts and previews.
 import { t } from "../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
+import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
 import { subscribeDocumentVisibility } from "../lib/reactive/platform.ts";
-import { updateCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
+import { isMarkdownBlockParked } from "./markdown-block-presentation.ts";
+import { measureCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
 import { MarkdownCodeHighlights } from "./markdown-code-highlight.ts";
 import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.ts";
 
@@ -30,6 +32,7 @@ export class MarkdownBlocks {
 
   private readonly pendingBlocks = new Set<HTMLElement>();
   private readonly observedNodes = new Set<HTMLElement>();
+  private readonly pendingWidths = new Set<HTMLElement>();
   private readonly resizeObserver = new ResizeObserver((entries) => {
     if (!this.active || this.disposed) {
       return;
@@ -38,9 +41,21 @@ export class MarkdownBlocks {
       entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
     );
     for (const wrapper of wrappers) {
-      if (wrapper) {
-        updateCodeBlockWidthOverflow(wrapper);
+      if (wrapper && !isMarkdownBlockParked(wrapper)) {
+        this.pendingWidths.add(wrapper);
       }
+    }
+    if (this.pendingWidths.size) {
+      // Geometry reads can force WebKit to relayout during resize delivery too.
+      scheduleLayout(this.pendingWidths, () => {
+        const updates = [...this.pendingWidths].map((wrapper) =>
+          this.root.contains(wrapper) && !isMarkdownBlockParked(wrapper)
+            ? measureCodeBlockWidthOverflow(wrapper)
+            : undefined,
+        );
+        this.pendingWidths.clear();
+        return () => updates.forEach((update) => update?.());
+      });
     }
   });
   private readonly mutationObserver = new MutationObserver((records) => {
@@ -56,6 +71,17 @@ export class MarkdownBlocks {
       const block = target?.closest<HTMLElement>(blockSelector);
       if (block) {
         this.pendingBlocks.add(block);
+      }
+      if (record.type === "attributes" && target instanceof HTMLElement) {
+        this.collectBlocks(target);
+        if (isMarkdownBlockParked(target)) {
+          for (const node of this.observedNodes) {
+            if (target.contains(node)) {
+              this.observedNodes.delete(node);
+              this.resizeObserver.unobserve(node);
+            }
+          }
+        }
       }
       for (const node of record.addedNodes) {
         if (node instanceof HTMLElement) {
@@ -104,6 +130,8 @@ export class MarkdownBlocks {
     this.pendingBlocks.clear();
     this.resizeObserver.disconnect();
     this.observedNodes.clear();
+    cancelLayout(this.pendingWidths);
+    this.pendingWidths.clear();
     this.codeHighlights?.pause();
     releaseMarkdownTables(this.root);
   }
@@ -132,6 +160,8 @@ export class MarkdownBlocks {
       this.mutationObserver.observe(root, {
         childList: true,
         subtree: true,
+        attributes: true,
+        attributeFilter: ["data-prepared-row", "data-preparing-row"],
       });
       this.observing = true;
     }
@@ -140,7 +170,7 @@ export class MarkdownBlocks {
     this.collectMutations(this.mutationObserver.takeRecords());
     for (const wrapper of this.pendingBlocks) {
       this.pendingBlocks.delete(wrapper);
-      if (!root.contains(wrapper)) {
+      if (!root.contains(wrapper) || isMarkdownBlockParked(wrapper)) {
         continue;
       }
       if (wrapper.matches(".markdown-mermaid")) {

@@ -103,7 +103,10 @@ it("repairs readable entries before independently preparing mixed agent database
   expect(receipt("media-persistence")).toMatchObject({
     requiredness: "conditional",
     outcome: "refused",
-    changes: [expect.stringContaining("Upgraded agent database schema")],
+    changes: [
+      expect.stringContaining("Saved pre-repair SQLite backup: "),
+      expect.stringContaining("Upgraded agent database schema"),
+    ],
     warnings: [expect.stringContaining(brokenDatabasePath)],
     refusal: { code: "step-refused" },
   });

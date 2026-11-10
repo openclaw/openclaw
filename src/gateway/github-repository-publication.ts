@@ -55,7 +55,10 @@ import {
   repositoryGitHubPublicationDigest,
   terminalRepositoryGitHubPublication,
 } from "./github-repository-publication-store.js";
-import { prepareRepositoryOwner } from "./github-repository-publication-workspace.js";
+import {
+  prepareRepositoryOwner,
+  type RepositoryDiskPublicationSource,
+} from "./github-repository-publication-workspace.js";
 import { matchesRepositoryGitHubPublicationClaim } from "./github-repository-publication.kernel.js";
 import { resolvePlacementTurnEnvironment } from "./worker-environments/placement-record.js";
 import type {
@@ -65,6 +68,7 @@ import type {
 
 export function createRepositoryGitHubPublicationCoordinator(params: {
   placements: WorkerSessionPlacementStore;
+  environments?: RepositoryDiskPublicationSource["environments"];
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent: () => void;
   signal: AbortSignal;
@@ -97,6 +101,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     prepareSource,
     getCommittedRuntimeConfig,
     assertCurrent: params.assertCurrent,
+    disk: params.environments && { placements, environments: params.environments },
   });
   const makeRow = async (input: {
     session: SessionIdentity;
@@ -429,7 +434,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     },
     async processClaim(claim: WorkerSessionTurnClaim) {
       const results = [];
-      for (const row of (
+      const selected = (
         await listRepositoryGitHubPublicationsAsync({
           sessionId: claim.sessionId,
           ownerProfileId: null,
@@ -438,13 +443,17 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       ).filter(
         (candidate) =>
           candidate.claim_id === null || matchesRepositoryGitHubPublicationClaim(candidate, claim),
-      )) {
+      );
+      for (const row of selected) {
         await placements.prepareWorkspaceResultClaim(claim);
         results.push(
           await placements.withWorkspaceExclusion(
             row.session_id,
             async (assertOwned) =>
               await execute(row, {
+                captureRequestIds: selected
+                  .filter((entry) => !entry.checkpoint_ref)
+                  .map((entry) => entry.request_id),
                 assertCustody: () => {
                   assertOwned();
                   if (!placements.validateWorkspaceResultClaim(claim)) {
@@ -459,6 +468,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     },
     ...createRepositoryGitHubPublicationRecovery({
       placements,
+      disk: params.environments && { placements, environments: params.environments },
       recovery: params.recovery,
       getCommittedRuntimeConfig,
       assertCurrent: params.assertCurrent,

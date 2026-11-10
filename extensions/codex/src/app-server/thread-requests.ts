@@ -3,7 +3,7 @@ import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-r
 import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
+import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
   buildCodexDefaultCollaborationPolicy,
@@ -43,7 +43,11 @@ import {
   resolveCodexAppServerModelProvider,
   resolveCodexAppServerRequestModelSelection,
 } from "./thread-model-selection.js";
-import { buildDeveloperInstructions, type CodexThreadPromptContext } from "./thread-prompt.js";
+import {
+  buildDeveloperInstructions,
+  placeCodexBaseInstructions,
+  type CodexThreadPromptContext,
+} from "./thread-prompt.js";
 import { applyCodexManagedShellEnvironment } from "./thread-shell-environment.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
@@ -202,22 +206,11 @@ export function buildCodexThreadGenericInstructions(
         dynamicTools: options.dynamicTools,
         nativeCodeModeEnabled: options.nativeCodeModeEnabled !== false,
         nativeCodeModeOnlyEnabled: options.config?.["features.code_mode_only"] === true,
+        hostSystemAgentActive: options.hostSystemAgentActive,
       }),
     usesManagedCollaboration(params, options)
-      ? buildCodexDefaultCollaborationPolicy(options.config ?? {}, options.nativeQuestionConfig)
+      ? buildCodexDefaultCollaborationPolicy(options.config ?? {}, options.nativeConfig)
       : undefined,
-  );
-}
-
-/** Capture the same immutable body sent natively, separately from refreshable context. */
-export function buildCodexThreadCreationPolicy(
-  params: CodexThreadConfigurationContext,
-  options: CodexThreadConfigurationOptions,
-  nativeConfig: JsonObject,
-) {
-  return createCodexEphemeralThreadPolicy(
-    { ...options, developerInstructions: buildCodexThreadGenericInstructions(params, options) },
-    nativeConfig,
   );
 }
 
@@ -235,13 +228,13 @@ export async function buildThreadStartParams(
     model: options.model ?? params.modelId,
     modelProvider: options.modelProvider ?? resolvedModelProvider,
   });
+  const configuration = buildCodexThreadConfiguration(params, options);
   return {
     ...modelSelection,
-    ...buildCodexThreadConfiguration(params, options),
-    ...((options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
-    isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
-      ? { baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS }
-      : {}),
+    ...configuration,
+    ...placeCodexBaseInstructions(params, options, configuration.developerInstructions, {
+      baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS,
+    }),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     threadSource: "openclaw",
@@ -283,6 +276,7 @@ export async function buildThreadResumeParams(
           })),
         authProfileId: options.authProfileId ?? params.authProfileId,
       });
+  const configuration = buildCodexThreadConfiguration(params, options);
   return {
     threadId: options.threadId,
     // Only the latest turn id/status is needed to preserve active-turn conflict
@@ -294,7 +288,9 @@ export async function buildThreadResumeParams(
       itemsView: "notLoaded",
     },
     ...modelSelection,
-    ...buildCodexThreadConfiguration(params, options),
+    ...configuration,
+    // Ring-zero resumes omit the empty base pinned at creation.
+    ...placeCodexBaseInstructions(params, options, configuration.developerInstructions, {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
   };
 }
@@ -417,6 +413,7 @@ export function isCodexNativeDelegationDisabledForRun(
     params.delegationCapability === "host_only" ||
     params.requireWorkspaceOnly === true ||
     params.pluginHarnessToolPolicyRestricted === true ||
+    deniesCodexNativeDelegation(params.pluginHarnessToolPolicySafeDeniedTools) ||
     isMessageOnlyCodexSourceReply(params) ||
     (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow))
   );
@@ -431,7 +428,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     nativeCodeModeOnlyEnabled?: boolean;
     directOnlyToolNamespaces?: readonly string[];
     askUserAvailable?: boolean;
-    nativeQuestionConfig?: CodexConfigReadResponse;
+    nativeConfig?: CodexConfigReadResponse;
     webSearchAllowed?: boolean;
     appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
     hostSystemAgentActive?: boolean;
@@ -481,7 +478,7 @@ export function buildCodexRuntimeThreadConfigForRun(
       baseConfig,
       options.appServer?.networkProxy?.configPatch,
       // Prefer the callable OpenClaw tool unless native questions were explicitly enabled.
-      options.askUserAvailable && !hasNativeQuestionOptIn(baseConfig, options.nativeQuestionConfig)
+      options.askUserAvailable && !hasNativeQuestionOptIn(baseConfig, options.nativeConfig)
         ? { "tools.experimental_request_user_input.enabled": false }
         : undefined,
       isCodexNativeDelegationDisabledForRun(params, options.hostSystemAgentActive)

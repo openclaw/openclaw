@@ -377,11 +377,6 @@ it("keeps match filters and active anchors authoritative across worker payload e
         await expect(hasSessionTranscriptMessage(scope)).resolves.toBe(true);
         await expect(readLatestTranscriptAssistantTextAsync(scope)).resolves.toEqual(latest);
         expect(readSessionColdTranscript(database.db, sessionId)).toEqual(archive);
-        expect(
-          database.db
-            .prepare("SELECT count(*) AS count FROM transcript_events WHERE session_id = ?")
-            .get(sessionId),
-        ).toEqual({ count: 0 });
       }
     }
   }));

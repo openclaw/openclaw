@@ -1,5 +1,3 @@
-import { getBatchResponseError } from "./batch-response-error.js";
-
 const DEFAULT_BATCH_OUTPUT_RECORD_MAX_BYTES = 4 * 1024 * 1024;
 const INITIAL_BATCH_OUTPUT_RECORD_BYTES = 64 * 1024;
 
@@ -128,39 +126,3 @@ export type EmbeddingBatchOutputLine = {
       | string;
   };
 };
-
-/** Apply one output line, collecting errors and successful embeddings by custom id. */
-export function applyEmbeddingBatchOutputLine(params: {
-  line: EmbeddingBatchOutputLine;
-  remaining: Set<string>;
-  errors: string[];
-  byCustomId: Map<string, number[]>;
-}) {
-  const customId = params.line.custom_id;
-  if (!customId) {
-    return;
-  }
-  params.remaining.delete(customId);
-
-  const errorMessage = params.line.error?.message;
-  if (errorMessage) {
-    params.errors.push(`${customId}: ${errorMessage}`);
-    return;
-  }
-
-  const response = params.line.response;
-  const statusCode = response?.status_code ?? 0;
-  if (statusCode >= 400) {
-    params.errors.push(`${customId}: ${getBatchResponseError(response) || "unknown error"}`);
-    return;
-  }
-
-  const data =
-    response?.body && typeof response.body === "object" ? (response.body.data ?? []) : [];
-  const embedding = data[0]?.embedding ?? [];
-  if (!Array.isArray(embedding) || embedding.length === 0 || !embedding.every(Number.isFinite)) {
-    params.errors.push(`${customId}: ${embedding?.length ? "invalid" : "empty"} embedding`);
-    return;
-  }
-  params.byCustomId.set(customId, embedding);
-}

@@ -3,6 +3,7 @@ import {
   ErrorCodes,
   GatewayErrorDetailCodes,
   errorShape,
+  type ProjectRecord,
   validateProjectsAddParams,
   validateProjectsListParams,
   validateProjectsCheckoutOptionsParams,
@@ -30,6 +31,7 @@ import {
   materializeProjectClone,
   removeClonedProjectCheckout,
 } from "../../projects/project-clone.js";
+import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import {
   listProjectRegistry,
   listWorkspaceProjects,
@@ -39,7 +41,10 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
-import { prepareCurrentUserProfileAliases } from "../../state/user-profile-reads.js";
+import {
+  prepareCurrentUserProfileAliases,
+  UserProfileDisclosureChangedError,
+} from "../../state/user-profile-reads.js";
 import { configuredDefaultRepository } from "../configured-default-repository.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
@@ -52,6 +57,7 @@ import {
   authorizeOperatorScopesForRequiredScope,
 } from "../method-scopes.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { filterProjectsForRequester, projectRequesterForClient } from "../project-access.js";
 import { searchRemoteProjects } from "../project-github-search.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveSessionCreateAgentId } from "../session-request-agent.js";
@@ -159,9 +165,26 @@ export const projectsHandlers: GatewayRequestHandlers = {
       const memoryStores = readMemoryProjectStores(assertCurrent);
       const assertMemoryCurrent = (keys: ReadonlySet<string>) =>
         assertMemoryProjectStoresCurrent(memoryStores, keys, assertCurrent);
-      const registryProjects = await listProjectRegistry(cfg);
+      // Restricted roles only discover projects they could open (public-only by default).
+      const registryProjects = await filterProjectsForRequester(
+        cfg,
+        await listProjectRegistry(cfg),
+        projectRequesterForClient(client),
+      );
       diagnostics?.mark("sessions");
-      const projects = registryProjects.map(sanitizeProjectRecord);
+      const githubHost = resolveConfiguredGitHubHost(cfg);
+      const projects = registryProjects.map((project) => {
+        // The registry already owns discovery. Project identity never grants repository access.
+        const repository = project.originUrl
+          ? parseProjectGitUrl(project.originUrl, githubHost)
+          : null;
+        return {
+          ...sanitizeProjectRecord(project),
+          ...(repository
+            ? { repositoryIdentity: new URL(repository.url).pathname.slice(1, -4) }
+            : {}),
+        };
+      });
       const canWrite = () =>
         authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, client?.connect.scopes ?? []).allowed;
       let store: Record<string, SessionEntry> = {};
@@ -228,18 +251,26 @@ export const projectsHandlers: GatewayRequestHandlers = {
           ...(writable && observedProjects ? observedProjects.usedSessions : []),
         ]),
       );
-      // Project identity is read-safe; host paths, origins, folders, and observed checkouts are
-      // placement details reserved for clients that can create sessions.
+      // Read-safe identity describes only already discoverable projects. Host paths, origins,
+      // folders, and observed checkouts remain write-scoped placement details.
       respond(
         true,
         {
           projects: writable
             ? projects
-            : projects.map(({ id, displayName, source, agentId }) =>
-                agentId ? { id, displayName, source, agentId } : { id, displayName, source },
-              ),
+            : projects.map(({ id, displayName, source, agentId, repositoryIdentity }) => {
+                const record: ProjectRecord = { id, displayName, source };
+                if (agentId) {
+                  record.agentId = agentId;
+                }
+                if (repositoryIdentity) {
+                  record.repositoryIdentity = repositoryIdentity;
+                }
+                return record;
+              }),
           ...(canCreate ? { githubHost: resolveConfiguredGitHubHost(cfg) } : {}),
-          ...(defaultRepository && (writable || canCreate) ? { defaultRepository } : {}),
+          // The default repository opens through projectGitUrl, an operator.write capability.
+          ...(defaultRepository && writable ? { defaultRepository } : {}),
           ...(recents
             ? {
                 recents: writable ? recents : recents.filter((recent) => recent.kind === "project"),
@@ -256,8 +287,15 @@ export const projectsHandlers: GatewayRequestHandlers = {
           await list();
           return;
         } catch (error) {
-          if (!(error instanceof ProjectListingChangedError) || attempt >= PROJECTS_LIST_ATTEMPTS) {
+          // Profile merges fence recents the same way listing guards fence sessions.
+          const changed =
+            error instanceof ProjectListingChangedError ||
+            error instanceof UserProfileDisclosureChangedError;
+          if (!changed) {
             throw error;
+          }
+          if (attempt >= PROJECTS_LIST_ATTEMPTS) {
+            throw new ProjectListingChangedError();
           }
         }
       }
@@ -305,10 +343,25 @@ export const projectsHandlers: GatewayRequestHandlers = {
         cfg,
         projectId: params.projectId,
         targetAgentId: selected.agentId,
+        requester: projectRequesterForClient(client),
         resolveSandboxRequired: () =>
           resolveCreatorSandbox(cfg, resolveOperatorSessionCreation(client)) === "required",
         assertCurrent,
         signal,
+        onRefresh: () => {
+          if (
+            client?.connId &&
+            hasCurrentClientAuthority?.() !== false &&
+            context.getRuntimeConfig() === cfg &&
+            client.authenticatedUserProfile?.profileId === profileId
+          ) {
+            context.broadcastToConnIds(
+              "projects.checkoutOptions.changed",
+              { projectId: params.projectId, agentId: params.agentId },
+              new Set([client.connId]),
+            );
+          }
+        },
       });
       assertCurrent();
       const currentDenial = authorizeGatewaySessionCreation({
@@ -326,7 +379,11 @@ export const projectsHandlers: GatewayRequestHandlers = {
       ).allowed;
       respond(
         true,
-        { current: canCreate && options.current, worktree: canCreate && options.worktree },
+        {
+          current: canCreate && options.current,
+          worktree: canCreate && options.worktree,
+          ...(canCreate && options.refreshing ? { refreshing: true } : {}),
+        },
         undefined,
       );
     },

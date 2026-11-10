@@ -1,14 +1,19 @@
 import { execFileSync } from "node:child_process";
+import * as childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-database-worker-ratchet.mts";
-import { inventory } from "../../scripts/database-worker-inventory.mjs";
+import { inventory, loadInventorySources } from "../../scripts/database-worker-inventory.mjs";
 import * as databaseWorkerCompat from "../../scripts/lib/database-worker-compat.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 
 it.each([
   ["session-cold-storage-chunks.ts", "readSessionColdChunks", "executeSqliteQuerySync"],
@@ -144,6 +149,35 @@ function fixture(sources: Record<string, string>) {
 
 const expectError = (errors: ReturnType<typeof fixture>["errors"], text: string) =>
   expect(errors).toHaveBeenCalledWith(expect.stringContaining(text));
+
+it("normalizes Windows discovery before SQLite exclusions and source loading", () => {
+  const files = [
+    "src/runtime.ts",
+    "src/test/fixture.ts",
+    "src/gateway/server.auth.default-token.suite.ts",
+  ];
+  const { root } = sourceFixture(Object.fromEntries(files.map((file) => [file, "export {};\n"])));
+  vi.mocked(childProcess.spawnSync).mockReturnValue({
+    pid: 0,
+    output: [],
+    status: 0,
+    signal: null,
+    stderr: "",
+    stdout: files.map((file) => path.win32.normalize(file)).join("\0") + "\0",
+  });
+  const read = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation((file, options) =>
+    read(String(file).replaceAll("\\", "/"), options),
+  );
+  const platform = process.platform;
+  Object.defineProperty(process, "platform", { value: "win32" });
+  try {
+    expect([...loadInventorySources(root)]).toEqual([["src/runtime.ts", "export {};\n"]]);
+  } finally {
+    Object.defineProperty(process, "platform", { value: platform });
+    vi.mocked(childProcess.spawnSync).mockReset();
+  }
+});
 
 it("reuses identical source snapshots while keeping head analysis fresh and invalidating changed bases", () => {
   const source = "executeSqliteQuerySync(query);\n";

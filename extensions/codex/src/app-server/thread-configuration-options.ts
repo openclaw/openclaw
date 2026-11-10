@@ -12,14 +12,16 @@ export type CodexThreadConfigurationOptions = {
   dynamicTools?: CodexDynamicToolSpec[];
   /** Current executor availability, independent of retained tool declarations. */
   askUserAvailable?: boolean;
-  /** Preflight snapshot whose origins distinguish authored settings from defaults. */
-  nativeQuestionConfig?: CodexConfigReadResponse;
+  /** Preflight `config/read` snapshot whose origins distinguish authored settings from defaults. */
+  nativeConfig?: CodexConfigReadResponse;
   /** Supervision preserves native mode selection and catalogue-owned instructions. */
   preserveNativeCollaboration?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   /** Observe assembled native instructions without rebuilding configuration decisions. */
   onDeveloperInstructions?: (instructions: string) => void;
+  /** A before_prompt_build `systemPrompt` replaced OpenClaw's policy; place no OpenClaw base. */
+  systemPromptReplaced?: boolean;
   /** Skills, persona, and memory carried with thread developer instructions, separate from generic policy. */
   refreshableInstructions?: string;
   config?: JsonObject;
@@ -30,6 +32,8 @@ export type CodexThreadConfigurationOptions = {
   environmentSelection?: CodexTurnEnvironmentParams[];
   model?: string | null;
   modelProvider?: string | null;
+  /** Supervised threads have no outer runtime plan; this provider owns their prompt guidance. */
+  nativeModelProvider?: string;
   hostSystemAgentActive?: boolean;
   restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
   shellEnvironment?: Readonly<Record<string, string>>;

@@ -14,6 +14,7 @@ import {
 } from "./tools-effective-inventory-shared.js";
 import type { EffectiveToolInventoryEntry } from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { describeGitHubPublishToolPreview } from "./tools/github-publish-tool.js";
 
 // Tool metadata may be attached to the normalized tool or the raw fallback
 // before schema projection. Check both so owner attribution survives cloning.
@@ -91,6 +92,13 @@ export function buildRuntimeCompatibleToolInventory(params: RuntimeCompatibleToo
           ...source,
           ...(label ? { label } : {}),
           ...(description ? { description, rawDescription: description } : {}),
+          ...(source.source === "core" && tool.name === "github_publish"
+            ? {
+                rawDescription: describeGitHubPublishToolPreview(
+                  rawToolsByName.get(tool.name)?.parameters ?? tool.parameters,
+                ),
+              }
+            : {}),
           ...(metadata?.risk ? { risk: metadata.risk } : {}),
           ...(metadata?.tags ? { tags: metadata.tags } : {}),
         };
