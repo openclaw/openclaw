@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import * as runtimeConfig from "../agents/agent-runtime-config.js";
 import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
 import { readCanonicalWorkspaceStateSnapshot } from "../agents/workspace-state-read.js";
@@ -16,13 +17,18 @@ import {
 } from "./add-stateless.js";
 import { seedTemplatePackageBootstrap } from "./bootstrap.js";
 import { buildGatewayTemplateAddPlan } from "./gateway-add-plan.js";
+import * as packageInstall from "./packages.js";
 import { readTemplateManifestFile } from "./reader.js";
 
 // No model call: exercise both ordinary workspace preparation owners, the shared
 // installer and the real seed-once owner. Adapter dispatch has separate coverage.
-it.each(["cli", "gateway"] as const)(
-  "keeps custom SOUL and deferred package bootstrap through %s conversation preparation",
-  async (transport) => {
+it.each([
+  { transport: "cli", failSeed: false },
+  { transport: "gateway", failSeed: false },
+  { transport: "gateway", failSeed: true },
+] as const)(
+  "keeps custom SOUL and deferred package bootstrap through $transport preparation (seed failure=$failSeed)",
+  async ({ transport, failSeed }) => {
     await withOpenClawTestState({ label: "template-conversation-bootstrap" }, async (state) => {
       const root = state.path("template");
       await fs.mkdir(root);
@@ -86,8 +92,8 @@ it.each(["cli", "gateway"] as const)(
           });
         }
       };
-      const prepare = async () => {
-        await prepareWorkspace();
+      const prepare = async (deferred = true) => {
+        await prepareWorkspace(deferred);
         const files = await loadWorkspaceBootstrapFiles(plan.agent.workspace);
         expect(files.find((file) => file.name === "SOUL.md")?.content).toBe(soul);
         await expect(
@@ -97,6 +103,23 @@ it.each(["cli", "gateway"] as const)(
           (await readCanonicalWorkspaceStateSnapshot(plan.agent.workspace)).setup,
         ).not.toHaveProperty("setupCompletedAt");
       };
+      plan.actions.push({
+        kind: "package",
+        action: "install",
+        blocked: false,
+        id: "calendar",
+        target: "calendar",
+        details: { kind: "plugin" },
+      });
+      const installStarted = createDeferred();
+      const installFinished = createDeferred();
+      using install = vi
+        .spyOn(packageInstall, "installTemplatePackages")
+        .mockImplementation(async () => {
+          installStarted.resolve();
+          await installFinished.promise;
+          return [];
+        });
       const apply = (leaseSet?: StatelessTemplateAddOptions["leaseSet"]) =>
         applyTemplateAddPlanStateless(plan, {
           ...(leaseSet ? { stateMode: "worker" as const, leaseSet } : {}),
@@ -113,7 +136,7 @@ it.each(["cli", "gateway"] as const)(
             }
             return "applied";
           },
-          onAgentReady: prepare,
+          onAgentReady: () => prepare(),
         });
       const { withExistingOpenClawStateSchema } =
         await import("../state/openclaw-state-db-schema-policy.js");
@@ -127,9 +150,50 @@ it.each(["cli", "gateway"] as const)(
         waitMs: 0,
         heartbeat: "worker" as const,
       };
+      const exerciseEarlyTurn = async (leaseSet?: StatelessTemplateAddOptions["leaseSet"]) => {
+        const installation = apply(leaseSet);
+        try {
+          await awaitGateBeforeSettlement(
+            installStarted.promise,
+            installation,
+            "Template Add settled before dependency installation",
+          );
+          // Ordinary user turns do not carry the installer's explicit deferral flag.
+          await prepare(false);
+          if (failSeed) {
+            await fs.writeFile(path.join(root, "BOOTSTRAP.md"), "Changed after consent.");
+          }
+        } finally {
+          installFinished.resolve();
+          // Join installer cleanup even when the early-turn regression fails.
+          await installation;
+        }
+        const result = await installation;
+        if (failSeed) {
+          expect(result).toMatchObject({
+            status: "partial",
+            agentRetained: true,
+            configCommitted: true,
+            error: {
+              code: "add_failed",
+              message: expect.stringContaining("changed after consent"),
+            },
+          });
+          // Retained failure must not hand bootstrap custody back to an ordinary turn.
+          await prepare(false);
+          const seedOptions = leaseSet ? { stateMode: "worker" as const, leaseSet } : {};
+          await expect(seedTemplatePackageBootstrap(plan, seedOptions)).rejects.toThrow(
+            "changed after consent",
+          );
+          await prepare(false);
+          await fs.writeFile(path.join(root, "BOOTSTRAP.md"), bootstrap);
+          await expect(seedTemplatePackageBootstrap(plan, seedOptions)).resolves.toBe("seeded");
+        }
+        return result;
+      };
       const result =
         transport === "cli"
-          ? await apply()
+          ? await exerciseEarlyTurn()
           : await withExistingOpenClawStateSchema(
               { path: openOpenClawStateDatabase().path },
               async () => {
@@ -141,13 +205,16 @@ it.each(["cli", "gateway"] as const)(
                     withOpenClawStateLeaseAsync(
                       { ...leaseOptions, scope: "core:agent-deletion" },
                       context,
-                      (agent) => apply({ context, leases: [allocation, agent] }),
+                      (agent) => exerciseEarlyTurn({ context, leases: [allocation, agent] }),
                     ),
                 );
               },
             );
-      expect(result.error).toBeUndefined();
-      expect(result).toMatchObject({ status: "complete" });
+      expect(install).toHaveBeenCalledOnce();
+      if (!failSeed) {
+        expect(result.error).toBeUndefined();
+        expect(result).toMatchObject({ status: "complete" });
+      }
       expect(await fs.readFile(path.join(plan.agent.workspace, "BOOTSTRAP.md"), "utf8")).toBe(
         bootstrap,
       );

@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { assertAgentInitializationCompleteInWorker } from "../config/sessions/agent-initialization.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
@@ -638,6 +640,13 @@ export async function beginSessionEffect(
             await params.revalidateAllowed();
           } else {
             await params.assertAllowed?.(signal);
+          }
+          if (effect.agent && params.run) {
+            await assertAgentInitializationCompleteInWorker(
+              getRuntimeConfigSnapshot() ?? {},
+              effect.agent.agentId,
+              () => signal.throwIfAborted(),
+            );
           }
         });
         signal.throwIfAborted();

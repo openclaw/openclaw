@@ -51,7 +51,7 @@ export function assertTemplatePluginRequirementsEnabled(
   }
 }
 
-export async function snapshotTemplatePluginInstallOwners(
+async function snapshotTemplatePluginInstallOwners(
   pluginIds: readonly string[],
   lease: Pick<PluginMetadataLeaseContext, "databasePath" | "assertOwned">,
 ): Promise<ReadonlyMap<string, string>> {
@@ -82,7 +82,7 @@ export async function snapshotTemplatePluginInstallOwners(
   return owners;
 }
 
-export async function assertTemplatePluginInstallOwnersCurrent(
+async function assertTemplatePluginInstallOwnersCurrent(
   expected: ReadonlyMap<string, string>,
   lease: Pick<PluginMetadataLeaseContext, "databasePath" | "assertOwned">,
 ): Promise<void> {

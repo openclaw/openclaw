@@ -57,6 +57,7 @@ import {
 import { resolveActiveParentSessionCreate } from "./session-create-active-parent.js";
 import {
   completeGatewaySessionCreation,
+  projectPendingSessionInitialization,
   rollbackAtomicGatewaySessionCreation,
 } from "./session-create-completion.js";
 import {
@@ -859,11 +860,7 @@ async function createGatewaySessionInScope(
           ...(authorizedPluginCreation && params.initialEntry?.cliSessionBindings
             ? { cliSessionBindings: structuredClone(params.initialEntry.cliSessionBindings) }
             : {}),
-          ...(params.initialEntry?.initializationPending === true ||
-          params.atomicInitialization === true ||
-          params.deferInitialization === true
-            ? { initializationPending: true }
-            : {}),
+          ...projectPendingSessionInitialization(params),
           ...(params.initialEntry?.modelSelectionLocked === true
             ? { modelSelectionLocked: true }
             : {}),

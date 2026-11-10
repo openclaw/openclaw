@@ -45,6 +45,8 @@ import {
 import { ensureGitRepo } from "./workspace-git.js";
 import { LEGACY_WORKSPACE_STATE_CURRENT_FILENAME } from "./workspace-legacy-state.js";
 import {
+  captureWorkspacePreparationGuard,
+  isWorkspaceBootstrapDeferred,
   maybeWriteWorkspaceAttestation,
   runWorkspacePreparation,
 } from "./workspace-preparation.js";
@@ -499,15 +501,6 @@ type EnsuredAgentWorkspace = {
   identityPathCreated?: boolean;
 };
 
-function captureWorkspacePreparationGuard(guard?: WorkspaceStateGuard) {
-  return (
-    guard && {
-      ...guard,
-      recoveryHoldPredicate: structuredClone(guard.recoveryHoldPredicate),
-    }
-  );
-}
-
 export async function ensureAgentWorkspace(
   params?: EnsureAgentWorkspaceParams,
 ): Promise<EnsuredAgentWorkspace> {
@@ -649,7 +642,7 @@ async function ensureAgentWorkspaceOwned(
   assertExpiryEvidence = captureWorkspaceStateFilesystemGuard(dir, !recentAttestation);
 
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
-  if (!params?.ensureBootstrapFiles) {
+  if (!params?.ensureBootstrapFiles || isWorkspaceBootstrapDeferred(dir)) {
     const hasContentEvidence = await hasSkipBootstrapWorkspaceContentEvidence(dir);
     if (recentAttestation && !hasContentEvidence) {
       throw new WorkspaceVanishedError({ workspaceDir: dir });

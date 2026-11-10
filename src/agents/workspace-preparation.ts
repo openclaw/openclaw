@@ -10,6 +10,26 @@ const preparationQueues = resolveGlobalMap<string, StoreWriterQueue>(
   Symbol.for("openclaw.workspacePreparationQueues"),
 );
 
+// The initializer owns seeding while ordinary turns may already use this workspace.
+// Keep failed, retained initialization deferred until a seed retry succeeds.
+const deferredBootstraps = resolveGlobalMap<string, true>(
+  Symbol.for("openclaw.workspaceDeferredBootstraps"),
+);
+
+export function deferWorkspaceBootstrap(dir: string): () => void {
+  const canonicalDir = resolveCanonicalWorkspacePath(dir);
+  deferredBootstraps.set(canonicalDir, true);
+  return () => settleWorkspaceBootstrapDeferral(canonicalDir);
+}
+
+export function isWorkspaceBootstrapDeferred(dir: string): boolean {
+  return deferredBootstraps.has(resolveCanonicalWorkspacePath(dir));
+}
+
+export function settleWorkspaceBootstrapDeferral(dir: string): void {
+  deferredBootstraps.delete(resolveCanonicalWorkspacePath(dir));
+}
+
 /** Keep host filesystem preparation and its worker writes in one directory's FIFO interval. */
 export function runWorkspacePreparation<T>(
   dir: string,
@@ -73,4 +93,13 @@ export async function maybeWriteWorkspaceAttestation(
     // the auxiliary disappearance evidence could not be refreshed.
   }
   assertHost?.();
+}
+
+export function captureWorkspacePreparationGuard(guard?: WorkspaceStateGuard) {
+  return (
+    guard && {
+      ...guard,
+      recoveryHoldPredicate: structuredClone(guard.recoveryHoldPredicate),
+    }
+  );
 }

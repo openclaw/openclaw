@@ -15,6 +15,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { deleteSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import { readSessionCreationReceiptInWorker } from "../../config/sessions/session-creation-receipt-read.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
@@ -26,7 +27,10 @@ import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { createGatewaySession } from "../session-create-service.js";
 import type { CreatedGatewaySession } from "../session-create-service.types.js";
-import { finalizeSessionCreateTarget } from "../session-create-target.js";
+import {
+  checkpointSessionCreateTarget,
+  finalizeSessionCreateTarget,
+} from "../session-create-target.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -102,12 +106,21 @@ export async function prepareAgentOnboarding(
 export async function completeAgentOnboarding(
   options: GatewayRequestHandlerOptions,
   agentId: string,
-  prePublication?: { config: OpenClawConfig; commandSource?: "cli"; initializationPending?: true },
+  prePublication?: {
+    config: OpenClawConfig;
+    commandSource?: "cli";
+    initializationPending?: true;
+    templateInitialization?: SessionEntry["templateInitialization"];
+    recover?: true;
+  },
 ): Promise<
   NonNullable<AgentsCreateResult["onboarding"]> & {
     rollback?: (() => Promise<void>) & {
       assertCurrent?: () => Promise<void>;
       complete?: () => Promise<void>;
+      checkpoint?: (
+        initialization: NonNullable<SessionEntry["templateInitialization"]>,
+      ) => Promise<void>;
     };
     preparationUncertain?: true;
   }
@@ -122,43 +135,62 @@ export async function completeAgentOnboarding(
     : undefined;
   try {
     const authority = readGatewayRequestMutationAuthority(options);
-    const created = await createGatewaySession({
-      cfg,
-      ...(prePublication?.initializationPending ? { deferInitialization: true as const } : {}),
-      ...(operation ? { creationOperation: operation } : {}),
-      // Add owns the prospective config and revalidates it before publishing. The
-      // session owner prepares only this private target; it never activates a roster.
-      ...(!prePublication ? { getCurrentConfig: options.context.getRuntimeConfig } : {}),
-      agentId,
-      key: sessionKey,
-      commandSource: prePublication?.commandSource ?? "webchat",
-      creation: resolveOperatorSessionCreation(options.client),
-      requestingOperatorScopes: options.client?.connect.scopes,
-      requestingOperatorProfileId: options.client?.authenticatedUserProfile?.profileId,
-      operatorRoleActor: resolveGatewayOperatorRoleActor(options.client),
-      commitGuard: authority.assertCurrent,
-      onPhase: diagnostics?.mark,
-      onCreatedSessionCommitted: (session) => {
-        preparation.committed = session;
-        options.sessionMutationAuthorization?.recordCreatedSession?.({
-          agentId,
-          sessionKey,
-          storePath: session.storePath,
-          sessionId: session.entry.sessionId,
-          entry: session.entry,
-          lifecycleRevision: session.entry.lifecycleRevision,
-        });
-      },
-    });
-    if (!created.ok) {
-      throw new Error(created.error.message);
-    }
-    if (!prePublication) {
-      emitSessionsChanged(options.context, { agentId, sessionKey, reason: "created" });
-      return { sessionKey, status: "completed" };
+    if (prePublication?.recover) {
+      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+      const entry = await readSessionEntryReadOnlyInWorker(
+        { agentId, storePath, sessionKey },
+        authority.assertCurrent,
+      );
+      if (
+        !entry?.initializationPending ||
+        !entry.templateInitialization ||
+        !isDeepStrictEqual(entry.templateInitialization, prePublication.templateInitialization)
+      ) {
+        throw new Error("The retained Template initialization incarnation changed");
+      }
+      preparation.committed = { agentId, key: sessionKey, storePath, entry, isNew: false };
+    } else {
+      const created = await createGatewaySession({
+        cfg,
+        ...(prePublication?.initializationPending ? { deferInitialization: true as const } : {}),
+        ...(operation ? { creationOperation: operation } : {}),
+        ...(prePublication?.templateInitialization
+          ? { templateInitialization: prePublication.templateInitialization }
+          : {}),
+        // Add owns the prospective config and revalidates it before publishing. The
+        // session owner prepares only this private target; it never activates a roster.
+        ...(!prePublication ? { getCurrentConfig: options.context.getRuntimeConfig } : {}),
+        agentId,
+        key: sessionKey,
+        commandSource: prePublication?.commandSource ?? "webchat",
+        creation: resolveOperatorSessionCreation(options.client),
+        requestingOperatorScopes: options.client?.connect.scopes,
+        requestingOperatorProfileId: options.client?.authenticatedUserProfile?.profileId,
+        operatorRoleActor: resolveGatewayOperatorRoleActor(options.client),
+        commitGuard: authority.assertCurrent,
+        onPhase: diagnostics?.mark,
+        onCreatedSessionCommitted: (session) => {
+          preparation.committed = session;
+          options.sessionMutationAuthorization?.recordCreatedSession?.({
+            agentId,
+            sessionKey,
+            storePath: session.storePath,
+            sessionId: session.entry.sessionId,
+            entry: session.entry,
+            lifecycleRevision: session.entry.lifecycleRevision,
+          });
+        },
+      });
+      if (!created.ok) {
+        throw new Error(created.error.message);
+      }
+      if (!prePublication) {
+        emitSessionsChanged(options.context, { agentId, sessionKey, reason: "created" });
+        return { sessionKey, status: "completed" };
+      }
     }
     const session = preparation.committed;
-    if (!session?.isNew) {
+    if (!session || (!session.isNew && !prePublication?.recover)) {
       throw new Error("Template Add did not prepare a new ordinary session");
     }
     return {
@@ -167,7 +199,7 @@ export async function completeAgentOnboarding(
       // Cleanup owns only this unpublished incarnation, not a saved approval. Once
       // Add publishes the agent, it discards this cleanup and keeps the session.
       rollback: Object.assign(
-        () => rollbackPreparedAgentSession(session),
+        () => (prePublication.recover ? Promise.resolve() : rollbackPreparedAgentSession(session)),
         prePublication.initializationPending
           ? {
               assertCurrent: async () => {
@@ -185,6 +217,16 @@ export async function completeAgentOnboarding(
                   );
                 }
               },
+              checkpoint: async (
+                initialization: NonNullable<SessionEntry["templateInitialization"]>,
+              ) => {
+                session.entry = await checkpointSessionCreateTarget(
+                  session,
+                  session.entry,
+                  initialization,
+                  authority.assertCurrent,
+                );
+              },
               complete: async () => {
                 await finalizeSessionCreateTarget(session, session.entry, authority.assertCurrent);
                 emitSessionsChanged(options.context, { agentId, sessionKey, reason: "created" });
@@ -194,7 +236,7 @@ export async function completeAgentOnboarding(
       ),
     };
   } catch (error) {
-    if (operation) {
+    if (operation && !prePublication?.recover) {
       try {
         let session = preparation.committed;
         if (!session) {
