@@ -1,5 +1,12 @@
+import type { SessionCatalogSession } from "../../../packages/gateway-protocol/src/index.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import {
+  groupCatalogSessionsByPerson,
+  groupCatalogSessionsByProject,
+  type CatalogProjectGrouping,
+} from "../lib/sessions/catalog-project-grouping.ts";
 import { projectSidebarSessionReference } from "./app-sidebar-agent-session-rows.ts";
+import type { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import type {
   CatalogBackingSessionDisplay,
   SidebarSessionCatalog,
@@ -9,6 +16,8 @@ import { sidebarCatalogLiveRows } from "./app-sidebar-session-snooze-visibility.
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarProjectionMemo } from "./sidebar-projection-cache.ts";
 import type { SidebarProjectionHost } from "./sidebar-projection-memo.ts";
+
+export const CATALOG_SESSION_GROUP_LIMIT = 5;
 
 const CATALOG_CONTROLS = [
   ["link", ".sidebar-recent-session__link"],
@@ -125,4 +134,61 @@ export function memoizedSidebarCatalogRows(
       return projected;
     },
   );
+}
+
+export function catalogSessionGroups(
+  sessions: readonly SessionCatalogSession[],
+  grouping: CatalogProjectGrouping,
+) {
+  return grouping === "project"
+    ? groupCatalogSessionsByProject(sessions)
+    : grouping === "person"
+      ? groupCatalogSessionsByPerson(sessions)
+      : null;
+}
+
+/** The lazy placement owner reveals every boundary once per native navigation epoch. */
+export function revealSidebarCatalogSelection(
+  host: AppSidebarOwner,
+  catalogs: readonly SidebarSessionCatalog[],
+) {
+  const disclosure = host.sessionProjection.children;
+  const row = host.catalogSessionRows().get(disclosure.selectedRootKey ?? "");
+  if (!row?.containsActiveDescendant) {
+    return;
+  }
+  const revealSection = (id: string) => {
+    if (disclosure.revealOnce("section:" + id) && host.collapsedSessionSections.has(id)) {
+      host.toggleSection(id);
+    }
+  };
+  for (const catalog of catalogs) {
+    for (const source of catalog.visibleHosts) {
+      if (!source.sessions.some((entry) => entry.sessionKey === row.key)) {
+        continue;
+      }
+      revealSection(`catalog:${catalog.id}`);
+      const grouped = catalogSessionGroups(source.sessions, host.catalogProjectGrouping);
+      const group = grouped?.groups.find((entry) =>
+        entry.sessions.some((session) => session.sessionKey === row.key),
+      );
+      const sectionId = group
+        ? `catalog-${group.kind}:${catalog.id}:${source.hostId}:${group.key}`
+        : grouped
+          ? `catalog-${host.catalogProjectGrouping}-ungrouped:${catalog.id}:${source.hostId}`
+          : `catalog-host:${catalog.id}:${source.hostId}`;
+      if (group) {
+        revealSection(sectionId);
+        if (group.legacySectionKey) {
+          revealSection(`catalog-project:${catalog.id}:${source.hostId}:${group.legacySectionKey}`);
+        }
+      }
+      const sessions = group?.sessions ?? grouped?.ungrouped ?? source.sessions;
+      const index = sessions.findIndex((entry) => entry.sessionKey === row.key);
+      if (disclosure.revealOnce("page:" + sectionId) && index >= CATALOG_SESSION_GROUP_LIMIT) {
+        host.setVisibleSessionLimit(sectionId, sessions.length);
+      }
+      return;
+    }
+  }
 }

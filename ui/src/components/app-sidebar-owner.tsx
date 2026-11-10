@@ -238,7 +238,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   private readonly Catalog = lazy(
     async () => {
       const renderer = await import("./app-sidebar-session-catalog-render.tsx");
-      this.catalogRowProjector = renderer.memoizedSidebarCatalogRows;
+      this.catalogRenderer = renderer;
       this.invalidate();
       return renderer;
     },
@@ -319,16 +319,21 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       this.selectedAgentSessionRows(this.getSessionNavigationState()),
     ).sections;
     const disclosure = this.sessionProjection.children;
-    const selected = sections.find((section) =>
-      section.rows.some((row) => row.key === disclosure.selectedRootKey && !row.visuallyActive),
-    );
-    if (
-      selected &&
-      disclosure.revealOnce("section:" + selected.id) &&
-      this.sessionOrganizer.collapsedSessionSections.has(selected.id)
-    ) {
-      this.sessionOrganizer.toggleSection(selected.id);
+    for (const section of sections) {
+      for (const row of section.rows) {
+        if (row.key !== disclosure.selectedRootKey || row.visuallyActive) {
+          continue;
+        }
+        if (
+          disclosure.revealOnce("section:" + section.id) &&
+          this.sessionOrganizer.collapsedSessionSections.has(section.id)
+        ) {
+          this.sessionOrganizer.toggleSection(section.id);
+        }
+        return;
+      }
     }
+    this.catalogRenderer?.revealSidebarCatalogSelection(this, this.sidebarSessionCatalogs());
   }
 
   toggleSessionPin(session: SidebarRecentSession): void {

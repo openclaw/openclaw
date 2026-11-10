@@ -11,14 +11,14 @@ import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
-import {
-  groupCatalogSessionsByPerson,
-  groupCatalogSessionsByProject,
-} from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import { createCatalogSessionRowRef } from "./app-sidebar-session-catalog-row.ts";
+import {
+  CATALOG_SESSION_GROUP_LIMIT,
+  catalogSessionGroups,
+  createCatalogSessionRowRef,
+} from "./app-sidebar-session-catalog-row.ts";
 import {
   catalogErrorMessages,
   formatSidebarTimestamp,
@@ -41,8 +41,11 @@ import {
   SessionRowBadges,
   sessionRunVisibility,
 } from "./solid/session-presentation.tsx";
-export { memoizedSidebarCatalogRows } from "./app-sidebar-session-catalog-row.ts";
-const CATALOG_SESSION_GROUP_LIMIT = 5;
+export {
+  memoizedSidebarCatalogRows,
+  revealSidebarCatalogSelection,
+} from "./app-sidebar-session-catalog-row.ts";
+
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows use canonical local labels and title snapshots; native catalog
   // refreshes must not rename them or replace the regular session presentation.
@@ -68,11 +71,7 @@ function renderCatalogHostGroup(
   });
   const projectGroups = createMemo(() => {
     const readHostValue = readHost();
-    return params.snapshot.projectGrouping === "project"
-      ? groupCatalogSessionsByProject(readHostValue.sessions)
-      : params.snapshot.projectGrouping === "person"
-        ? groupCatalogSessionsByPerson(readHostValue.sessions)
-        : null;
+    return catalogSessionGroups(readHostValue.sessions, params.snapshot.projectGrouping);
   });
   function renderCatalogSessionRow(readSession: () => SessionCatalogSession, projectChild = false) {
     const timestamp = createMemo(() =>
@@ -386,11 +385,7 @@ function renderCatalogHostGroup(
               });
               const collapsed = createMemo(() => collapsedSectionId() !== null);
               const activity = createMemo(() =>
-                catalogSessionActivity(
-                  group().sessions,
-                  readLiveRowsByKey(),
-                  (row) => row.isRunVisuallyActive === true,
-                ),
+                catalogSessionActivity(group().sessions, readLiveRowsByKey()),
               );
               return (
                 <div class="sidebar-session-catalog-project" role="listitem">
@@ -463,9 +458,7 @@ function renderCatalogGroup(
   const sectionId = createMemo(() => `catalog:${readCatalog().id}`);
   const collapsed = createMemo(() => params.host.collapsedSessionSections.has(sectionId()));
   const rows = createMemo(() => readCatalog().visibleHosts.flatMap((host) => host.sessions));
-  const activity = createMemo(() =>
-    catalogSessionActivity(rows(), readLiveRowsByKey(), (row) => row.isRunVisuallyActive === true),
-  );
+  const activity = createMemo(() => catalogSessionActivity(rows(), readLiveRowsByKey()));
   let viewMenuTrigger: HTMLButtonElement | undefined;
   const hasActiveRun = createMemo(() => activity().running);
   const hasUnread = createMemo(() => activity().unread);

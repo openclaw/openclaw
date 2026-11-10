@@ -41,7 +41,7 @@ import {
   sidebarVisibleRowsInOrder,
 } from "./app-sidebar-personal-navigation.ts";
 import { sidebarPresenceScope } from "./app-sidebar-presence.ts";
-import type { memoizedSidebarCatalogRows } from "./app-sidebar-session-catalog-row.ts";
+import type * as CatalogRenderer from "./app-sidebar-session-catalog-render.tsx";
 import {
   adoptedCatalogSessionKeys,
   type SidebarSessionCatalog,
@@ -283,11 +283,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   // never remove their adopted rows from the regular session list.
   visibleSessionCatalogs = () => visibleSidebarSessionCatalogs(this);
 
-  protected catalogRowProjector?: typeof memoizedSidebarCatalogRows;
+  protected catalogRenderer?: typeof CatalogRenderer;
 
   catalogSessionRows = (): ReadonlyMap<string, SidebarRecentSession> =>
-    this.catalogRowProjector?.(this.catalogRowsMemo, this, this.sidebarSessionCatalogs()) ??
-    EMPTY_CATALOG_ROWS;
+    this.catalogRenderer?.memoizedSidebarCatalogRows(
+      this.catalogRowsMemo,
+      this,
+      this.sidebarSessionCatalogs(),
+    ) ?? EMPTY_CATALOG_ROWS;
 
   protected sidebarSessionCatalogs = () => {
     // Catalogs consume the rows stage's resolved owner.

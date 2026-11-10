@@ -256,12 +256,9 @@ export class SidebarSessionProjection {
       catalogs &&
         this.catalogPresentation.readRevision(
           () => [
+            // Catalog and prepared-row owners already track roster and session revisions.
             catalogs,
-            data.sessionsResult,
-            data.sessionResultsByAgent,
             host.catalogSessionRows(),
-            this.revision,
-            context?.sessions.revision,
             this.mountedCatalogRevision,
             areSessionCatalogsSettled(data),
             data.visibleSessionLimits,
@@ -278,13 +275,10 @@ export class SidebarSessionProjection {
                 catalogSessionActivity(
                   catalog.visibleHosts.flatMap((catalogHost) => catalogHost.sessions),
                   projectedRowsByKey,
-                  (row) => row.isRunVisuallyActive === true,
                 ),
               ),
-              Array.from(this.mountedCatalogRows, ({ key }) => {
-                const row = projectedRowsByKey.get(key);
-                return row ? [row, this.children.capture(key)] : null;
-              }),
+              // Explicit disclosure actions invalidate directly; compare prepared facts here.
+              Array.from(this.mountedCatalogRows, ({ key }) => projectedRowsByKey.get(key)),
               areSessionCatalogsSettled(data),
               data.visibleSessionLimits,
             ];
