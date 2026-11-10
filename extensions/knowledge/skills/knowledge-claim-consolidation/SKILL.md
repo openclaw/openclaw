@@ -30,9 +30,9 @@ current fingerprint. Then enumerate exactly one starting set:
   call reports at most 10 examples per outcome, so a limit of 10 returns every
   claim it examined.
 - **One page**, for a hub page or a page over its size budget. List its
-  current claims with `knowledge_connections` `id`, `direction: "claims"`,
-  `view: "full"` and `includeCards: true`, following `nextOffset` with the
-  same filters. Restart when `snapshot` changes. On a hub, group from the cards
+  current claims with `knowledge_connections` `id` and `direction: "claims"`;
+  each row carries the claim's text, kind, day, linked page titles and
+  16-character hash. Follow `nextOffset` with the same filters. Restart when `snapshot` changes. On a hub, group from the cards
   first and work one group at a time; do not read every claim in full up front.
 - **One subject, optionally since a date.** When the subject has a page, list
   its claims with `knowledge_timeline` `entity`, `timeField: "recorded_at"`

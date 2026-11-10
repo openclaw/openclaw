@@ -192,7 +192,7 @@ it("fixture classification consistently removes records from current views witho
   expect((await f.service.grep({ query: "Fixture canary" }, f.owner)).total).toBe(0);
   expect(
     (await f.service.connections({ id: f.source.id }, f.owner)).connections.some(
-      (r: any) => r.record.id === claim.id,
+      (r: any) => r.id === claim.id,
     ),
   ).toBe(false);
   expect((await f.service.recent({}, f.owner)).items.some((r: any) => r.id === claim.id)).toBe(
@@ -440,7 +440,7 @@ it("entity annotations link a claim by ID without changing its assertion, and re
   expect(linked!.revision).toBe(before!.revision + 1);
   const connected = await f.service.connections({ id: alex.id, direction: "claims" }, f.owner);
   expect(
-    connected.connections.some((c: any) => c.record.id === claim.id),
+    connected.connections.some((c: any) => c.id === claim.id),
     "The subject page now lists the claim",
   ).toBeTruthy();
   // Exact replay returns the same receipt; a stale revision conflicts.

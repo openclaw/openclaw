@@ -1,3 +1,4 @@
+import { hashMatches } from "./hash-fence.js";
 import type { VerifyInput, VerifyOutput } from "./ingestion-contract.js";
 import { resolveLinks } from "./markdown-links.js";
 import { linkTargets } from "./merge.js";
@@ -59,7 +60,10 @@ export function verifyRecords(
         "Record validation found " + issue.code + "; inspect this exact record for details.",
       );
     }
-    if (expectation.expectedHash !== undefined && record.hash !== expectation.expectedHash) {
+    if (
+      expectation.expectedHash !== undefined &&
+      !hashMatches(record.hash, expectation.expectedHash)
+    ) {
       add(id, "hash-mismatch", "Record changed since the supplied receipt.");
     }
     if (

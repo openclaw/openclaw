@@ -2,7 +2,6 @@ import { summaryLink } from "./claim-view.js";
 import { identityTag } from "./knowledge-presentation.js";
 import type { Page } from "./page-context.js";
 import { button, el, tile } from "./page-dom.js";
-import { isFullHit } from "./retrieval-hit.js";
 import { temporalQuery, temporalSelectionError } from "./search-date-filters.js";
 import { icon } from "./ui-icons.js";
 
@@ -66,7 +65,7 @@ export function searchForm(ui: Page, compact = false) {
           }
           suggestions.replaceChildren();
           suggestions.append(el("small", "Exact matches"));
-          const hits = result.hits.filter(isFullHit);
+          const hits = result.hits;
           if (!hits.length) {
             suggestions.append(el("p", `No page is named exactly "${s.query}".`));
           }
@@ -148,7 +147,7 @@ export async function searchResults(ui: Page, n: number, target: HTMLElement) {
   if (!result.coverage.complete) {
     list.append(el("p", result.coverage.message, "knowledge-notice"));
   }
-  for (const hit of result.hits.filter(isFullHit)) {
+  for (const hit of result.hits) {
     const row = el("article", undefined, "knowledge-search-hit");
     row.append(
       summaryLink(ui, hit.record),

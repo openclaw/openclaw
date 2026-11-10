@@ -72,7 +72,7 @@ it("structured UI/agent service parity: decision, owned commitment, event, edge 
     f.owner,
   );
   expect(Check(contract.operations.connections.output, outgoing)).toBeTruthy();
-  expect(outgoing.connections[0]!.record.id).toBe(edge.id);
+  expect(outgoing.connections[0]).toMatchObject({ id: edge.id });
   expect(
     (await f.service.connections({ id: f.pages.project.id, direction: "incoming" }, f.operator))
       .connections[0]!.from,
@@ -85,8 +85,8 @@ it("structured UI/agent service parity: decision, owned commitment, event, edge 
   expect(reverse.nextOffset).toBe(1);
   expect(
     (await f.service.connections({ id: f.pages.person.id, direction: "claims" }, f.owner))
-      .connections[0]!.record.id,
-  ).toBe(commitment.id);
+      .connections[0],
+  ).toMatchObject({ id: commitment.id });
 });
 
 it("all claim kinds roundtrip; contradictions and uncertain attribution are not merged", async () => {

@@ -7,9 +7,7 @@ import { expect, it } from "vitest";
 import { stringify } from "yaml";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
-import { isFullHit } from "./retrieval-hit.js";
 import { keywordExpression, keywordSearch } from "./retrieval.js";
-import { AGENT_HIT_LIMIT, COMPACT_SNIPPET_CHARS } from "./search-detail.js";
 import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
 import {
@@ -21,6 +19,8 @@ import {
   toolContext,
   operatorContext,
 } from "./test-support.js";
+import { COMPACT_SNIPPET_CHARS } from "./tool-result-contract.js";
+import { AGENT_HIT_LIMIT, leanToolResults } from "./tool-results.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -69,6 +69,8 @@ async function fixture() {
     owner,
     operator,
     service,
+    // What agent tools see: the service behind the lean tool-result adapter.
+    agent: leanToolResults(service) as any,
     store,
     put,
     group: () => {
@@ -101,20 +103,21 @@ it("UI and tool share FTS title/alias/body retrieval, literal modes and stable c
     ["purple flower", "aliases"],
     ["distinctive", "body"],
   ] as const) {
-    const result = await f.service.grep({ query, detail: "full" }, f.owner),
+    const result = await f.agent.grep({ query, detail: "full" }, f.owner),
       ui = await f.service.grep({ query }, f.operator),
-      compact = await f.service.grep({ query }, f.owner);
+      compact = await f.agent.grep({ query }, f.owner);
     expect(Check(contract.operations.grep.output, result)).toBeTruthy();
     expect(Check(contract.operations.grep.output, compact)).toBeTruthy();
     expect(stable(result)).toStrictEqual(stable(ui));
-    expect(compact.hits.map((h) => h.record.id)).toStrictEqual(ui.hits.map((h) => h.record.id));
+    expect(compact.hits.map((h: any) => h.id)).toStrictEqual(ui.hits.map((h) => h.record.id));
     expect(result.index.state).toBe("ready");
     expect(result.index.lag).toBe(false);
     expect(result.total).toBe(1);
     expect(result.hits[0]!.matches).toStrictEqual([field]);
     const current = (await f.service.record({ id: "record_alpha" }, f.owner)).record;
-    expect(result.hits.find(isFullHit)!.citation.hash).toBe(current!.hash);
-    expect(result.hits.find(isFullHit)!.citation.revision).toBe(current!.revision);
+    expect(result.hits[0]!.citation.hash).toBe(current!.hash);
+    expect(result.hits[0]!.citation.revision).toBe(current!.revision);
+    expect(compact.hits[0].hash).toBe(current!.hash.slice(0, 16));
   }
   expect(await f.total({ query: "orchid nonexistent", mode: "all" })).toBe(0);
   expect(await f.total({ query: "orchid nonexistent", mode: "any" })).toBe(1);
@@ -246,10 +249,10 @@ it("external edits, rename, deletion, malformed replacement and ontology changes
   await rename(target, target + "-renamed.md");
   target += "-renamed.md";
   expect(await f.total({ query: "oldword" })).toBe(0);
-  const changed = await f.service.grep({ query: "newword", detail: "full" }, f.owner);
+  const changed = await f.service.grep({ query: "newword" }, f.owner);
   expect(changed.index.snapshot).not.toBe(before.index.snapshot);
-  expect(changed.hits.find(isFullHit)!.citation.path).toMatch(/renamed/);
-  expect(changed.hits.find(isFullHit)!.citation.revision).toBe(2);
+  expect(changed.hits[0]!.citation.path).toMatch(/renamed/);
+  expect(changed.hits[0]!.citation.revision).toBe(2);
   await writeFile(target, "malformed newword");
   expect(await f.total({ query: "newword" })).toBe(0);
   await f.put("editable_two", "Newname", "newword");
@@ -320,8 +323,8 @@ it("bounded contextual snippets have truthful original Markdown lines", async ()
     body = `${"Introduction\n".repeat(100)}rareword <script>alert('unsafe')</script>\n${"tail 😀\n".repeat(200)}`;
   const target = await f.put("snippet_record", "Long record", body),
     raw = await readFile(target, "utf8");
-  const result = await f.service.grep({ query: "rareword", detail: "full" }, f.owner),
-    hit = result.hits.find(isFullHit),
+  const result = await f.service.grep({ query: "rareword" }, f.owner),
+    hit = result.hits[0],
     snippet = hit!.snippet;
   expect(snippet.field).toBe("body");
   expect(snippet.text).toMatch(/rareword/);
@@ -337,26 +340,19 @@ it("bounded contextual snippets have truthful original Markdown lines", async ()
   ).toBeTruthy();
   expect(Check(contract.operations.grep.output, result)).toBeTruthy();
   // Agent calls default to compact hits whose short snippet still keeps the match.
-  const compact = (await f.service.grep({ query: "rareword" }, f.owner)).hits[0]!;
+  const compact = (await f.agent.grep({ query: "rareword" }, f.owner)).hits[0]!;
   expect(Object.keys(compact).toSorted(defaultOrder)).toStrictEqual([
-    "matches",
-    "record",
-    "snippet",
-  ]);
-  expect(Object.keys(compact.record).toSorted(defaultOrder)).toStrictEqual([
+    "hash",
     "id",
-    "kind",
-    "lifecycle",
-    "path",
     "revision",
+    "snippet",
     "title",
     "type",
-    "valid",
   ]);
-  expect(compact.snippet.text).toMatch(/rareword/);
+  expect(compact.snippet).toMatch(/rareword/);
   // The cut never splits the emoji tail's surrogate pairs.
-  expect(compact.snippet.text.length <= COMPACT_SNIPPET_CHARS).toBeTruthy();
-  expect(compact.snippet.text.isWellFormed()).toBe(true);
+  expect(compact.snippet.length <= COMPACT_SNIPPET_CHARS).toBeTruthy();
+  expect(compact.snippet.isWellFormed()).toBe(true);
 });
 
 it("FTS operators are literal words, malformed/oversized input is rejected, Unicode terms work", async () => {
@@ -399,7 +395,7 @@ it("ranking preserves pagination and scope without rereading the filtered corpus
   expect(next.index.snapshot).toBe(first.index.snapshot);
   expect(next.freshness.indexedAt).toBe(first.freshness.indexedAt);
   // Agent calls that omit limit get the agent page size, not the storage default.
-  const agentPage = await f.service.grep({ query: "haystack" }, f.owner);
+  const agentPage = await f.agent.grep({ query: "haystack" }, f.owner);
   expect(agentPage.hits.length).toBe(AGENT_HIT_LIMIT);
   expect(agentPage.nextOffset).toBe(AGENT_HIT_LIMIT);
   await f.put("outside_record", "Needle", "needle ".repeat(100));
@@ -443,13 +439,13 @@ it("published pages are immediately searchable without approval; restored genera
   expect(receipt.state).toBe("published");
   expect(receipt.indexed).toBe(false);
   expect(receipt.message).toMatch(/pending/);
-  const indexed = await service.grep({ query: "newlypublishedword", detail: "full" }, f.owner);
+  const indexed = await service.grep({ query: "newlypublishedword" }, f.owner);
   expect(indexed.index.state).toBe("ready");
   expect(indexed.total).toBe(1);
-  expect(indexed.hits.find(isFullHit)!.citation.hash).toBe(receipt.hash);
-  expect(indexed.hits.find(isFullHit)!.evidence.length).toBe(1);
-  expect(indexed.hits.find(isFullHit)!.evidence[0]!.start_line).toBe(1);
-  expect(indexed.hits.find(isFullHit)!.attribution).toBe("User note");
+  expect(indexed.hits[0]!.citation.hash).toBe(receipt.hash);
+  expect(indexed.hits[0]!.evidence.length).toBe(1);
+  expect(indexed.hits[0]!.evidence[0]!.start_line).toBe(1);
+  expect(indexed.hits[0]!.attribution).toBe("User note");
   expect((await service.lookup({ query: receipt.id }, f.owner)).outcome).toBe("found");
   const raw = (await service.record({ id: receipt.id, view: "raw" }, f.owner)).record!.raw;
   expect(raw).not.toMatch(/acceptance:/);
@@ -544,7 +540,7 @@ it("an active search follows superseded wording to the current replacement after
   await f.put("loop_one", "Loop", "Harbor plot loop.\n", superseded("loop_two"));
   await f.put("loop_two", "Loop", "Other loop.\n", superseded("loop_one"));
 
-  const full = await f.service.grep({ query: "harbor plot", detail: "full" }, f.owner);
+  const full = await f.service.grep({ query: "harbor plot" }, f.owner);
   expect(Check(contract.operations.grep.output, full)).toBeTruthy();
   expect(ids(full)).toStrictEqual(["venue_v2", "pilot_v3"]);
   expect(full.hits[1]).toMatchObject({
@@ -559,9 +555,9 @@ it("an active search follows superseded wording to the current replacement after
       hash: expect.stringMatching(/^[0-9a-f]{64}$/),
     },
   });
-  const compact = await f.service.grep({ query: "harbor plot" }, f.owner);
+  const compact = await f.agent.grep({ query: "harbor plot" }, f.owner);
   expect(Check(contract.operations.grep.output, compact)).toBeTruthy();
-  expect(compact.hits[1]!.via).toStrictEqual({ id: "pilot_v1", title: "Pilot plan", revision: 3 });
+  expect(compact.hits[1]!.via).toStrictEqual({ id: "pilot_v1", revision: 3 });
 
   // Pagination spans direct and followed hits as one list.
   const second = await f.service.grep({ query: "harbor plot", offset: 1, limit: 1 }, f.owner);

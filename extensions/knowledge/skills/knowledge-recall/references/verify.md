@@ -7,7 +7,8 @@
 Run `knowledge_verify` over every published ID (up to 100 per call). Supply
 expectations from your plan, never copied from saved output:
 
-- `expectedRevision`/`expectedHash` from receipts.
+- `expectedRevision`/`expectedHash` from receipts (a full hash or a row's
+  16-character prefix).
 - `owner`, `due_at`, `occurred_at`, `source_page`, `from`, `to`, `label`
   compare exactly; `null` asserts absence; omitted skips.
 - `expectedEntities`/`expectedDependencies`: required members (extras allowed).

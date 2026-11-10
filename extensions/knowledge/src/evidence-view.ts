@@ -1,5 +1,5 @@
 import type { FeatureClient, FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { confidenceView } from "./knowledge-presentation.js";
 import { icon } from "./ui-icons.js";
 
@@ -10,7 +10,7 @@ declare global {
   }
 }
 
-type Detail = FeatureOutput<typeof contract, "record">;
+type Detail = FeatureOutput<FullOutputContract, "record">;
 type FileEvidence = NonNullable<Detail["evidence"]>[number];
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string) => {
   const n = document.createElement(tag);
@@ -21,7 +21,7 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string) => {
 };
 
 export function evidenceView(
-  feature: FeatureClient<typeof contract>,
+  feature: FeatureClient<FullOutputContract>,
   result: Detail,
   alive: () => boolean,
   redact: (s: string) => string,
@@ -240,7 +240,7 @@ export function evidenceView(
 /** Download control for one retained original, streamed through `id`'s attachment authority.
  * `compact` renders an icon-only button for dense lists such as the Sources rail. */
 export function originalDownload(
-  feature: FeatureClient<typeof contract>,
+  feature: FeatureClient<FullOutputContract>,
   id: string,
   e: FileEvidence,
   alive: () => boolean,

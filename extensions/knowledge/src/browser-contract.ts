@@ -1,5 +1,5 @@
 import type { FeatureClientContract } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 
 // Keep backend schemas out of the browser while checking every operation's kind.
 export const browserContract = {
@@ -53,4 +53,4 @@ export const browserContract = {
     agent_query: { kind: "query" },
     agent_action: { kind: "action" },
   },
-} satisfies FeatureClientContract<typeof contract>;
+} satisfies FeatureClientContract<FullOutputContract>;

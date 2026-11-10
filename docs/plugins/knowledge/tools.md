@@ -18,13 +18,49 @@ When Knowledge is enabled, its declared tools are included in the built-in
 `coding` and `full` tool profiles. This does not enable other plugins or
 override explicit tool denies, narrower policies, or Knowledge store access.
 
+## Agent response shapes
+
+Agent tool calls return what an agent needs most of the time. The Control UI,
+operator inspection, and commands always receive the complete response.
+
+- **List rows** (connections, records, search, lookup, timeline) carry the
+  record ID, revision, and the first 16 characters of its hash. Pages add title
+  and type; claims add kind, one day (occurrence, else recorded), their text
+  without HTML comments, linked page titles, and source page; relationships add
+  `from` and `to`. `lifecycle` and `assertionOrigin` appear only when not
+  `active` or `source`.
+- **Single records** (`knowledge_record`) return the full hash, the body or claim
+  text, aliases, non-empty domain fields, and linked pages. `maxChars` bounds
+  the whole response.
+- **Write receipts** return the record `id`, new `revision` and full `hash`,
+  and the `ontologyFingerprint` the next write needs. `state` and `message`
+  appear only when the receipt is not `published`; changed `items`, `impact`,
+  and a page `budget` appear when present. `knowledge_mutation` returns the
+  complete receipt.
+- Snapshots and `nextOffset` appear only while another page remains; coverage
+  appears only when incomplete.
+
+Ask for the complete response with `detail: "full"` on `knowledge_record`,
+`knowledge_grep`, `knowledge_lookup`, `knowledge_records`,
+`knowledge_timeline`, the `knowledge_chronicle_*` tools, `knowledge_ontology`,
+`knowledge_status`, and `knowledge_verify`, and with `view: "full"` on
+`knowledge_connections`. On `knowledge_record`, `metadataView: "full"`,
+`includeEvidence`, `includeReferences`, and `view: "raw"` add only the
+metadata, evidence, connected rows and links, or raw Markdown they name.
+
+Every write fence (`expectedHash`) accepts the full hash or a lowercase prefix of
+at least 16 characters, so a list row's hash fences a write directly; the
+revision must still match. Shorter prefixes are rejected. The fence protects
+against concurrent and external edits to one record selected by ID, not against
+forged content, so 64 bits of the content hash are enough.
+
 ## Ontology
 
 `knowledge_ontology` inspects the vocabulary of the effective store.
 
 | Task                 | Input                                                           | Output                                                                      |
 | -------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Discover vocabulary  | `{}`                                                            | Catalog: names, labels, kinds, descriptions, aliases, record counts         |
+| Discover vocabulary  | `{}`                                                            | Catalog: names, kinds, descriptions, and the fingerprint writes need        |
 | Prepare a page write | `{"view":"definitions","name":"project"}`                       | Structured fields, allowed values, filing, endpoint constraints, provenance |
 | Browse a kind        | `{"kind":"page","limit":20}`                                    | Filtered catalog with `nextOffset`                                          |
 | See examples         | `{"view":"definitions","name":"project","includeRecords":true}` | Up to 20 record summaries per type with `recordsTruncated`                  |
@@ -42,10 +78,14 @@ See [Records and ontology](/plugins/knowledge/records-and-ontology).
 
 ## Reading records
 
-`knowledge_record({id})` returns body text, identity, revision and hash,
-lifecycle, attribution, validation issues, and compact structured metadata. It
-does not return raw Markdown, full frontmatter, evidence, or connected records
-unless asked.
+`knowledge_record({id})` returns the ID, revision, full hash, and lifecycle when
+not active. Pages add title, type, aliases, non-empty domain fields, and the
+body; claims add kind, date, text, linked pages, source, owner, and attribution.
+Validation issues, partial identity, supersession, and merge redirects appear
+when present. `maxChars` (default 12,000) bounds the whole response; follow
+`nextOffset` with `offset`. The options below add only what they name;
+`detail: "full"` returns the complete response, where `content.nextOffset`
+continues the body window.
 
 | Option                              | Effect                                                                                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------- |
@@ -71,9 +111,9 @@ UTF-16 surrogate pairs. A preview may stop one unit before its cap; later source
 lines do not fill that gap.
 
 `knowledge_evidence_read({id, path, sha256})` reads a retained source passage as
-UTF-8 text, with optional `startLine`/`endLine`. It returns a verified source
-hash and range plus `nextCursor`; continue with the same id, path, and hash until
-`nextCursor` is `null`. `maxChars` is 256–3,000 (default 3,000). Each call
+UTF-8 text, with optional `startLine`/`endLine`. It returns the passage text and
+its line range, plus `nextCursor` while more remains; continue with the same id,
+path, and hash until no `nextCursor` is returned. `maxChars` is 256–3,000 (default 3,000). Each call
 re-authorizes and re-verifies the source. Binary sources use
 `knowledge_attachment`. A source aggregated from a related claim must be read
 through that claim's ID.
@@ -83,12 +123,15 @@ through that claim's ID.
 `knowledge_records` is the exhaustive, paginated inventory. It filters by kind,
 ontology type or alias, and ID/title/alias substring. Default listing covers
 current eligible records; `lifecycle: "all"` requests historical and invalid
-records too. `includeCards` adds bounded claim text; `includeEndpoints` adds
-relationship endpoint summaries.
+records too. Claims list their title as text; `includeCards` adds their bounded
+card text, linked pages, and source. `includeEndpoints` adds relationship
+endpoints.
 
-`knowledge_connections({id})` returns compact identities, directions, typed
-endpoints, and uncertainty. `view: "full"` adds record details and up to three
-evidence references; `includeCards: true` with full view adds claim prose.
+`knowledge_connections({id})` returns one row per connection: its direction
+plus the [list row](#agent-response-shapes) of the connected record. Claim rows
+include their text, so a page's claims need no extra options. `view: "full"`
+returns complete record summaries and up to three evidence references;
+`includeCards: true` with full view adds claim card metadata.
 
 | Direction              | Meaning                                              |
 | ---------------------- | ---------------------------------------------------- |
@@ -99,7 +142,8 @@ evidence references; `includeCards: true` with full view adds claim prose.
 | `backlinks`            | Derived reverse links; not proof of an authored link |
 
 Connections return 20 rows by default, at most 100, within a 24 KiB response.
-Follow `nextOffset` with unchanged filters and compare `snapshot`.
+Follow `nextOffset` with unchanged filters and compare `snapshot`, which is
+returned while more pages remain.
 `historical: true` includes superseded records, never withdrawn ones.
 
 Browse and Recent bound responses by bytes and nested values, not just row count.
@@ -116,11 +160,13 @@ Oversized cards come back as navigable summaries; read them with
   as the identity.
 
 Both default to active records and accept `kind`, `type`, `tag`, `limit` (1–50,
-default 20), `offset`, and `lifecycle` (`active`, `superseded`, or `all`).
-`index.state: "unavailable"` with `total: null` is a failed retrieval, not zero
-matches. An active `knowledge_grep` also returns the current replacement of a
-matching superseded record, after direct matches, with `matches: ["superseded"]`
-and `via` naming the earlier record. See
+default 10 for agents and 20 otherwise), `offset`, and `lifecycle` (`active`,
+`superseded`, or `all`). Agent search hits are list rows with a short snippet
+(claims omit the title their text repeats); lookup hits are list rows without a
+snippet. `index.state: "unavailable"` with `total: null` is a failed retrieval,
+not zero matches. An active `knowledge_grep` also returns the current
+replacement of a matching superseded record, after direct matches, with `via`
+naming the earlier record (`detail: "full"` adds `matches: ["superseded"]`). See
 [Retrieval and dates](/plugins/knowledge/retrieval#superseded-wording).
 
 For bodies over 64 KiB, search previews are opening excerpts rather than located
@@ -380,11 +426,12 @@ An accepted publication has durable intent and recovery material. A request
 rejected before acceptance, including a stale revision or hash, creates no draft
 or receipt; read the current record, reconcile, and submit a new request.
 
-- `knowledge_save_page` and `knowledge_resume` return publication status
-  separately from `git: {state, commit?, message}`. A `published` receipt is a
-  successful save even when Git is `pending` or `unavailable`.
-- A receipt's `indexed: false` means keyword indexing is pending until the next
-  search.
+- Agent write receipts omit `state` when it is `published` and include
+  `git: {state, message}` only when the local Git checkpoint is `pending` or
+  `unavailable`. A `published` receipt is a successful save even then.
+- A complete receipt (`knowledge_mutation`, `knowledge_history`) also has
+  `requestId`, `path`, `at`, the Git commit, and `indexed: false`, which
+  means keyword indexing is pending until the next search.
 - `knowledge_history` lists scoped receipts and revisions with a
   `git: {state, pending, message}` summary.
 - `knowledge_revision` returns a bounded window of a retained revision; continue

@@ -59,7 +59,7 @@ it("remember links a claim to a uniquely matching page and cites the retained ex
   expect(read.record!.metadata!.assertion_origin).toBe("source");
   expect(read.evidence![0]!.verified).toBe(true);
   const claims = await f.service.connections({ id: project.id, direction: "claims" }, f.owner);
-  expect(claims.connections[0]!.record.id).toBe(out.items[0]!.id);
+  expect(claims.connections[0]).toMatchObject({ id: out.items[0]!.id });
 });
 
 it("remember replays an accepted request once and rejects changed payloads", async () => {

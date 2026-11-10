@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FeatureInput } from "openclaw/plugin-sdk/feature-contract";
 import { expect, it } from "vitest";
-import { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import type { ExtractSectionInput } from "./mutation-contract.js";
 import { PAGE_BUDGET_CHARS } from "./page-budget.js";
 import { createKnowledgeService } from "./service.js";
@@ -20,7 +20,7 @@ async function fixture() {
     owner = toolContext(api);
   const call = async <K extends keyof typeof service>(
     op: K,
-    input: FeatureInput<typeof contract, K>,
+    input: FeatureInput<FullOutputContract, K>,
   ) => service[op](input, owner);
   const vaultId = (await call("status", {})).vault,
     fingerprint = (await call("ontology", {})).fingerprint;
@@ -247,7 +247,7 @@ it("extracts a section with its links, evidence, claim subjects and history, or 
   );
   const links = async (id: string) =>
     (await f.call("connections", { id, direction: "links" })).connections
-      .map((c) => c.record.id)
+      .map((c: any) => c.id)
       .toSorted();
   expect(await links(destination.id)).toStrictEqual([ledger.id, owner.id, provider.id].toSorted());
   expect(await links(atlas.id)).toStrictEqual([destination.id, ledger.id, search.id].toSorted());

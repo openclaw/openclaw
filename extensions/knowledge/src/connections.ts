@@ -3,27 +3,18 @@ import { claimCard } from "./claim-card.js";
 import { ConnectionsInput, ConnectionsOutput } from "./connections-contract.js";
 import { resolveLinks } from "./markdown-links.js";
 import { linkTargets, mergeRedirects } from "./merge.js";
+import type { LoadedRecord } from "./model.js";
 import { recordSummary } from "./record-summary.js";
 import { eligible } from "./retrieval.js";
+import { pageRow, summaryRow } from "./tool-rows.js";
 import { digest, type SampleVault } from "./vault.js";
 
-const compact = (r: ReturnType<typeof recordSummary>) => ({
-  id: r.id,
-  title: r.title,
-  kind: r.kind,
-  type: r.type,
-  ...(r.identityStatus
-    ? { identityStatus: r.identityStatus, identityContext: r.identityContext }
-    : {}),
-  ...(r.attributionConfidence
-    ? {
-        attributionConfidence: {
-          level: r.attributionConfidence.level,
-          basis: r.attributionConfidence.basis,
-        },
-      }
-    : {}),
-});
+// Compact rows carry a claim's text from its card; pages and relationships carry identity.
+const compact = (r: LoadedRecord, records: LoadedRecord[]) =>
+  summaryRow(
+    { ...recordSummary(r), ...(r.kind === "claim" ? { card: claimCard(r, records) } : {}) },
+    r.metadata.superseded_by,
+  );
 export const CONNECTION_RESPONSE_BYTES = 24 * 1024;
 
 export function connections(
@@ -33,7 +24,9 @@ export function connections(
 ): Static<typeof ConnectionsOutput> {
   const full = requested.view === "full";
   if (requested.includeCards && !full) {
-    throw new Error("includeCards requires view=full; compact connections omit card bodies.");
+    throw new Error(
+      "includeCards requires view=full; compact connection rows already include claim text.",
+    );
   }
   const records = eligible(data, withdrawn, requested.historical ?? false);
   // A merged page's connections are its survivor's.
@@ -63,23 +56,26 @@ export function connections(
       ) {
         directions.push("claims");
       }
-      const summary = full ? recordSummary(r) : compact(recordSummary(r));
       for (const direction of directions) {
         if (!input.direction || input.direction === direction) {
-          rows.push({
-            direction,
-            record: {
-              ...summary,
-              ...(input.includeCards && r.kind === "claim" ? { card: claimCard(r, records) } : {}),
-            },
-            ...(r.kind === "relationship" ? { from: m.from!, to: m.to!, label: m.label! } : {}),
-            ...(full
+          rows.push(
+            full
               ? {
+                  direction,
+                  record: {
+                    ...recordSummary(r),
+                    ...(input.includeCards && r.kind === "claim"
+                      ? { card: claimCard(r, records) }
+                      : {}),
+                  },
+                  ...(r.kind === "relationship"
+                    ? { from: m.from!, to: m.to!, label: m.label! }
+                    : {}),
                   evidence: (m.evidence ?? []).slice(0, 3),
                   evidenceTruncated: (m.evidence?.length ?? 0) > 3,
                 }
-              : {}),
-          });
+              : { direction, ...compact(r, records) },
+          );
         }
       }
     }
@@ -102,21 +98,31 @@ export function connections(
       if (source.id === current.id) {
         for (const target of records) {
           if (targets.has(target.id) && target.id !== source.id) {
-            rows.push({
-              direction: "links",
-              record: full ? recordSummary(target) : compact(recordSummary(target)),
-              label: "References",
-              ...(full ? { evidence: [], evidenceTruncated: false } : {}),
-            });
+            rows.push(
+              full
+                ? {
+                    direction: "links",
+                    record: recordSummary(target),
+                    label: "References",
+                    evidence: [],
+                    evidenceTruncated: false,
+                  }
+                : { direction: "links", ...compact(target, records) },
+            );
           }
         }
       } else if (targets.has(current.id)) {
-        rows.push({
-          direction: "backlinks",
-          record: full ? recordSummary(source) : compact(recordSummary(source)),
-          label: "Referenced by",
-          ...(full ? { evidence: [], evidenceTruncated: false } : {}),
-        });
+        rows.push(
+          full
+            ? {
+                direction: "backlinks",
+                record: recordSummary(source),
+                label: "Referenced by",
+                evidence: [],
+                evidenceTruncated: false,
+              }
+            : { direction: "backlinks", ...compact(source, records) },
+        );
       }
     }
   }
@@ -125,20 +131,27 @@ export function connections(
   const snapshot = digest(JSON.stringify(records.map((r) => [r.id, r.path, r.hash])));
   const envelope = (page: typeof rows): Static<typeof ConnectionsOutput> => {
     const endpointIds = new Set(
-      page.flatMap((r) => (r.record.kind === "relationship" ? [r.from, r.to] : [])),
+      page.flatMap((r) => {
+        if ("record" in r) {
+          return r.record.kind === "relationship" ? [r.from, r.to] : [];
+        }
+        return "from" in r && "to" in r ? [r.from, r.to] : [];
+      }),
     );
+    const nextOffset = offset + page.length < rows.length ? offset + page.length : null;
     return {
       connections: page,
       ...(input.includeEndpoints
         ? {
             endpoints: eligible(data, withdrawn, false)
               .filter((r) => endpointIds.has(r.id))
-              .map((r) => (full ? recordSummary(r) : compact(recordSummary(r)))),
+              .map((r) => (full ? recordSummary(r) : pageRow(recordSummary(r)))),
           }
         : {}),
       total: rows.length,
-      nextOffset: offset + page.length < rows.length ? offset + page.length : null,
-      snapshot,
+      nextOffset,
+      // Compact responses carry the snapshot only while there is a next page to compare.
+      ...(full || nextOffset !== null ? { snapshot } : {}),
       ...(redirectedFrom ? { redirectedFrom } : {}),
     };
   };

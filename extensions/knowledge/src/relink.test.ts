@@ -82,7 +82,7 @@ it("relink links unique mentions, leaves ambiguous and unnamed claims, and a rep
   expect(read.record!.lifecycle).toBe("active");
   expect(read.record!.revision).toBe(2);
   const claims = await f.service.connections({ id: atlasPage.id, direction: "claims" }, f.owner);
-  expect(claims.connections.map((c) => c.record.id)).toStrictEqual([atlas]);
+  expect(claims.connections.map((c: any) => c.id)).toStrictEqual([atlas]);
 
   const again = await f.relink({});
   expect(

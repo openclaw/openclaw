@@ -22,7 +22,7 @@
 ## Create, then link
 
 You can't predict paths. Publish a new page with its evidence first, then use the
-returned path for self-citations and cross-links in a follow-up edit. Link to
+returned ID for self-citations and cross-links in a follow-up edit. Link to
 other pages only after they exist. Reread revision/hash before each follow-up
 edit.
 

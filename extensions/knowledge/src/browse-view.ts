@@ -1,6 +1,6 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import { claimCard, summaryLink } from "./claim-view.js";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { assertionOrigin as origin, confidenceView } from "./knowledge-presentation.js";
 import { loadingPlaceholder } from "./loading-view.js";
 import type { Page } from "./page-context.js";
@@ -109,7 +109,7 @@ export function renderBrowse(
   ui: Page,
   n: number,
   target: HTMLElement,
-  result?: FeatureOutput<typeof contract, "records">,
+  result?: FeatureOutput<FullOutputContract, "records">,
 ) {
   const { s, empty, open, load } = ui;
   const layout = el("div", undefined, "knowledge-browse"),

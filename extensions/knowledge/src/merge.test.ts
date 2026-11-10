@@ -4,6 +4,7 @@ import path from "node:path";
 import type { FeatureInput } from "openclaw/plugin-sdk/feature-contract";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
+import type { FullOutputContract } from "./contract.js";
 import { contract } from "./contract.js";
 import { createKnowledgeService } from "./service.js";
 import { storeFixture, toolContext, useTestTempDirs, defaultOrder } from "./test-support.js";
@@ -19,7 +20,7 @@ async function fixture() {
     owner = toolContext(api);
   const call = async <K extends keyof typeof service>(
     op: K,
-    input: FeatureInput<typeof contract, K>,
+    input: FeatureInput<FullOutputContract, K>,
   ) => service[op](input, owner);
   const fingerprint = (await call("ontology", {})).fingerprint;
   const page = (title: any, extra = {}) =>
@@ -147,14 +148,10 @@ it("reads follow the redirect without rewriting claims", async () => {
   ).toBe("found");
   const connections = await f.call("connections", { id: f.survivor.id });
   expect(
-    connections.connections.some(
-      (c: any) => c.direction === "claims" && c.record.id === f.owned.id,
-    ),
+    connections.connections.some((c: any) => c.direction === "claims" && c.id === f.owned.id),
   ).toBeTruthy();
   expect(
-    connections.connections.some(
-      (c: any) => c.direction === "backlinks" && c.record.id === f.linker.id,
-    ),
+    connections.connections.some((c: any) => c.direction === "backlinks" && c.id === f.linker.id),
   ).toBeTruthy();
   const stale = await f.call("connections", { id: f.absorbed.id });
   expect(stale.redirectedFrom).toBe(f.absorbed.id);

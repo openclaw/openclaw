@@ -14,6 +14,7 @@ export const Summary = Type.Object({
   path: text(500),
   lifecycle: text(20),
   revision: Type.Integer(),
+  hash: Type.Optional(text(64)),
   valid: Type.Boolean(),
   writtenByAgentId: Type.Optional(text(64)),
   recordedAt: Type.Optional(text(40)),
