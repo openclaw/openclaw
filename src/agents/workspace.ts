@@ -278,16 +278,11 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
 
   // Explicitly seeded and customized first-run instructions own completion;
   // provisioning a profile or skill cannot consume them before their first turn.
-  if (bootstrapExists && (
-    params.generatedHashes?.has(DEFAULT_BOOTSTRAP_FILENAME) ||
-    (await fileDiffersFromTemplate(params.dir, DEFAULT_BOOTSTRAP_FILENAME))
-  )) {
-    return { repaired: false, bootstrapExists, state: params.state };
-  }
-
   if (
     bootstrapExists
-      ? !(await workspaceProfileLooksConfigured({
+      ? params.generatedHashes?.has(DEFAULT_BOOTSTRAP_FILENAME) ||
+        (await fileDiffersFromTemplate(params.dir, DEFAULT_BOOTSTRAP_FILENAME)) ||
+        !(await workspaceProfileLooksConfigured({
           dir: params.dir,
           generatedHashes: params.generatedHashes,
         }))
