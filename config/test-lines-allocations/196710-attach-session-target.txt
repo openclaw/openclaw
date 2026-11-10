@@ -1,0 +1,5 @@
+# PR #196710: assert the attach positional/session conflict surfaces as an
+# ExpectedCliError so the CLI prints the actionable reason instead of the
+# generic "The CLI command failed." line. Focused regression test for the
+# error-surfacing behavior.
+11
