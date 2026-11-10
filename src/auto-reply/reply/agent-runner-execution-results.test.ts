@@ -77,13 +77,13 @@ it.each([
   }
 });
 
-it.each(["missing-answer", "blocked-tool"])(
+it.each(["missing-answer", "provider-refusal", "blocked-tool"])(
   "preserves one %s notice through queued delivery",
   async (kind) => {
     const followupRun = createFollowupRun();
     followupRun.originatingChannel = "whatsapp";
     followupRun.originatingTo = "user";
-    if (kind === "missing-answer") {
+    if (kind !== "blocked-tool") {
       followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
     }
     followupRun.run.terminalReplyExpectation = "required";
@@ -97,7 +97,12 @@ it.each(["missing-answer", "blocked-tool"])(
             },
             { assistantTranscriptOwned: true },
           )
-        : { text: "⚠️ Bash blocked", isError: true };
+        : kind === "provider-refusal"
+          ? {
+              text: "The provider refused this request (category: cyber). Revise the request and try again.",
+              isError: true,
+            }
+          : { text: "⚠️ Bash blocked", isError: true };
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [notice],
       meta: {
@@ -112,8 +117,8 @@ it.each(["missing-answer", "blocked-tool"])(
     const execution = await execute(params);
     assert(execution.outcome.kind === "settled");
     expect(execution.outcome.status).toBe("failed");
-    expect(execution.outcome.result.payloads).toEqual(kind === "missing-answer" ? [] : [notice]);
-    if (kind === "missing-answer") {
+    expect(execution.outcome.result.payloads).toEqual(kind === "blocked-tool" ? [notice] : []);
+    if (kind !== "blocked-tool") {
       expect(execution.outcome.terminalFailurePayload).toBe(notice);
     }
 
