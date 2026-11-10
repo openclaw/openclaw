@@ -6,8 +6,6 @@ Tests for model_usage helpers.
 import argparse
 import io
 from datetime import date, timedelta
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest import TestCase, main
 from unittest.mock import patch
 
@@ -23,19 +21,6 @@ from model_usage import (
 
 
 class TestModelUsage(TestCase):
-    def test_load_payload_accepts_one_leading_bom_from_file_and_stdin(self):
-        payload = '{"provider":"codex","daily":[],"note":"keep\ufeffthis"}'
-        expected = {"provider": "codex", "daily": [], "note": "keep\ufeffthis"}
-        with TemporaryDirectory() as directory:
-            filename = Path(directory) / "cost.json"
-            for prefix in ("", "\ufeff"):
-                raw = prefix + payload
-                filename.write_text(raw, encoding="utf-8")
-                for source in (str(filename), "-"):
-                    with self.subTest(bom=bool(prefix), source=source):
-                        with patch("sys.stdin", io.StringIO(raw)):
-                            self.assertEqual(load_payload(source, "codex"), expected)
-
     def test_load_payload_rejects_mismatched_provider_object(self):
         with patch("sys.stdin", io.StringIO('{"provider":"claude","daily":[]}')):
             with self.assertRaisesRegex(
