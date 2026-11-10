@@ -60,8 +60,11 @@ export function resolveReplyBackendQueueMessageMismatch(
     options.terminalReplyExpectation !== (backend.terminalReplyExpectation ?? "required") &&
     !(
       options.isInboundUserMessage === true &&
-      options.terminalReplyExpectation !== "optional" &&
-      backend.supportsUserReplyPromotion === true
+      // Steering an active turn shares its reply owner: an optional human
+      // correction inherits the active contract instead of waiting for the
+      // turn to finish, and a required one promotes an optional backend.
+      (options.terminalReplyExpectation === "optional" ||
+        backend.supportsUserReplyPromotion === true)
     )
   ) {
     return "reply_expectation_mismatch";

@@ -249,6 +249,30 @@ describe("submitSessionControllerSteer", () => {
     },
   );
 
+  it("lets an optional human correction steer a required-reply turn", async () => {
+    const fingerprint = "human-reply-contract-tools";
+    const { operation, input, injected } = startTurn({
+      turnKind: undefined,
+      queueMessage: acceptQueue,
+      replyContract: {
+        toolAuthorityFingerprint: fingerprint,
+        terminalReplyExpectation: "required",
+      },
+    });
+    const result = await steer(input, {
+      isInboundUserMessage: true,
+      terminalReplyExpectation: "optional",
+      toolAuthorityFingerprint: fingerprint,
+    });
+
+    expect(result).toMatchObject(acceptedSteer);
+    await input.settlement.promise;
+    expect(input.phase).toBe("consumed");
+    expect(injected).toEqual(["steer"]);
+    expectNoInput(input);
+    expect(operation.result).toBeNull();
+  });
+
   it("preserves the published backend transcript-wait contract without a native capability observation", async () => {
     const received: unknown[] = [];
     const operation: NonNullable<AgentHarnessAttemptParams["replyOperation"]> =
