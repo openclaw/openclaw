@@ -453,7 +453,7 @@ describe("Muse native MSP harness", () => {
       .mockImplementation(async function (this: Session, options) {
         submission.mockRestore();
         const turn = await this.sendUserTurn(options);
-        void turn.completed.then(completed.resolve, completed.reject);
+        void turn.completed.then(() => completed.resolve(), completed.reject);
         return turn;
       });
     writes.append.mockImplementationOnce(async ({ messages }) => {
