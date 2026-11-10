@@ -5,7 +5,7 @@
   gap: 5px;
   margin-bottom: var(--space-1);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-reply-attribution__icon,

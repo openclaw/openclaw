@@ -198,6 +198,11 @@ disposable build/cache roots are excluded before hashing and result-size account
 their local bytes remain available to the sandbox. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
 
+Use `.openclaw/tmp/` for disposable output files that workspace file tools need
+to read or write later. Keep `TMPDIR`, `TMP`, and `TEMP` at their inherited system
+paths: native tools such as Chromium need short temporary paths for Unix sockets,
+and a deeply nested checkout can exceed that limit.
+
 pnpm can select `.openclaw/.pnpm-store/` when installing beneath a protected
 `.openclaw` mount and its home store cannot hard-link into that project.
 Managed binary installers use `.openclaw/tools/` for re-downloadable tools such as Crabbox.

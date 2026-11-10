@@ -272,11 +272,15 @@ and remain recoverable. New publish qualification requires admitted Q=C.
 
 Evidence reuse preserves both the original producer identity and the current
 consumer identity, inputs, coverage, and artifact provenance. It cannot relabel
-an old run as candidate-owned. Reconciliation is read-only; explicit resume is
-limited to a candidate request before any qualification-ref mutation or FRV
-dispatch. An uncertain write never authorizes another dispatch. All publication
-gates, stable soak, blocking performance, environment approvals, and exact-byte
-checks remain unchanged.
+an old run as candidate-owned. Reconciliation is read-only. Before the first FRV
+workflow POST, explicit resume may continue an admitted candidate request whose
+qualification ref is still intended, or reuse its existing uncertain ref after
+verifying the exact Q commit and a complete empty workflow inventory. Recovery
+revalidates admission and signer authority, then verifies the exact ref again
+before recording the first workflow attempt. An attempted or uncertain workflow
+POST remains observation-only and never authorizes another dispatch. All
+publication gates, stable soak, blocking performance, environment approvals, and
+exact-byte checks remain unchanged.
 
 Local contract tests can prove input binding, refusal, and recovery behavior.
 They do not prove hosted workflow admission, environment access, OIDC, signing,

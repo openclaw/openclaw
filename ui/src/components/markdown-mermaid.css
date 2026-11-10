@@ -73,7 +73,7 @@ openclaw-mermaid > .actions .oc-menu {
 openclaw-mermaid > .actions .oc-menu-item {
   min-height: var(--menu-item-height);
   padding: 0 8px;
-  font: 12px var(--font-body);
+  font: var(--control-ui-text-sm) var(--font-body);
   cursor: default;
 }
 openclaw-mermaid > .preview {
@@ -106,7 +106,7 @@ openclaw-mermaid > .source {
   background: transparent;
   overflow: auto;
   max-height: 480px;
-  font: 12px/1.6 var(--mono);
+  font: var(--control-ui-text-sm)/1.6 var(--mono);
   tab-size: 2;
 }
 openclaw-mermaid > .source > code {
@@ -116,7 +116,7 @@ openclaw-mermaid > .source > code {
 openclaw-mermaid > .status {
   margin: 0;
   padding: 36px 16px 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 @media (hover: none), (pointer: coarse) {

@@ -20,6 +20,10 @@ const loaders = {
   tui: () => import("../tui/tui-last-session.kernel.js").then((m) => m.tuiLastSessionOperations),
   sessionState: () =>
     import("../sessions/session-state-events.worker.js").then((m) => m.sessionStateOperations),
+  "sessionState.record": () =>
+    import("../sessions/session-state-events-record.worker.js").then(
+      (m) => m.sessionStateRecordOperations,
+    ),
   sessionUpstream: () =>
     import("../sessions/session-upstream-links.worker.js").then((m) => m.sessionUpstreamOperations),
   subagents: () =>
@@ -178,6 +182,15 @@ const loaders = {
     import("../infra/delivery-queue.worker.js").then((m) => m.deliveryQueueOperations),
   sessionDelivery: () =>
     import("../infra/session-delivery-queue.worker.js").then((m) => m.sessionDeliveryOperations),
+  // Queue recovery does not need the subagent completion runtime.
+  "sessionDelivery.admitSubagentCompletion": () =>
+    import("../agents/subagents/completion/subagent-completion-admission.worker.js").then(
+      (m) => m.subagentCompletionDeliveryOperations,
+    ),
+  "sessionDelivery.mutateSubagentCompletion": () =>
+    import("../agents/subagents/completion/subagent-completion-admission.worker.js").then(
+      (m) => m.subagentCompletionDeliveryOperations,
+    ),
   conversationBindings: () =>
     import("../infra/outbound/current-conversation-bindings.worker.js").then(
       (m) => m.conversationBindingOperations,
@@ -187,10 +200,33 @@ const loaders = {
       (m) => m.workerInferenceOperations,
     ),
   workerPlacements: () =>
-    import("../gateway/worker-environments/placement-lifecycle.worker.js").then((m) => ({
-      ...m.placementLifecycleOperations,
-      ...m.placementReadOperations,
-    })),
+    import("../gateway/worker-environments/placement-lifecycle.worker.js").then(
+      (m) => m.placementLifecycleOperations,
+    ),
+  "workerPlacements.clearLocalTurnClaims": () =>
+    import("../gateway/worker-environments/placement-recovery.worker.js").then(
+      (m) => m.placementRecoveryOperations,
+    ),
+  "workerPlacements.read": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readIdentities": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readMove": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readReconcile": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readWithMove": () =>
+    import("../gateway/worker-environments/placement-projection.worker.js").then(
+      (m) => m.placementProjectionOperations,
+    ),
   placementTools: () =>
     import("../gateway/worker-environments/placement-session-tool-operations.worker.js").then(
       (m) => m.placementSessionToolOperations,

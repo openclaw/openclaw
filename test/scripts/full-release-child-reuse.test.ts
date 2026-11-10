@@ -386,7 +386,7 @@ describe("independent release child reuse", () => {
     },
   );
 
-  it("keeps job fallback and retry backoff within the shared deadline", async () => {
+  it("keeps job fallback and retry backoff within the default two-minute deadline", async () => {
     const data = await fixture("normalCi", undefined, TOOLING, 261);
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
     vi.useFakeTimers();
@@ -406,7 +406,6 @@ describe("independent release child reuse", () => {
       validateReusableReleaseChild(selection, data.request, {
         ...data.deps,
         github,
-        deadlineMs: started + 120_000,
       }),
     ).rejects.toThrow(/API GET .*per_page=30&page=1 exceeded its time budget/);
     expect(jobReads).toEqual([
@@ -458,7 +457,7 @@ describe("independent release child reuse", () => {
   );
 
   it("replays exact raw child evidence but refuses fresh child and source-parent attempts", async () => {
-    const data = await fixture();
+    const data = await fixture("normalCi", undefined, TOOLING, 261);
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
     const { downloadArchive, ...deps } = data.deps;
     const { archiveBytes } = await downloadArchive();
@@ -470,8 +469,16 @@ describe("independent release child reuse", () => {
       }
       return Response.json(data.artifact);
     });
-    const github = async (endpoint: string) =>
-      endpoint === "actions/runs/77" ? data.parent : deps.github(endpoint);
+    let jobReads = 0;
+    const github = async (endpoint: string) => {
+      if (endpoint.includes("/jobs?")) {
+        jobReads += 1;
+        if (endpoint.includes("per_page=100&page=2")) {
+          throw new Error("gh: Server Error (HTTP 502)");
+        }
+      }
+      return endpoint === "actions/runs/77" ? data.parent : deps.github(endpoint);
+    };
     const writer = createReleaseEvidenceReplay(data.request);
     await validateReusableReleaseChild(selection, data.request, {
       ...deps,
@@ -481,6 +488,7 @@ describe("independent release child reuse", () => {
     });
     expect(zipReads).toBe(1);
     const payload = JSON.parse(writer.serialize());
+    const acquiredJobReads = jobReads;
     const replay = createReleaseEvidenceReplay(data.request, payload);
     await validateReusableReleaseChild(selection, data.request, {
       ...deps,
@@ -489,6 +497,7 @@ describe("independent release child reuse", () => {
       immutableReads: replay,
     });
     expect(zipReads).toBe(1);
+    expect(jobReads).toBe(acquiredJobReads);
     data.parent.run_attempt = 2;
     await expect(
       validateReusableReleaseChild(selection, data.request, {

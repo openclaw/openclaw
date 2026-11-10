@@ -9,6 +9,7 @@ export type TemplatesCreateOptions = TemplatesInspectOptions & {
   name?: string;
   agentId?: string;
 };
+export type TemplatesDraftOptions = { json?: boolean };
 export type TemplatesValidateOptions = { json?: boolean };
 export type TemplatesBuildOptions = { out: string; json?: boolean };
 export type TemplatesDevOptions = { agentId?: string; workspace?: string; json?: boolean };
@@ -33,6 +34,16 @@ export function registerTemplatesCli(program: Command) {
     .action(async (path: string, opts: TemplatesCreateOptions) => {
       const { runTemplatesCreateCommand } = await import("./templates-cli.project.js");
       await runTemplatesCreateCommand(path, opts);
+    });
+
+  templates
+    .command("draft")
+    .description("Prepare a private Template draft without publishing")
+    .argument("<workspace>", "Agent workspace for the private draft")
+    .option("--json", "Print JSON", false)
+    .action(async (workspace: string, opts: TemplatesDraftOptions) => {
+      const { runTemplatesDraftCommand } = await import("./templates-cli.project.js");
+      await runTemplatesDraftCommand(workspace, opts);
     });
 
   templates

@@ -567,3 +567,30 @@ describe("chat view notice integration", () => {
     });
   });
 });
+
+it("offers a static issue form without including error text or diagnostics", async () => {
+  const { container, publish } = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
+    error: "Synthetic private error ws://private.invalid/?token=secret session:private",
+    errorDetail: { message: "Synthetic diagnostic", credential: "never-share-this" },
+  });
+  await waitForSolid(() => {
+    const link = container.querySelector<HTMLAnchorElement>("a.report-issue-link");
+    expect(link?.textContent).toBe("Report a bug");
+    const url = new URL(link!.href);
+    expect(url.origin + url.pathname).toBe("https://github.com/openclaw/openclaw/issues/new");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      template: "bug_report.yml",
+      title: "[Bug]: Control UI: ",
+    });
+    expect(link?.rel).toBe("noopener noreferrer");
+    expect(link?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(link?.target).toBe("_blank");
+  });
+  const destination = container.querySelector<HTMLAnchorElement>("a.report-issue-link")!.href;
+  publish({ error: "Another synthetic error with private user content", errorDetail: undefined });
+  await waitForSolid(() => {
+    expect(container.querySelector<HTMLAnchorElement>("a.report-issue-link")?.href).toBe(
+      destination,
+    );
+  });
+});
