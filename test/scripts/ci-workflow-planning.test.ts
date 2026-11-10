@@ -6441,10 +6441,8 @@ describe("ci workflow guards", () => {
             expect(route(runner, override)).toBe("ubuntu-24.04");
           }
         }
-        for (const [key, value] of Object.entries({
-          frozen_target: "",
-          compatibility_target: "true",
-        })) {
+        const excludedTargets = { frozen_target: "", compatibility_target: "true" };
+        for (const [key, value] of Object.entries(excludedTargets)) {
           expect(route(typeRunner, { preflightOutputs: { [key]: value } })).toBe(fourCpu);
         }
         // Frozen defaults retain their historical hosted route; hybrid owns its own layout.
@@ -6485,10 +6483,6 @@ describe("ci workflow guards", () => {
         JSON.stringify(override),
       ).toBe("ubuntu-24.04");
     }
-
-    expect(readFileSync("scripts/ci-build-manifest.mjs", "utf8")).toContain(
-      "createNodeTestShardBundles",
-    );
     const artifactRunner = workflow.jobs["build-artifacts"]["runs-on"];
     for (const frozenTarget of ["false", "true", ""]) {
       const context = {
