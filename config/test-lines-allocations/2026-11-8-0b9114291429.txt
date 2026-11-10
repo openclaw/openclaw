@@ -1,0 +1,5 @@
+40
+# LOCAL 2026.11.8 row 26; source 0b9114291429df561ed41340cdc035f51e0f163b.
+# Discards revoked token scope baseline while preserving live-token and widening refusals. Scope limits: Only revoked-token scope resolution included, not source Access-page/sign-out companions.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.

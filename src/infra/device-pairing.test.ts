@@ -236,6 +236,46 @@ describe("device pairing tokens", () => {
     });
   });
 
+  test.each([true, false])(
+    "reissues only requested scopes after revocation=%s",
+    async (revoked) => {
+      const oldToken = await setupOperatorToken(["operator.read", "operator.write"]);
+      if (revoked) {
+        await expect(
+          revokeDeviceToken({
+            deviceId: "device-1",
+            role: "operator",
+            callerScopes: ["operator.read", "operator.write"],
+            baseDir,
+          }),
+        ).resolves.toMatchObject({ ok: true });
+      }
+      const pending = await requestOperator(["operator.read"]);
+      const result = await approveRequest(pending.request, ["operator.read"]);
+      if (!revoked) {
+        expect(result).toEqual({
+          status: "forbidden",
+          reason: "caller-missing-scope",
+          scope: "operator.write",
+        });
+        await expect(verifyOperatorToken(oldToken, ["operator.write"])).resolves.toEqual({
+          ok: true,
+        });
+        return;
+      }
+      expect(result).toMatchObject({ status: "approved" });
+      const paired = await getPairedDevice("device-1", baseDir);
+      expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+      expect(paired?.tokens?.operator?.revokedAtMs).toBeUndefined();
+      const newToken = requireToken(paired?.tokens?.operator?.token);
+      expect(newToken).not.toBe(oldToken);
+      await expect(verifyOperatorToken(newToken, ["operator.read"])).resolves.toEqual({ ok: true });
+      await expect(verifyOperatorToken(newToken, ["operator.write"])).resolves.toMatchObject({
+        ok: false,
+      });
+    },
+  );
+
   test("does not widen a down-scoped operator token when approving a scope upgrade", async () => {
     await pairDevice(["operator.read", "operator.write"]);
     await setOperatorScopes(baseDir, ["operator.read"]);
