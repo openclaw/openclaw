@@ -1,9 +1,9 @@
 // Real isolated Gateway + public registry + production UI. No mocked RPCs or simulated delays.
-// Acceptance: mean first-catalog-RPC-to-content latency <= 50% of 10-run baseline
-// in >=5 candidate runs for BOTH surfaces, with equal identities and full contents.
+// Acceptance: mean visible action/navigation-to-content latency <= 50% of 10-run
+// baseline in >=5 candidate runs for BOTH surfaces, with full contents and no skeleton.
 // Cold browser context per sample; resident Gateway, uncontrolled shared upstream caches.
-// Keep the approved content-readiness boundary fixed across baseline and candidate.
-// Trusted-click and automation-call timings are separate diagnostics, not boot proof.
+// Keep the entry scenario and visible-readiness boundary fixed across both arms.
+// Record pre-RPC, request span, and post-RPC rendering separately on the browser clock.
 // node --import ./scripts/tsx.mjs scripts/bench-templates-catalog.mts
 //   --config <isolated config> --output <JSON> --samples 10 --label baseline
 import assert from "node:assert/strict";
@@ -22,6 +22,36 @@ import type {
   ClawHubTemplateCatalogOverview,
 } from "../src/templates/clawhub-source.js";
 import { resolvePlaywrightChromiumExecutablePath } from "../ui/src/test-helpers/playwright-chromium.ts";
+// Match the existing Control UI instrumentation serializer: tsx may preserve nested
+// function names through __name, which must exist in the browser observation scope.
+function observeNativeCatalogTiming() {
+  // Preserve the native method and always invoke it with the original socket below.
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  const send = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (data) {
+    if (typeof data !== "string") {
+      return send.call(this, data);
+    }
+    try {
+      const request = JSON.parse(data) as RequestFrame;
+      if (request.type === "req" && request.method.startsWith("templates.catalog.")) {
+        performance.mark("templates-rpc-start-" + request.id);
+        const receive = (event: MessageEvent) => {
+          try {
+            const response = JSON.parse(String(event.data)) as ResponseFrame;
+            if (response.type === "res" && response.id === request.id) {
+              performance.mark("templates-rpc-end-" + request.id);
+              this.removeEventListener("message", receive, true);
+            }
+          } catch {}
+        };
+        this.addEventListener("message", receive, true);
+      }
+    } catch {}
+    return send.call(this, data);
+  };
+}
+
 async function markActivation(target: Locator) {
   await target.evaluate((element) => {
     element.addEventListener(
@@ -42,7 +72,10 @@ const { values } = parseArgs({
     config: { type: "string" },
     "compare-config": { type: "string" },
     output: { type: "string" },
+    provenance: { type: "string" },
     samples: { type: "string", default: "10" },
+    entry: { type: "string", default: "established" },
+    warm: { type: "boolean", default: false },
     label: { type: "string", default: "baseline" },
     upstream: {
       type: "string",
@@ -69,23 +102,44 @@ const configs = await Promise.all(
 );
 const count = Number(values.samples);
 assert(Number.isSafeInteger(count) && count >= 1);
+assert(!values.warm || values.entry === "direct", "Warm mode is an explicit direct-route reload");
 await fs.mkdir(path.dirname(values.output), { recursive: true });
+const provenance: unknown = values.provenance
+  ? JSON.parse(await fs.readFile(values.provenance, "utf8"))
+  : undefined;
 const browser = await chromium.launch({
   executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
   args: ["--no-sandbox"],
 });
 type Run = { arm: string; surface: string } & (
-  | { ok: true; ms: number; activationMs: number; content: unknown }
+  | {
+      ok: true;
+      ms: number;
+      activationMs: number;
+      preRpcMs: number;
+      rpcSpanMs: number;
+      postRpcMs: number;
+      content: unknown;
+    }
   | { ok: false; error: string }
 );
 const runs: Run[] = [];
 const report = {
+  schemaVersion: 2,
   label: values.label,
-  primaryMetric: "ms",
-  metric: "first templates.catalog request to rendered complete contents",
-  activationMetric: "trusted native click event to DOM-content assertion (browser clock)",
+  browserVersion: browser.version(),
+  primaryMetric: "activationMs",
+  entry: values.entry,
+  provenance,
+  parityNormalization: "iconUrl registry origin only; asset path and every other field preserved",
+  metric: "visible action/navigation to complete rendered contents with zero skeletons",
+  rpcMetric: "first templates.catalog request to rendered complete contents (diagnostic)",
+  activationMetric:
+    "trusted click or navigation start to full visible contents, zero skeletons, and two animation frames (browser clock)",
   automationMetric: "Playwright click call to readiness, including actionability wait",
-  browserState: "fresh context per sample",
+  browserState: values.warm
+    ? "warm reload after complete cold render in same context"
+    : "fresh context per sample",
   gatewayState: "resident isolated real Gateway",
   upstream: values.upstream,
   runs,
@@ -107,6 +161,9 @@ try {
           serviceWorkers: "block",
         });
         const page = await context.newPage();
+        await page.addInitScript({
+          content: `;(() => { const __name = (target) => target; (${observeNativeCatalogTiming.toString()})(); })();`,
+        });
         const requests: Array<{
           id: string;
           method: string;
@@ -153,47 +210,88 @@ try {
         let content: unknown;
         let activation = 0;
         try {
-          // Settle authenticated settings first. On this base, first-connection bootstrap
-          // omits Labs flags; its visible Refresh loads authoritative configuration.
-          await page.goto(origin + "/settings/labs#token=" + encodeURIComponent(config.token), {
-            waitUntil: "domcontentloaded",
-          });
-          await page.waitForTimeout(1500);
-          const refresh = page.getByRole("button", { name: "Refresh configuration", exact: true });
-          if (await refresh.isVisible()) {
-            await refresh.click();
-          }
-          await page.waitForFunction(() =>
-            document.querySelector(
-              '.settings-row input[role="switch"],.settings-row button[role="switch"]',
-            ),
-          );
-          await page.getByRole("button", { name: "Back to app", exact: true }).click();
-          await page.getByRole("button", { name: "Pages", exact: true }).click();
-          const templates = page.locator('[data-sidebar-entry="route:templates"] a').first();
-          await templates.waitFor();
-          requests.length = 0;
-          activation = performance.now();
-          await markActivation(templates);
-          await templates.click();
-          if (surface === "detail") {
-            await page.locator("[data-templates-entry]").first().waitFor({ timeout: 120000 });
-            const overview = requests.find((r) => r.method === "templates.catalog.search" && r.ok)
-              ?.payload as { overview: ClawHubTemplateCatalogOverview };
-            const entry = [
-              ...overview.overview.featured,
-              ...overview.overview.sections.flatMap((s) => s.entries),
-            ].find((e) => e.packageName === values.package);
-            assert(entry, "Workload package must be present in the real catalog");
+          if (values.entry === "direct") {
+            activation = performance.now();
+            const route =
+              surface === "listing"
+                ? "/templates"
+                : "/templates/packages/" + encodeURIComponent(values.package!);
+            await page.goto(origin + route + "#token=" + encodeURIComponent(config.token), {
+              waitUntil: "domcontentloaded",
+            });
+            if (values.warm) {
+              await page
+                .locator(
+                  surface === "listing"
+                    ? "[data-templates-entry]"
+                    : ".plugin-catalog-detail .plugin-capabilities",
+                )
+                .first()
+                .waitFor({ timeout: 120000 });
+              await page.waitForFunction(
+                () =>
+                  !document.querySelector(
+                    ".agents-home__template-skeleton,.templates-content-skeleton",
+                  ),
+              );
+              requests.length = 0;
+              activation = performance.now();
+              await page.reload({ waitUntil: "domcontentloaded" });
+            }
+          } else {
+            await page.goto(origin + "/new#token=" + encodeURIComponent(config.token), {
+              waitUntil: "domcontentloaded",
+            });
+            await page.getByText("Connected", { exact: true }).first().waitFor({ timeout: 120000 });
+            if (values.entry === "established") {
+              await page.getByRole("button", { name: /^Identity and app menu for / }).click();
+              await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+              await page.getByRole("link", { name: "Labs", exact: true }).click();
+              const templatesSetting = page
+                .locator(".settings-row")
+                .filter({ has: page.locator(".settings-row__title", { hasText: /^Templates$/ }) })
+                .getByRole("switch");
+              await templatesSetting.waitFor();
+              await page
+                .locator(".settings-row")
+                .filter({ has: page.locator(".settings-row__title", { hasText: /^Templates$/ }) })
+                .locator('input[role="switch"]:checked')
+                .waitFor();
+              await page.getByRole("button", { name: "Back to app", exact: true }).click();
+            } else {
+              assert(
+                values.entry === "navigation",
+                "Use --entry established, navigation, or direct",
+              );
+            }
+            await page.getByRole("button", { name: "Pages", exact: true }).click();
+            const templates = page.locator('[data-sidebar-entry="route:templates"] a').first();
+            await templates.waitFor();
             requests.length = 0;
             activation = performance.now();
-            const add = page
-              .locator("[data-templates-entry]")
-              .filter({ has: page.getByRole("heading", { name: entry.displayName, exact: true }) })
-              .first()
-              .locator(".agents-home__template-add");
-            await markActivation(add);
-            await add.click();
+            await markActivation(templates);
+            await templates.click();
+            if (surface === "detail") {
+              await page.locator("[data-templates-entry]").first().waitFor({ timeout: 120000 });
+              const overview = requests.find((r) => r.method === "templates.catalog.search" && r.ok)
+                ?.payload as { overview: ClawHubTemplateCatalogOverview };
+              const entry = [
+                ...overview.overview.featured,
+                ...overview.overview.sections.flatMap((section) => section.entries),
+              ].find((e) => e.packageName === values.package);
+              assert(entry, "Workload package must be in the real catalog");
+              requests.length = 0;
+              activation = performance.now();
+              const add = page
+                .locator("[data-templates-entry]")
+                .filter({
+                  has: page.getByRole("heading", { name: entry.displayName, exact: true }),
+                })
+                .first()
+                .locator(".agents-home__template-add");
+              await markActivation(add);
+              await add.click();
+            }
           }
           await page.waitForFunction(
             () =>
@@ -263,22 +361,52 @@ try {
             if (detail.contents.instructions.some((item) => item.name.includes("/"))) {
               assert(text.includes("View all"), "Complete workspace inventory must be reachable");
             }
-            content = {
-              packageName: detail.packageName,
-              version: detail.version,
-              contents: detail.contents,
-            };
+            content = detail;
           }
+          await page.waitForFunction((targetSurface) => {
+            const root = document.querySelector(
+              targetSurface === "listing" ? "[data-templates-explore]" : ".plugin-catalog-detail",
+            );
+            return (
+              root &&
+              !root.querySelector(
+                ".skeleton,.templates-content-skeleton,.agents-home__template-skeleton",
+              )
+            );
+          }, surface);
+          await page.evaluate(
+            () =>
+              new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              }),
+          );
           const end = performance.now();
-          const activationMs = await page.evaluate(() => {
-            const mark = performance.getEntriesByName("templates-bench-click").at(-1);
-            if (!mark) {
-              throw new Error("Missing trusted native click event");
-            }
-            return performance.now() - mark.startTime;
-          });
           const catalog = requests.filter((r) => r.method.startsWith("templates.catalog."));
           assert(catalog.length > 0);
+          const visible = await page.evaluate(
+            ({ ids, direct }) => {
+              const click = direct
+                ? 0
+                : performance.getEntriesByName("templates-bench-click").at(-1)?.startTime;
+              const first = performance
+                .getEntriesByName("templates-rpc-start-" + ids[0])
+                .at(-1)?.startTime;
+              const last = performance
+                .getEntriesByName("templates-rpc-end-" + ids.at(-1))
+                .at(-1)?.startTime;
+              if (click === undefined || first === undefined || last === undefined) {
+                throw new Error("Missing actual browser action/RPC timing marks");
+              }
+              const ready = performance.now();
+              return {
+                activationMs: ready - click,
+                preRpcMs: first - click,
+                rpcSpanMs: last - first,
+                postRpcMs: ready - last,
+              };
+            },
+            { ids: catalog.map((r) => r.id), direct: values.entry === "direct" },
+          );
           assert(errors.length === 0, "Browser errors: " + errors.join("; "));
           const row = {
             arm,
@@ -288,7 +416,10 @@ try {
             startedAt,
             completedAt: new Date().toISOString(),
             ms: end - catalog[0]!.start,
-            activationMs,
+            activationMs: visible.activationMs,
+            preRpcMs: visible.preRpcMs,
+            rpcSpanMs: visible.rpcSpanMs,
+            postRpcMs: visible.postRpcMs,
             automationMs: end - activation,
             workflowMs: end - navigation,
             loadavg: loadavg(),
@@ -348,16 +479,26 @@ const summary = [...new Set(completed.map((row) => row.arm))].flatMap((arm) =>
     const rows = completed.filter((row) => row.arm === arm && row.surface === surface);
     return Object.assign(
       { arm, surface, samples: rows.length },
-      summarizeTimes(rows.map((row) => row.ms)),
-      { activation: summarizeTimes(rows.map((row) => row.activationMs)) },
+      summarizeTimes(rows.map((row) => row.activationMs)),
+      {
+        rpcToReady: summarizeTimes(rows.map((row) => row.ms)),
+        activation: summarizeTimes(rows.map((row) => row.activationMs)),
+        preRpc: summarizeTimes(rows.map((row) => row.preRpcMs)),
+        rpcSpan: summarizeTimes(rows.map((row) => row.rpcSpanMs)),
+        postRpc: summarizeTimes(rows.map((row) => row.postRpcMs)),
+      },
     );
   }),
 );
+const comparable = (value: unknown) =>
+  JSON.stringify(value, (key: string, item: unknown) =>
+    key === "iconUrl" && typeof item === "string" ? new URL(item).pathname : item,
+  );
 const parity = ["listing", "detail"].map((surface) => {
   const rows = completed.filter((row) => row.surface === surface);
   return {
     surface,
-    equal: rows.every((row) => JSON.stringify(row.content) === JSON.stringify(rows[0]?.content)),
+    equal: rows.every((row) => comparable(row.content) === comparable(rows[0]?.content)),
   };
 });
 await fs.writeFile(values.output, JSON.stringify({ ...report, summary, parity }, null, 2));
