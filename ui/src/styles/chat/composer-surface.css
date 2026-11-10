@@ -65,8 +65,9 @@
   gap: 6px;
   min-width: 0;
   min-height: 0;
+  /* Keep the first attached card clear of status text in the transcript overlap. */
+  padding-block-start: 8px;
   overflow-y: auto;
-  scrollbar-width: thin;
 }
 
 .chat-footer__context:not(
@@ -94,14 +95,9 @@
   flex-shrink: 0;
 }
 
-.chat-footer
-  .chat-footer__context
-  :is(
-    .session-progress-card__body,
-    .chat-queue__scroll,
-    .agent-chat__goal-detail-objective,
-    .chat-error__diagnostic
-  ) {
+.chat-footer .chat-footer__context .session-progress-card__body,
+.chat-footer .chat-footer__context .chat-queue__scroll,
+.chat-footer .chat-footer__context .agent-chat__goal-detail-objective {
   overscroll-behavior: auto;
 }
 
@@ -148,11 +144,7 @@
 .agent-chat__input,
 .agent-chat__disabled-banner.callout,
 .agent-chat__composer-notices
-  :is(
-    .chat-composer-neighbor-card,
-    .agent-chat__composer-errors--standalone,
-    .agent-chat__talk-status.callout
-  ) {
+  :is(.chat-composer-neighbor-card, .agent-chat__composer-alert, .agent-chat__talk-status.callout) {
   border-radius: var(--chat-composer-radius);
   corner-shape: var(--chat-composer-corner-shape);
 }
@@ -186,8 +178,11 @@
      chip restating its own. They are peers describing the next turn, and a
      reader should not be able to tell which feature shipped which one. Consumers
      outside the composer keep the same values as fallbacks; the mobile block
-     raises the whole family to touch size by rewriting these four. */
-  --chat-composer-chip-height: 30px;
+     raises the whole family to touch size by rewriting these four.
+     The chip box is the icon buttons' box, so every control in the action row
+     shares one height and one centre line; the trigger rule paints the pill
+     one step inside it, on the primary action's 30px painted tier. */
+  --chat-composer-chip-height: var(--chat-composer-send-size);
   --chat-composer-chip-gap: 4px;
   --chat-composer-chip-padding-inline: 8px;
   --chat-composer-chip-text: calc(13px * var(--control-ui-text-scale));
@@ -424,11 +419,7 @@
 }
 
 .agent-chat__composer-combobox > textarea {
-  --scrollbar-thumb: color-mix(in srgb, var(--muted) 20%, transparent);
-  --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 28%, transparent);
-
   field-sizing: content;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 @supports selector(::-webkit-scrollbar) {
@@ -443,8 +434,6 @@
     /* Short drafts use padding: reserving a native gutter makes every edit relayout slower. */
     padding-inline-end: var(--chat-composer-editor-inset-inline);
     scrollbar-gutter: auto;
-    scrollbar-width: auto;
-    scrollbar-color: auto;
   }
 
   .agent-chat__composer-combobox > textarea:where([data-composer-scrollable]) {
@@ -459,14 +448,6 @@
       0px,
       calc(var(--chat-composer-radius) - var(--chat-composer-editor-inset-block))
     );
-  }
-
-  .agent-chat__composer-combobox > textarea::-webkit-scrollbar-thumb {
-    background-color: var(--scrollbar-thumb);
-  }
-
-  .agent-chat__composer-combobox > textarea::-webkit-scrollbar-thumb:hover {
-    background-color: var(--scrollbar-thumb-hover);
   }
 }
 
@@ -814,14 +795,6 @@
   );
 }
 
-.agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach {
-  width: var(--chat-composer-send-size);
-  min-width: var(--chat-composer-send-size);
-  height: var(--chat-composer-send-size);
-  padding: calc((var(--chat-composer-send-size) - var(--chat-composer-primary-surface-size)) / 2);
-  background-clip: content-box;
-}
-
 /* Icon-only triggers center the glyph, not the generic flex-growing text label. */
 .agent-chat__input-btn--attach > .oc-menu-item__label,
 .chat-talk-input-picker__trigger > .oc-menu-item__label {
@@ -1079,6 +1052,7 @@
 }
 
 /* Keep the painted primary surface independent of the target, including hover. */
+.agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach,
 .agent-chat__input.agent-chat__input--chat
   :is(.chat-mobile-primary-action, .chat-desktop-primary-action)
   .chat-send-btn,

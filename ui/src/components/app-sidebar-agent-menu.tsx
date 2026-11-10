@@ -13,6 +13,7 @@ import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { COMMAND_VALUE_PREFIX } from "./sidebar-identity-menu-links.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
+import { MenuHeading } from "./solid/menu-heading.tsx";
 import {
   createMenuControls,
   type MenuControls,
@@ -264,7 +265,7 @@ export function renderSidebarAgentMenu(
   const menuLabel = createMemo(() =>
     t(params.rosterMode ? "agentChip.workspaceMenuLabel" : "agentChip.menuLabel"),
   );
-  const agentsTitle = <div class="sidebar-customize-menu__title">{t("agentChip.agents")}</div>;
+  const agentsTitle = <MenuHeading label={t("agentChip.agents")} />;
   const createAgentItem: MenuItem = {
     id: `${COMMAND_VALUE_PREFIX}new-agent`,
     get label() {

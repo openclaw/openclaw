@@ -3,6 +3,7 @@ import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
 import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import { blacksmithRunnerLabel } from "./lib/ci-blacksmith-capacity.mjs";
 import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
@@ -143,7 +144,12 @@ const createPluginContractTestShards =
           task: "contracts-plugins",
         },
       ];
-const createMatrix = (include) => ({ include });
+const createMatrix = (include) => ({
+  include: include.map((row) => {
+    const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
+    return label ? { ...row, runner_label: label } : row;
+  }),
+});
 // Share setup without combining the target planner's process envelopes.
 const createContractMatrix = (shards, task) =>
   createMatrix(
@@ -727,7 +733,12 @@ if (selectedTestTargets) {
     selected.has("extensions/browser/chrome-extension/bootstrap.chromium.test.ts");
   runUiRealGateway = e2eTargets.some((file) => realGatewayTargets.has(file));
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
-  uiTestShardCount = Math.min(3, uiTargets.length);
+  // Small PR selections share the existing three-worker row instead of repeating setup.
+  // Full UI owners and manual validation retain their established shard layout.
+  uiTestShardCount = Math.min(
+    3,
+    ordinaryPullRequest && !uiOwnerScope.unit ? Math.ceil(uiTargets.length / 3) : uiTargets.length,
+  );
   // Keep the existing worker/row cap; omit empty file partitions.
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
 }
@@ -928,17 +939,23 @@ if (runCheckPlan && proposedCheckScope?.types) {
     const budgetOnlyFallback =
       budgetCompanions.length < changedPaths.length &&
       resolveCiCheckFamilyScope(budgetCompanions).mode === "scoped";
+    const sourceOnlyFallback = compilerPaths.every((file) => file.startsWith("src/"));
     // Shared tests and numeric allocations retain every guard family, including
     // allocation validation. A budget record does not widen otherwise scoped
-    // source companions; compiler/lint owners still discover all consumers.
+    // companions. Ordinary source inputs can also use complete compiler/lint
+    // consumer discovery even when a fixture requires all guard families.
     preserveFullChecks = !changedPaths.every((file) => {
       const facts = getChangedPathFacts(file);
       return (
         path.posix.normalize(file) === file &&
         !file.includes("\\") &&
         (isTestLineAllocationPath(file) ||
+          (budgetOnlyFallback && facts.surface === "rootTest") ||
+          ((budgetOnlyFallback || sourceOnlyFallback) && facts.surface === "docs") ||
           (["source", "package", "ui", "extension"].includes(facts.surface) &&
-            (budgetOnlyFallback || (facts.isTestOnly && facts.isChangedLaneTest))))
+            (budgetOnlyFallback ||
+              sourceOnlyFallback ||
+              (facts.isTestOnly && facts.isChangedLaneTest))))
       );
     });
   }
@@ -946,7 +963,7 @@ if (runCheckPlan && proposedCheckScope?.types) {
     runNodeFull &&
     !releaseFastLane &&
     proposedCheckScope.additionalGroups.includes("boundaries") &&
-    (!narrowCheckScope ||
+    (preserveFullChecks ||
       !compilerPaths ||
       compilerPaths.every((file) => file.startsWith("extensions/")))
       ? "additional-checks"
@@ -1058,12 +1075,17 @@ if (
 }
 const { isPostgresConformanceTestTarget } = postgresConformancePlan;
 const postgresConformancePaths = [
+  "package.json",
+  "pnpm-lock.yaml",
   ".github/actions/postgres-conformance/**",
   "**/*.postgres.test.ts",
   "src/state/openclaw-agent-*",
   "src/config/sessions/**",
   "src/agents/harness/context-engine-turn-outbox*",
   "src/gateway/server*.ts",
+  "src/gateway/server-methods/cron.ts",
+  "src/gateway/server-methods/cron-add.ts",
+  "src/gateway/server-methods/cron-run.ts",
   "src/cli/gateway-cli/run.ts",
   "src/commands/*preflight*.ts",
   "src/commands/doctor-database-*.ts",
@@ -1099,6 +1121,12 @@ const postgresConformancePaths = [
   "src/state/openclaw-state-db-contract.ts",
   "src/state/postgres-schema.generated/**",
   "src/cron/store/runtime-authority-store.ts",
+  "src/cron/store/row-codec.ts",
+  "src/cron/store/runtime-rows.kernel.ts",
+  "src/cron/store/run-finalization.worker.ts",
+  "src/cron/store/run-queue.worker.ts",
+  "src/cron/service.ts",
+  "src/cron/service/ops-run.ts",
   "src/infra/database-engine/**",
   "src/infra/postgres-sync/**",
   "src/infra/sql-connection.ts",
@@ -1362,6 +1390,34 @@ const shardRequiresTests = (shard, tests, fallback) =>
       ? patterns.some((pattern) => tests.some((test) => matchesGlob(test, pattern)))
       : fallback(plan);
   });
+const workerPresetOwner =
+  frozenTarget || !existsSync("./scripts/lib/vitest-runtime-selection.mts")
+    ? undefined
+    : await importTargetPlan("./scripts/lib/vitest-runtime-selection.mts");
+const workerCachePreset = (shard) => {
+  if (
+    shard.requiresDist ||
+    shard.pretestBuildMode ||
+    !workerPresetOwner?.resolveCiVitestWorkerPreset
+  ) {
+    return undefined;
+  }
+  const plans = shard.targets?.length
+    ? shard.targets.map((target) => ({ target }))
+    : (shard.groups ?? [shard]).map((group) =>
+        Object.assign({}, group, { env: { ...shard.env, ...group.env } }),
+      );
+  // Unknown flags keep the full archive; the runtime recomputes the decision.
+  const hasExtraArgs = [shard, ...plans].some((plan) => {
+    const args = plan.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON;
+    return (
+      args !== undefined &&
+      (typeof args !== "string" || (args.trim() !== "" && args.trim() !== "[]"))
+    );
+  });
+  const preset = workerPresetOwner.resolveCiVitestWorkerPreset(plans, hasExtraArgs);
+  return preset === "full" ? undefined : preset;
+};
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const packedNodeTestRows = [];
 const nodeTestShards = targetNodeTestShards
@@ -1406,10 +1462,15 @@ const nodeTestShards = targetNodeTestShards
       configs: packedGroups ? undefined : shard.configs,
       env: shard.env,
       includePatterns: packedGroups ? undefined : shard.includePatterns,
+      worker_cache_preset: workerCachePreset(shard),
       pretest_build_mode: shard.pretestBuildMode,
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
       runner: shard.runner,
+      runner_label: blacksmithRunnerLabel(
+        shard.runner,
+        Math.max(0, ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
+      ),
       timeout_minutes:
         !shard.requiresDist && testRuntimeMode === "dual-all"
           ? 2 * (shard.timeoutMinutes ?? 60)
@@ -1618,10 +1679,14 @@ const additionalChecks = [
         : narrowCheckScope.additionalGroups.includes(group))),
 );
 // Move an already-selected boundary row; sharing must never add another CI job.
+// Older target planners cannot mark the combined GitHub lint rows as SDK consumers.
+const supportsCombinedLintSdk =
+  existsSync("scripts/ci-check-plan.mts") &&
+  readFileSync("scripts/ci-check-plan.mts", "utf8").includes("requires_sdk_declarations");
 const sharedSdkDeclarations =
   workflowEventName === "pull_request" &&
   isCanonicalRepository &&
-  runnerProfile === "hybrid" &&
+  (runnerProfile === "hybrid" || (runnerProfile === "github" && supportsCombinedLintSdk)) &&
   runCheckPlan &&
   runNodeFull &&
   !releaseFastLane &&

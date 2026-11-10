@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import {
   CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE,
   selectControlUiRoutePreloads,
@@ -13,7 +14,7 @@ import {
   shouldPrecompressControlUiAsset,
 } from "../ui/config/control-ui-asset-compression.ts";
 import { extractControlUiStartupAssetPaths } from "../ui/config/control-ui-startup-assets.ts";
-import { reportLimitViolations } from "./lib/check-limits.mts";
+import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import {
   MERMAID_RENDERER_ASSET,
@@ -45,6 +46,9 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
+  // Coordinator-approved full locale hints plus the warm-frame admission hint
+  // (#195865): measured 13,962 B plus 64 B headroom.
+  documentGzipBytes: 14_026,
   // Consolidated eager/route partitions measure 5/20/17 requests over HTTP/1.1.
   // Preserve the initial two-request headroom; route limits match their measured graphs.
   startupJsRequests: 7,
@@ -54,11 +58,11 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Generated-name-normalized main measurement plus 64 B toolchain headroom.
-  // PR #194017 (L294): 1,288,049 B CI-measured with the shared-boot window receipt, plus 64 B headroom.
-  // Ayaan Zaidi approved +1 KiB for naming a failed reply's provider cause (#193996, 2026-11-06).
-  chatBootJsGzipBytes: 1_289_137,
-  newBootJsGzipBytes: 797_620,
+  // Entering-row forecasts (#196173): measured 1,300,731 B, plus 64 B headroom.
+  // Cold construction split: add CI-measured 336 B, coordinator-accepted (local +508 B).
+  chatBootJsGzipBytes: 1_301_131,
+  // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
+  newBootJsGzipBytes: 803_364,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -67,15 +71,19 @@ const controlUiPerformanceBudgets = {
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  // Normalized shared application chunk plus 64 B toolchain headroom.
-  largestJsGzipBytes: 560_350,
+  // Same snapshot-save repair, measured shared chunk plus 64 B.
+  // The same shared-chunk trade, measured plus 64 B.
+  largestJsGzipBytes: 564_484,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Header-local notice matching adds 13 B and lowers 400-message 4x scroll CPU 5–7%.
-  totalCssGzipBytes: 324_685,
-  // Ranked selector splits: measured raw CSS plus 64 B headroom.
-  totalCssRawBytes: 1_678_428,
+  // Vincent Koc accepted the interface-wide text-scale cost in #196468
+  // (2026-11-10): +2,284 B gzip / +30,654 B raw versus a7ba22b9.
+  // Add only that accepted delta to the prior fixed ceilings (326,575 /
+  // 1,682,231). Preserve their existing allowance for concurrent main changes,
+  // rather than subtracting it by binding the caps to one stale build total.
+  totalCssGzipBytes: 328_859,
+  totalCssRawBytes: 1_712_885,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
@@ -216,6 +224,7 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
   }
   return {
     schemaVersion: 2 as const,
+    document: { rawBytes: Buffer.byteLength(html), gzipBytes: gzipSync(html).byteLength },
     startup,
     routeBoot,
     total: {
@@ -244,6 +253,7 @@ function collectControlUiPerformanceBudgetChecks(
     ].map((asset) => asset.file),
   );
   const checks: Array<[string, number, number, "count" | "bytes"]> = [
+    ["document gzip", metrics.document.gzipBytes, budgets.documentGzipBytes, "bytes"],
     ["startup JS requests", metrics.startup.js.requests, budgets.startupJsRequests, "count"],
     ["startup CSS requests", metrics.startup.css.requests, budgets.startupCssRequests, "count"],
     ["startup JS gzip", metrics.startup.js.gzipBytes, startupJsLimit, "bytes"],
@@ -435,6 +445,15 @@ function controlUiPerformanceWarnings(
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS>,
 ): string[] {
   const warnings: string[] = [];
+  for (const [metric, actual, cap] of [
+    ["document gzip", metrics.document.gzipBytes, budgets.documentGzipBytes],
+    ["total CSS gzip", metrics.total.css.gzipBytes, budgets.totalCssGzipBytes],
+    ["total CSS raw", metrics.total.css.rawBytes, budgets.totalCssRawBytes],
+  ] as const) {
+    if (actual > cap) {
+      warnings.push(`${metric} is ${actual - cap} B over its fixed ceiling (${actual} > ${cap} B)`);
+    }
+  }
   if (metrics.startup.css.gzipBytes > CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES) {
     warnings.push(
       `startup CSS gzip is above the ${CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES} B advisory target; remaining hard-ceiling headroom: ${budgets.startupCssGzipBytes - metrics.startup.css.gzipBytes} B`,
@@ -484,6 +503,7 @@ export function formatControlUiPerformanceReport(
   const lines = [
     "Control UI performance:",
     `  measurement: generated asset hashes normalized for budgets; served sizes retain sidecars with identity fallback; Node ${process.version}`,
+    `  document: ${metrics.document.rawBytes} B raw, ${metrics.document.gzipBytes} B gzip (limit: ${budgets.documentGzipBytes} B)`,
     `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {
@@ -807,6 +827,16 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     );
   } else {
     process.stdout.write(`${result.report}\n`);
+  }
+  // Keep inherited overages visible even when the build only reports budgets.
+  if (limitsAreAdvisory()) {
+    reportLimitViolations(
+      result.warnings.map((message) => ({
+        file: "scripts/check-control-ui-performance.mts",
+        title: "Control UI performance warning",
+        message,
+      })),
+    );
   }
   if (!reportOnly) {
     const metricFiles: Record<string, string> = {

@@ -1,5 +1,5 @@
 import { getObserver } from "@solidjs/signals";
-import type { JSX } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import { createMemo, lazy, Loading, Show } from "solid-js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
@@ -10,7 +10,11 @@ import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { IdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import { projectGateway, projectOverlays } from "../lib/reactive/application.ts";
+import {
+  projectApplicationConfig,
+  projectGateway,
+  projectOverlays,
+} from "../lib/reactive/application.ts";
 import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
@@ -62,6 +66,10 @@ import type { MenuEntry } from "./solid/menu.tsx";
 
 export { SidebarCatalogMenu as CatalogSessionMenu } from "./app-sidebar-catalog-menu.runtime.tsx";
 export { createSessionMenuWork } from "./session-menu-work.ts";
+
+const OpenClawIdIdentityMenu = lazy(() => import("./openclaw-id/identity-menu.tsx"), {
+  export: "OpenClawIdIdentityMenu",
+});
 
 const AgentCreateDialog = lazy(() => import("./agent-create-dialog.tsx"), {
   export: "AgentCreateDialog",
@@ -287,6 +295,11 @@ function renderSidebarMenus(
           const user = selfUser();
           return user ? { ...user, watchedSessions: [] } : undefined;
         });
+        const config =
+          view.sessionDataContext && projectApplicationConfig(view.sessionDataContext.config);
+        const IdentityMenu = dynamic(() =>
+          config?.read().openclawIdEnabled ? OpenClawIdIdentityMenu : SidebarIdentityMenu,
+        );
         const updateAvailable = createMemo(
           () =>
             isReleaseUpdateAvailable(
@@ -299,7 +312,7 @@ function renderSidebarMenus(
             !isUpdateAttentionForced(overlaySnapshot()?.updateStatusBanner?.tone),
         );
         return (
-          <SidebarIdentityMenu
+          <IdentityMenu
             {...{
               nativeGatewaySnapshot: view.nativeGatewaySnapshot,
               position: menu,

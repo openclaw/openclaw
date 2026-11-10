@@ -6,7 +6,6 @@ import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.j
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
-import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
 import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -26,6 +25,7 @@ import type { SpawnedToolContext } from "./spawned-context.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import type { OpenClawCodingToolConstructionPlan } from "./tool-catalog.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
+import type { ToolOutcomeObserver } from "./tool-outcome-observation.js";
 import type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,

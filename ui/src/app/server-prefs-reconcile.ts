@@ -1,4 +1,4 @@
-// Loaded when a real config snapshot is available, not by the synchronous edit/outbox seam.
+// Loaded by display reconciliation, not by the synchronous edit/outbox seam.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
@@ -217,16 +217,13 @@ function serverPrefsLocalPatch(
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
-function retainPendingAppearanceSnapshot(
+function retainPendingSnapshot(
   prefs: ServerUiPrefs,
   lastSeen: ServerUiPrefs,
-  ready: boolean,
+  ready: (key: SyncedPrefKey) => boolean,
 ): void {
-  if (ready) {
-    return;
-  }
-  // Pending is not empty: retain confirmed appearance until profile coverage arrives.
-  for (const key of SYNCED_PREF_KEYS.filter(isAppearancePref)) {
+  // Pending is not empty: retain confirmed fields until their source arrives.
+  for (const key of SYNCED_PREF_KEYS.filter((candidate) => !ready(candidate))) {
     delete prefs[key];
     if (Object.hasOwn(lastSeen, key)) {
       Object.assign(prefs, { [key]: lastSeen[key] });
@@ -268,6 +265,7 @@ export function resolveServerUiPrefState<K extends SyncedPrefKey>(
     : state;
 }
 export function applyServerUiPrefs(
+  // Null means operator defaults are still unknown; explicit profile values may settle first.
   configObject: unknown,
   hooks: {
     scope?: string;
@@ -299,21 +297,27 @@ export function applyServerUiPrefs(
     appearanceReady: profileReady || scopeChanged,
     navigationReady: profileReady,
   };
+  const ready = (key: SyncedPrefKey) =>
+    isServerUiPrefReady(key, readiness) &&
+    (configObject !== null ||
+      (profilePrefs !== null &&
+        (SYNCED_PREFS[key].configSync === false || Object.hasOwn(profilePrefs, key))));
   const backgroundReady = Boolean(hooks.profileId && profilePrefs !== null);
   const shadowPrefs =
     scope === sync.pendingScope
       ? sync.pendingPrefs
       : parseStoredPrefs(readStorage(PENDING_KEY, scope));
   const retainedLocalKeys = readRetainedLocalKeys(scope);
-  const reconciledRetainedKeys = [...retainedLocalKeys].filter((key) =>
-    isServerUiPrefReady(key, readiness),
-  );
+  const reconciledRetainedKeys = [...retainedLocalKeys].filter((key) => ready(key));
   const finishReconciliation = () => {
     if (reconciledRetainedKeys.length) {
       sync.updateRetainedLocalKeys(scope, reconciledRetainedKeys, false);
     }
-    sync.lastReconciledScope = scope;
-    sync.lastReconciledConfigObject = configObject;
+    // A partial profile read must not consume the switch for still-pending defaults.
+    if (configObject !== null) {
+      sync.lastReconciledScope = scope;
+      sync.lastReconciledConfigObject = configObject;
+    }
   };
   const prefs = { ...extractServerUiPrefs(configObject), ...profilePrefs };
   if (
@@ -340,7 +344,7 @@ export function applyServerUiPrefs(
     // Local retention covers the old/unknown baseline, not a newer confirmed navigation value.
     for (const key of navigationKeys) {
       if (
-        isServerUiPrefReady(key, readiness) &&
+        ready(key) &&
         Object.hasOwn(lastSeen, key) &&
         !prefValuesEqual(prefs[key], lastSeen[key])
       ) {
@@ -348,7 +352,7 @@ export function applyServerUiPrefs(
       }
     }
   }
-  retainPendingAppearanceSnapshot(prefs, lastSeen, readiness.appearanceReady);
+  retainPendingSnapshot(prefs, lastSeen, ready);
   const navigationIdentityChanged = sync.lastReconciledScope !== scope;
   const hasProfile = Boolean(hooks.profileId);
   const identityChanged = navigationIdentityChanged && Boolean(hooks.profileId || scopeChanged);
@@ -386,7 +390,6 @@ export function applyServerUiPrefs(
     finishReconciliation();
     return false;
   }
-  const { appearanceReady, navigationReady } = readiness;
   const firstSnapshot = lastSeenSnapshot === null;
   const changed: ServerUiPrefs = {};
   // Apply per field: only keys whose server value changed since last seen. Reapplying unchanged
@@ -395,13 +398,10 @@ export function applyServerUiPrefs(
     if ((shadowPrefs && prefKey in shadowPrefs) || retainedLocalKeys.has(prefKey)) {
       continue;
     }
-    const ready = isServerUiPrefReady(prefKey, {
-      appearanceReady,
-      navigationReady,
-    });
+    const fieldReady = ready(prefKey);
     if (Object.hasOwn(prefs, prefKey)) {
       if (
-        ready &&
+        fieldReady &&
         (scopeChanged || firstSnapshot || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
       ) {
         Object.assign(changed, { [prefKey]: prefs[prefKey] });
@@ -409,7 +409,8 @@ export function applyServerUiPrefs(
     } else if (
       !(prefKey in prefs) &&
       SYNCED_PREFS[prefKey].write &&
-      ((ready && Object.hasOwn(lastSeen, prefKey)) || (scopeChanged && isAppearancePref(prefKey)))
+      fieldReady &&
+      (Object.hasOwn(lastSeen, prefKey) || (scopeChanged && isAppearancePref(prefKey)))
     ) {
       // A new identity also clears appearance values absent from its last-seen
       // snapshot, so it never inherits the previous identity's rendered look.

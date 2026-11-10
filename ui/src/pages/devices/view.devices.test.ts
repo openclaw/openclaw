@@ -554,6 +554,56 @@ describe("devices inventory rendering", () => {
     expect(document.activeElement).toBe(copy);
   });
 
+  it("retains warning badges and facts across fresh inventory snapshots", () => {
+    const props = createDevicesViewProps({
+      gatewayVersion: "2026.10.30",
+      nodes: [
+        {
+          nodeId: "node-one",
+          displayName: "Node One",
+          paired: true,
+          connected: false,
+          platform: "win32",
+          coreVersion: "2026.10.29",
+          workerBundle: { status: "missing" },
+        },
+      ],
+    });
+    const container = renderDevicesContainer(props);
+    const row = getSettingsRow(container, "Node One");
+    const badges = Array.from(row.querySelectorAll(".device-entry__alerts > span"));
+    const facts = Array.from(row.querySelectorAll(".device-entry__facts > .device-fact")).slice(
+      0,
+      3,
+    );
+    expect(badges).toHaveLength(3);
+    expect(facts).toHaveLength(3);
+    const versionBadge = expectDefined(badges[0], "version warning badge");
+    const versionFact = expectDefined(facts[0], "version warning fact");
+
+    renderDevicesInto(container, { ...props, nodes: props.nodes.map((node) => ({ ...node })) });
+
+    expect(
+      Array.from(row.querySelectorAll(".device-entry__alerts > span")).every(
+        (badge, index) => badge === badges[index],
+      ),
+    ).toBe(true);
+    expect(
+      Array.from(row.querySelectorAll(".device-entry__facts > .device-fact"))
+        .slice(0, 3)
+        .every((fact, index) => fact === facts[index]),
+    ).toBe(true);
+    renderDevicesInto(container, { ...props, gatewayVersion: "2026.11.1" });
+    expect(row.querySelector(".device-entry__alerts > span")).toBe(versionBadge);
+    expect(versionBadge.getAttribute("title")).toContain("2026.11.1");
+    expect(versionFact.textContent).toContain("2026.11.1");
+    renderDevicesInto(container, { ...props, gatewayVersion: "2026.10.29" });
+    const remaining = Array.from(row.querySelectorAll(".device-entry__alerts > span"));
+    expect(remaining).toHaveLength(2);
+    expect(remaining.every((badge, index) => badge === badges[index + 1])).toBe(true);
+    expect(versionBadge.isConnected).toBe(false);
+  });
+
   it.each([true, false])(
     "reports the device ID copy outcome on the button when clipboard succeeds: %s",
     async (succeeds) => {
@@ -794,6 +844,32 @@ describe("devices inventory rendering", () => {
     expect(rotations).toEqual([{ deviceId: "device-1", name: "Device One", role: "operator" }]);
     findButton(section, "Revoke").click();
     expect(revocations).toEqual([{ deviceId: "device-1", role: "operator" }]);
+  });
+
+  it("points an OpenClaw ID browser to the Access page instead of offering removal", () => {
+    const container = renderDevicesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "ocid-browser",
+            displayName: "Remote browser",
+            roles: ["operator"],
+            managedBy: "openclaw-id",
+            tokens: [{ role: "operator", scopes: ["operator.read"], createdAtMs: Date.now() }],
+          },
+        ],
+      },
+    });
+    const section = getInventorySection(container);
+    const buttons = Array.from(section.querySelectorAll("button"), (b) => b.textContent?.trim());
+    expect(buttons).not.toContain("Revoke");
+    expect(buttons).not.toContain("Remove…");
+    expect(buttons).toContain("Rotate");
+    expect(section.textContent).toContain("Manage people on the Access page");
+    expect(section.querySelector("a")?.getAttribute("href")).toBe(
+      "/plugin?plugin=openclaw-id-access&id=access",
+    );
   });
 
   it("keeps roles and scopes no token carries", () => {

@@ -13,10 +13,10 @@ import {
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   beginInlineFreeformSlashArguments,
-  commitInlineSlashSelection,
   findDirectInlineSlashArgumentInvocation,
   hasActiveInlineSlashArgumentPrefix,
   removeInlineSlashSelection,
+  replaceSlashToken,
 } from "./chat-composer-inline-slash.ts";
 import type { SkillMenuHost } from "./chat-composer-skill-menu-state.ts";
 
@@ -57,7 +57,7 @@ export type SlashMenuHost = SkillMenuHost & {
   canRun: (inline: boolean, command?: SlashCommandDef, args?: string) => boolean;
   runInlineCommand?: (command: string) => void;
   commandFilter?: (command: SlashCommandDef) => boolean;
-  activateComposerMode?: (command: SlashCommandDef, inline: boolean) => boolean;
+  activateComposerMode?: (command: SlashCommandDef, inline: boolean, args?: string) => boolean;
 };
 
 export function isSlashMenuVisible(state: SlashMenuState): boolean {
@@ -207,11 +207,15 @@ export function createSlashMenu() {
       resetSlashMenuState(state);
     }
 
-    const caret = host.getTextarea()?.selectionStart ?? value.length;
+    const textarea = host.getTextarea();
+    const caret = textarea?.selectionStart ?? value.length;
     const completion = findInlineSlashCompletion(value, caret);
     // The caret-local token owns completion before a leading command's argument tail.
     const argMatch = value.match(/^\/(\S+)\s(.*)$/);
-    if (argMatch && !completion?.inline) {
+    // Selecting into the argument tail must not replace its picker with the command picker.
+    const selectionIncludesArgs =
+      completion && !completion.inline && (textarea?.selectionEnd ?? caret) > completion.end;
+    if (argMatch && (!completion || selectionIncludesArgs)) {
       if (!opts.skipSlashIntent) {
         requestSlashCommandRefresh(host);
       }
@@ -265,6 +269,14 @@ export function createSlashMenu() {
       ...items.filter((command) => command.source !== "skill"),
       ...items.filter((command) => command.source === "skill"),
     ];
+    if (value === "/") {
+      // Keyboard selection and rendering must share the full menu's grouped order.
+      state.slashMenuItems = Array.from(
+        Map.groupBy(state.slashMenuItems, (command) =>
+          command.source === "skill" ? "skills" : (command.category ?? "session"),
+        ).values(),
+      ).flat();
+    }
     state.slashMenuOpen = items.length > 0;
     state.slashMenuIndex = Math.max(
       0,
@@ -283,7 +295,10 @@ export function createSlashMenu() {
     completeOnly = false,
   ): void {
     const completion = state.slashMenuCompletion;
-    if (host.activateComposerMode?.(cmd, completion?.inline === true)) {
+    // Prose after a leading command token becomes that command's arguments.
+    const leadingArgs =
+      completion && !completion.inline ? host.getDraft().slice(completion.end).trim() : "";
+    if (host.activateComposerMode?.(cmd, completion?.inline === true, leadingArgs || undefined)) {
       return;
     }
     if (
@@ -331,9 +346,9 @@ export function createSlashMenu() {
       host.runInlineCommand(`/${cmd.name}`);
       return;
     }
-    if (completion?.inline) {
+    if (completion && (completion.inline || leadingArgs)) {
       resetSlashMenuState(state);
-      commitInlineSlashSelection(inlineReplacement, completion, host);
+      replaceSlashToken(completion.inline ? inlineReplacement : `/${cmd.name}`, completion, host);
       return;
     }
 
@@ -392,7 +407,7 @@ export function createSlashMenu() {
     }
     if (completion?.inline && (!run || !command || !executesInlineImmediately(command))) {
       resetSlashMenuState(state);
-      commitInlineSlashSelection(`/${cmdName} ${arg}`, completion, host);
+      replaceSlashToken(`/${cmdName} ${arg}`, completion, host);
       return;
     }
     resetSlashMenuState(state);

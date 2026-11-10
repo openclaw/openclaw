@@ -4,14 +4,15 @@ import {
   filePreviewDocumentLink,
 } from "../../components/file-preview-document.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateAddFeedback } from "./templates-detail-view.tsx";
-import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 import "../../styles/template-preview.css";
+import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 
 type Category = "instructions" | "skills" | "integrations" | "automations";
 const categories: Array<{ key: Category; labelKey: string; icon: IconName }> = [
@@ -140,22 +141,16 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
         </button>
       </header>
       <div ref={(element) => (body = element)} class="template-preview__body">
-        <For each={[props.view.detailRequest ?? props.view.catalogRequest]}>
+        <For each={[props.view.detailRequest]}>
           {() => (
             <Errored
               fallback={(error) => (
-                <div class="callout danger" role="alert">
+                <InlineAlert tone="danger" role="alert">
                   {formatUiError(error())}
-                  <button
-                    type="button"
-                    class="btn"
-                    onClick={() =>
-                      props.view.selected ? props.view.onRetryDetail() : props.view.onRetryCatalog()
-                    }
-                  >
+                  <button type="button" class="btn" onClick={() => props.view.onRetryDetail()}>
                     {t("common.retry")}
                   </button>
-                </div>
+                </InlineAlert>
               )}
             >
               <Loading
@@ -165,9 +160,6 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                   </p>
                 }
               >
-                <Show when={props.view.readEntries().length === 0}>
-                  <span />
-                </Show>
                 <Show when={contents()}>
                   <Show
                     when={category()}
@@ -259,7 +251,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                             {() => (
                               <Errored
                                 fallback={(error) => (
-                                  <div class="callout danger" role="alert">
+                                  <InlineAlert tone="danger" role="alert">
                                     {formatUiError(error())}
                                     <button
                                       type="button"
@@ -268,7 +260,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                     >
                                       {t("common.retry")}
                                     </button>
-                                  </div>
+                                  </InlineAlert>
                                 )}
                               >
                                 <Loading fallback={<p role="status">{t("common.loading")}</p>}>

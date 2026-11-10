@@ -434,13 +434,13 @@ describe("release validation no-push transport", () => {
       const runner = String(job(release, "qa_lab_runtime_pair_lane_release_checks")["runs-on"]);
       const runsOn = (vars: Record<string, string>) =>
         runInNewContext(runner.slice(3, -2), runnerSandbox({ vars }));
-      expect(runsOn({ OPENCLAW_CI_RUNNER_BACKEND: backend })).toBe("blacksmith-8vcpu-ubuntu-2404");
+      expect(runsOn({ OPENCLAW_CI_RUNNER_BACKEND: backend })).toBe("blacksmith-2vcpu-ubuntu-2404");
       expect(
         runsOn({
           OPENCLAW_CI_RUNNER_BACKEND: backend,
           OPENCLAW_RELEASE_RUNNER_GROUP: "release",
         }),
-      ).toEqual({ group: "release", labels: "blacksmith-8vcpu-ubuntu-2404" });
+      ).toEqual({ group: "release", labels: "blacksmith-2vcpu-ubuntu-2404" });
       const notice = job(release, "resolve_target").steps?.find(
         (candidate) => candidate.name === "Report release runner routing",
       );
@@ -537,7 +537,7 @@ describe("release validation no-push transport", () => {
               runner.slice(3, -2),
               runnerSandbox({ inputs: { use_github_hosted_runners: resolved } }),
             ),
-          ).toBe(expected ? "ubuntu-24.04" : "blacksmith-32vcpu-ubuntu-2404");
+          ).toBe(expected ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404");
         }
       }
     },

@@ -108,6 +108,7 @@ function serviceFor(authority: Awaited<ReturnType<typeof linkedClaw>>["authority
   const service = createOpenClawIdService({
     getConfig: () => ({ enabled: true }),
     getStateDir: () => "/nonexistent/openclaw-id-test",
+    getGatewayServer: () => undefined,
     log: { info: vi.fn(), warn: vi.fn() },
     createAuthority: async () => authority,
   });
@@ -267,6 +268,7 @@ describe("Gateway membership authority and enforcement", () => {
       {
         submit: (statement) => claw.authority.submit(statement, "mailbox"),
         redeem: (redemption, identity) => claw.authority.redeem(redemption, identity),
+        redeemNode: (redemption) => claw.authority.redeemNode(redemption),
       },
     );
     expect(result).toMatchObject({ ok: false, code: "not_direct" });

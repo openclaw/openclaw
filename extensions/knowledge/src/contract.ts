@@ -484,7 +484,7 @@ export const contract = defineFeatureContract({
         "List current eligible authorized records exhaustively using pagination, with optional kind, ontology type/alias, or ID/title/alias filtering. lifecycle=all is an explicit historical inventory including inactive/invalid records; originals remain available by exact record/history inspection. includeCards adds bounded claim text and card metadata from the same scan, without evidence excerpts. includeEndpoints adds deduplicated current eligible relationship endpoint summaries for this page from the same authorized scan. Responses are bounded by bytes and nested values and may return fewer rows than requested; follow nextOffset, not offset+limit. Oversized individual cards fall back to clickable summaries; use knowledge_record for full content.",
       input: Type.Object(
         {
-          offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 500 })),
+          offset: Type.Optional(Type.Integer({ minimum: 0 })),
           limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
           kind: Type.Optional(
             Type.Union([Type.Literal("page"), Type.Literal("claim"), Type.Literal("relationship")]),
@@ -556,7 +556,7 @@ export const contract = defineFeatureContract({
       kind: "query",
       description:
         "Operator settings: agents, effective store assignments and store inventory. Never creates storage.",
-      input: empty,
+      input: Type.Object({ includeRecordCounts: Type.Optional(Type.Boolean()) }),
       output: StoresSnapshot,
     },
     stores_change: {

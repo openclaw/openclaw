@@ -29,7 +29,7 @@
 .palette-session-settings__content {
   width: min(292px, calc(100vw - 40px));
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.4;
 }
 
@@ -134,7 +134,7 @@
 .palette-session-settings__secondary,
 .palette-session-settings__unavailable {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .palette-session-settings__unavailable {
@@ -180,19 +180,11 @@
   padding-top: 0;
   padding-bottom: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .palette-session-settings__remember input {
   justify-self: center;
-  appearance: auto;
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  padding: 0;
-  accent-color: var(--accent);
-  color-scheme: inherit;
-  box-shadow: none;
 }
 
 .palette-session-settings__heading {
@@ -215,7 +207,6 @@
   max-height: 230px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .palette-session-settings__choices > section + section {
@@ -225,6 +216,6 @@
 .palette-session-settings__error {
   padding: 6px 10px 0;
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: normal;
 }

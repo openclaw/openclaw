@@ -109,7 +109,11 @@ function normalizeNullableSchemaForHint(
   };
 }
 
-function renderPrimitive(value: unknown): string | undefined {
+function renderPrimitive(value: unknown, maxChars: number): string | undefined {
+  // Remote schemas can carry huge literals; reject them before serializing.
+  if (typeof value === "string" && value.length > maxChars) {
+    return undefined;
+  }
   if (
     value === null ||
     typeof value === "string" ||
@@ -129,7 +133,9 @@ function compactLiteralUnion(values: unknown, limits: CompactSchemaLimits): Sche
   ) {
     return undefined;
   }
-  const rendered = values.map(renderPrimitive);
+  const rendered = values.map((value) =>
+    renderPrimitive(value, limits.declaration ? limits.maxChars : MAX_COMPACT_ENUM_CHARS),
+  );
   if (rendered.some((value) => value === undefined)) {
     return undefined;
   }
@@ -384,7 +390,7 @@ function compactSchemaType(
   if (schemaUnion) {
     return finish(schemaUnion);
   }
-  const literal = renderPrimitive(schema.const);
+  const literal = renderPrimitive(schema.const, limits.maxChars);
   if (literal !== undefined) {
     return finish(completeHint(literal));
   }

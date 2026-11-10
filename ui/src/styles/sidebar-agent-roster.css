@@ -11,12 +11,13 @@ openclaw-sidebar-agent-roster {
   grid-template-rows: 46px;
   align-items: center;
   column-gap: 8px;
-  margin-inline: -6px;
-  padding-inline: 14px 13px;
+  /* Reclaim the section inset so the fill runs flush with the session rows. */
+  margin-inline: -8px;
+  padding-inline: 16px 15px;
   border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
@@ -180,9 +181,9 @@ openclaw-sidebar-agent-roster {
   flex: 1;
   gap: 1px;
   min-width: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
-  line-height: 16px;
+  line-height: calc(16px * var(--control-ui-text-scale));
 }
 
 .sidebar-agent-roster__copy > span {
@@ -193,18 +194,18 @@ openclaw-sidebar-agent-roster {
 
 .sidebar-agent-roster__preview {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
 }
 
 .sidebar-agent-roster__unread {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-agent-roster__link {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-agent-roster__row {
@@ -333,8 +334,8 @@ openclaw-sidebar-agent-roster {
   flex-basis: 12px;
 }
 .sidebar-session-team-state .session-glyph__ring {
+  --spinner-art: initial;
   inset: 0;
-  mask: var(--spinner-mask);
 }
 @media (hover: none), (pointer: coarse) {
   .sidebar-agent-roster__actions {

@@ -31,6 +31,7 @@ function strand(root: string, idleMs: number, hold?: "creator" | "reader") {
   const outer = createSqliteSnapshotStagingTokenSync(root);
   const child = createSqliteSnapshotStagingTokenSync(outer.directory);
   fs.writeFileSync(path.join(child.directory, "database.sqlite"), "copied bytes");
+  fs.writeFileSync(path.join(child.directory, "database.sqlite.partial"), "interrupted compaction");
   child.release();
   let release: () => void = () => {};
   if (hold === "creator") {

@@ -4,7 +4,7 @@
 
 .plugins-hub-header .page-title {
   margin: 0;
-  font-size: 26px;
+  font-size: calc(26px * var(--control-ui-text-scale));
 }
 
 .plugins-hub-header .hub-tabs--sub .hub-tab {
@@ -17,7 +17,7 @@
 
 @media (max-width: 768px) {
   .plugins-hub-header .page-title {
-    font-size: 22px;
+    font-size: calc(22px * var(--control-ui-text-scale));
   }
 }
 
@@ -296,8 +296,7 @@
   contain-intrinsic-block-size: auto 280px;
 }
 
-.plugin-catalog-section__header,
-.plugins-settings-error {
+.plugin-catalog-section__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -766,7 +765,7 @@
 .plugins-detail__title h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 20px;
+  font-size: calc(20px * var(--control-ui-text-scale));
   font-weight: 680;
   letter-spacing: -0.02em;
 }
@@ -778,7 +777,7 @@
   padding-block-start: var(--overlay-modal-padding);
 }
 
-.plugins-consent__header > .oc-dialog__close {
+.plugins-consent__header .oc-dialog__close {
   align-self: start;
   margin-block-start: calc(12px - var(--overlay-modal-padding));
 }
@@ -1082,7 +1081,7 @@
   min-width: 0;
   margin: 0;
   color: var(--text-strong);
-  font-size: clamp(24px, 3vw, 32px);
+  font-size: calc(clamp(24px, 3vw, 32px) * var(--control-ui-text-scale));
   line-height: 1.05;
   overflow-wrap: anywhere;
 }
@@ -1609,8 +1608,8 @@
   }
 
   /* Refresh sits beside the page menu here, not at the end of the row. */
-  openclaw-skills-page .skill-library-search__action .btn.refresh-button {
-    justify-content: center;
+  openclaw-skills-page .skill-library-search__action .refresh-button {
+    justify-items: center;
   }
 
   openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {

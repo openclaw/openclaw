@@ -3,7 +3,7 @@
   gap: 20px;
   min-width: 0;
   color: var(--text);
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--control-ui-text-scale));
   line-height: 1.5;
 }
 
@@ -22,7 +22,7 @@
 .plugin-session-summary__history > h3 {
   margin: 0;
   color: var(--text);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   font-weight: 600;
 }
 
@@ -87,7 +87,7 @@
 .plugin-session-summary__role {
   overflow: hidden;
   color: var(--text);
-  font-size: 0.76rem;
+  font-size: calc(0.76rem * var(--control-ui-text-scale));
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -96,7 +96,7 @@
 .plugin-session-summary__message-header time {
   flex: none;
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--control-ui-text-scale));
   white-space: nowrap;
 }
 
@@ -104,13 +104,13 @@
   min-width: 0;
   margin-inline-start: 32px;
   overflow-wrap: anywhere;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
   line-height: 1.55;
 }
 
 .plugin-session-summary__message .sidebar-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 12px 0 6px;
-  font-size: 0.84rem;
+  font-size: calc(0.84rem * var(--control-ui-text-scale));
   line-height: 1.4;
 }
 
@@ -125,7 +125,7 @@
 .plugin-session-summary__message .sidebar-markdown pre {
   max-width: 100%;
   overflow-x: auto;
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--control-ui-text-scale));
 }
 
 .plugin-session-summary > .btn {
@@ -142,7 +142,7 @@
   gap: 4px 12px;
   margin-bottom: 12px;
   color: var(--text);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   font-weight: 600;
   letter-spacing: normal;
   text-transform: none;
@@ -150,7 +150,7 @@
 
 .plugin-session-summary__progress .session-progress-card__heading-actions {
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--control-ui-text-scale));
   font-weight: 400;
 }
 
@@ -164,7 +164,7 @@
 }
 
 .plugin-session-summary__progress .session-progress-card__step {
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
   line-height: 1.5;
 }
 

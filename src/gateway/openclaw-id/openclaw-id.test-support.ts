@@ -27,7 +27,7 @@ import type { StoredClaw } from "./claw-store.js";
 import type { OpenClawIdMemberProfiles } from "./member-profiles.js";
 import { createOpenClawIdService, type OpenClawIdEffects } from "./service.js";
 
-const TEST_K_SRV = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
+export const TEST_K_SRV = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
 export const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 /** A claw record store kept in memory. */
@@ -144,6 +144,8 @@ export function serviceFor(
     ),
     cancelRuns: vi.fn(async (connections: readonly string[]) => connections.length),
     closeConnections: vi.fn(),
+    removeNodePairings: vi.fn(async () => {}),
+    reconcileNodePairings: vi.fn(async () => {}),
     revokeDeviceTokens: vi.fn(async (tokens) => [...tokens]),
     describeActivity: vi.fn((keys: readonly string[]) =>
       Object.fromEntries(
@@ -162,6 +164,7 @@ export function serviceFor(
   const service = createOpenClawIdService({
     getConfig: () => config,
     getStateDir: () => "/nonexistent/openclaw-id-test",
+    getGatewayServer: () => undefined,
     log,
     createAuthority: async () => authority,
   });
@@ -201,7 +204,7 @@ export async function redemptionMail(params: {
   proofKey: Uint8Array;
   accountId: string;
   email: string;
-}): Promise<{ message: MailboxMessage; peerKey: IrohEndpointKey }> {
+}) {
   const signer = await generateEd25519Signer();
   const peerKey = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
   const parts = {
@@ -237,6 +240,6 @@ export async function redemptionMail(params: {
       payload: { kind: "invite_redemption", redemption },
       received_at: nowSeconds(),
       expires_at: nowSeconds() + 86400,
-    },
+    } satisfies MailboxMessage,
   };
 }

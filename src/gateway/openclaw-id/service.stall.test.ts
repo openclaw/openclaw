@@ -43,6 +43,7 @@ describe("OpenClaw ID lifecycle with a stalled Discovery", () => {
     const service = createOpenClawIdService({
       getConfig: () => config,
       getStateDir: () => stateDir!,
+      getGatewayServer: () => undefined,
       log: { info: vi.fn(), warn: vi.fn() },
       createAuthority: async () => claw.authority,
     });

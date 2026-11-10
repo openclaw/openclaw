@@ -21,8 +21,9 @@ import {
 import { sameSidebarPresentation } from "./sidebar-projection-cache.ts";
 import type { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 import "./tooltip.ts";
+import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 
 /** Compose independently owned session state and context indicators. */
 
@@ -212,6 +213,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           "sidebar-recent-session--dragging":
             host().sessionOrganizer.draggingSessionKey === session().key,
           "sidebar-recent-session--naming": session().titlePending,
+          "sidebar-recent-session--menu-open": menuOpen(),
         },
       ]}
       style={{ "--session-color": color() ? `var(--session-color-${color()})` : undefined }}
@@ -352,7 +354,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
                   },
                 );
               } else {
-                void host().sessionOrganizer.archiveSessionWithUndo(target);
+                void host().sessionOrganizer.archiveSessionWithUndo(target, rowElement);
               }
             }}
           >
@@ -385,27 +387,30 @@ export function renderChildSessionLoadError(host: () => SessionListHost, parentK
   const error = createMemo(() => host().sessionData.childSessionErrorsByParent.get(parentKey));
   return (
     <Show when={error()}>
-      <div
-        class="sidebar-session-error callout danger"
+      <InlineAlert
+        tone="danger"
+        class="sidebar-session-error"
         data-child-session-error={parentKey}
-        role="alert"
+        action={
+          <button
+            class="sidebar-session-tree__show-more"
+            type="button"
+            data-retry-child-sessions={parentKey}
+            onClick={() => host().sessionData.retryChildSessions(parentKey)}
+          >
+            {t("common.retry")}
+          </button>
+        }
       >
-        <span>{error()}</span>
-        <button
-          class="sidebar-session-tree__show-more"
-          type="button"
-          data-retry-child-sessions={parentKey}
-          onClick={() => host().sessionData.retryChildSessions(parentKey)}
-        >
-          {t("common.retry")}
-        </button>
-      </div>
+        {error()}
+      </InlineAlert>
     </Show>
   );
 }
 export function renderSessionTree(params: {
   host: SessionListHost;
   session: SidebarRecentSession;
+  display?: CatalogBackingSessionDisplay;
   pinReorder?: boolean;
   listItem?: boolean;
   icon?: JSX.Element;
@@ -452,6 +457,7 @@ export function renderSessionTree(params: {
         host={host()}
         session={session()}
         pinReorder={params.pinReorder}
+        display={params.display}
         listItem={false}
         icon={icon()}
       />

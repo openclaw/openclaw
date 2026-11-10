@@ -130,12 +130,6 @@
 }
 
 .chat-tool-row__chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 14px;
-  width: 14px;
-  height: 14px;
   opacity: 0;
   transition:
     opacity 150ms ease-out,
@@ -375,7 +369,7 @@
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--secondary) 55%, transparent);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.55;
   overflow-x: auto;
   overflow-y: auto;
@@ -476,7 +470,7 @@
   gap: 8px;
   padding: 8px 12px 0;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.55;
   color: var(--text);
 }
@@ -498,7 +492,7 @@
   margin: 0;
   padding: 6px 12px 10px 12px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: color-mix(in srgb, var(--text) 82%, var(--muted) 18%);
   white-space: pre-wrap;
@@ -515,7 +509,7 @@
   padding: 7px 14px 9px;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-align: end;
 }
 
@@ -552,7 +546,7 @@
 .chat-tool-kv__key {
   flex-shrink: 0;
   font-family: var(--mono);
-  font-size: calc(var(--control-ui-text-sm) - 1px);
+  font-size: var(--control-ui-text-xs);
   color: color-mix(in srgb, var(--muted) 90%, var(--text) 10%);
 }
 
@@ -607,7 +601,7 @@
   padding: 12px 14px 14px;
   overflow: auto;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -669,7 +663,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-tool-card__modes .oc-tab[aria-selected="true"] {
@@ -740,7 +734,7 @@
 .chat-tool-card__detail {
   flex: 1 1 auto;
   min-width: 0;
-  font: 11px/1.4 var(--mono);
+  font: var(--control-ui-text-xs)/1.4 var(--mono);
   color: var(--muted);
 }
 
@@ -749,7 +743,7 @@
   padding: 0;
   border: 0;
   background: transparent;
-  font: 11px/1.4 var(--mono);
+  font: var(--control-ui-text-xs)/1.4 var(--mono);
   text-align: start;
   cursor: var(--cursor-action);
 }
@@ -782,7 +776,7 @@
 }
 
 .chat-tool-card__block-label {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -797,7 +791,7 @@
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -978,7 +972,7 @@
 }
 
 .chat-tool-card__raw-toggle {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-tool-card__raw-body {
@@ -1090,8 +1084,16 @@
   }
 }
 
+/* Completed work reads as a quiet heading over what follows: a medium label and
+   a resting chevron, with no divider. Two extra pixels below the uniform
+   run-block gap keep the label from crowding the reply or a leading code block. */
+.chat-work-group {
+  margin-block-end: 2px;
+}
+
 .chat-work-group .chat-activity-group__label {
   color: inherit;
+  font-weight: var(--control-ui-font-weight-semibold);
 }
 
 .chat-work-group__total {
@@ -1136,12 +1138,6 @@
         text-shimmer var(--text-shimmer-duration) var(--text-shimmer-easing) infinite;
     }
   }
-}
-
-.chat-work-group__separator {
-  width: 100%;
-  height: 1px;
-  background: var(--border);
 }
 
 @media (pointer: coarse) {
@@ -1200,7 +1196,7 @@
 
 .chat-tool-review__label {
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 700;
 }
 
@@ -1210,7 +1206,7 @@
   border-radius: var(--radius-full);
   color: var(--muted);
   background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 600;
   text-transform: lowercase;
 }
@@ -1218,7 +1214,7 @@
 .chat-tool-review__rationale {
   margin: 4px 0 0 20px;
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }

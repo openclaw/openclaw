@@ -152,7 +152,6 @@
   top: calc(var(--dreams-sleeper-y) - 262px);
   left: max(0px, calc(50% - 200px));
   max-width: 100%;
-  box-sizing: border-box;
   padding: 16px 20px;
   /* Opaque underneath, so a star drifting behind it never lands on a word. */
   background: linear-gradient(var(--accent-subtle), var(--accent-subtle)), var(--bg);
@@ -167,7 +166,7 @@
 }
 
 .dreams__bubble-text {
-  font-size: 16px;
+  font-size: var(--control-ui-text-lg);
   color: color-mix(in srgb, var(--accent) 50%, var(--text));
   font-style: italic;
   min-width: 180px;
@@ -366,7 +365,7 @@
 .dreams-diary__date {
   display: block;
   min-height: 32px;
-  line-height: 32px;
+  line-height: calc(32px * var(--control-ui-text-scale));
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
   color: var(--text-strong);
@@ -399,7 +398,7 @@
 
 .dreams-diary__para {
   margin: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.7;
   color: var(--text);
   overflow-wrap: anywhere;
@@ -442,7 +441,7 @@
 }
 
 .dreams-diary__preview-title {
-  font-size: 16px;
+  font-size: var(--control-ui-text-lg);
   font-weight: 600;
   color: var(--text);
 }
@@ -476,7 +475,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.65;
   color: var(--text);
 }
@@ -633,27 +632,24 @@
 
   .dreams__moon {
     top: 8px;
-    right: 12px;
+    right: 16px;
     width: 52px;
     height: 52px;
   }
 
   .dreams__bubble {
     top: calc(var(--dreams-sleeper-y) - 236px);
+    /* Auto margins center the bubble; its float animation owns transform. */
     left: 0;
     right: 0;
     width: fit-content;
-    max-width: 100%;
     margin-inline: auto;
-    box-sizing: border-box;
-    padding: 14px 18px;
+    padding: clamp(14px, 4.2vw, 16px) clamp(16px, 5vw, 20px);
   }
 
   .dreams__bubble-text {
-    display: block;
     min-width: 0;
-    font-size: 15px;
-    text-wrap: balance;
+    font-size: calc(clamp(14px, 4.4vw, 16px) * var(--control-ui-text-scale));
   }
 
   .dreams__bubble-dot--far {
@@ -687,24 +683,5 @@
 
   .dreams-review__row[aria-expanded] .settings-row__chevron svg {
     transition: none;
-  }
-}
-
-@media (max-width: 640px) {
-  /* Auto margins, not a transform: the float animation owns transform. */
-  .dreams__bubble {
-    left: 0;
-    right: 0;
-    width: fit-content;
-    margin-inline: auto;
-    padding: clamp(14px, 4.2vw, 16px) clamp(16px, 5vw, 20px);
-  }
-
-  .dreams__bubble-text {
-    font-size: clamp(14px, 4.4vw, 16px);
-  }
-
-  .dreams__moon {
-    right: 16px;
   }
 }

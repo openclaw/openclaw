@@ -45,7 +45,7 @@
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: var(--radius-lg);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.25;
 }
 
@@ -86,7 +86,7 @@
 .agent-chat__goal-label {
   flex: 0 0 auto;
   color: var(--chat-goal-status-color, var(--chat-text));
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 400;
   line-height: 1.45;
 }
@@ -284,7 +284,7 @@
     height: auto;
     gap: 4px;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: var(--control-ui-text-xs);
     line-height: 1.2;
     color: var(--text);
     background: color-mix(in srgb, var(--text) 7%, transparent);
@@ -310,7 +310,6 @@
     padding-inline-end: 4px;
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-width: thin;
   }
 
   .agent-chat__goal[data-expanded="true"]
@@ -356,7 +355,7 @@
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-usage {
     color: color-mix(in srgb, var(--muted) 82%, transparent);
-    font-size: 11px;
+    font-size: var(--control-ui-text-xs);
   }
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-separator {
@@ -404,7 +403,7 @@
 }
 
 .agent-chat__goal-detail-objective {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -414,7 +413,7 @@
 .agent-chat__goal-detail-note,
 .agent-chat__goal-detail-meta {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -542,8 +541,8 @@
 .session-progress-card__current {
   min-width: 0;
   overflow: hidden;
-  font-size: 13px;
-  line-height: 18px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: calc(18px * var(--control-ui-text-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
   transition: color 140ms ease;
@@ -602,9 +601,9 @@
 .session-progress-card__summary-count {
   flex: none;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
   transition: color 140ms ease;
 }
 
@@ -625,7 +624,6 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   padding: 0 18px 14px 13px;
   border: 0;
   border-radius: 0;
@@ -636,7 +634,7 @@
 .session-progress-card--composer .session-progress-card__heading {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   letter-spacing: 0;
   text-transform: none;
 }
@@ -645,7 +643,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -665,7 +663,7 @@
 
 .session-progress-card--composer .session-progress-card__step,
 .session-progress-card--composer .session-progress-card__markdown.sidebar-markdown {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .session-progress-card--composer .session-progress-card__steps {

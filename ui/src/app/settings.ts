@@ -37,6 +37,8 @@ import {
   normalizeChatMessageMaxWidth,
   normalizeChatSendShortcut,
   normalizeChatWorkspaceDock,
+  normalizeDashboardsDisplay,
+  normalizeSessionFilesDisplay,
   normalizeSidebarAgentOrder,
   normalizeTextScale,
   UI_APPEARANCE_DEFAULTS,
@@ -479,6 +481,8 @@ export function loadUiPreferences(
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
+      dashboardsDisplay: normalizeDashboardsDisplay(parsed.dashboardsDisplay),
+      sessionFilesDisplay: normalizeSessionFilesDisplay(parsed.sessionFilesDisplay),
       sidebarSessionLayouts: normalizeSidebarSessionLayouts(parsed.sidebarSessionLayouts),
       sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
         parsed.sidebarSessionActivePanels,
@@ -671,6 +675,8 @@ export function saveSettings(
     // Right dock is the default; only the opt-in bottom dock persists.
     chatWorkspaceDock: next.chatWorkspaceDock === "bottom" ? "bottom" : undefined,
     boardSessionViews: nonemptySettingsRecord(next.boardSessionViews),
+    dashboardsDisplay: normalizeDashboardsDisplay(next.dashboardsDisplay),
+    sessionFilesDisplay: normalizeSessionFilesDisplay(next.sessionFilesDisplay),
     sidebarSessionLayouts: nonemptySettingsRecord(next.sidebarSessionLayouts),
     sidebarSessionActivePanels: nonemptySettingsRecord(next.sidebarSessionActivePanels),
     navWidth: next.navWidth, // Persist size, not visibility: shared localStorage leaks across tabs.

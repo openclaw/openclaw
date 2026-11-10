@@ -482,9 +482,12 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
               </div>
             </div>
           </Show>
-          <Show when={store().abandonedTurnOutcomeUnknown}>
-            <div class="custodian__error" role="alert">
-              <span>{t("custodian.connectionChanged")}</span>
+          <Show
+            when={store().abandonedTurnOutcomeUnknown && !store().chatAvailable && !store().error}
+          >
+            <div class="custodian__catch-up" role="status">
+              <span class="custodian__history-spinner" aria-hidden="true" />
+              <span class="sr-only">{t("connection.reconnecting")}</span>
             </div>
           </Show>
           <Loading
@@ -495,15 +498,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
               {transcriptNotice(transcriptStatus())}
             </Errored>
           </Loading>
-          <Show
-            when={
-              store().error &&
-              !(
-                store().abandonedTurnOutcomeUnknown &&
-                store().error === t("custodian.connectionChanged")
-              )
-            }
-          >
+          <Show when={store().error}>
             <div class="custodian__error" role="alert">
               <span>{store().error}</span>
               <Show when={store().activeClient && store().chatAvailable && store().canRetry()}>

@@ -82,10 +82,7 @@
 .chat-workspace-rail__group-chevron svg,
 .sidebar-file-view__action svg,
 .session-diff__toolbar-button svg,
-.session-diff__toolbar-icon svg,
-.session-diff__refresh svg,
 .session-diff__chevron svg,
-.session-diff__file-menu svg,
 .session-diff__footer svg {
   width: 14px;
   height: 14px;
@@ -631,7 +628,7 @@ button.sidebar-image-view__image {
 
 .sidebar-file-view--desktop .sidebar-file-view__path {
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .sidebar-file-view__edit-actions .btn {
@@ -701,8 +698,8 @@ button.sidebar-image-view__image {
 }
 
 .sidebar-file-view--desktop .cm-editor {
-  font-size: 12px;
-  line-height: 22px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(22px * var(--control-ui-text-scale));
 }
 
 .sidebar-file-view--desktop .cm-content {
@@ -862,17 +859,11 @@ button.sidebar-image-view__image {
   animation: btn-spinner-spin 0.7s linear infinite;
 }
 
-.session-diff__toolbar-button,
-.session-diff__toolbar-icon,
-.session-diff__refresh,
-.session-diff__file-menu {
+.session-diff__toolbar-button {
   min-width: 26px;
   height: 26px;
   min-height: 26px;
   padding: 4px;
-}
-
-.session-diff__toolbar-button {
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -976,7 +967,7 @@ button.sidebar-image-view__image {
   background: color-mix(in srgb, currentColor 10%, transparent);
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 700;
 }
 
@@ -1050,7 +1041,7 @@ button.sidebar-image-view__image {
   border-radius: 999px;
   background: color-mix(in srgb, var(--muted) 18%, transparent);
   color: var(--muted);
-  font-size: calc(var(--control-ui-text-sm) - 2px);
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .session-diff .chat-diffstat {
@@ -1197,7 +1188,7 @@ button.sidebar-image-view__image {
   border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
   background: color-mix(in srgb, var(--secondary) 45%, transparent);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
 }
 
@@ -1311,7 +1302,7 @@ button.sidebar-image-view__image {
   border-radius: 3px;
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
   font-weight: 700;
 }
 
@@ -1977,7 +1968,7 @@ openclaw-session-diff:has(> .session-diff--desktop) {
    Transcript diffs and mobile cards retain their own presentation. */
 .session-diff--desktop :is(.chat-diff, .session-diff-split) {
   background: transparent;
-  line-height: 22px;
+  line-height: calc(22px * var(--control-ui-text-scale));
 }
 
 .session-diff--desktop :is(.chat-diff__gutter, .session-diff-split__gutter) {
