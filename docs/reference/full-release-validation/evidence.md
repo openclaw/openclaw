@@ -57,6 +57,37 @@ approval, content, and readback checks. Known enclosing evidence is budgeted bef
 fanout, but later job/attempt growth can still exceed the unchanged final artifact
 limit and fail sealing; evidence is not truncated to fit.
 
+## Bounded publication recovery
+
+A publisher may consume a nonempty selected plugin subset of an authenticated
+all-publishable admission without changing the original qualification. The
+operation retains the original release, channel, route, Windows operands, and
+sealed artifact identities. It does not create a replacement admission or make
+selected evidence sufficient for a broader publication. Each batch uses a new
+parent authorization and retains current authority checks at the final effect.
+
+Prepared npm consumers authenticate the complete original manifest before
+selecting that batch's entries. Already-published npm packages are excluded from
+publication fanout only after exact registry-byte verification. Before core npm
+publication, the parent verifies the complete original npm roster after the
+plugin child finishes; missing packages or mismatched bytes block core publication.
+
+ClawHub recovery uses the original child's authenticated recovery seal and
+transaction roster, not a replacement prepared manifest. A publication parent
+can name the original ClawHub run and attempt and dispatch the existing recovery
+workflow. Its sealed dispatch payload binds the exact original child, selected
+plugins, current parent, and full validation run. Recovery keeps the existing
+ClawHub environment and credential, verifies current parent authorization before
+every recovery request, and verifies exact public bytes. A selected batch does not
+claim completion of excluded packages. Before core publication, a full-scope
+parent waits for recovery of the complete original roster. Manual recovery without
+parent inputs retains the existing full-roster behavior.
+
+The existing preview/load reports allowlisted response quota headers using its
+own workflow token. Select a batch from observed remaining capacity and measured
+costs, including parent and ClawHub work; static request estimates alone do not
+justify a retry. Resume after the observed reset with fresh parent authorization.
+
 <a id="publication-waivers" />
 
 ## Release-tooling waivers

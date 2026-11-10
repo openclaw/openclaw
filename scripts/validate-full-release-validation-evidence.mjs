@@ -119,6 +119,7 @@ function displayValue(value) {
  * @property {string} [expectedTrustedWorkflowSha]
  * @property {string} [expectedWorkflowBranch]
  * @property {import("./full-release-publication-contract.mjs").PublicationSelection | (() => import("./full-release-publication-contract.mjs").PublicationSelection)} [expectedPublicationSelection]
+ * @property {import("./full-release-publication-contract.mjs").PublicationSelection | (() => import("./full-release-publication-contract.mjs").PublicationSelection)} [expectedPublicationOperation]
  * @property {{ npmDistTag: string }} [expectedCoreNpmPublication]
  * @property {(sha: string) => string} [getWorkflowSource]
  * @property {(sha: string) => boolean} [isTrustedMainAncestor]
@@ -157,6 +158,49 @@ export function isShaPinnedReleaseValidationBranch(branch) {
   return PINNED_BRANCH_PATTERN.test(branch ?? "");
 }
 
+/**
+ * The caller has authenticated the complete original admission. This derives
+ * only the current operation; it never rewrites the admission or artifact roster.
+ * @param {import("./full-release-publication-contract.mjs").PublicationSourceFact | undefined} source
+ * @param {import("./full-release-publication-contract.mjs").PublicationSelection} operation
+ */
+function validatePublicationOperation(source, operation) {
+  const original = source?.publicationSelection;
+  if (!source || !original || source.validationPurpose !== "publish") {
+    throw new Error("Publication operation requires an authenticated publish admission.");
+  }
+  if (publicationSourceJson(original) === publicationSourceJson(operation)) {
+    return;
+  }
+  if (
+    original.pluginPublishScope !== "all-publishable" ||
+    operation.publishOpenclawNpm !== false ||
+    operation.pluginPublishScope !== "selected" ||
+    !Array.isArray(operation.plugins) ||
+    operation.plugins.length === 0 ||
+    new Set(operation.plugins).size !== operation.plugins.length ||
+    publicationSourceJson({
+      ...operation,
+      publishOpenclawNpm: original.publishOpenclawNpm,
+      pluginPublishScope: original.pluginPublishScope,
+      plugins: original.plugins,
+    }) !== publicationSourceJson(original) ||
+    operation.plugins.some(
+      (name) =>
+        !source.projection?.packages.some(
+          (entry) =>
+            entry.name === name &&
+            name.startsWith("@openclaw/") &&
+            entry.targets.some((target) => target === "npm" || target === "clawhub"),
+        ),
+    )
+  ) {
+    throw new Error(
+      "Publication operation is not a covered plugin-only subset of the original admission.",
+    );
+  }
+}
+
 /** @param {FullReleaseValidationEvidenceOptions} options */
 export function validateFullReleaseValidationEvidence({
   run: rawRun,
@@ -170,6 +214,7 @@ export function validateFullReleaseValidationEvidence({
   expectedTrustedWorkflowSha,
   expectedWorkflowBranch,
   expectedPublicationSelection,
+  expectedPublicationOperation,
   expectedCoreNpmPublication,
   getWorkflowSource,
   isTrustedMainAncestor,
@@ -182,7 +227,11 @@ export function validateFullReleaseValidationEvidence({
   ) {
     throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
-  if (expectedPublicationSelection && expectedCoreNpmPublication) {
+  if (
+    [expectedPublicationSelection, expectedPublicationOperation, expectedCoreNpmPublication].filter(
+      Boolean,
+    ).length > 1
+  ) {
     throw new Error("Publication evidence requires one actual consumption selection.");
   }
   const run = normalizeFullReleaseValidationRun(rawRun);
@@ -386,7 +435,7 @@ export function validateFullReleaseValidationEvidence({
       }
     }
   }
-  if (registryContract) {
+  if (registryContract || expectedPublicationOperation) {
     const contextIdentity = sourceAdmission?.projection
       ? resolveReleaseContextIdentity(
           sourceAdmission.targetContextRef,
@@ -399,8 +448,10 @@ export function validateFullReleaseValidationEvidence({
         ? `v${sourceAdmission.projection.version}`
         : undefined);
     if (
-      !publicationAdmission ||
-      (!expectedPublicationSelection && !expectedCoreNpmPublication) ||
+      (registryContract && !publicationAdmission) ||
+      (!expectedPublicationSelection &&
+        !expectedPublicationOperation &&
+        !expectedCoreNpmPublication) ||
       sourceReleaseTag !== expectedReleaseTag
     ) {
       throw new Error("B publication evidence requires the actual selection and release tag.");
@@ -439,6 +490,14 @@ export function validateFullReleaseValidationEvidence({
         "Candidate-owned qualification requires authenticated complete frozen evidence",
       );
     }
+  }
+  if (expectedPublicationOperation) {
+    validatePublicationOperation(
+      sourceAdmission,
+      typeof expectedPublicationOperation === "function"
+        ? expectedPublicationOperation()
+        : expectedPublicationOperation,
+    );
   }
   const pinnedMatch = PINNED_BRANCH_PATTERN.exec(run.headBranch ?? "");
   if (!pinnedMatch) {
@@ -767,6 +826,43 @@ function gitIsAncestor(ancestor, target) {
   );
 }
 
+/** @returns {import("./full-release-publication-contract.mjs").PublicationSelection} */
+function publisherOperationFromEnvironment() {
+  const plugins = (process.env.RELEASE_PLUGINS ?? "").split(/[\s,]+/u).filter(Boolean);
+  const subset = process.env.PLUGIN_PUBLISH_SCOPE === "selected";
+  const publishOpenclawNpm = process.env.PUBLISH_OPENCLAW_NPM === "true";
+  // Normalize the unchanged route/channel/Windows operands as a full intent.
+  // Only authenticated operation validation below may narrow that intent.
+  const { publicationSelection } = normalizePublicationIntent(
+    "publish",
+    JSON.stringify({
+      route: process.env.PREPARED_PLUGINS?.trim()
+        ? "prepared"
+        : process.env.RELEASE_NPM_DIST_TAG === "extended-stable"
+          ? "extended-stable"
+          : "normal",
+      npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
+      publishOpenclawNpm: subset ? true : publishOpenclawNpm,
+      pluginPublishScope: subset ? "all-publishable" : process.env.PLUGIN_PUBLISH_SCOPE,
+      plugins: subset ? [] : plugins,
+      ...(process.env.WINDOWS_NODE_TAG
+        ? {
+            windowsNodeTag: process.env.WINDOWS_NODE_TAG,
+            windowsNodeInstallerDigests: JSON.parse(
+              process.env.WINDOWS_NODE_INSTALLER_DIGESTS ?? "",
+            ),
+          }
+        : {}),
+    }),
+  );
+  if (!publicationSelection) {
+    throw new Error("Publisher requires a publication selection.");
+  }
+  return subset
+    ? { ...publicationSelection, publishOpenclawNpm, pluginPublishScope: "selected", plugins }
+    : publicationSelection;
+}
+
 async function main() {
   const manifestPath = process.env.MANIFEST_FILE ?? "";
   if (!manifestPath) {
@@ -777,6 +873,10 @@ async function main() {
   const trustedMainRef = process.env.TRUSTED_MAIN_REF ?? "refs/remotes/origin/main";
   const consumer = process.env.PUBLICATION_CONSUMER ?? "";
   const coreProjection = consumer === "core-npm" || consumer === "docker-only";
+  const boundedOperation =
+    consumer === "publisher" &&
+    process.env.PLUGIN_PUBLISH_SCOPE === "selected" &&
+    manifest.sourceAdmission?.publicationSelection !== undefined;
   if (consumer && !["publisher", "core-npm", "docker-only"].includes(consumer)) {
     throw new Error("Unknown publication evidence consumer.");
   }
@@ -804,31 +904,8 @@ async function main() {
       ? { npmDistTag: process.env.RELEASE_NPM_DIST_TAG ?? "" }
       : undefined,
     expectedPublicationSelection:
-      consumer === "publisher"
-        ? () =>
-            normalizePublicationIntent(
-              "publish",
-              JSON.stringify({
-                route: process.env.PREPARED_PLUGINS?.trim()
-                  ? "prepared"
-                  : process.env.RELEASE_NPM_DIST_TAG === "extended-stable"
-                    ? "extended-stable"
-                    : "normal",
-                npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
-                publishOpenclawNpm: process.env.PUBLISH_OPENCLAW_NPM === "true",
-                pluginPublishScope: process.env.PLUGIN_PUBLISH_SCOPE,
-                plugins: (process.env.RELEASE_PLUGINS ?? "").split(/[\s,]+/u).filter(Boolean),
-                ...(process.env.WINDOWS_NODE_TAG
-                  ? {
-                      windowsNodeTag: process.env.WINDOWS_NODE_TAG,
-                      windowsNodeInstallerDigests: JSON.parse(
-                        process.env.WINDOWS_NODE_INSTALLER_DIGESTS ?? "",
-                      ),
-                    }
-                  : {}),
-              }),
-            ).publicationSelection
-        : undefined,
+      consumer === "publisher" && !boundedOperation ? publisherOperationFromEnvironment : undefined,
+    expectedPublicationOperation: boundedOperation ? publisherOperationFromEnvironment : undefined,
     manifestPath,
     npmPreflightLineage:
       process.env.VERIFY_NPM_PREFLIGHT_LINEAGE === "true"

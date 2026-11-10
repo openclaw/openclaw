@@ -11,6 +11,7 @@ import {
 } from "../../scripts/plugin-npm-evidence-reuse.mjs";
 import {
   authenticatePreparedNpmArtifact,
+  downloadPreparedNpmRelease,
   main,
   PREPARED_NPM_MANIFEST,
   preparedNpmArtifactName,
@@ -406,7 +407,15 @@ async function carrierFixture(prepare?: (source: ReturnType<typeof fixture>) => 
     GITHUB_RUN_ATTEMPT: "2",
   });
   const writer = createReleaseEvidenceReplay(binding);
-  await authenticatePreparedNpmArtifact({ ...params, immutableReads: writer });
+  const adopted = await authenticatePreparedNpmArtifact({ ...params, immutableReads: writer });
+  if (prepare) {
+    await downloadPreparedNpmRelease({
+      ...params,
+      ...adopted,
+      token: "synthetic-token",
+      fetchImpl: async () => new Response(Uint8Array.from(source.archives.get(9001)!)),
+    });
+  }
   const payload = JSON.parse(writer.serialize());
   const zip = makeStoredZip({ "plugin-npm-evidence.json": JSON.stringify(payload) });
   const run = {
@@ -637,7 +646,8 @@ it("preserves the public return-time gate but removes exactly one CLI combined g
   // The raw fixture graph is smaller than the saved production trace.
   expect(removed).toBe(finalGateCalls.length);
   // The completed admission attempt and job page replay; its current run and
-  // permissions remain live. The exact-attempt read removes one of the 17 reads.
+  // permissions remain live. Exact-attempt replay and the shared same-actor
+  // permission check remove two of the original 17 reads.
   expect(finalGateCalls).not.toContain("actions/runs/40/attempts/1/jobs?per_page=100");
   expect(finalGateCalls).not.toContain("actions/runs/40/attempts/1");
   expect(finalGateCalls).toEqual(
@@ -647,7 +657,7 @@ it("preserves the public return-time gate but removes exactly one CLI combined g
       "collaborators/release-operator/permission",
     ]),
   );
-  expect(removed).toBe(16);
+  expect(removed).toBe(15);
   expect(f.calls.length).toBe(publicFetchCalls);
   expect(f.source.calls.filter((route) => route === "actions/runs/800")).toHaveLength(2);
   console.log(
@@ -739,6 +749,17 @@ async function cliPackageFixture() {
     });
     packageArchives.set(9001, manifestZip);
     packageArchives.set(9002, packageZip);
+    source.archives.set(9001, manifestZip);
+    source.artifacts.set(9001, {
+      id: 9001,
+      name: source.params.artifact.artifactName,
+      digest: source.params.artifact.artifactDigest,
+      size_in_bytes: manifestZip.length,
+      expired: false,
+      expires_at: "2099-01-01T00:00:00Z",
+      created_at: "2026-08-28T12:01:02.000Z",
+      workflow_run: { id: 101, head_sha: source.params.sourceSha, head_branch: source.f.branch },
+    });
   });
   cliEnvironment(f, root);
   const fetch = f.paramsForLoad.fetchImpl;

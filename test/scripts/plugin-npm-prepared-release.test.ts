@@ -10,6 +10,7 @@ import {
   downloadPreparedNpmRelease,
   PREPARED_NPM_MANIFEST,
   preparedNpmArtifactName,
+  selectUnpublishedPreparedNpmPackages,
   validatePreparedNpmRelease,
   verifyPreparedNpmRegistry,
 } from "../../scripts/plugin-npm-prepared-release.mjs";
@@ -471,10 +472,32 @@ it("admits only the exact successful preparation artifact and source inventory",
     token: "synthetic-token",
     fetchImpl: artifactFetch(artifact, bytes),
   };
+  const capacity = vi.spyOn(console, "error").mockImplementation(() => {});
   const admitted = await downloadPreparedNpmRelease({
     ...download,
+    reportCapacity: true,
+    fetchImpl: async (url: string) => {
+      const response = await download.fetchImpl(url);
+      response.headers.set("x-ratelimit-limit", "1000");
+      response.headers.set("x-ratelimit-remaining", "700");
+      response.headers.set("x-ratelimit-reset", "1794310000");
+      response.headers.set("x-ratelimit-resource", "core");
+      response.headers.set("authorization", "must-not-log");
+      return response;
+    },
     archivePath: join(sourceRoot, "prepared.zip"),
   });
+  expect(capacity).toHaveBeenCalledExactlyOnceWith(
+    JSON.stringify({
+      githubCapacity: {
+        "x-ratelimit-limit": "1000",
+        "x-ratelimit-remaining": "700",
+        "x-ratelimit-reset": "1794310000",
+        "x-ratelimit-resource": "core",
+      },
+    }),
+  );
+  capacity.mockRestore();
   expect(admitted.packages).toEqual(manifest.packages);
   await expect(
     downloadPreparedNpmRelease({
@@ -506,7 +529,7 @@ it("consumes the original qualified package in another run without a source inst
     "plugin-publication-manifest.json": readFileSync(created.manifestPath),
   });
   const artifact = metadata(11, artifactName, bytes);
-  const result = await consumePreparedNpmPackage({
+  const consumeParams = {
     ...expected,
     token: "synthetic-token",
     package: {
@@ -518,10 +541,35 @@ it("consumes the original qualified package in another run without a source inst
     cacheDir: join(root, "downloads"),
     outputDir: join(root, "verified"),
     fetchImpl: artifactFetch(artifact, bytes),
-  });
+  };
+  const result = await consumePreparedNpmPackage(consumeParams);
   expect(readFileSync(result.tarballPath)).toEqual(readFileSync(tarballPath));
   expect(result.producerRunId).toBe(producer.runId);
   expect(result.producerRunAttempt).toBe(producer.runAttempt);
+  const registry = npmRegistryPackument(entry.packageName, version, readFileSync(tarballPath));
+  const verify = (requirePublished: boolean) =>
+    selectUnpublishedPreparedNpmPackages({
+      ...consumeParams,
+      sourceRoot: root,
+      packages: [consumeParams.package],
+      requirePublished,
+      fetchImpl: (url: string) =>
+        url.startsWith("https://registry.npmjs.org/")
+          ? Promise.resolve(
+              url.endsWith(".tgz")
+                ? new Response(new Uint8Array(readFileSync(tarballPath)))
+                : Response.json(registry),
+            )
+          : consumeParams.fetchImpl(url),
+    });
+  expect(await verify(true)).toEqual([]);
+  const published = registry.versions[version]!;
+  delete registry.versions[version];
+  expect(await verify(false)).toEqual([consumeParams.package]);
+  await expect(verify(true)).rejects.toThrow("complete original plugin roster");
+  registry.versions[version] = published;
+  published.dist.integrity = "sha512-conflicting";
+  await expect(verify(false)).rejects.toThrow("registry bytes conflict");
 });
 function registryFixture() {
   const bytes = Buffer.from("exact qualified bytes");

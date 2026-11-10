@@ -72,6 +72,18 @@ it("attests and uploads the gated parent receipt before dispatching children", (
   const verifyIndex = names.indexOf("Verify all prepared plugin bytes before publication");
   expect(verifyIndex).toBeGreaterThan(names.indexOf("Upload release approval receipt"));
   expect(verifyIndex).toBeLessThan(names.indexOf("Dispatch publish workflows"));
+  const coreStart = requireStep(publish, "Start core npm publication");
+  const coreScript = expectDefined(coreStart.run);
+  const rosterCheck = coreScript.indexOf("'--require-published', 'true'");
+  expect(rosterCheck).toBeGreaterThan(coreScript.indexOf("wait_for_run plugin-npm-release.yml"));
+  expect(rosterCheck).toBeLessThan(
+    coreScript.indexOf("dispatch_workflow openclaw-npm-release.yml"),
+  );
+  containsAll(coreScript, [
+    "'--selection-mode', 'all-publishable'",
+    "env.RELEASE_NPM_DIST_TAG === 'extended-stable' ? 'extended-stable' : 'default'",
+  ]);
+  expect(coreStart.run).not.toContain("manifest.receiptRecovery");
   const [write, attest, upload] = publish.steps.slice(initializeIndex + 1, initializeIndex + 4);
   expect(write).toMatchObject({ id: "approval_receipt" });
   expect(write?.run).toContain("release-approval-receipt.mjs create");
@@ -83,6 +95,46 @@ it("attests and uploads the gated parent receipt before dispatching children", (
     path: "${{ runner.temp }}/openclaw-release-approval/approval.json",
     "if-no-files-found": "error",
   });
+});
+
+it("binds sealed ClawHub recovery to the current parent before core publication", () => {
+  const publish = requireJob("openclaw-release-publish", "publish");
+  const names = publish.steps.map((step) => step.name);
+  expect(names.indexOf("Seal ClawHub recovery request")).toBeGreaterThan(
+    names.indexOf("Upload release approval receipt"),
+  );
+  expect(names.indexOf("Upload ClawHub recovery request")).toBeLessThan(
+    names.indexOf("Dispatch publish workflows"),
+  );
+  const seal = requireStep(publish, "Seal ClawHub recovery request");
+  containsAll(seal.run, [
+    "original_child_run_id: env.ORIGINAL_CLAWHUB_RUN_ID",
+    "original_child_run_attempt: env.ORIGINAL_CLAWHUB_RUN_ATTEMPT",
+    "plugins: env.PLUGIN_PUBLISH_SCOPE === 'selected' ? env.PLUGINS : ''",
+    "release_publish_run_id: env.GITHUB_RUN_ID",
+    "release_publish_run_attempt: env.GITHUB_RUN_ATTEMPT",
+    "full_release_validation_run_id: env.FULL_RELEASE_VALIDATION_RUN_ID",
+    "full_release_validation_run_attempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT",
+  ]);
+  const upload = requireStep(publish, "Upload ClawHub recovery request");
+  expect(upload.with?.name).toBe(
+    "openclaw-clawhub-recovery-request-${{ github.run_id }}-${{ github.run_attempt }}",
+  );
+  const dispatch = requireStep(publish, "Dispatch publish workflows");
+  containsAll(dispatch.run, [
+    "clawhub-recovery-request/dispatch.json",
+    "dispatch_workflow plugin-clawhub-recovery.yml",
+  ]);
+  const coreScript = expectDefined(requireStep(publish, "Start core npm publication").run);
+  const recoveryWait = coreScript.indexOf("wait_for_run plugin-clawhub-recovery.yml");
+  expect(recoveryWait).toBeGreaterThan(coreScript.indexOf("wait_for_run plugin-npm-release.yml"));
+  expect(recoveryWait).toBeLessThan(coreScript.indexOf('if [[ "${PUBLISH_OPENCLAW_NPM}"'));
+  expect(recoveryWait).toBeLessThan(
+    coreScript.indexOf("dispatch_workflow openclaw-npm-release.yml"),
+  );
+  expect(readFileSync("scripts/lib/release-publish-children.sh", "utf8")).toContain(
+    "plugin-clawhub-recovery.yml) output_key=clawhub_recovery_run_id; env_key=CHILD_CLAWHUB_RECOVERY_RUN_ID",
+  );
 });
 
 it.each([

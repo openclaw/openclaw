@@ -60,6 +60,14 @@ on:
         description: Optional original npm publisher run id; otherwise recovered from the published package provenance
         required: false
         type: string
+      original_clawhub_run_id:
+        description: Optional original sealed ClawHub publisher to recover without repacking
+        required: false
+        type: string
+      original_clawhub_run_attempt:
+        description: Exact original ClawHub publisher attempt, required with original_clawhub_run_id
+        required: false
+        type: string
       npm_dist_tag:
         description: npm dist-tag passed to the plugin and core publishers; extended-stable leaves npm latest unchanged
         required: true
@@ -171,6 +179,8 @@ jobs:
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
           OPENCLAW_NPM_RESUME_RUN_ID: ${{ inputs.openclaw_npm_resume_run_id }}
+          ORIGINAL_CLAWHUB_RUN_ID: ${{ inputs.original_clawhub_run_id }}
+          ORIGINAL_CLAWHUB_RUN_ATTEMPT: ${{ inputs.original_clawhub_run_attempt }}
           DEFER_CLAWHUB: ${{ inputs.defer_clawhub && 'true' || 'false' }}
           WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
@@ -201,6 +211,13 @@ jobs:
             exit 1
           fi
           release_evidence_required=false
+          if [[ -n "${ORIGINAL_CLAWHUB_RUN_ID:-}${ORIGINAL_CLAWHUB_RUN_ATTEMPT:-}" ]]; then
+            if [[ ! "${ORIGINAL_CLAWHUB_RUN_ID:-}" =~ ^[1-9][0-9]*$ || ! "${ORIGINAL_CLAWHUB_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ || "$RELEASE_EVIDENCE_MODE" != full-release-validation || "$PUBLISH_DOCKER_ONLY" == true || "$DEFER_CLAWHUB" == true || -n "$PREPARED_PLUGINS" ]]; then
+              echo "Sealed ClawHub recovery requires an exact original attempt and direct full-release evidence, without Docker-only, defer, or replacement prepared artifacts." >&2
+              exit 1
+            fi
+            release_evidence_required=true
+          fi
           if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" || "${PUBLISH_DOCKER_ONLY}" == "true" || "${PLUGIN_PUBLISH_SCOPE}" == "all-publishable" ]]; then
             release_evidence_required=true
           fi
@@ -759,7 +776,7 @@ jobs:
           if (prepared) {
             appendFileSync(env.GITHUB_OUTPUT, `prepared_docker_run_id=${prepared.preparedRunId}\nprepared_docker_run_attempt=${prepared.preparedRunAttempt}\nprepared_docker_artifact_name=${prepared.preparedArtifactName}\nprepared_docker_manifest_sha256=${prepared.preparedManifestSha256}\n`);
           }
-          if (env.PLUGIN_PUBLISH_SCOPE === 'all-publishable' && env.PUBLISH_DOCKER_ONLY !== 'true') {
+          if (env.PUBLISH_DOCKER_ONLY !== 'true') {
             const descriptor = manifest.publicationArtifacts?.pluginNpm;
             if (!descriptor && manifest.sourceAdmission?.qualificationAdmission) {
               throw new Error('Candidate-owned all-plugin publication requires the original FRV npm artifact; repacking is not allowed.');
@@ -1312,6 +1329,7 @@ jobs:
       signed_tag_object_sha: ${{ needs.resolve_release_target.outputs.signed_tag_object_sha }}
       clawhub_run_id: ${{ steps.children.outputs.plugin_clawhub_run_id }}
       clawhub_bootstrap_run_id: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
+      clawhub_recovery_run_id: ${{ steps.children.outputs.clawhub_recovery_run_id }}
       clawhub_receipt: ${{ steps.clawhub_receipt.outcome }}
     if: ${{ !inputs.publish_docker_only }}
     env:
@@ -1324,6 +1342,8 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag }}
       RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
       PLUGINS: ${{ inputs.plugins }}
+      ORIGINAL_CLAWHUB_RUN_ID: ${{ inputs.original_clawhub_run_id }}
+      ORIGINAL_CLAWHUB_RUN_ATTEMPT: ${{ inputs.original_clawhub_run_attempt }}
       WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
       DEFER_CLAWHUB: ${{ inputs.defer_clawhub && 'true' || 'false' }}
       NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
@@ -1470,6 +1490,38 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Seal ClawHub recovery request
+        if: inputs.original_clawhub_run_id != ''
+        env:
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { mkdirSync, writeFileSync } from 'node:fs';
+          const env = process.env;
+          const directory = env.RUNNER_TEMP + '/clawhub-recovery-request';
+          mkdirSync(directory);
+          // Seal the exact GitHub dispatch payload, not a replacement admission.
+          writeFileSync(directory + '/dispatch.json', JSON.stringify({ ref: env.GITHUB_REF_NAME, inputs: {
+            original_child_run_id: env.ORIGINAL_CLAWHUB_RUN_ID,
+            original_child_run_attempt: env.ORIGINAL_CLAWHUB_RUN_ATTEMPT,
+            reason: 'Resume original sealed attempts from parent ' + env.GITHUB_RUN_ID + '/' + env.GITHUB_RUN_ATTEMPT,
+            plugins: env.PLUGIN_PUBLISH_SCOPE === 'selected' ? env.PLUGINS : '',
+            release_publish_run_id: env.GITHUB_RUN_ID,
+            release_publish_run_attempt: env.GITHUB_RUN_ATTEMPT,
+            full_release_validation_run_id: env.FULL_RELEASE_VALIDATION_RUN_ID,
+            full_release_validation_run_attempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
+          } }) + '\n', { flag: 'wx' });
+          NODE
+
+      - name: Upload ClawHub recovery request
+        if: inputs.original_clawhub_run_id != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openclaw-clawhub-recovery-request-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clawhub-recovery-request/dispatch.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Write Windows release approval
         id: windows_approval
         if: ${{ inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' }}
@@ -1570,7 +1622,7 @@ jobs:
           if [[ -n "${PLUGINS// }" ]]; then
             plan_args+=(--plugins "${PLUGINS}")
           fi
-          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" || "${DEFER_CLAWHUB:-false}" == "true" ]]; then
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" || "${DEFER_CLAWHUB:-false}" == "true" || -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" ]]; then
             plan_args+=(--skip-clawhub)
           fi
           if [[ -n "${PREPARED_PLUGINS}" ]]; then
@@ -1766,7 +1818,9 @@ jobs:
             echo "- Release tag: \`${RELEASE_TAG}\`"
             echo "- Release SHA: \`${TARGET_SHA}\`"
             echo "- Release approval: this workflow job"
-            if [[ "${DEFER_CLAWHUB:-false}" == "true" ]]; then
+            if [[ -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" ]]; then
+              echo "- ClawHub: recover original sealed attempts; wait for exact readback before core"
+            elif [[ "${DEFER_CLAWHUB:-false}" == "true" ]]; then
               echo "- ClawHub: deferred to independent recovery; full release remains incomplete"
             elif [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
               echo "- ClawHub: skipped by release track"
@@ -1784,7 +1838,7 @@ jobs:
             if is_stable_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
               echo "- Windows Hub promotion: optional detached child after GitHub publication"
             fi
-            if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
+            if [[ "${WAIT_FOR_CLAWHUB}" == "true" || -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" ]]; then
               echo "- Workflow completion waits for ClawHub"
             else
               echo "- Workflow does not wait for ClawHub; monitor its run separately"
@@ -1855,6 +1909,14 @@ jobs:
           fi
 
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
+          if [[ -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" ]]; then
+            recovery_args=()
+            while IFS= read -r entry; do
+              recovery_args+=(-f "$(jq -r '[.key, .value] | join("=")' <<< "$entry")")
+            done < <(jq -c '.inputs | to_entries[]' "$RUNNER_TEMP/clawhub-recovery-request/dispatch.json")
+            recovery_run_id="$(dispatch_workflow plugin-clawhub-recovery.yml "${recovery_args[@]}")"
+            echo "clawhub_recovery_run_id=${recovery_run_id}" >> "$GITHUB_OUTPUT"
+          fi
           plugin_clawhub_run_id=""
           if [[ "$(jq -r '.normal.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
             clawhub_dispatch_args=()
@@ -1954,7 +2016,11 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ needs.resolve_release_target.outputs.plugin_sdk_api_acknowledgement }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          PREPARED_NPM_ARTIFACT: ${{ needs.resolve_release_target.outputs.plugin_npm_artifact }}
+          PREPARED_NPM_FRV_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          PREPARED_NPM_FRV_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
           CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.children.outputs.plugin_npm_run_id }}
+          CLAWHUB_RECOVERY_RUN_ID: ${{ steps.children.outputs.clawhub_recovery_run_id }}
           CHILD_PLUGIN_CLAWHUB_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_run_id }}
           CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
           CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED: ${{ steps.children.outputs.openclaw_npm_already_published }}
@@ -1970,6 +2036,11 @@ jobs:
           fi
           echo "plugin_npm_completed=true" >> "$GITHUB_OUTPUT"
           echo "plugin_npm_run_id=${plugin_npm_run_id}" >> "$GITHUB_OUTPUT"
+          if [[ -n "${CLAWHUB_RECOVERY_RUN_ID:-}" ]]; then
+            # The recovery owner verifies exact original bytes before succeeding.
+            # Full scope has no selected list, so core waits for the complete roster.
+            wait_for_run plugin-clawhub-recovery.yml "$CLAWHUB_RECOVERY_RUN_ID" "$PARENT_WORKFLOW_SHA" "" true true
+          fi
 
           if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
             echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
@@ -1980,6 +2051,21 @@ jobs:
           if [[ "${CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED}" == "true" ]]; then
             echo "- OpenClaw npm publish: already on npm; resuming postpublish stages" >> "$GITHUB_STEP_SUMMARY"
             exit 0
+          fi
+          # Verify the original complete roster after the child settles. A successful
+          # deferred bootstrap is not proof that its package bytes are public.
+          if [[ -n "${PREPARED_NPM_ARTIFACT:-}" ]]; then
+            node --input-type=module <<'NODE'
+          import { main } from './.release-harness/scripts/plugin-npm-prepared-release.mjs';
+          const env = process.env;
+          await main(['load', '--source-sha', env.TARGET_SHA, '--selection-mode', 'all-publishable',
+            '--npm-dist-tag', env.RELEASE_NPM_DIST_TAG === 'extended-stable' ? 'extended-stable' : 'default',
+            '--require-published', 'true',
+            '--cache-dir', env.RUNNER_TEMP + '/core-roster-downloads',
+            '--output-dir', env.RUNNER_TEMP + '/core-roster-packages',
+            '--output', env.RUNNER_TEMP + '/core-roster.json',
+            '--github-output', env.GITHUB_OUTPUT]);
+          NODE
           fi
           evidence_args=(-f release_evidence_mode="${RELEASE_EVIDENCE_MODE}")
           if [[ "${RELEASE_EVIDENCE_MODE}" == "authorized-beta-focused-v1" ]]; then
@@ -2766,6 +2852,7 @@ jobs:
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           CHILD_PLUGIN_CLAWHUB_RUN_ID: ${{ needs.publish.outputs.clawhub_run_id }}
           CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: ${{ needs.publish.outputs.clawhub_bootstrap_run_id }}
+          CHILD_CLAWHUB_RECOVERY_RUN_ID: ${{ needs.publish.outputs.clawhub_recovery_run_id }}
           CLAWHUB_RECEIPT_OUTCOME: ${{ needs.publish.outputs.clawhub_receipt }}
         run: |
           source scripts/lib/release-publish-children.sh

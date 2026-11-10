@@ -344,6 +344,7 @@ export async function executeClawHubRecoveryManifest({
     }),
   timeoutMilliseconds = 30 * 60 * 1000,
   report = console.error,
+  revalidateAuthority,
 }) {
   const manifest = validateClawHubRecoveryManifest(rawManifest);
   const trimmedReason = reason?.trim();
@@ -395,6 +396,9 @@ export async function executeClawHubRecoveryManifest({
           publication.attemptId,
         ),
       );
+      // Registry observations and conflict waits may outlive the current
+      // parent admission. Retained attempts identify bytes, not live authority.
+      await revalidateAuthority?.();
       started = await requestRecovery(
         `/api/v1/publish/attempts/${encodeURIComponent(entry.attemptId)}/recover`,
         {

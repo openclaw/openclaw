@@ -3,6 +3,12 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  createPublicationAdmission,
+  createPublicationObservations,
+  createPublicationSourceFact,
+} from "../../scripts/full-release-publication-contract.mjs";
+import { releaseExecutionPlanSha256 } from "../../scripts/full-release-validation-policy.mjs";
 import { npmEvidenceArtifactName } from "../../scripts/plugin-npm-evidence-reuse.mjs";
 import {
   PREPARED_NPM_MANIFEST,
@@ -36,7 +42,7 @@ type RequestRecord = {
 // Materialize external GitHub responses before starting any consumer. The
 // subprocess never imports fixture clients or receives an authenticated owner.
 // The recovery graph retains the original Q receipts under a distinct P seal.
-export async function createNpmCliProcessFixture(root: string) {
+export async function createNpmCliProcessFixture(root: string, plugins = "") {
   const f = candidatePublicationFixture();
   const responses: Record<string, ResponseBytes> = {};
   const json = (route: string, value: unknown) => {
@@ -92,7 +98,7 @@ export async function createNpmCliProcessFixture(root: string) {
   };
   producer.artifactName = preparedNpmArtifactName(f.q, producer);
   const policy = "name: immutable npm policy\n";
-  const version = "2026.9.2-beta.1";
+  const version = f.source.projection!.version;
   const packages: Array<{
     extensionId: string;
     packageDir: string;
@@ -163,6 +169,54 @@ export async function createNpmCliProcessFixture(root: string) {
       },
     });
   }
+  const request = Object.fromEntries(
+    Object.entries(f.source).filter(
+      ([key]) =>
+        !["kind", "contract", "status", "inventoryDigest", "projection", "digest"].includes(key),
+    ),
+  );
+  Object.assign(
+    f.source,
+    createPublicationSourceFact(
+      request,
+      { packages: [], platforms: [] },
+      {
+        ...f.source.projection,
+        packages: [
+          ...f.source.projection!.packages,
+          ...packages.map((entry) => ({
+            name: entry.packageName,
+            version: entry.version,
+            targets: ["npm"],
+          })),
+        ].sort((a, b) => a.name.localeCompare(b.name)),
+      },
+    ),
+  );
+  const admission = f.manifest.publicationAdmission!;
+  const observations = createPublicationObservations(f.source, {
+    ...admission.observations,
+    sourceDigest: f.source.digest,
+    npm: [
+      ...admission.observations.npm,
+      ...packages.map((entry) => ({
+        ...admission.observations.npm[0],
+        name: entry.packageName,
+        version: entry.version,
+      })),
+    ].sort((a, b) => a.name.localeCompare(b.name)),
+  });
+  Object.assign(
+    admission,
+    createPublicationAdmission(
+      f.source,
+      observations,
+      admission.binding.artifact,
+      admission.binding.admittedAt,
+    ),
+  );
+  f.plan.sha256 = releaseExecutionPlanSha256(f.plan);
+  f.manifest.executionPlanSha256 = f.plan.sha256;
   const prepared = makeStoredZip({
     [PREPARED_NPM_MANIFEST]: JSON.stringify({
       schema: "openclaw.plugin-npm-prepared/v1",
@@ -336,8 +390,8 @@ export async function createNpmCliProcessFixture(root: string) {
     PREPARED_NPM_ARTIFACT: JSON.stringify(producer),
     PREPARED_NPM_FRV_RUN_ID: recovery.runId,
     PREPARED_NPM_FRV_RUN_ATTEMPT: "1",
-    PREPARED_NPM_SELECTION_MODE: "all-publishable",
-    PREPARED_NPM_PLUGINS: "",
+    PREPARED_NPM_SELECTION_MODE: plugins ? "selected" : "all-publishable",
+    PREPARED_NPM_PLUGINS: plugins,
     PREPARED_NPM_DIST_TAG: "default",
     PREPARED_NPM_EVIDENCE_ID: "",
     PREPARED_NPM_EVIDENCE_DIGEST: "",
@@ -360,6 +414,8 @@ export async function createNpmCliProcessFixture(root: string) {
       process.execPath,
       ["--import", transport, cli, ...args, "--source-sha", f.q, "--github-output", output],
       {
+        // Publisher jobs contain only trusted tooling, not the source extensions.
+        cwd: directory,
         encoding: "utf8",
         timeout: 60_000,
         maxBuffer: 1024 * 1024,
@@ -381,13 +437,15 @@ export async function createNpmCliProcessFixture(root: string) {
     f,
     recovery,
     packages,
+    previewManifest: join(root, "preview-manifest.json"),
     records,
     responses,
     json,
     bytes,
     save,
     run,
-    authorize: (invocation: string, replay = true) => run(invocation, ["authorize"], replay),
+    authorize: (invocation: string, replay = true) =>
+      run(invocation, ["authorize", "--package", JSON.stringify(packages[0])], replay),
     // Match the workflow: load takes its roster selection from the CLI option,
     // while the environment selection binds the adoption/evidence request.
     preview: (invocation = "preview") =>

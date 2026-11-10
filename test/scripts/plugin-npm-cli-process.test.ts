@@ -9,13 +9,15 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // publication owner and cannot establish that the uploaded carrier is sufficient.
 // Only two identical consumers run; the 101-consumer report below is extrapolated.
 it("replays recovery-backed preview evidence through two CLI consume/authorize pairs", async () => {
-  const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-recovery-"));
+  const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-recovery-"), "@openclaw/alpha");
   const success = (result: ReturnType<typeof f.preview>) => {
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
   };
   success(f.preview());
   const carrier = f.sealCarrier();
+  expect(JSON.parse(readFileSync(f.previewManifest, "utf8")).packages).toHaveLength(2);
+  expect(carrier.binding.plugins).toEqual(["@openclaw/alpha"]);
   expect(carrier.binding.frvRunId).toBe("9900");
   expect(carrier.binding.childRunId).toBe("800");
   expect(carrier.binding.childRunAttempt).toBe(2);
@@ -133,7 +135,7 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
     expect(categoriesByProcess[name]!.immutable, name + " reacquired immutable evidence").toBe(0);
     const calls = requests(name);
     expect(calls, name + " total GitHub requests").toHaveLength(
-      name.startsWith("consume") ? 135 : 132,
+      name.startsWith("consume") ? 137 : 134,
     );
     // One owner refreshes original qualification; retain the later effect-boundary checks.
     for (const [route, count] of [
@@ -214,6 +216,18 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
     expect(result.stderr).not.toContain("Unconfigured external fixture request");
     expect(existsSync(result.output)).toBe(false);
   };
+  for (const [label, entry] of [
+    ["outside-subset", f.packages[1]],
+    ["wrong-version", { ...f.packages[0], version: "2026.9.3-beta.1" }],
+    [
+      "tampered-origin",
+      { ...f.packages[0], artifact: { ...f.packages[0]!.artifact, runAttempt: 2 } },
+    ],
+  ] as const) {
+    const result = f.run(label, ["authorize", "--package", JSON.stringify(entry)]);
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("authenticated current operation");
+  }
   // Keep the authentic carrier fixed while current remote state changes.
   for (const [route, changed, pattern] of [
     ["actions/artifacts/6201", { expired: true }, /expired|artifact/iu],
