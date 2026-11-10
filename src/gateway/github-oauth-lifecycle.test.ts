@@ -26,6 +26,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { jsonResponse } from "../test-helpers/http.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -173,12 +174,15 @@ function setSelectedIdentity(
 }
 
 function createLifecycle(
-  options: { getPersistedConfig?: () => Promise<OpenClawConfig> } = {},
+  options: {
+    getPersistedConfig?: () => Promise<OpenClawConfig>;
+    warn?: (message: string) => void;
+  } = {},
 ): GitHubOAuthLifecycle {
   const lifecycle = createGitHubOAuthLifecycle({
     getConfig: () => currentConfig,
     getPersistedConfig: options.getPersistedConfig ?? (async () => currentConfig),
-    warn: vi.fn(),
+    warn: options.warn ?? vi.fn(),
     scheduler: createTestGatewayScheduler(time.clock),
   });
   lifecycleInstances.push(lifecycle);
@@ -846,6 +850,75 @@ describe("GitHub OAuth refresh and maintenance", () => {
     mocks.refreshToken.mockResolvedValueOnce({ status: "error", code: "bad_refresh_token" });
     await lifecycle.refreshEffectiveIdentity("main");
     await expectStoredOAuth(OLD_PROFILE, { refreshFailure: "expired" });
+  });
+
+  it("retries after an outage that never reached GitHub and asks for reconnection after an ambiguous one", async () => {
+    const warn = vi.fn<(message: string) => void>();
+    currentConfig = configForScope("system", identity(OLD_PROFILE, { oauth: true, author: true }));
+    const lifecycle = createLifecycle({ warn });
+    const client = await vi.importActual<typeof import("../agents/github-oauth-client.js")>(
+      "../agents/github-oauth-client.js",
+    );
+    mocks.refreshToken.mockImplementation(client.refreshGitHubOAuthToken);
+    const network = vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new TypeError("fetch failed", {
+        cause: Object.assign(new Error("getaddrinfo ENOTFOUND github.com"), {
+          code: "ENOTFOUND",
+          syscall: "getaddrinfo",
+        }),
+      }),
+    );
+
+    await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
+    await lifecycle.refreshEffectiveIdentity("main");
+    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toEqual({
+      state: "valid",
+      record: expect.not.objectContaining({ refreshClaim: expect.anything() }),
+    });
+    await expectStoredOAuth(OLD_PROFILE, { refreshFailure: "failed" });
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("will retry"));
+
+    network.mockResolvedValue(
+      jsonResponse({
+        access_token: "access-token-after-outage",
+        token_type: "bearer",
+        scope: "gist read:org repo workflow",
+        expires_in: 28_800,
+        refresh_token: "refresh-token-after-outage",
+        refresh_token_expires_in: 15_897_600,
+      }),
+    );
+    await lifecycle.refreshEffectiveIdentity("main");
+    const retryClaim = mocks.writeOAuthRecord.mock.calls
+      .map(([, record, expected]) => ({ record, expected }))
+      .findLast(({ record, expected }) => record.refreshClaim && !expected?.refreshClaim);
+    expect(retryClaim?.expected?.refreshFailure).toBe("failed");
+    expect(retryClaim?.record.refreshFailure).toBeUndefined();
+    expect(refreshedTokens).toEqual(["access-token-after-outage"]);
+    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toEqual({
+      state: "valid",
+      record: expect.objectContaining({ refreshToken: "refresh-token-after-outage" }),
+    });
+    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toEqual({
+      state: "valid",
+      record: expect.not.objectContaining({ refreshFailure: expect.anything() }),
+    });
+
+    await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
+    network.mockRejectedValue(
+      new TypeError("fetch failed", {
+        cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET", syscall: "read" }),
+      }),
+    );
+    await lifecycle.refreshEffectiveIdentity("main");
+    await expectStoredOAuth(OLD_PROFILE, {
+      refreshFailure: "failed",
+      refreshClaim: expect.any(String),
+    });
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("reconnect GitHub"));
+    network.mockClear();
+    await lifecycle.refreshEffectiveIdentity("main");
+    expect(network).not.toHaveBeenCalled();
   });
 
   it("preserves an accepted rotation without publishing a superseded profile after config changes", async () => {
