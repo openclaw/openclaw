@@ -105,13 +105,20 @@ export function isAtomicReplacePermissionError(error: unknown): boolean {
   return code === "EACCES" || code === "EPERM" || code === "EEXIST" || code === "EROFS";
 }
 
-async function writeExistingMemoryInPlace(params: {
+export async function writeExistingMemoryInPlace(params: {
   filePath: string;
-  expectedContent: string;
+  expectedContent?: string;
   content: string;
   conflictMessage?: string;
+  // Revalidated immediately before the write effects: the awaited preimage
+  // read and open above can span a revocation of the caller's authority.
+  assertBeforeMutation?: () => void;
 }): Promise<boolean> {
-  if ((await readMemoryContent(params.filePath)) !== params.expectedContent) {
+  // The preimage is read up front so a partial write can restore it. When the
+  // caller knows the content it planned from, a mismatch is a conflict; without
+  // it, the current bytes are the preimage (DREAMS.md fallback path).
+  const currentContent = await readMemoryContent(params.filePath);
+  if (params.expectedContent !== undefined && currentContent !== params.expectedContent) {
     throw new MemoryWriteConflictError(params.conflictMessage);
   }
   let handle: Awaited<ReturnType<typeof fs.open>>;
@@ -121,12 +128,13 @@ async function writeExistingMemoryInPlace(params: {
     return false;
   }
   try {
+    params.assertBeforeMutation?.();
     await handle.writeFile(params.content, { encoding: "utf-8" });
     await handle.truncate(Buffer.byteLength(params.content));
     await handle.sync();
     return true;
   } catch (error) {
-    const original = Buffer.from(params.expectedContent, "utf-8");
+    const original = Buffer.from(currentContent, "utf-8");
     try {
       await writeFileWindowFully(handle, original, 0);
       await handle.truncate(original.length);
