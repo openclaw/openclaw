@@ -250,6 +250,8 @@ it.for([
   "retained-config-downgrade",
   "retained-channel-config-downgrade",
   "unrelated-agent-config",
+  "unrelated-provider-auth",
+  "retained-provider-auth",
   "remapped-workspace",
   "remapped-guarded",
   "remapped-default",
@@ -291,7 +293,7 @@ it.for([
       }
       const remapped = change.startsWith("remapped-");
       const toolOnly = change === "tool-only-delivery";
-      const unrelatedConfig = change === "unrelated-agent-config";
+      const unrelatedConfig = change.startsWith("unrelated-");
       const producerMode = toolOnly
         ? "full"
         : change === "remapped-workspace"
@@ -339,7 +341,16 @@ it.for([
             if (unrelatedConfig) {
               setRuntimeConfigSnapshot({
                 ...config,
-                agents: { ...config.agents, entries: { ...config.agents?.entries, other: {} } },
+                ...(change === "unrelated-agent-config"
+                  ? {
+                      agents: {
+                        ...config.agents,
+                        entries: { ...config.agents?.entries, other: {} },
+                      },
+                    }
+                  : {
+                      auth: { profiles: { unrelated: { provider: "unrelated", mode: "api_key" } } },
+                    }),
               });
             }
             const write = tools.find((tool) => tool.name === "write");
@@ -375,6 +386,18 @@ it.for([
                   ...config,
                   channels: { discord: { enabled: true, actions: { stickers: false } } },
                 });
+              } else if (change === "retained-provider-auth") {
+                setRuntimeConfigSnapshot({
+                  ...config,
+                  auth: {
+                    profiles: {
+                      selected: {
+                        provider: expectDefined(params.provider, "selected provider"),
+                        mode: "api_key",
+                      },
+                    },
+                  },
+                });
               } else {
                 config.tools = { ...config.tools, deny: ["write"] };
                 setRuntimeConfigSnapshot(config);
@@ -401,6 +424,9 @@ it.for([
                 }
                 expect(String(error)).toMatch(/authority|permission|active|configuration changed/i);
                 retainedWriteRejected = true;
+                if (change === "retained-provider-auth") {
+                  throw error;
+                }
               }
             }
             return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
@@ -553,6 +579,14 @@ it.for([
           change === "retained-tool-downgrade" ? "read-only" : "full",
         );
         expect(outcome.executionStarted).toBe(true);
+        if (change === "retained-provider-auth") {
+          expect(outcome).toMatchObject({
+            status: "failed",
+            terminalOutcome: {
+              error: "agent harness host capability is no longer active",
+            },
+          });
+        }
       } else {
         expect(outcome.status, outcome.error).toBe("completed");
       }

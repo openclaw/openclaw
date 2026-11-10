@@ -50,7 +50,7 @@ export function captureSessionEventConfigPolicy(
   agentId: string,
   job?: CronStoredJob,
 ) {
-  const captured = job ? captureRuntimeConfig(config) : config;
+  const captured = captureRuntimeConfig(config);
   const publication = getRuntimeConfigSnapshotMetadata();
   let checkedConfig = config;
   let checkedPublication = publication;
@@ -61,12 +61,10 @@ export function captureSessionEventConfigPolicy(
       return changed;
     },
     selectModel(selection: PolicySelection) {
-      if (job) {
-        matches = captureSessionEventConfigRelevance(captured, agentId, job, selection);
-        // A fallback may consume auth that an earlier provider did not need.
-        checkedConfig = config;
-        checkedPublication = publication;
-      }
+      matches = captureSessionEventConfigRelevance(captured, agentId, job, selection);
+      // A fallback may consume auth that an earlier provider did not need.
+      checkedConfig = config;
+      checkedPublication = publication;
     },
     assertCurrent(current: OpenClawConfig, routeChannels: Array<string | undefined>) {
       const currentPublication = getRuntimeConfigSnapshotMetadata();

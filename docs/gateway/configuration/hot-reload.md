@@ -193,20 +193,28 @@ Overlapping model or credential changes use the newer write's runtime applicatio
 superseding an earlier publication does not itself require a Gateway restart.
 
 Auth-profile edits refresh credential facts without replacing unchanged plugin
-instances. A scheduled session event that has selected its model keeps running
-when another provider's auth profile changes. Changes to its own provider's auth
-policy still invalidate the captured policy. Before execution has started, the
-session-event owner can re-admit the same occurrence under current policy, with
+instances. A session event, scheduled or unscheduled, that has selected its model
+keeps running when another provider's auth profile or auth order changes. Changes
+to its selected provider's auth policy, auth aliases, or profile binding still
+invalidate the captured policy. Before model selection, all auth and model changes
+remain relevant. Before execution has started, the session-event owner can
+re-admit the same occurrence under current policy, with
 at most two retries. Once a hook, model, or delivery may have performed work, it
 does not replay the occurrence; a failed scheduled run remains visible in cron
 history and the next schedule is a separate run.
 
-Logging changes never revoke scheduled work. Once a scheduled turn selects its
+Logging changes never revoke session events. Once a session event selects its
 model, edits to another provider's model configuration also leave it running.
 Adding models to the allowlist preserves the turn while its selected model remains
 allowed; removing that permission or changing its provider's configuration still
 rechecks the occurrence under current policy. These unrelated edits do not consume
 the occurrence's bounded readmission attempts.
+
+When the selected model uses the OpenClaw runtime rather than CLI execution,
+MCP server edits are checked by the MCP owner instead of revoking the entire
+session event. Native and CLI runtimes retain the captured MCP configuration
+check. This applies to both scheduled and unscheduled events and never enables
+replay of started work.
 
 Every session event, including a background command's completion follow-up,
 compares only the configuration its own agent uses: shared settings, agent
@@ -217,8 +225,7 @@ configuration. Adding or editing another agent, including that agent's secret
 references, leaves a running
 event alone, and so do logging changes. A change to the event's own agent, the
 agent defaults, or shared settings still rechecks the occurrence under current
-policy. Only scheduled events narrow auth, model-provider, and MCP changes to
-their selected model; other session events treat any such change as relevant.
+policy.
 
 Session detail and process-list reads that encounter a retired model-catalog
 callback refresh their catalog binding once before preparing the response.

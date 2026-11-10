@@ -593,12 +593,10 @@ function enqueueSessionEventAttempt(
         },
       },
       replyOptions: {
-        onModelSelected: options.scheduledAutomation
-          ? (selection) => {
-              configPolicy.selectModel(selection);
-              assertEffectCurrent();
-            }
-          : undefined,
+        onModelSelected: (selection) => {
+          configPolicy.selectModel(selection);
+          assertEffectCurrent();
+        },
         sessionPrincipalTurn:
           !options.scheduledAutomation &&
           !isCronSessionKey(sessionKey) &&
