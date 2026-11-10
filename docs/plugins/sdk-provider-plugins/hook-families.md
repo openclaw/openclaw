@@ -92,3 +92,18 @@ Some stream helpers stay provider-local on purpose. `@openclaw/anthropic-provide
 
 The same package-root pattern also backs `@openclaw/openai-provider` (provider builders, default-model helpers, realtime provider builders) and `@openclaw/openrouter-provider` (provider builder plus onboarding/config helpers).
 </Accordion>
+
+### Serialized Converse transport
+
+`createConverseStreamFn` from `openclaw/plugin-sdk/provider-stream-family` reuses
+the Amazon Bedrock plugin's public execution artifact without loading its SDK
+until a stream is requested. Its `ConverseProxyTransportFactory` resolves one
+selected proxy endpoint and credential per request. The returned `send` callback
+receives the final serialized method, path, query, headers and body and returns
+complete response bytes, status and headers. It owns guarded HTTP dispatch,
+credential authority, bounds and cancellation; it must not resolve AWS credentials.
+
+The native runtime retains replay conversion, SDK serialization, EventStream
+decoding, Claude delivery quarantine, usage and client cleanup. Proxy mode uses
+only the supplied bearer credential and one SDK attempt. Direct Bedrock streams
+continue using the native provider's existing auth and transport policy.
