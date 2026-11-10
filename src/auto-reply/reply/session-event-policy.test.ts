@@ -113,16 +113,19 @@ it.each([
       new Map([["plugins.entries.advisor.config.token", "ADVISOR_TOKEN"]]),
     ),
   );
-  const check = captureScheduledSessionEventConfigPolicy(
-    captureRuntimeConfigWithSource(before, before),
-    "main",
-    makeCronJob({}),
-  );
-  expect(check(captureRuntimeConfigWithSource(after, after), [])).toBe(true);
-  // Policy outside the plugin owner still revokes the occurrence.
-  expect(
-    check(captureRuntimeConfigWithSource({ ...after, tools: { deny: ["exec"] } }, after), []),
-  ).toBe(false);
+  // Scheduled and unscheduled session events share this relevance check.
+  for (const job of [makeCronJob({}), undefined]) {
+    const check = captureSessionEventConfigRelevance(
+      captureRuntimeConfigWithSource(before, before),
+      "main",
+      job,
+    );
+    expect(check(captureRuntimeConfigWithSource(after, after), [])).toBe(true);
+    // Policy outside the plugin owner still revokes the occurrence.
+    expect(
+      check(captureRuntimeConfigWithSource({ ...after, tools: { deny: ["exec"] } }, after), []),
+    ).toBe(false);
+  }
 });
 
 it.each([
