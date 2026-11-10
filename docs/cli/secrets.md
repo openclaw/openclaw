@@ -33,6 +33,8 @@ openclaw secrets reload
 
 If your plan includes `exec` SecretRefs/providers, pass `--allow-exec` on both the dry-run and write `apply` commands. If the closing `audit --check` still reports plaintext findings, update the remaining reported target paths and rerun the audit.
 
+Complete-audit gating: without `--allow-exec`, the audit header reads `UNMEASURED — N exec resolvability check(s) skipped` and the JSON reports `resolution.resolvabilityComplete: false` with `resolution.skippedExecRefs: N`. Treat that run as unmeasured, not healthy: re-run with `--allow-exec` before using the result as a CI gate or a restart readiness signal. Exit codes are unchanged (`1` on findings, `2` on unresolved refs).
+
 Exit codes for CI/gates:
 
 - `audit --check` returns `1` on findings.
