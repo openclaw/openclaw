@@ -257,6 +257,14 @@ suite.define(() => {
           ).toEqual({ focused: true, selection: [0, 13], insideLink: false });
         }
         if (surface !== "menu") {
+          expect(
+            await name.evaluate((element) =>
+              element.dispatchEvent(
+                new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+              ),
+            ),
+          ).toBe(true);
+          await name.click({ button: "right" });
           expect(await dialog.count()).toBe(0);
           await name.fill("Discarded draft");
           await name.press("Escape");

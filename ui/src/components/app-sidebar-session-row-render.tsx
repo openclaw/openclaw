@@ -136,12 +136,18 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const indicators = renderSidebarSessionIndicators(host, session, display, icon);
   const { running, stateId, metaId, pullRequest, childrenExpanded } = indicators;
   const controls: CatalogRowControls = {};
-  const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
+  const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (
+    event,
+  ) => {
+    if (event.target instanceof HTMLInputElement) {
+      return;
+    }
     handleContextMenuEvent(event, controls.link ?? null, (trigger, x, y) => {
       if (!host().sidebarSnapshot) {
         host().sidebarMenus.openSessionMenu(actionSession(), x, y, trigger);
       }
     });
+  };
   const pinLabel = createMemo(() => {
     return t(personallyPinned() ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   });
