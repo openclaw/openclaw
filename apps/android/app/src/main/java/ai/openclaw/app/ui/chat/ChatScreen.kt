@@ -2503,8 +2503,7 @@ internal fun ChatVoiceTranscriptBlock(
             topLeft = Offset(if (layoutDirection == LayoutDirection.Rtl) size.width - barWidth else 0f, 0f),
             size = Size(barWidth, size.height),
           )
-        }
-        .padding(start = 10.dp),
+        }.padding(start = 10.dp),
     verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
     ChatUserMessageText(
