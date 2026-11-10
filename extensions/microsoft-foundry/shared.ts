@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolveClaudeFable5ModelIdentity,
+  supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
   type ModelApi,
@@ -225,7 +226,7 @@ function resolveFoundryModelTokenLimits(value?: string | null): {
   }
   if (
     normalized &&
-    (supportsClaudeAdaptiveThinking({ id: normalized }) ||
+    (supportsClaude1MContext({ id: normalized }) ||
       requiresFoundryMandatoryAdaptiveClaudeThinking(normalized))
   ) {
     return { contextWindow: 1_000_000, maxTokens: 128_000 };

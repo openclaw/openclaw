@@ -28,6 +28,7 @@ it.each([
   ["claude-sonnet-4.6", "anthropic-messages", "entra-id", 1_000_000, 128_000],
   ["claude-sonnet-4.5", "anthropic-messages", "entra-id", 200_000, 64_000],
   ["claude-opus-4.1", "anthropic-messages", "entra-id", 200_000, 32_000],
+  ["claude-opus-6", "anthropic-messages", "api-key", 128_000, 16_384],
 ] as const)(
   "uses native limits for %s",
   (modelNameHint, api, authMethod, contextWindow, maxTokens) => {
