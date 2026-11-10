@@ -13,8 +13,6 @@ import {
   markdownSessionLinkFromKeyboardEvent,
 } from "../../../components/markdown-session-links.ts";
 import { handleMarkdownTableInteraction } from "../../../components/markdown-tables.ts";
-import { LoadingState } from "../../../components/solid/loading-state.tsx";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import type { TemplateReference } from "../../../components/template-reference-surface.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
@@ -36,7 +34,7 @@ import {
   subscribeExpansionState,
 } from "../chat-thread.ts";
 import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
-import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
+import { ChatConversationLoading, renderChatLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
@@ -97,38 +95,38 @@ type ChatThreadInput = {
 };
 
 export function ChatThread(input: ChatThreadInput) {
+  const mobile = useContext(ChatConversationMobile);
   // Undefined waits for the composer frame; false prepares history; true admits it.
   // Restored snapshots join the header and composer in their first visible frame.
-  const [ready, setReady] = createSignal<boolean | undefined>(
-    input.props.restoring ? true : undefined,
-  );
+  const [ready, setReady] = createSignal<boolean | undefined>(input.props.restoring || undefined);
   const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   // Match boot admission: task yields delay Firefox's initial readiness.
-  const prepareHistory = "chrome" in window;
-  let preparation: Generator<void> | undefined;
+  const preparation =
+    "chrome" in window &&
+    prepareChatTranscript(
+      () => input.props,
+      (key) => input.transcript.renderSession(key, (session) => session),
+    );
   const reveal = createTimeout(
     () => {
       try {
-        if (prepareHistory) {
-          preparation ??= prepareChatTranscript(
-            () => input.props,
-            (key) => input.transcript.renderSession(key, (session) => session),
-          );
-          if (!preparation.next().done) {
-            reveal.schedule();
-            return;
-          }
+        if (preparation && !preparation.next().done) {
+          reveal.schedule();
+          return;
         }
       } catch {
         // Replay failed preparation under the existing render error boundary.
       }
-      preparation = undefined;
       setReady(true);
     },
     () =>
       ready() === false &&
       isPresented() &&
-      (!input.props.loading || input.props.messages.length > 0)
+      (!input.props.loading ||
+        input.props.messages.length ||
+        input.props.queue.length ||
+        input.props.pendingInputs?.length ||
+        input.props.runActive)
         ? 0
         : undefined,
   );
@@ -141,13 +139,12 @@ export function ChatThread(input: ChatThreadInput) {
             if (ready() === undefined) {
               scheduleLayout(
                 reveal,
-                () => () => (prepareHistory ? setReady(false) : reveal.schedule(0)),
+                () => () => (preparation ? setReady(false) : reveal.schedule(0)),
               );
             }
             return () => {
               cancelLayout(reveal);
               reveal.cancel();
-              preparation = undefined;
             };
           });
           return (
@@ -158,11 +155,18 @@ export function ChatThread(input: ChatThreadInput) {
                 <div
                   class={[
                     "chat-thread",
-                    { "chat-thread--annotations": input.props.commentAttachments !== undefined },
+                    {
+                      "chat-thread--annotations": input.props.commentAttachments !== undefined,
+                      "chat-thread--route-loading": mobile() && input.props.routeLoadingSkeleton,
+                    },
                   ]}
                   ref={[elementRef(input.bindViewport)]}
                 >
-                  <ChatConversationLoading route />
+                  {input.props.loading ? (
+                    renderChatLoading(mobile(), input.props.routeLoadingSkeleton)
+                  ) : (
+                    <ChatConversationLoading route />
+                  )}
                 </div>
               )}
             </>
@@ -218,8 +222,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
-  const transcript = createMemo(() => input.transcript);
-  const geometry = createMemo(() => projectOwner(transcript(), (owner) => owner));
+  const geometry = createMemo(() => projectOwner(input.transcript, (owner) => owner));
   const presentation = createMemo(
     () =>
       input.transcript.renderSession(input.props.sessionKey, (session) => ({
@@ -262,17 +265,15 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
         input.props.announceTranscript !== false && !projection.searchOpen && !input.props.loading,
       );
     }
-    return { session, projection };
+    return projection;
   });
-  const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
-  const isEmpty = createMemo(() => current().projection.isEmpty);
-  const searchOpen = createMemo(() => current().projection.searchOpen);
-  const routeLoading = createMemo(() => input.props.routeLoadingSkeleton && showLoadingSkeleton());
+  const showLoadingSkeleton = createMemo(() => current().showLoadingSkeleton);
+  const routeLoading = () => input.props.routeLoadingSkeleton && showLoadingSkeleton();
   const commentPins = () =>
     input.props.commentAttachments?.some((attachment) => attachment.selectionAnnotation);
   const prefetchRef = createLinkReaderPrefetchRef(() => [
     input.props.sessionKey,
-    current().projection.showLoadingSkeleton ? false : (input.props.transcriptVisible ?? true),
+    showLoadingSkeleton() ? false : (input.props.transcriptVisible ?? true),
     Boolean(input.props.gatewayClient?.connected),
   ]);
   const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
@@ -296,39 +297,29 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   const contents = createMemo(() => {
     // Native range changes redraw this island without preparing the whole pane.
     geometry().read();
-    if (routeLoading() && mobile()) {
-      return <ChatConversationLoading route />;
+    if (showLoadingSkeleton()) {
+      return renderChatLoading(mobile(), routeLoading(), sentinel());
     }
-    if (showLoadingSkeleton() || isEmpty()) {
+    if (current().isEmpty) {
       return (
         <div class="chat-thread-inner">
           {sentinel()}
-          {isEmpty() && !showLoadingSkeleton() ? historyHeader()?.content : undefined}
-          {showLoadingSkeleton() ? (
-            mobile() ? (
-              <ChatConversationLoading route={false} />
-            ) : routeLoading() ? (
-              <LoadingState messagesOnly />
-            ) : (
-              <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
-            )
-          ) : undefined}
-          {isEmpty() && !showLoadingSkeleton() && !searchOpen() ? (
-            <div class="agent-chat__empty">{t("chat.thread.noMessages")}</div>
-          ) : undefined}
-          {isEmpty() && searchOpen() ? (
+          {historyHeader()?.content}
+          {current().searchOpen ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>
-          ) : undefined}
+          ) : (
+            <div class="agent-chat__empty">{t("chat.thread.noMessages")}</div>
+          )}
         </div>
       );
     }
-    return current().projection.renderRows(sentinel(), historyHeader());
+    return current().renderRows(sentinel(), historyHeader());
   });
-  const announcement = createMemo(() => {
+  const announcement = () => {
     // The row owner records the accepted announcement while rendering its rows.
     contents();
-    return current().session.liveAnnouncementText;
-  });
+    return presentation().session.liveAnnouncementText;
+  };
   return (
     <>
       <Show when={input.presented && root()}>
@@ -374,7 +365,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
         class={[
           "chat-thread",
           {
-            "chat-thread--direct": current().projection.isDirectThread,
+            "chat-thread--direct": current().isDirectThread,
             "chat-thread--route-loading": mobile() && routeLoading(),
             "chat-thread--comment-pins": commentPins(),
             "chat-thread--annotations": input.props.commentAttachments !== undefined,
@@ -389,10 +380,10 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
         onPointerOver={handleTemplateReference}
         onFocusIn={(event) => {
           handleTemplateReference(event);
-          current().session.handleFocusIn(event);
+          presentation().session.handleFocusIn(event);
         }}
         onFocusOut={(event) => {
-          current().session.handleFocusOut(event);
+          presentation().session.handleFocusOut(event);
         }}
         onKeyDown={(event) => {
           if (
@@ -425,10 +416,10 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
             input.props.onOpenSessionLink?.(sessionTarget);
             return;
           }
-          input.props.onHistoryIntent?.(event);
+          historyIntent(event);
         }}
-        onTouchEnd={(event) => input.props.onHistoryIntent?.(event)}
-        onTouchCancel={(event) => input.props.onHistoryIntent?.(event)}
+        onTouchEnd={historyIntent}
+        onTouchCancel={historyIntent}
         onClick={(event) => {
           handleMarkdownCodeBlockClick(event);
           handleMarkdownTableInteraction(event);
@@ -487,8 +478,8 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
           {announcement()}
         </span>
         <ChatPositionRail
-          positions={current().projection.positionIndex}
-          transcript={current().session}
+          positions={current().positionIndex}
+          transcript={presentation().session}
           assistant={{
             ...resolveAssistantDisplayAvatar(input.props),
             name: input.props.assistantName,
@@ -500,7 +491,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
             <Loading>
               <ChatCommentPins
                 threadState={threadState}
-                transcript={current().session}
+                transcript={presentation().session}
                 attachments={input.props.commentAttachments}
                 sessionKey={input.props.sessionKey}
                 disabled={input.props.commentsDisabled ?? false}

@@ -93,25 +93,23 @@ export function* prepareChatTranscript(
   getSession: (key: string) => ChatTranscriptSession,
 ) {
   let preparedItems: ReturnType<typeof buildCachedChatItems> | undefined;
-  let preparedGeneration = -1;
-  while (true) {
-    const props = getProps();
-    if (props.messages.length <= 512) {
-      return;
-    }
+  let preparedGeneration: number | undefined;
+  for (let props = getProps(); props.messages.length > 512; props = getProps()) {
     const input = chatTranscriptInputs(props, getSession(props.sessionKey));
     // Freeze the live getter exactly as the stream source does before caching it.
     const items = buildCachedChatItems({ ...input.chatItemsInput });
     const generation = getChatItemsGeneration(items);
-    if (items !== preparedItems || generation !== preparedGeneration) {
-      preparedItems = items;
-      preparedGeneration = generation;
-      yield;
-      continue;
+    if (items === preparedItems && generation === preparedGeneration) {
+      projectTranscriptIndex(
+        chatTranscriptChain(items, props, input.searchFiltering),
+        getExpandedToolCards(props.sessionKey),
+        props,
+      );
+      return;
     }
-    const chain = chatTranscriptChain(items, props, input.searchFiltering);
-    projectTranscriptIndex(chain, getExpandedToolCards(props.sessionKey), props);
-    return;
+    preparedItems = items;
+    preparedGeneration = generation;
+    yield;
   }
 }
 

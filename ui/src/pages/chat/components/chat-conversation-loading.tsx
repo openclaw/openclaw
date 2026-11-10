@@ -1,9 +1,30 @@
+import type { JSX } from "@solidjs/web";
 import { For } from "solid-js";
+import { LoadingState } from "../../../components/solid/loading-state.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import "../../../styles/chat/conversation-notices.css";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+export function renderChatLoading(mobile: boolean, route?: boolean, children?: JSX.Element) {
+  if (mobile && route) {
+    return <ChatConversationLoading route />;
+  }
+  return (
+    <div class="chat-thread-inner">
+      {children}
+      {mobile ? (
+        <ChatConversationLoading route={false} />
+      ) : route ? (
+        <LoadingState messagesOnly />
+      ) : (
+        <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
+      )}
+    </div>
+  );
+}
 
 function Lines(props: { widths: number[] }) {
   return (

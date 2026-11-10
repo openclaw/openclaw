@@ -176,6 +176,11 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   await vi.advanceTimersByTimeAsync(0);
   flush();
   expect(preparing.container.querySelector(".chat-virtual-row")).toBeNull();
+  expect(preparing.container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
+  preparing.update({
+    chat: { ...preparing.chat, messages: [], loading: true, routeLoadingSkeleton: true },
+  });
+  expect(preparing.container.querySelector(".lazy-view-state--loading")).not.toBeNull();
   preparing.update({ chat: preparing.chat });
   await vi.advanceTimersByTimeAsync(0);
   flush();
@@ -193,4 +198,18 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   expect(preparing.container.textContent).toContain("Replacement history");
   expect(preparing.container.textContent).not.toContain("Initial history");
   preparing.unmount();
+
+  const pending = mountPane("mount-pending", false, 0);
+  pending.update({
+    chat: {
+      ...pending.chat,
+      loading: true,
+      queue: [
+        { id: "first", text: "First turn", createdAt: 1, sendState: "failed", sendAttempts: 1 },
+      ],
+    },
+  });
+  await settlePaints();
+  expect(pending.container.textContent).toContain("First turn");
+  pending.unmount();
 });
