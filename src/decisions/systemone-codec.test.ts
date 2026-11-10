@@ -79,6 +79,30 @@ describe("System One wire codec", () => {
     },
   );
 
+  it("preserves native refusals and optional confidence without inventing estimates", () => {
+    const response = wire();
+    const result = decodeSystemOneResponse(
+      batch,
+      {
+        ...response,
+        answers: {
+          b: { type: "refusal" },
+          c: { type: "choice", choice: "a", probabilities: { a: 0.4, b: 0.6 } },
+          s: { type: "score", score: 0.6, probabilities: { "0": 0.4, "1": 0.6 }, confidence: null },
+        },
+      },
+      { confidence: "optional" },
+    );
+    expect(validateDecisionResultV2(batch, result)).toBe(true);
+    expect(result).toMatchObject({
+      answers: {
+        b: { type: "error", code: "provider-error", providerCode: "refusal" },
+        c: { type: "choice", choice: "a", probabilities: { a: 0.4, b: 0.6 } },
+        s: { type: "score", score: 0.6, probabilities: [0.4, 0.6], confidence: null },
+      },
+    });
+  });
+
   it.each([undefined, null, -0.1, 1.1, Number.NaN, "0.5"])(
     "rejects malformed or absent required confidence: %s",
     (confidence) => {

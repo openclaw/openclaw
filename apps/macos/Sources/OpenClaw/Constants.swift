@@ -10,6 +10,9 @@ var gatewayLaunchdLabel: String {
 let nodeLaunchdLabel = "ai.openclaw.node"
 let onboardingVersionKey = "openclaw.onboardingVersion"
 let onboardingSeenKey = "openclaw.onboardingSeen"
+/// Fingerprint of the config file's `gateway` section at the moment the user chose "Set up later".
+/// While it matches the file, the app has no primary Gateway; any other writer's edit retires it.
+let primaryGatewayDeferredFingerprintKey = "openclaw.primaryGatewayDeferredFingerprint"
 let onboardingSystemAgentPendingKey = "openclaw.onboardingSystemAgentPending"
 // Pre-rename releases persisted pending activations under the Crestodian key.
 let onboardingSystemAgentPendingRetiredKey = "openclaw.onboardingCrestodianPending"

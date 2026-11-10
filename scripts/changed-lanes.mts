@@ -8,6 +8,7 @@ import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { isChangedTsgoCoreTestInput } from "./lib/tsgo-core-test-shards.mts";
+import { readWindowsTargets } from "./lib/windows-test-targets.mts";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
@@ -166,7 +167,7 @@ export function getChangedCoreTestPaths(result: ChangedLaneResult): string[] | u
 }
 
 type DetectChangedLanesOptions = {
-  packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null;
+  packageJsonChangeKind?: "liveDockerTooling" | "windowsTestTooling" | "tooling" | null;
 };
 
 type PackageJsonGitParams = {
@@ -221,7 +222,9 @@ export function detectChangedLanes(
   const packageJsonIsLiveDockerTooling =
     paths.includes("package.json") && options.packageJsonChangeKind === "liveDockerTooling";
   const packageJsonIsTooling =
-    paths.includes("package.json") && options.packageJsonChangeKind === "tooling";
+    paths.includes("package.json") &&
+    (options.packageJsonChangeKind === "tooling" ||
+      options.packageJsonChangeKind === "windowsTestTooling");
 
   if (paths.length === 0) {
     reasons.push("no changed paths");
@@ -545,10 +548,10 @@ function classifyPackageJsonChangeFromGit(params: PackageJsonGitParams) {
   }
 }
 
-function classifyPackageJsonScriptChange(
+export function classifyPackageJsonScriptChange(
   before: string,
   after: string,
-): "liveDockerTooling" | "tooling" | null {
+): "liveDockerTooling" | "windowsTestTooling" | "tooling" | null {
   const beforePackage = parsePackageJson(before);
   const afterPackage = parsePackageJson(after);
   if (!beforePackage || !afterPackage) {
@@ -562,6 +565,24 @@ function classifyPackageJsonScriptChange(
       stableStringify(isRecord(afterScripts) ? afterScripts : {})
   ) {
     return null;
+  }
+  if (isRecord(beforeScripts) && isRecord(afterScripts)) {
+    const withoutWindows = (scripts: Record<string, unknown>) =>
+      Object.fromEntries(
+        Object.entries(scripts).filter(([name]) => !/^test:windows:ci:[12]$/u.test(name)),
+      );
+    if (
+      stableStringify(withoutWindows(beforeScripts)) ===
+      stableStringify(withoutWindows(afterScripts))
+    ) {
+      try {
+        readWindowsTargets(beforeScripts);
+        readWindowsTargets(afterScripts);
+        return "windowsTestTooling";
+      } catch {
+        // Invalid inventories retain ordinary package-script scope.
+      }
+    }
   }
   // Coercing missing/non-record scripts to {} must not grant the narrower live-Docker lane.
   return isRecord(beforeScripts) &&

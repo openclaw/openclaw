@@ -395,6 +395,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     if (bundle) {
       bundle.inputs.push(...inputs);
       bundle.item.message.content.push(...content);
+      if (invocation.attachments.length > 0) {
+        bundle.item.message.role = "toolResult";
+      }
       if (ownsActivity || Array.isArray(bundle.item.message.activity)) {
         bundle.item.message.activity = [
           ...readPreparedActivity(bundle.item.message),
@@ -409,7 +412,13 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       key: `${owner.source.item.key}:invocation:${identity(owner)}:${owner.name}`,
       message: {
         ...message,
-        role: invocation.call ? "assistant" : message.role,
+        // Result media stays tool-owned when the invocation moves to its call row.
+        role:
+          invocation.attachments.length > 0
+            ? "toolResult"
+            : invocation.call
+              ? "assistant"
+              : message.role,
         runId: owner.runId,
         content,
         activity: ownsActivity ? [...prepared.values()] : undefined,
@@ -447,21 +456,29 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     // Prose and media keep their original position as their own rows, so
     // commentary never carries a tool call: every call joins the tool rows
     // that its activity group summarizes.
-    const prose = (content: unknown[], segment: number): ProjectedItem => ({
-      ...source.item,
-      key: segment === 0 ? source.item.key : `${source.item.key}:prose:${segment}`,
-      message: {
-        ...source.message,
-        content,
-        activity: undefined,
-        toolCallId: undefined,
-        tool_call_id: undefined,
-        toolUseId: undefined,
-        tool_use_id: undefined,
-        toolName: undefined,
-        tool_name: undefined,
-      },
-    });
+    const prose = (content: unknown[], segment: number): ProjectedItem => {
+      const projected: ProjectedItem = {
+        ...source.item,
+        key: segment === 0 ? source.item.key : `${source.item.key}:prose:${segment}`,
+        message: {
+          ...source.message,
+          content,
+          activity: undefined,
+          toolCallId: undefined,
+          tool_call_id: undefined,
+          toolUseId: undefined,
+          tool_use_id: undefined,
+          toolName: undefined,
+          tool_name: undefined,
+        },
+      };
+      // Prose belongs to the same immutable source as its invocation projection.
+      memoInputs.set(projected, {
+        owner: source.originalMessage,
+        inputs: [source.originalMessage, source.originalMessage.content],
+      });
+      return projected;
+    };
     const ordered: ProjectedItem[] = [];
     let pendingProse: unknown[] = [];
     const flushProse = () => {

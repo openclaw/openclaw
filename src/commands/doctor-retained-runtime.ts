@@ -17,7 +17,7 @@ export async function prepareRetainedUpdateRuntimeCleanup(
   });
   return async (
     shouldRepair: boolean,
-    authority?: { assertCurrent: () => void; assertResourcesSettled: () => void },
+    authority?: { assertCurrent: () => void; assertResourcesSettled: (directory: string) => void },
   ): Promise<void> => {
     const lines = await maintainRetainedUpdateRuntimes({
       packageRoots,

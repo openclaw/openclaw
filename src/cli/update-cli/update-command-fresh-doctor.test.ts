@@ -384,12 +384,11 @@ describe("post-plugin update readiness", () => {
       const stderr = [
         "[gateway] startup trace: doctor.config-flow 4100.0ms total=4200.0ms start=100.0ms\n",
         "real Doctor warning\n",
+        "Retirement-only Doctor widened: config.preflight-config-changed\n",
         "[gateway] startup trace: doctor.contribution.doctor:plugins 2500.0ms total=6800.0ms start=4300.0ms\n",
         "[gateway] startup trace: doctor.contributions 2600.0ms total=6900.0ms start=4300.0ms",
       ].join("");
-      let traceEnv: string | undefined;
       mocks.command.mockImplementationOnce(async (_command, _args, options: CommandOptions) => {
-        traceEnv = options.env?.OPENCLAW_GATEWAY_STARTUP_TRACE;
         const bytes = Buffer.from(stderr);
         for (let offset = 0; offset < bytes.length; offset += 11) {
           options.onOutputChunk?.(bytes.subarray(offset, offset + 11), "stderr");
@@ -427,7 +426,7 @@ describe("post-plugin update readiness", () => {
         await expect(pending).rejects.toThrow("Updated pre-plugin Doctor failed");
       }
 
-      expect(traceEnv).toBe("1");
+      expect(mocks.command.mock.calls[0]?.[2].env?.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
       expect(onDoctorStep).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           name: `${phase} doctor`,
@@ -437,16 +436,18 @@ describe("post-plugin update readiness", () => {
           durationMs: expect.any(Number),
           diagnostics: [
             "Doctor sections: config-flow 4.1 s, contributions 2.6 s; slowest contributions: plugins 2.5 s",
+            "Retirement-only Doctor widened: config.preflight-config-changed",
           ],
         }),
       );
-      const step = onDoctorStep.mock.calls[0]![0];
-      expect(updateRunStepsFromResultStep(step)[0]?.status).toBe(
+      expect(updateRunStepsFromResultStep(onDoctorStep.mock.calls[0]![0])[0]?.status).toBe(
         outcome === "success" || outcome === "advisory" || phase === "post-plugin"
           ? "completed"
           : "failed",
       );
-      expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("real Doctor warning");
+      expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith(
+        "real Doctor warning\nRetirement-only Doctor widened: config.preflight-config-changed",
+      );
     },
   );
 

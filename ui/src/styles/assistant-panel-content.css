@@ -51,7 +51,7 @@ openclaw-home-session > openclaw-chat-pane {
   gap: 4px;
   padding: 0 12px 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .assistant-panel-context details {

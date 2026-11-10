@@ -305,6 +305,19 @@ export const iconData = {
     ["path", { d: "M12 7v4" }],
     ["path", { d: "M16 7v9" }],
   ]),
+  // Canonical Blobster outline normalized to the shared 24-unit stroke grid.
+  blobster: strokeIconData([
+    [
+      "path",
+      {
+        d: "m20.661 9.861c-0.318 0-0.626 0.057-0.877 0.151-0.016 0.005-0.037-0.005-0.042-0.026-0.694-4.002-3.991-6.824-7.743-6.824s-7.049 2.823-7.743 6.824c-0.005 0.021-0.026 0.031-0.042 0.026-0.25-0.094-0.558-0.151-0.856-0.151-1.017 0-1.758 0.757-1.758 1.816s0.647 2.103 1.795 2.103c0.292 0 0.574-0.052 0.777-0.115 0.037-0.01 0.073 0.01 0.078 0.047 0.511 2.917 2.431 5.238 4.638 6.177 0.021 0.01 0.031 0.031 0.031 0.052v1.508c0 0.146 0.11 0.25 0.25 0.25h1.377c0.141 0 0.245-0.104 0.245-0.25v-1.132c0-0.031 0.026-0.052 0.057-0.047 0.381 0.037 0.762 0.052 1.148 0.052 0.391 0 0.783-0.021 1.127-0.052 0.037-0.005 0.068 0.021 0.068 0.052v1.127c0 0.146 0.125 0.25 0.266 0.25h1.357c0.151 0 0.256-0.104 0.256-0.25v-1.508c0-0.021 0.016-0.042 0.037-0.052 2.343-1.09 4.174-3.381 4.617-6.172 0.005-0.037 0.042-0.057 0.078-0.047 0.235 0.068 0.517 0.11 0.824 0.11 1.158 0 1.763-1.101 1.763-2.103 0-1.101-0.803-1.816-1.732-1.816z",
+      },
+    ],
+    ["circle", { cx: "9.12", cy: "7.831", r: "0.949", fill: "currentColor", stroke: "none" }],
+    ["circle", { cx: "14.864", cy: "7.831", r: "0.949", fill: "currentColor", stroke: "none" }],
+    ["path", { d: "m8.917 3.72c-0.595-1.304-1.92-1.717-2.718-1.393" }],
+    ["path", { d: "m15.083 3.72c0.631-1.304 1.92-1.717 2.703-1.393" }],
+  ]),
   bot: strokeIconData([
     ["path", { d: "M12 8V4H8" }],
     ["rect", { width: "16", height: "12", x: "4", y: "8", rx: "2" }],
@@ -501,6 +514,17 @@ export const iconData = {
   ]),
   list: strokePathData("M8 6h13", "M8 12h13", "M8 18h13", "M3 6h.01", "M3 12h.01", "M3 18h.01"),
   listFilter: strokePathData("M3 6h18", "M7 12h10", "M10 18h4"),
+  slidersHorizontal: strokePathData(
+    "M10 5H3",
+    "M12 19H3",
+    "M14 3v4",
+    "M16 17v4",
+    "M21 12h-9",
+    "M21 19h-5",
+    "M21 5h-7",
+    "M8 10v4",
+    "M8 12H3",
+  ),
   // Filled dots opt out of the shared fill="none" stroke shell.
   gripVertical: strokeIconData([
     ["circle", { cx: "9", cy: "6", r: "1.1", fill: "currentColor", stroke: "none" }],
@@ -582,3 +606,7 @@ export const iconData = {
 } as const satisfies Record<string, IconData>;
 
 export type IconName = keyof typeof iconData;
+
+export function isIconName(name: string | undefined): name is IconName {
+  return Object.hasOwn(iconData, name ?? "");
+}

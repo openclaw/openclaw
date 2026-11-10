@@ -55,7 +55,7 @@ final class GatewayConnectionController {
     private var trustProbeGeneration: UInt64 = 0
     private var connectAttemptGeneration: UInt64 = 0
     private var autoConnectSuppression: AutoConnectSuppressionLease?
-    @ObservationIgnored private var pendingAutoConnectTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var pendingAutoConnectTask: Task<Void, Never>?
     @ObservationIgnored var operatorFleetReconcileTask: Task<Void, Never>?
     private var pendingAutoConnectGeneration: UInt64?
     @ObservationIgnored private var pendingAutoConnectSuppressionGeneration: UInt64?
@@ -114,6 +114,7 @@ final class GatewayConnectionController {
 
         self.updateFromDiscovery()
         self.observeDiscovery()
+        self.observeGatewayRegistration()
 
         if self.discoveryEnabled, self.localNetworkAccessRequested {
             self.discovery.start()
@@ -699,6 +700,7 @@ extension GatewayConnectionController {
             } ?? false
             self.appModel?.disconnectForgottenGateway(
                 preservingPendingConnectAttempt: hasDifferentPendingTarget)
+            self.appModel?.focusChatSession(nil)
         }
         if shouldDisconnect, let appModel = self.appModel {
             await appModel.waitForGatewaySessionResetIfNeeded()
@@ -729,6 +731,8 @@ extension GatewayConnectionController {
         _ = GatewaySettingsStore.clearGatewayCustomHeaders(gatewayStableID: stableID)
         _ = GatewayTLSStore.clearFingerprint(stableID: stableID)
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        // Re-pairing the same Gateway must not reopen the forgotten conversation.
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
         let shareRelayGatewayID = ShareGatewayRelaySettings.loadConfig()?.gatewayStableID
         if GatewayStableIdentifier.matches(shareRelayGatewayID, stableID) {
             ShareGatewayRelaySettings.clearConfig()
@@ -945,6 +949,9 @@ extension GatewayConnectionController {
             return false
         }
 
+        if GatewayStableIdentifier.matches(ShareGatewayRelaySettings.loadConfig()?.gatewayStableID, stableID) {
+            ShareGatewayRelaySettings.clearConfig()
+        }
         guard self.persistTLSFingerprint(fingerprint, stableID) else {
             self.appModel?.gatewayStatusText = "Could not update gateway certificate"
             return false
@@ -1382,7 +1389,7 @@ extension GatewayConnectionController {
                 fingerprintSha256: fp,
                 isManual: pendingConnect.isManual,
                 attemptGeneration: pendingConnect.suppressionLease.generation)
-            self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
+            self.appModel?.awaitGatewayTrustDecision()
             return .accepted
         case let .failure(failure):
             let problem = self.tlsProbeFailureProblem(failure, host: host, port: port)

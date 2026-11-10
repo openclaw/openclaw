@@ -23,7 +23,8 @@ export async function collectInvalidConfigLegacyIssues(
   }
   const { findDoctorLegacyConfigIssues } = await (doctorIssuesModule ??=
     import("../commands/doctor/shared/legacy-config-issues.js"));
+  const { withPreparedPluginSetupRead } = await import("../plugins/plugin-setup-module.js");
   const activatePluginState = await options.preparePluginDiagnostics?.();
   activatePluginState?.();
-  return findDoctorLegacyConfigIssues(raw, sourceRaw);
+  return withPreparedPluginSetupRead(() => findDoctorLegacyConfigIssues(raw, sourceRaw));
 }

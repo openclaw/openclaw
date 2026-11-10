@@ -8,6 +8,7 @@ type PreparationPhase =
   | "allocate"
   | "allocationWait"
   | "mutationWait"
+  | "workspaceWait"
   | "capacityWait"
   | "repository"
   | "sources"

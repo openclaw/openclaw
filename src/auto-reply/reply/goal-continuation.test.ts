@@ -211,13 +211,14 @@ describe("Goal continuation eligibility", () => {
   it.each([
     [true, "remote-exec", "workerGoal"],
     [true, "local", "localCodexGoal"],
+    [true, "local-no-authority", "localCodexGoal"],
     [true, "worker-turn", undefined],
     [true, "wrong-session", undefined],
     [true, "unsupported", undefined],
     [true, "no-authority", undefined],
     [false, "local", "localCodexGoal"],
     [false, "worker-required", undefined],
-    [false, "no-authority", undefined],
+    [false, "no-authority", "localCodexGoal"],
     [false, "revoked", undefined],
   ] as const)("checks Codex Goal admission (placed=%s, %s)", async (placed, mode, marker) => {
     const f = fixture();
@@ -228,11 +229,11 @@ describe("Goal continuation eligibility", () => {
       workerPlacement.current.mockReturnValue({
         ...localPlacement(identity.sessionId),
         sessionKey: mode === "wrong-session" ? "other" : f.params.sessionKey,
-        state: mode === "local" ? "local" : "requested",
+        state: mode === "local" || mode === "local-no-authority" ? "local" : "requested",
         executionMode: mode === "worker-turn" ? "worker-turn" : "remote-exec",
       });
     }
-    if (mode !== "no-authority") {
+    if (mode !== "no-authority" && mode !== "local-no-authority") {
       f.params.base.operatorAuthority = {
         profileId: "operator",
         scopes: ["operator.admin"],
@@ -258,14 +259,18 @@ describe("Goal continuation eligibility", () => {
     }
   });
   it.each([
-    ["localCodexGoal", "local", false, true],
-    ["localCodexGoal", "worker", false, false],
-    ["workerGoal", "local", false, false],
-    ["workerGoal", "worker", false, true],
-    ["localCodexGoal", "local", true, false],
+    ["localCodexGoal", "local", false, true, true],
+    ["localCodexGoal", "local", false, false, true],
+    ["localCodexGoal", "worker", false, true, false],
+    ["localCodexGoal", "worker", false, false, false],
+    ["workerGoal", "local", false, true, false],
+    ["workerGoal", "worker", false, true, true],
+    ["workerGoal", "worker", false, false, false],
+    ["localCodexGoal", "local", true, true, false],
+    ["localCodexGoal", "local", true, false, false],
   ] as const)(
-    "checks %s Codex placement against %s (requires worker=%s)",
-    async (marker, current, requiresWorker, expected) => {
+    "checks %s Codex placement against %s (requires worker=%s, operator=%s)",
+    async (marker, current, requiresWorker, hasOperatorAuthority, expected) => {
       workerPlacement.current.mockReturnValue({
         ...localPlacement(identity.sessionId),
         sessionKey: "agent:main:goal",
@@ -277,7 +282,7 @@ describe("Goal continuation eligibility", () => {
           continuation: { ...identity, [marker]: true },
           agentId: "main",
           sessionKey: "agent:main:goal",
-          hasOperatorAuthority: true,
+          hasOperatorAuthority,
           requiresWorker,
         }),
       ).resolves.toBe(expected);
@@ -323,6 +328,15 @@ describe("Goal continuation eligibility", () => {
     { meta: { pendingToolCalls: [{ id: "tool-1", name: "exec", arguments: "{}" }] } },
     { meta: { stopReason: "refusal" } },
     { didSendDeterministicApprovalPrompt: true },
+    {
+      acceptedSessionSpawns: [
+        {
+          runId: "child",
+          childSessionKey: "agent:main:subagent:child",
+          expectsCompletionMessage: true,
+        },
+      ],
+    },
     { payloads: [{ text: "failed", isError: true }] },
   ])("preserves an existing continuation, failure or approval owner: %j", async (result) => {
     const f = fixture();

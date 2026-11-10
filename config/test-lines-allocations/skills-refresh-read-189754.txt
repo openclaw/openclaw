@@ -1,0 +1,2 @@
+# Mid-scan config refresh republishes once; shutdown still rejects the in-flight read.
+46

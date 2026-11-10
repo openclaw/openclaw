@@ -70,7 +70,7 @@ openclaw-chat-details[mobile] {
   color: var(--muted);
   background: var(--panel);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 .chat-details-toggle svg {
   width: 14px;
@@ -93,8 +93,8 @@ openclaw-chat-details[mobile] {
   box-shadow: var(--shadow-lg);
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  font-size: 12px;
+  --scrollbar-size: var(--scrollbar-size-compact);
+  font-size: var(--control-ui-text-sm);
 }
 .chat-details--docked {
   position: absolute;
@@ -170,7 +170,7 @@ openclaw-chat-details[mobile] {
   justify-content: space-between;
   margin-bottom: 8px;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 .chat-details__toolbar button,
 .chat-details__row .chat-copy-btn,
@@ -210,7 +210,7 @@ openclaw-chat-details[mobile] {
   padding: 3px 0;
   list-style: none;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
 }
 .chat-details__caption svg {
@@ -222,7 +222,7 @@ openclaw-chat-details[mobile] {
 }
 .chat-details__caption > span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
 }
 .chat-details summary::-webkit-details-marker {
@@ -298,7 +298,7 @@ openclaw-chat-details[mobile] {
   padding: 4px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .chat-details__participants[open] {
   flex-basis: 100%;
@@ -311,7 +311,7 @@ openclaw-chat-details[mobile] {
   gap: 6px;
   align-items: center;
   min-height: 24px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .chat-details__creator > span:first-child {
   flex: none;
@@ -322,7 +322,7 @@ openclaw-chat-details[mobile] {
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   list-style: none;
   min-height: 26px;
 }
@@ -335,7 +335,7 @@ openclaw-chat-details[mobile] {
   align-items: center;
   gap: 7px;
   min-height: 27px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .chat-details__person .chat-author-avatar {
   width: 20px;
@@ -346,7 +346,7 @@ openclaw-chat-details[mobile] {
 .chat-details__muted {
   padding: 5px 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .chat-details__agent-avatar {
   display: grid;
@@ -382,7 +382,7 @@ openclaw-chat-details[mobile] {
   grid-row: 1 / span 2;
 }
 .chat-details .chat-subagent-activity__name {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
   overflow: hidden;
   white-space: nowrap;
@@ -392,12 +392,12 @@ openclaw-chat-details[mobile] {
   grid-column: 2;
   grid-row: 2;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .chat-details .chat-subagent-activity__elapsed-compact,
 .chat-details__process-elapsed {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   justify-self: end;
@@ -409,7 +409,7 @@ openclaw-chat-details[mobile] {
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   justify-self: end;
 }
@@ -511,7 +511,7 @@ openclaw-chat-details[mobile] {
   border-radius: var(--radius-sm);
   background: none;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-align: start;
 }
 .chat-details__process {
@@ -527,7 +527,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   text-overflow: clip;
   white-space: nowrap;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .chat-details__more {
   display: block;
@@ -583,13 +583,13 @@ button.chat-details__process:is(:hover, :focus-visible) {
   overflow: hidden;
   text-overflow: clip;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   flex: 1;
   min-width: 0;
 }
 .chat-details .chat-pr__number {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   color: var(--muted);
 }
 .chat-details .chat-pr__meta {
@@ -601,11 +601,11 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 .chat-details .chat-pr__diff {
   display: inline-flex;
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 .chat-details .chat-pr__state {
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 .chat-details__changes {
   position: relative;
@@ -644,7 +644,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   display: block;
 }
 .chat-details .chat-pr__title {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
 }
 .chat-details .chat-pr--compact .chat-pr__link:hover {
@@ -667,7 +667,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   border: 0;
   border-radius: 5px;
   background: color-mix(in srgb, currentColor 8%, transparent);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 .chat-details .chat-pr__dismiss {
   width: 18px;
@@ -686,7 +686,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 
 .chat-details__badge {
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 400;
   flex: none;
   margin-inline-start: auto;
@@ -763,7 +763,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
 }
 .chat-environment__counts {
@@ -778,7 +778,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-environment-mobile > h3 {
   margin: 0 12px 8px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 400;
 }
 .chat-environment-mobile__group {
@@ -793,7 +793,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   min-height: 44px;
   padding-block: 10px;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 .chat-environment-mobile__row + .chat-environment-mobile__row {
   border-top: 1px solid var(--border);
@@ -806,7 +806,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-environment-mobile__row > small {
   flex: none;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 .chat-environment-mobile .chat-environment__action > span:not(.chat-environment__counts) {
   overflow-wrap: anywhere;
@@ -845,4 +845,11 @@ button.chat-details__process:is(:hover, :focus-visible) {
   width: 15px;
   height: 15px;
   color: var(--muted);
+}
+
+/* Loading hints stay subordinate to the conversation, in both Details hosts. */
+.chat-details .skeleton::after,
+.chat-mobile-host__details .skeleton::after {
+  opacity: 0.25;
+  animation-duration: calc(var(--skeleton-duration) * 1.8);
 }
