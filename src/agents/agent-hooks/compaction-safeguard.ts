@@ -24,6 +24,7 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import { recoverCompactionSafeguardFailure } from "../compaction-summary-refusal.js";
 import { summarizeCompactionHistory } from "../compaction.js";
@@ -62,6 +63,7 @@ import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardCancellation,
 } from "./compaction-safeguard-runtime.js";
+import { hasProjectedSummaryText } from "./compaction-safeguard-text.js";
 import {
   collectToolFailures,
   formatToolFailuresSection,
@@ -663,7 +665,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         try {
           // Give the provider ALL messages — no pruning, no chunking, no split-turn splitting.
           const providerResult = await compactionProvider.summarize({
-            messages: [...baseMessagesToSummarize, ...turnPrefixMessages],
+            messages: [...baseMessagesToSummarize, ...turnPrefixMessages].map((message) =>
+              projectRecordedModelPrompt(message),
+            ),
             signal,
             customInstructions: structuredInstructions,
             summarizationInstructions,
@@ -781,6 +785,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const reconciliationMessages =
         previousSummary ||
         includePreservedContext ||
+        hasProjectedSummaryText(preservedRecentMessages) ||
         summaryTargetMessages.length > 0 ||
         turnPrefixMessages.length > 0
           ? oracleMessages

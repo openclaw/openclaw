@@ -172,7 +172,10 @@ export interface ContextUsageEstimate {
 }
 
 /** Estimate context tokens for messages using provider usage when available. */
-export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
+export function estimateContextTokens(
+  messages: AgentMessage[],
+  estimateMessageTokens = estimateTokens,
+): ContextUsageEstimate {
   let usageTokens = 0;
   let lastUsageIndex: number | null = null;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -194,7 +197,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
   }
   let trailingTokens = 0;
   for (const message of lastUsageIndex === null ? messages : messages.slice(lastUsageIndex + 1)) {
-    trailingTokens += estimateTokens(message);
+    trailingTokens += estimateMessageTokens(message);
   }
 
   return {
@@ -439,12 +442,12 @@ export function prepareCompaction(
       ? { state: "unresolved", request: selectedRequest }
       : { state: "none" }
     : undefined;
-  const contextUsage = estimateContextTokens(contextMessages);
+  const estimateMessageTokens = constraints?.estimateTokens ?? estimateTokens;
+  const estimateTotal = (messages: AgentMessage[]) =>
+    messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
+  const contextUsage = estimateContextTokens(contextMessages, estimateMessageTokens);
   const tokensBefore = contextUsage.tokens;
-  const totalEstimatedTokens = contextMessages.reduce(
-    (total, message) => total + estimateTokens(message),
-    0,
-  );
+  const totalEstimatedTokens = estimateTotal(contextMessages);
   // Provider usage includes prompt/schema tokens omitted by estimateTokens. Normalize its trigger
   // units to the cut walk, capped at a one-token retained tail; otherwise a small transcript
   // can leave the cut at the first entry and free nothing.
@@ -458,10 +461,7 @@ export function prepareCompaction(
           Math.max(1, contextUsage.usageTokens / totalEstimatedTokens),
         )
       : 1;
-  const resetPreludeTokens = resetPreludeMessages.reduce(
-    (total, message) => total + estimateTokens(message),
-    0,
-  );
+  const resetPreludeTokens = estimateTotal(resetPreludeMessages);
   // The reset prelude is always part of the summarization request. Count it like
   // other model-visible boundary context so a large kept tail moves the cut earlier.
   const keepRecentTokens = Math.min(

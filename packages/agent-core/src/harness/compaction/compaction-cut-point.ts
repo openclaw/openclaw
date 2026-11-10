@@ -121,6 +121,8 @@ export function findTurnStartIndex(
 }
 
 export interface CompactionRetentionConstraints {
+  /** Host model-facing message costs without replacing canonical summary excerpts. */
+  estimateTokens?: (message: AgentMessage) => number;
   /** Identifies the active request and whether its unprocessed entry must remain verbatim. */
   requestBoundary?: {
     entryId: string;
@@ -249,7 +251,11 @@ export function findCutPoint(
     if (isCutPointMessage(message)) {
       cutIndex = resolveCutPoint(i);
     }
-    accumulatedTokens += retention?.estimateTokens(message) ?? estimateTokens(message);
+    accumulatedTokens += (
+      retention?.estimateTokens ??
+      constraints?.estimateTokens ??
+      estimateTokens
+    )(message);
     if (accumulatedTokens >= keepRecentTokens) {
       break;
     }

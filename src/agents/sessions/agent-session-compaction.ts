@@ -8,6 +8,7 @@ import {
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
+import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { resolveCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
 import { SAFETY_MARGIN } from "../compaction-planning.js";
@@ -21,6 +22,7 @@ import {
   buildSessionContext,
   compact,
   estimateContextTokens,
+  estimateTokens,
   prepareCompaction,
   shouldCompact,
   type CompactionPreparation,
@@ -63,6 +65,9 @@ type CompactionWorkOutcome =
   | { status: "aborted" }
   | { status: "skipped"; reason: string };
 type SettledCompactionWorkOutcome = Exclude<CompactionWorkOutcome, { status: "aborted" }>;
+
+// Keep Array.map's index out of the projection's optional transcript parameter.
+const projectCompactionMessage = (message: AgentMessage) => projectRecordedModelPrompt(message);
 
 /** @internal */
 export const agentSessionAutomaticCompaction: unique symbol = Symbol.for(
@@ -365,27 +370,22 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           // A queued input not in the transcript yet belongs to the prompt owner;
           // older history cannot stand in for that request.
           pendingUserIdempotencyKey && pendingEntryIndex < 0 ? undefined : options.requestState,
-          requestBudget || requestBoundaryEntryId
-            ? {
-                ...(requestBoundaryEntryId
-                  ? {
-                      requestBoundary: {
-                        entryId: requestBoundaryEntryId,
-                        preserve: pathEntries[pendingEntryIndex]?.id === requestBoundaryEntryId,
-                      },
-                    }
-                  : {}),
-                ...(requestBudget && retention
-                  ? {
-                      budget: {
-                        ...retention,
-                        estimateTokens: (message: AgentMessage) =>
-                          estimateCompactionHistoryTokens([message], requestBudget),
-                      },
-                    }
-                  : {}),
-              }
-            : undefined,
+          {
+            estimateTokens: (message) => estimateTokens(projectCompactionMessage(message)),
+            requestBoundary: requestBoundaryEntryId
+              ? {
+                  entryId: requestBoundaryEntryId,
+                  preserve: pathEntries[pendingEntryIndex]?.id === requestBoundaryEntryId,
+                }
+              : undefined,
+            budget:
+              requestBudget && retention
+                ? {
+                    ...retention,
+                    estimateTokens: (msg) => estimateCompactionHistoryTokens([msg], requestBudget),
+                  }
+                : undefined,
+          },
         ),
       );
     }
@@ -468,7 +468,13 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         .join("\n\n");
       const runCoreCompaction = () =>
         compact(
-          preparation,
+          {
+            ...preparation,
+            // Only model input expands private projections. Raw excerpts and
+            // deterministic fallback keep the canonical user-visible text.
+            messagesToSummarize: preparation.messagesToSummarize.map(projectCompactionMessage),
+            turnPrefixMessages: preparation.turnPrefixMessages.map(projectCompactionMessage),
+          },
           model,
           auth.apiKey,
           auth.headers,
@@ -548,7 +554,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
             ...requestBudget,
             pendingTokens: 0,
           })
-        : estimateContextTokens(replacementMessages).tokens;
+        : estimateContextTokens(replacementMessages.map(projectCompactionMessage)).tokens;
       const assertCommitCurrent = () => {
         options.signal.throwIfAborted();
         const controller = isManual
