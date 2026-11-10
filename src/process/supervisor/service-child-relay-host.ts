@@ -248,6 +248,11 @@ export async function createServiceChildRelayAdapter(
     expire: expireCleanup,
     force: () => kill("SIGKILL"),
   });
+  const recordControlError = (error: unknown) => {
+    // A broken write cannot replace the receipt and native extinction join.
+    controlError ??= toErrorObject(error, "service child control delivery failed");
+    cleanupDeadline.begin();
+  };
 
   const sendControlMessage = createServiceChildControlSender({
     child,
@@ -482,9 +487,7 @@ export async function createServiceChildRelayAdapter(
         void sendControlMessage({
           type: "closing-ack",
           closingSequence: message.sequence,
-        }).catch((error: unknown) => {
-          controlError ??= toErrorObject(error, "closing acknowledgement failed");
-        });
+        }).catch(recordControlError);
       }
     } else if (message.type === "startup-error") {
       // A failed command never sends ready. Keep its live anchor's identity for
@@ -545,9 +548,7 @@ export async function createServiceChildRelayAdapter(
         finishControl();
       }
     });
-    control.on("error", (error) => {
-      controlError ??= error;
-    });
+    control.on("error", recordControlError);
   }
 
   child.on("message", (raw: unknown) => {
@@ -606,8 +607,7 @@ export async function createServiceChildRelayAdapter(
       ? () => {
           void sendControlMessage({ type: "stdin-end" }).then(
             () => child.stdin?.end(),
-            (error: unknown) =>
-              loseIdentity(toErrorObject(error, "stdin EOF delivery failed").message),
+            recordControlError,
           );
         }
       : undefined,

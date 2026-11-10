@@ -28,10 +28,14 @@ const runtimeOnlyBuiltCliFiles = new Set([
 // These selections need no compiled test-only fixtures.
 const runtimeOnlyUnitFiles = new Set([
   "src/agents/agent-tools.delegated-authority.test.ts",
+  "src/agents/provider-auth-websocket.test.ts",
   "src/agents/session-placement-computer.test.ts",
   "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
+  "src/agents/sessions/agent-session-steering-context.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
+  "src/agents/subagents/registry/subagent-control.accounting.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
+  "src/agents/tools/sessions-send-communication.test.ts",
   "src/auto-reply/reply/commands-system-prompt.test.ts",
   "src/auto-reply/reply/dispatch-acp.test.ts",
   "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
@@ -44,10 +48,16 @@ const runtimeOnlyUnitFiles = new Set([
   "src/commands/doctor-maintenance.stopped-systemd.test.ts",
   "src/commands/doctor-plugin-package-consent.test.ts",
   "src/config/io.load-async.test.ts",
+  "src/cron/session-run.session-model-strictness.integration.test.ts",
   "src/flows/doctor-health.update-schema.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
   "src/gateway/server-methods/session-catalog-privacy.test.ts",
+  "src/gateway/server-methods/sessions-lifecycle-dormant.test.ts",
   "src/gateway/server.beam-owned-view.test.ts",
+  "src/gateway/server.subagent-transcript-conflict.test.ts",
+  "src/gateway/session-row-projection.subagent-index.test.ts",
+  "src/gateway/session-subagent-resume.test.ts",
+  "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
   "src/gateway/talk/client-permission-parity.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
   "src/plugins/doctor-repair-setup.test.ts",
@@ -219,10 +229,12 @@ export function shouldUseRuntimeOnlyVitestWorkers(
   }
   if (
     (config === "test/vitest/vitest.agents-core.config.ts" ||
+      config === "test/vitest/vitest.agents-support.config.ts" ||
       config === "test/vitest/vitest.agents-spawn-production-boundary.config.ts" ||
       config === "test/vitest/vitest.auto-reply.config.ts" ||
       config === "test/vitest/vitest.auto-reply-reply.config.ts" ||
       config === "test/vitest/vitest.commands.config.ts" ||
+      config === "test/vitest/vitest.cron.config.ts" ||
       config === "test/vitest/vitest.infra.config.ts" ||
       config === "test/vitest/vitest.runtime-config.config.ts" ||
       config === "test/vitest/vitest.plugins.config.ts" ||

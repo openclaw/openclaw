@@ -162,7 +162,7 @@ describe("owner certificate expiry at the Gateway", () => {
     };
     const service = createOpenClawIdService({
       getConfig: () => ({ enabled: true, relayUrl: "https://relay.example.test" }),
-      getStateDir: () => "/nonexistent/openclaw-id-test",
+      getStateDir: () => claw.stateDir,
       getGatewayServer: () => undefined,
       log: { info: vi.fn(), warn: vi.fn() },
       createAuthority: async () => claw.authority,
@@ -215,7 +215,7 @@ describe("owner certificate expiry at the Gateway", () => {
         relayUrl: "https://relay.example.test",
         ownerDeviceInactivityDays: 1,
       }),
-      getStateDir: () => "/nonexistent/openclaw-id-test",
+      getStateDir: () => claw.stateDir,
       getGatewayServer: () => undefined,
       log: { info: vi.fn(), warn: vi.fn() },
       createAuthority: async () => claw.authority,
@@ -252,12 +252,16 @@ describe("owner certificate expiry at the Gateway", () => {
       expect(await claw.authority.submit(add, "tunnel")).toMatchObject({ ok: true });
       const ownerSource = (await claw.authority.resolvePeer(claw.w1))!;
       const memberSource = (await claw.authority.resolvePeer(memberKey))!;
-      const { service, effects } = serviceFor(createOpenClawIdAuthority(claw.store), {
-        enabled: true,
-        ownerDeviceInactivityDays: 1,
-        memberDeviceInactivityDays: 2,
-        ...(remoteState === "failed" ? { relayUrl: "https://relay.example.test" } : {}),
-      });
+      const { service, effects } = serviceFor(
+        createOpenClawIdAuthority(claw.store),
+        {
+          enabled: true,
+          ownerDeviceInactivityDays: 1,
+          memberDeviceInactivityDays: 2,
+          ...(remoteState === "failed" ? { relayUrl: "https://relay.example.test" } : {}),
+        },
+        claw.stateDir,
+      );
       runtime.start.mockImplementation(() => {
         throw new Error("relay unavailable");
       });

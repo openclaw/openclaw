@@ -12,8 +12,11 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import type { BoundKeyRefusal } from "./tunnel-child/keyfile.js";
 import {
   parseTunnelToGatewayMessage,
+  TUNNEL_EXIT_KEY_MISMATCH,
+  TUNNEL_EXIT_KEY_MISSING,
   TUNNEL_EXIT_KEY_REFUSED,
   TUNNEL_EXIT_UNAVAILABLE,
   type GatewayToTunnelMessage,
@@ -79,7 +82,9 @@ export type TunnelSupervisorStatus =
       lastExit: string;
     }
   /** `retryInMs` is set while the supervisor waits to probe the transport again. */
-  | { state: "unavailable"; reason: string; retryInMs?: number };
+  | { state: "unavailable"; reason: string; retryInMs?: number }
+  /** No file holds the endpoint key the claw is bound to. Not retried. */
+  | { state: "key_refused"; reason: BoundKeyRefusal };
 
 /** How to launch the child: an entry module and the Node arguments that run it. */
 export type TunnelChildLaunch = { entry: URL; execArgv: string[] };
@@ -271,6 +276,15 @@ export function createTunnelSupervisor(params: {
           launch();
         }, tuning.unavailableRetryMs);
         retryTimer.unref();
+        return;
+      }
+      if (code === TUNNEL_EXIT_KEY_MISSING || code === TUNNEL_EXIT_KEY_MISMATCH) {
+        wanted = false;
+        const reason = code === TUNNEL_EXIT_KEY_MISSING ? "keys_missing" : "key_mismatch";
+        setStatus({ state: "key_refused", reason });
+        params.log.warn(
+          `openclaw-id: endpoint key refused (${reason}); remote access is off, the Gateway keeps running. Restore the original key file, then restart the Gateway`,
+        );
         return;
       }
       if (code === TUNNEL_EXIT_KEY_REFUSED) {

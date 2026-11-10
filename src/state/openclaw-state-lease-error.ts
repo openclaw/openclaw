@@ -101,7 +101,7 @@ export function createOpenClawStateLeaseLostError(
   const diagnostic =
     loss?.reason === "expired" && lateByMs > 0 ? { ...loss, renewalTimerLateByMs: lateByMs } : loss;
   return new OpenClawStateLeaseError(
-    `${identity.leaseLabel ?? "state lease"} ${identity.scope}/${identity.key} was lost${diagnostic ? ` (${formatStateLeaseLoss(diagnostic)})` : ""}`,
+    `${identity.leaseLabel ?? "state lease"} ${identity.scope}/${identity.key} was lost${diagnostic ? ` (${formatStateLeaseLoss(diagnostic)})` : ""}; retry the operation`,
     { code: "OPENCLAW_STATE_LEASE_LOST", cause, loss: diagnostic },
   );
 }

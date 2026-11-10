@@ -33,6 +33,43 @@ pause invocation through successful unpause return and conservatively include
 engine CLI overhead. Command latency includes guest execution and finalization;
 the subsequent correctness read is excluded.
 
+The native driver acquires the existing reconciliation lease after warmup and
+after the measured burst, then awaits outstanding native removal operations
+observed by its phase instrumentation. This settles cleanup after canonical
+acceptance. `cleanupSettlementMs` reports the final tail separately;
+total CPU and allocation include it, while individual command latency does not.
+Apply the same driver to every source revision so deferred cleanup cannot make
+the candidate's total work disappear from the comparison.
+On btrfs, this also performs `syncfs` and waits for `btrfs subvolume sync` after
+the burst. The explicit flush avoids waiting for the periodic transaction
+commit timer. Native
+subvolume deletion delegates extent retirement to kernel threads, which can sit
+outside the rig's CPU cgroup. `hostCpuMs` therefore reports `/proc/stat` deltas
+for the whole Linux VM, including that work and unrelated daemon activity. Use
+the identical-code controls to assess noise; do not describe cgroup CPU alone
+as complete kernel-cleanup accounting. The final settlement may include the
+sync command's polling interval and is separate from command latency.
+
+To measure unprivileged filesystem operations, run Node as the workspace owner
+with no effective capabilities. A task-private rootful Podman API socket can
+control the real guest independently; record that engine placement rather than
+calling it rootless-engine proof. Do not mount an operator or production socket.
+The kernel settlement observer needs privilege for its B-tree query. In another
+terminal inside the disposable rig, start the narrowly scoped observer as root:
+
+```sh
+python3 scripts/perf/local-workspace-checkpoint-settlement.py \
+  --root /owned-btrfs --socket /owned-proof/settlement.sock
+```
+
+The root directory must belong to the measured user. The observer creates a
+mode-0600 socket for that owner and accepts only a constant settlement request;
+it cannot receive a path or command. Add
+`--settlement-socket /owned-proof/settlement.sock` to every measurement arm.
+Reports record Node's UID and effective capabilities. Snapshot creation and
+removal still run as that unprivileged user; only the private engine and final
+measurement observer are privileged. Stop the observer after the comparison.
+
 Reports include raw pause and command samples, median/p95/max, main-process CPU,
 main-isolate allocation, source hashes, host load, and owner phases. The manifest
 phase includes worker dispatch; `withStagedWorkerWorkspaceManifest` contains
@@ -40,12 +77,15 @@ phase includes worker dispatch; `withStagedWorkerWorkspaceManifest` contains
 Git and container processes. Native Linux runs also report the measured-window
 `cpu.stat` usage delta for the rig's cgroup and descendants, including Node
 workers, native helpers, Git, Podman, and the guest. Use an exclusively owned
-cgroup; the report records its namespace membership and CPU limit. Allocation
-excludes workers and children and requires a runtime exposing V8's
+cgroup; the report records its namespace membership and CPU limit. Main-isolate
+allocation excludes workers and children and requires a runtime exposing V8's
 `total_allocated_bytes` counter, such as Node 26.12.1.
 
 Run a separate `--instrument allocation` pass per source for sampled allocation
-and a CPU profile saved beside the report as `<report>.cpuprofile`. Do not compare
+and a CPU profile saved beside the report as `<report>.cpuprofile`. Native allocation
+passes also sample worker heap counters outside the CPU/latency window and report
+matched-thread allocation deltas, worker starts/exits, and unavailable or unmatched
+samples. Exited workers are not silently counted as zero allocation. Do not compare
 instrumented timings against the plain timing arms. Report aggregate process and
 main-thread CPU separately, and retain raw samples so phase overlap and outliers
 remain inspectable.
@@ -189,3 +229,23 @@ snapshot directory as a guest deletion. Snapshot device identity also differs
 from the source despite preserved inode and ctime, affecting fingerprint reuse.
 After retaining output, delete only the named snapshots and nested/source
 subvolumes, unmount this loop filesystem, and remove its task-owned image.
+
+## Dirty-writeback diagnostic
+
+After the command comparison, run the separate synthetic primitive probe on a
+new directory on the private btrfs mount, with `btrfs-progs` and `strace` present:
+
+```sh
+python3 scripts/perf/local-workspace-snapshot-writeback.py \
+  --root /owned-btrfs/writeback-probe > writeback.jsonl
+```
+
+It seeds 62,000 files/1.1 GB, then compares snapshots with and without explicit
+pre-capture `syncfs`. Steady samples write 1.7 GB/hour in five-second intervals;
+separate burst samples rewrite the whole tree immediately before capture. Keep
+those regimes separate: an hourly average does not describe burst size. The
+probe retains syscall timings beside the report and verifies snapshot isolation.
+`Dirty`/`Writeback` are whole-kernel counters, not private-cgroup metrics. Snapshot
+timings include `strace` overhead and qualify the primitive, not command latency.
+The probe removes its named source and snapshots; retain the small trace files
+with the report, then remove that task-owned probe directory.
