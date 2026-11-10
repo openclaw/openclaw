@@ -384,15 +384,18 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   // egress and prepend messages.responsePrefix here too; otherwise the disambiguation
   // prefix is silently dropped on tool sends while replies keep it. Interpolate the
   // template like normalize-reply.ts so identity tokens render. model/provider/thinking
-  // tokens need the live model selection that a tool send never performs, so when any
-  // placeholder stays unresolved we skip prefixing instead of leaking a literal `{model}`.
+  // tokens come from the calling run's model selection; callers without one (CLI, Gateway
+  // RPC) leave them unresolved, and we skip prefixing instead of leaking a literal `{model}`.
   // The startsWith guard matches normalize-reply.ts and keeps re-runs idempotent.
   const responsePrefix = resolveResponsePrefixTemplate(
     resolveResponsePrefix(cfg, agentId ?? "", {
       channel,
       accountId: accountId ?? undefined,
     }),
-    { identityName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId ?? "")?.name) },
+    {
+      ...input.responsePrefixContext,
+      identityName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId ?? "")?.name),
+    },
   );
   const prefixHasUnresolvedVar =
     responsePrefix !== undefined && UNRESOLVED_PREFIX_VAR_PATTERN.test(responsePrefix);

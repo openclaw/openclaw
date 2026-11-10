@@ -3,9 +3,12 @@ import {
   isAgentEventLifecycleGenerationCurrent,
   onAgentEvent,
 } from "../../../infra/agent-events.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDraining,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../../../process/gateway-work-admission.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { isAgentLifecycleYieldedWaiting } from "../../agent-lifecycle-parent-state.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
@@ -50,31 +53,33 @@ export function createSubagentRegistryListener(config: {
     if (listenerStop) {
       return;
     }
-    listenerStop = onAgentEvent((evt) => {
+    const stopSession = sessionChanges.subscribe((evt) => {
+      if ("all" in evt || evt.scope !== "runtime" || isGatewayRestartDraining()) {
+        return;
+      }
+      // Runtime row changes follow terminal persistence. Raw model end events
+      // also describe pause notices and unfinished tool handoffs.
+      void runWithGatewayIndependentRootWorkContinuation(async () => {
+        for (const child of getSubagentRunsForRequesterSession(evt.sessionKey)) {
+          if (child.waitForMessage && isYieldedSubagentRun(child)) {
+            await settleUnreachableYieldedSubagentRun({
+              runId: child.runId,
+              entry: child,
+              complete: completeSubagentRunWithRecovery,
+            });
+          }
+        }
+      }, "subagents:requester-settlement").catch((err: unknown) => {
+        subagentRegistryLog.warn("requester settlement handler failed", { err });
+      });
+    });
+    const stopAgent = onAgentEvent((evt) => {
       if (!evt || evt.stream !== "lifecycle") {
         return;
       }
       // Own lifecycle writes before their first await.
       void runWithGatewayIndependentRootWorkContinuation(async () => {
         const phase = evt.data?.phase;
-        if (
-          (phase === "end" || phase === "error") &&
-          evt.data.executionStarted !== false &&
-          !isAgentLifecycleYieldedWaiting(evt.data) &&
-          evt.data.stopReason !== "restart" &&
-          evt.sessionKey
-        ) {
-          for (const child of getSubagentRunsForRequesterSession(evt.sessionKey)) {
-            if (child.waitForMessage && isYieldedSubagentRun(child)) {
-              await settleUnreachableYieldedSubagentRun({
-                runId: child.runId,
-                entry: child,
-                complete: completeSubagentRunWithRecovery,
-                requesterEnded: true,
-              });
-            }
-          }
-        }
         let entry = runs.get(evt.runId);
         if (!entry) {
           if (phase === "end" && typeof evt.sessionKey === "string") {
@@ -224,6 +229,10 @@ export function createSubagentRegistryListener(config: {
         subagentRegistryLog.warn("lifecycle event handler failed", { err, runId: evt.runId });
       });
     });
+    listenerStop = () => {
+      stopAgent();
+      stopSession();
+    };
   }
 
   return {

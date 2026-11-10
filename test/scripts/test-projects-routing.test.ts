@@ -674,6 +674,19 @@ console.log(JSON.stringify(directImporterTests));`,
     expect(changedPlans(changedPaths)).toEqual([expectedPlan("tooling", targets)]);
   });
 
+  it.each([false, true])(
+    "selects Testbox preparation for gate changes with boundedOwners=%s",
+    (boundedOwners) => {
+      const plan = changedPlan(["scripts/pr-lib/gates.sh"], { boundedOwners });
+      const target = "test/scripts/pr-prepare-testbox.test.ts";
+
+      expect(plan.targets).toContain(target);
+      if (boundedOwners) {
+        expect(plan.ownerTargets).toContain(target);
+      }
+    },
+  );
+
   it("keeps core test-only changes on their owning test lane", () => {
     const changedPaths = ["src/auto-reply/reply/commands-approve.test.ts"];
 
