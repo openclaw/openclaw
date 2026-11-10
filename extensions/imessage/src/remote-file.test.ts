@@ -122,6 +122,17 @@ it("uploads into an owner-only remote directory and cleans after success", async
   expect(cleanup?.[1].input).toBe(`set -eu\nrm -rf -- ${remoteDir}\n`);
 });
 
+it.each(["中文.txt", "café.txt", "报告（终稿）.txt", "📄.txt", "report.txt"])(
+  "keeps the readable attachment name through remote upload and send: %s",
+  async (filename) => {
+    respond({}, {}, {});
+    await stage({ localPath: `/gateway/${filename}` });
+    const remotePath = `${remoteDir}/${filename}`;
+    expect(runCommand.mock.calls[1]?.[0].at(-1)).toBe(`messages-mac:${remotePath}`);
+    expect(use).toHaveBeenCalledWith(remotePath);
+  },
+);
+
 it("cleans the token-owned parent after setup timeout", async () => {
   respond({ code: null, termination: "timeout" }, {});
 
