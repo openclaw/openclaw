@@ -276,6 +276,50 @@ it.each([false, true])(
   },
 );
 
+it("keeps a settled tool-only run as activity rather than an empty assistant reply", async () => {
+  const tool = createMessageGroup(
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "inspect", name: "read", arguments: { path: "report.md" } },
+        { type: "toolCall", id: "check", name: "exec", arguments: { command: "git status -sb" } },
+      ],
+      timestamp: 1000,
+    },
+    "tool",
+    { runId: "poll-run" },
+  );
+  const view = mountSolid(() => (
+    <AgentRunFrame
+      frame={{
+        kind: "agent-run-frame",
+        key: "poll",
+        runId: "poll-run",
+        boundaryId: "send:poll-run",
+        outcome: { kind: "completed", actionOwner: null },
+        parts: [tool],
+      }}
+      options={{
+        streamOptions: {},
+        workPreviews: new Map(),
+        partDependencies: (part) => [part],
+        renderGroupOptions: () => ({
+          showReasoning: false,
+          showToolCalls: true,
+          assistantName: "Assistant",
+        }),
+        isWorkExpanded: () => false,
+        onToggleWork: () => {},
+      }}
+    />
+  ));
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".chat-activity-group__summary")).not.toBeNull(),
+  );
+  expect(view.container.querySelector(".chat-avatar-slot")).toBeNull();
+  expect(view.container.querySelector(".chat-group-footer")).toBeNull();
+});
+
 it("does not give provider speech unframed answer actions", () => {
   const speech = {
     role: "assistant",

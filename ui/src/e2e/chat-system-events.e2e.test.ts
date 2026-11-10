@@ -1,4 +1,7 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -50,6 +53,65 @@ const history = [
 ];
 
 suite.define(() => {
+  it("keeps fallback details and silent continuation activity out of empty reply chrome", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const runId = "continuation";
+      await installMockGateway(page, {
+        historyMessages: [
+          history[0]!,
+          fallback("switch-before"),
+          message("assistant", answerText, "answer"),
+          {
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "inspect", name: "read", arguments: { path: "report.md" } },
+              {
+                type: "toolCall",
+                id: "check",
+                name: "exec",
+                arguments: { command: "git status -sb" },
+              },
+            ],
+            timestamp: timestamp + 1,
+            stopReason: "toolUse",
+            __openclaw: { id: "poll", runId, turnBoundary: true },
+          },
+          {
+            role: "assistant",
+            content: [],
+            stopReason: "stop",
+            timestamp: timestamp + 2,
+            __openclaw: { id: "silent", runId },
+          },
+          fallback("switch-after"),
+        ],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.getByText(answerText, { exact: true }).waitFor();
+      const activity = page.locator(".chat-activity-group__summary");
+      await activity.waitFor();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".chat-thread"),
+          [activity],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(suite.artifactDir, "continuation-thread.png"), frame.png);
+      }
+      const disclosures = page.locator(".chat-system-events");
+      expect(await disclosures.count()).toBe(2);
+      expect(await disclosures.first().getAttribute("open")).toBeNull();
+      await disclosures.first().locator("summary").click();
+      await expect
+        .poll(() => disclosures.first().textContent())
+        .toContain("Model fallback: Primary → Backup");
+      const operations = page.locator(".chat-group", { has: activity });
+      expect(await operations.locator(".chat-avatar-slot").count()).toBe(0);
+      expect(await operations.locator(".chat-group-footer").count()).toBe(0);
+    });
+  });
+
   it.each([false, true])(
     "appends events without losing disclosure state (grouped=%s)",
     async (grouped) => {
