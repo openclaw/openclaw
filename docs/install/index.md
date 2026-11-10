@@ -248,8 +248,9 @@ If you want managed startup after install:
 Deploy OpenClaw on a cloud server or VPS. See [Linux server](/vps) for the full
 provider picker (DigitalOcean, Hetzner, Hostinger, Fly.io, GCP, Azure, Railway,
 Northflank, Oracle Cloud, Raspberry Pi, and more), deploy declaratively on
-[Render](/install/render), or try the experimental [Cloudflare Containers](/install/cloudflare)
-template.
+[Render](/install/render), self-host with a one-click template on
+[Easypanel](/install/easypanel), or try the experimental
+[Cloudflare Containers](/install/cloudflare) template.
 
 <CardGroup cols={3}>
   <Card title="Cloudflare" href="/install/cloudflare">
@@ -257,6 +258,9 @@ template.
   </Card>
   <Card title="Docker VM" href="/install/docker-vm-runtime">
     Shared Docker steps.
+  </Card>
+  <Card title="Easypanel" href="/install/easypanel">
+    Self-hosted one-click Docker template.
   </Card>
   <Card title="Kubernetes" href="/install/kubernetes">
     K8s deployment.

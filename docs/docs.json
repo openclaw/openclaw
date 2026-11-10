@@ -1453,6 +1453,7 @@
                     "pages": [
                       "install/cloudflare",
                       "install/daytona",
+                      "install/easypanel",
                       "install/exe-dev",
                       "install/fly",
                       "install/northflank",

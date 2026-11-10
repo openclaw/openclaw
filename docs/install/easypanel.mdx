@@ -1,0 +1,79 @@
+---
+summary: "Deploy OpenClaw on Easypanel with a one-click template"
+read_when:
+  - Deploying OpenClaw to Easypanel
+  - You want a self-hosted, one-click Docker deploy on your own server
+title: "Easypanel"
+---
+
+[Easypanel](https://easypanel.io) is a self-hosted Docker deployment platform, and OpenClaw has a one-click deployment template there, for anyone who wants to self-host on their own server or VPS.
+
+## One-click deploy
+
+<a href="https://easypanel.io/templates/openclaw" target="_blank" rel="noreferrer">
+  Deploy on Easypanel
+</a>
+
+<Steps>
+  <Step title="Deploy the template">
+    Open the [OpenClaw template](https://easypanel.io/templates/openclaw) on Easypanel and click **Deploy**.
+  </Step>
+
+<Step title="Review the service settings">
+  The template provisions a single service running the Gateway. It exposes the **Gateway Port** (`18789`, used for the Control UI) and the **Bridge Port** (`18790`), and persists `/home/node/.openclaw` (config) and `/home/node/.openclaw/workspace` (workspace) in volumes so they survive redeploys.
+</Step>
+
+  <Step title="Set variables">
+    Optionally set, before or after deploying:
+
+    - `Gateway Token` -- leave empty to auto-generate; treat it as an admin secret
+    - `Claude AI Session Key` / `Claude Web Session Key` / `Claude Web Cookie` -- optional, for Claude integration
+    - `Enable Agent Sandboxing` -- lets OpenClaw spawn isolated Docker containers for agents to run code (requires mounting the Docker socket)
+
+  </Step>
+
+<Step title="Connect">
+  Easypanel provisions an HTTPS domain for the service automatically. Open that domain to reach the Control UI.
+</Step>
+
+  <Step title="Finish onboarding">
+    The Gateway starts automatically with `--allow-unconfigured`. To complete setup, open the service's console in Easypanel and run:
+
+    ```bash
+    node dist/index.js onboard --no-install-daemon
+    ```
+
+  </Step>
+</Steps>
+
+## What you get
+
+- Hosted OpenClaw Gateway + Control UI
+- Persistent config and workspace via Easypanel volumes, so `openclaw.json`, auth stores, channel/provider state, sessions, and workspace survive redeploys
+
+## Connect a channel
+
+Use the Control UI or run `openclaw onboard` from the service console for channel setup instructions:
+
+- [Discord](/channels/discord)
+- [Telegram](/channels/telegram) (fastest -- just a bot token)
+- [All channels](/channels)
+
+## Backups and migration
+
+Export your state, config, auth profiles, and workspace:
+
+```bash
+openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
+```
+
+Restore verifies and extracts into a fresh staging directory; activation is a
+separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
+
+## Next steps
+
+- Set up messaging channels: [Channels](/channels)
+- Configure the Gateway: [Gateway configuration](/gateway/configuration)
+- Keep OpenClaw up to date: [Updating](/install/updating)
