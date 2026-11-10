@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
+import { verifyRetainedPublicationArtifacts } from "./full-release-artifacts.mjs";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
 import {
   decodePublicationDispatchEnvelope,
@@ -53,7 +54,10 @@ import {
   validateReleaseChildRunProvenance,
   validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
-import { inspectActionsArtifactZip } from "./lib/actions-artifact-archive.mjs";
+import {
+  downloadExactActionsArtifactArchive,
+  inspectActionsArtifactZip,
+} from "./lib/actions-artifact-archive.mjs";
 import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { releaseChildReuseSha256 } from "./lib/full-release-child-request.mjs";
 import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
@@ -341,8 +345,7 @@ function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
   });
 }
 
-function readExecutionPlanEvidence(runId, repository, immutableReads) {
-  const name = `full-release-execution-plan-${runId}`;
+function readRunArtifacts(runId, repository) {
   const artifacts = [];
   let total;
   for (let page = 1; page <= 10; page += 1) {
@@ -357,7 +360,7 @@ function readExecutionPlanEvidence(runId, repository, immutableReads) {
       response.artifacts.length > 100 ||
       (total !== undefined && total !== response.total_count)
     ) {
-      throw new Error("publication execution plan artifact enumeration is invalid");
+      throw new Error("release artifact enumeration is invalid");
     }
     total = response.total_count;
     artifacts.push(...response.artifacts);
@@ -365,12 +368,18 @@ function readExecutionPlanEvidence(runId, repository, immutableReads) {
       break;
     }
     if (artifacts.length > total || response.artifacts.length < 100) {
-      throw new Error("publication execution plan artifact enumeration is incomplete");
+      throw new Error("release artifact enumeration is incomplete");
     }
   }
   if (artifacts.length !== total || new Set(artifacts.map((entry) => entry.id)).size !== total) {
-    throw new Error("publication execution plan artifact enumeration is incomplete or duplicated");
+    throw new Error("release artifact enumeration is incomplete or duplicated");
   }
+  return artifacts;
+}
+
+function readExecutionPlanEvidence(runId, repository, immutableReads) {
+  const name = `full-release-execution-plan-${runId}`;
+  const artifacts = readRunArtifacts(runId, repository);
   const matches = artifacts.filter((artifact) => artifact.name === name);
   if (matches.length !== 1) {
     throw new Error(
@@ -2118,9 +2127,16 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutableReads } = {}) {
   const normalizedRepository = normalizeRepository(repository);
+  const runAdmissionGh = (args) => {
+    const route = args[1].replace("repos/" + normalizedRepository + "/", "");
+    const load = () => runQualificationAdmissionGh(args);
+    return route.endsWith("/zip")
+      ? immutableReads.bytes(route, load)
+      : immutableReads.text(route, load);
+  };
   return {
-    validateChildReuse(selection, request) {
-      return validateReusableReleaseChild(selection, request, { immutableReads });
+    validateChildReuse(selection, request, { deadlineMs } = {}) {
+      return validateReusableReleaseChild(selection, request, { immutableReads, deadlineMs });
     },
     getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
       if (
@@ -2190,20 +2206,25 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         }
         immutableReads.observeRun(route, current);
       }
-      const runGh = (args) => {
-        const route = args[1].replace("repos/" + normalizedRepository + "/", "");
-        const load = () => runQualificationAdmissionGh(args);
-        return route.endsWith("/zip")
-          ? immutableReads.bytes(route, load)
-          : immutableReads.text(route, load);
-      };
       return verifyQualificationAdmission({
         ...options,
-        ...(immutableReads ? { runGh, downloadArchive: runGh } : {}),
+        ...(immutableReads ? { runGh: runAdmissionGh, downloadArchive: runAdmissionGh } : {}),
       });
     },
     revalidateQualificationAdmissionAuthority(options) {
-      return revalidateQualificationAdmissionAuthority(options);
+      return revalidateQualificationAdmissionAuthority({
+        ...options,
+        ...(immutableReads ? { runGh: runAdmissionGh } : {}),
+      });
+    },
+    verifyRetainedPublicationArtifacts(root, env, options) {
+      return verifyRetainedPublicationArtifacts(root, env, { ...options, immutableReads });
+    },
+    downloadArtifactArchive(options) {
+      return downloadExactActionsArtifactArchive({ ...options, immutableReads });
+    },
+    getRunArtifacts(runId) {
+      return readRunArtifacts(runId, normalizedRepository);
     },
     getArtifact(artifactId) {
       if (!/^[1-9][0-9]{0,19}$/u.test(String(artifactId))) {

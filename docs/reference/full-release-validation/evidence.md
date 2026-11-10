@@ -170,6 +170,18 @@ npm/plugin/Docker artifacts; P owns aggregation and current publication admissio
 A retained original parent is not relabeled successful. Historical FRV validation
 and historical-plan restoration remain unchanged.
 
+The recovery producer hashes and inspects the original payloads once and seals
+that exact inventory in the aggregate. Publication readers first authenticate the
+successful recovery job, ordered uploads, and observation bytes. They then
+reconstruct the complete inventory from the original descriptors, small manifests,
+and live artifact metadata and require an exact match with the sealed inventory.
+Bulk npm, SDK, Docker, and candidate bodies are not downloaded again by every
+plugin publisher. A fresh bounded plugin-artifact listing replaces per-package
+metadata requests; it is local to that authentication, never immutable replay.
+Selected package consumers still download and verify their own original bytes,
+and current producer attempts, expiry, and operator authority remain mandatory.
+The immutable replay carries raw small evidence only; its limits are unchanged.
+
 Parsed payloads retain the archive owner's existing size and integrity limits.
 Opaque Docker and candidate image/registry archives use its streaming digest
 verification: the authenticated metadata size is the exact transfer bound, and

@@ -236,40 +236,45 @@ function validateRun(run, selection, request) {
   );
 }
 
-async function readAttemptJobs(github, run, runAttempt) {
-  return readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
-    const jobs = [];
-    let total;
-    const maxPages = Math.ceil((MAX_JOB_PAGES * 100) / perPage);
-    for (let page = 1; page <= maxPages; page += 1) {
-      const inventory = await github(
-        `actions/runs/${run.id}/attempts/${runAttempt}/jobs?per_page=${perPage}&page=${page}`,
-        { smallerPageFallback },
-      );
-      total ??= inventory?.total_count;
-      requireEvidence(
-        positiveInteger(total) &&
-          total <= MAX_JOB_PAGES * 100 &&
-          inventory?.total_count === total &&
-          Array.isArray(inventory.jobs) &&
-          inventory.jobs.length > 0 &&
-          inventory.jobs.every(
-            (job) =>
-              String(job.run_id) === String(run.id) &&
-              job.run_attempt === runAttempt &&
-              job.head_sha === run.head_sha &&
-              job.status === "completed",
-          ),
-        "job inventory is incomplete or belongs to another attempt",
-      );
-      jobs.push(...inventory.jobs);
-      if (jobs.length >= total) {
-        requireEvidence(jobs.length === total, "job inventory count changed");
-        return jobs;
+async function readAttemptJobs(deps, run, runAttempt) {
+  const path = `actions/runs/${run.id}/attempts/${runAttempt}/jobs?`;
+  return readReleaseJobListing(
+    async (perPage, { smallerPageFallback }) => {
+      const jobs = [];
+      let total;
+      const maxPages = Math.ceil((MAX_JOB_PAGES * 100) / perPage);
+      for (let page = 1; page <= maxPages; page += 1) {
+        const inventory = await deps.github(
+          `actions/runs/${run.id}/attempts/${runAttempt}/jobs?per_page=${perPage}&page=${page}`,
+          { smallerPageFallback },
+        );
+        total ??= inventory?.total_count;
+        requireEvidence(
+          positiveInteger(total) &&
+            total <= MAX_JOB_PAGES * 100 &&
+            inventory?.total_count === total &&
+            Array.isArray(inventory.jobs) &&
+            inventory.jobs.length > 0 &&
+            inventory.jobs.every(
+              (job) =>
+                String(job.run_id) === String(run.id) &&
+                job.run_attempt === runAttempt &&
+                job.head_sha === run.head_sha &&
+                job.status === "completed",
+            ),
+          "job inventory is incomplete or belongs to another attempt",
+        );
+        jobs.push(...inventory.jobs);
+        if (jobs.length >= total) {
+          requireEvidence(jobs.length === total, "job inventory count changed");
+          deps.immutableReads?.selectJobPageSize(path, perPage);
+          return jobs;
+        }
       }
-    }
-    throw new Error("Full release child evidence job inventory exceeded its bound");
-  });
+      throw new Error("Full release child evidence job inventory exceeded its bound");
+    },
+    deps.immutableReads?.jobPageSizes(path),
+  );
 }
 
 function validatePublisher(jobs, receipt) {
@@ -406,7 +411,7 @@ async function validateEvidence(selection, request, deps) {
     const results = await Promise.allSettled(
       Array.from({ length: Math.min(4, run.run_attempt - first + 1) }, async (_, index) => {
         const runAttempt = first + index;
-        return { runAttempt, jobs: await readAttemptJobs(deps.github, run, runAttempt) };
+        return { runAttempt, jobs: await readAttemptJobs(deps, run, runAttempt) };
       }),
     );
     const failed = results.find((result) => result.status === "rejected");
