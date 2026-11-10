@@ -47,6 +47,7 @@ import {
   updateMcpToolsOffline,
 } from "./mcp-cli-state-owner.js";
 import { exitCliAfterOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { parseKeyValueEntries } from "./parse-key-value-entries.js";
 import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -141,23 +142,6 @@ function applyMcpToolFilter(server: Record<string, unknown>, opts: McpServerCont
       ...(exclude ? { exclude } : {}),
     };
   }
-}
-
-function parseKeyValueEntries(values: readonly string[] | undefined, label: string) {
-  const entries: Record<string, string> = {};
-  for (const raw of values ?? []) {
-    const separatorIndex = raw.indexOf("=");
-    if (separatorIndex <= 0) {
-      fail(`${label} entries must use KEY=VALUE.`);
-    }
-    const key = raw.slice(0, separatorIndex).trim();
-    const value = raw.slice(separatorIndex + 1);
-    if (!key) {
-      fail(`${label} entries must use a non-empty key.`);
-    }
-    entries[key] = value;
-  }
-  return Object.keys(entries).length > 0 ? entries : undefined;
 }
 
 function parseMcpApprovalModeOption(
@@ -1027,13 +1011,13 @@ export function registerMcpCli(program: Command) {
           if (opts.arg && opts.arg.length > 0) {
             server.args = opts.arg;
           }
-          setOptionalField(server, "env", parseKeyValueEntries(opts.env, "--env"));
+          setOptionalField(server, "env", parseKeyValueEntries(opts.env, "--env", fail));
           setOptionalField(server, "cwd", readNonBlankString(opts.cwd));
         }
         if (url) {
           server.url = url;
           setOptionalField(server, "transport", normalizeStringifiedOptionalString(opts.transport));
-          setOptionalField(server, "headers", parseKeyValueEntries(opts.header, "--header"));
+          setOptionalField(server, "headers", parseKeyValueEntries(opts.header, "--header", fail));
           applyMcpOAuthOptions(server, opts);
           applyMcpTlsOptions(server, opts);
         }

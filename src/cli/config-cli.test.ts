@@ -14,6 +14,7 @@ import {
 } from "../plugins/plugin-metadata.test-support.js";
 import { registerConfigJsonOutputTests } from "./config-cli.json-output.test-support.js";
 import { registerConfigMutationSchemaTests } from "./config-cli.mutation-schema.test-support.js";
+import { registerProviderEnvTests } from "./config-cli.provider-env.test-support.js";
 import {
   readConfigCliSnapshotWithMetadata,
   type ConfigCliSnapshotReader,
@@ -920,40 +921,23 @@ describe("config cli", () => {
       });
     });
 
-    it.each([
-      [
-        "leading equals",
-        "=SYNTHETIC_PROVIDER_ENV_SECRET",
-        "--provider-env expects KEY=*** entries.",
-      ],
-      [
-        "whitespace key",
-        "   =SYNTHETIC_PROVIDER_ENV_SECRET",
-        "--provider-env key must not be empty.",
-      ],
-    ])("does not disclose provider env values for a %s entry", async (_name, entry, message) => {
-      const secret = "SYNTHETIC_PROVIDER_ENV_SECRET";
-
-      await expect(
-        runConfigSet(
-          "secrets.providers.runner",
-          "--provider-source",
-          "exec",
-          "--provider-command",
-          "/usr/bin/env",
-          "--provider-env",
-          entry,
-          "--dry-run",
-        ),
-      ).rejects.toThrow(ExitError);
-
-      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(JSON.stringify(mockLog.mock.calls)).not.toContain(secret);
-      expect(JSON.stringify(mockWriteStdout.mock.calls)).not.toContain(secret);
-      expect(JSON.stringify(mockError.mock.calls)).not.toContain(secret);
-      expectErrorIncludes(message);
-    });
+    registerProviderEnvTests(() => ({
+      runConfigSet,
+      setGatewaySnapshot,
+      createProviderCommand: () => {
+        const command = path.join(tempDirs.make("openclaw-config-provider-env-"), "resolver");
+        writeSecurePluginEntrypoint(command, "// Fixture command; never executed.\n");
+        return command;
+      },
+      firstWrittenConfig,
+      mockReadConfigFileSnapshot,
+      mockWriteConfigFile,
+      mockLog,
+      mockWriteStdout,
+      mockError,
+      expectErrorIncludes,
+      ExitError,
+    }));
 
     it.skipIf(process.platform === "win32")(
       "rejects an unsafe exec provider command before writing",

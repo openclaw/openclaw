@@ -40,6 +40,33 @@ async function writeMcpServers(home: string, servers: Record<string, unknown>): 
 }
 
 describe("mcp cli", () => {
+  it.each(
+    ["__proto__", "constructor", "prototype"].flatMap((key) =>
+      ["--env", "--header"].map((flag) => ({ key, flag })),
+    ),
+  )("rejects reserved key $key in $flag without changing config", async ({ key, flag }) => {
+    await withMcpHome(async (home) => {
+      await writeMcpServers(home, { existing: { command: "node", enabled: false } });
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const before = await fs.readFile(configPath, "utf8");
+      await expect(
+        runMcpCommand([
+          "mcp",
+          "add",
+          "docs",
+          ...(flag === "--env" ? ["--command", "node"] : ["--url", "https://mcp.example.com/mcp"]),
+          "--no-probe",
+          flag,
+          ` ${key} =SYNTHETIC_SECRET`,
+        ]),
+      ).rejects.toMatchObject({ code: 1 });
+      expect(lastErrorLine()).toContain(
+        `${flag} key "${key}" is reserved; use a different key name.`,
+      );
+      expect(lastErrorLine()).not.toContain("SYNTHETIC_SECRET");
+      expect(await fs.readFile(configPath, "utf8")).toBe(before);
+    });
+  });
   it.each(["cert.pem", " cert.pem "])(
     "preserves literal TLS client paths from add flags: %j",
     async (name) => {
