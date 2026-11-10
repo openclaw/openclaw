@@ -194,7 +194,7 @@ describe("native plugin alias preparation", () => {
     },
   );
 
-  it.each(["alias", "relative"] as const)(
+  it.each(["alias", "relative", "host"] as const)(
     "evaluates shared SDK imports before concurrent lazy CJS plugins require them (%s)",
     async (sdkImport) => {
       const f = fixture();
@@ -202,8 +202,8 @@ describe("native plugin alias preparation", () => {
       writeFile(f.root, "dist/plugin-sdk/used.js", 'export { value } from "./leaf.js";');
       const bundledEntry = writeFile(
         f.root,
-        "dist/extensions/bundled/index.cjs",
-        `module.exports = { start: () => import("${sdkImport === "alias" ? "openclaw/plugin-sdk/used" : "../../plugin-sdk/used.js"}") };`,
+        sdkImport === "host" ? "dist/catalog.cjs" : "dist/extensions/bundled/index.cjs",
+        `module.exports = { start: () => import("${sdkImport === "alias" ? "openclaw/plugin-sdk/used" : sdkImport === "host" ? "./plugin-sdk/used.js" : "../../plugin-sdk/used.js"}") };`,
       );
       const pluginDir = path.join(f.root, "external");
       writeFile(pluginDir, "package.json", JSON.stringify({ name: "external-fixture" }));
@@ -222,8 +222,15 @@ describe("native plugin alias preparation", () => {
       const registry = createEmptyPluginRegistry();
       registry.plugins.push(record);
       const load = createPluginModuleLoader({ devSourceRoot: f.root, pluginSdkResolution: "dist" });
-      const bundled = load(bundledEntry) as { start: () => Promise<{ value: string }> };
-      const external = load(entry, { record, rootDir: pluginDir, registry }) as {
+      // Register through the real loader, but keep the host chunk outside plugin
+      // parent custody, as it is during provider catalog loading.
+      const loadedExternal = load(entry, { record, rootDir: pluginDir, registry });
+      const bundled = (
+        sdkImport === "host" ? requireFixture(bundledEntry) : load(bundledEntry)
+      ) as {
+        start: () => Promise<{ value: string }>;
+      };
+      const external = (sdkImport === "host" ? requireFixture(entry) : loadedExternal) as {
         start: () => Promise<{ default: { value: string } }>;
       };
       let reads: Promise<unknown>[] = [];
@@ -294,23 +301,88 @@ describe("native plugin alias preparation", () => {
     expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
   });
 
-  it.each(["query", "unregistered"] as const)(
+  it.each(["query", "unregistered", "host", "host-query", "host-hash", "host-unexported"] as const)(
     "keeps native SDK URL evaluation for %s imports",
     async (kind) => {
       const f = fixture();
       const outside = fixture();
       fs.writeFileSync(f.used, "await Promise.resolve(); export const url = import.meta.url;");
-      installOpenClawPluginSdkNativeResolver({ pluginModulePath: f.entry, devSourceRoot: f.root });
-      const metadata = createRequire(kind === "unregistered" ? outside.entry : f.entry)(
-        kind === "unregistered" ? outside.entry : f.entry,
-      ) as { loadEsm: (name: string) => Promise<unknown> };
-      const url = pathToFileURL(f.used);
-      if (kind === "query") {
+      installOpenClawPluginSdkNativeResolver({
+        pluginModulePath: f.entry,
+        devSourceRoot: f.root,
+        pluginSdkResolution: "dist",
+      });
+      const parent = kind.startsWith("host")
+        ? writeFile(
+            f.root,
+            "dist/catalog.cjs",
+            "module.exports = { loadEsm: (name) => import(name) };",
+          )
+        : kind === "unregistered"
+          ? outside.entry
+          : f.entry;
+      const metadata = requireFixture(parent) as { loadEsm: (name: string) => Promise<unknown> };
+      const target =
+        kind === "host-unexported"
+          ? writeFile(
+              f.root,
+              "dist/plugin-sdk/unexported.js",
+              "await Promise.resolve(); export const url = import.meta.url;",
+            )
+          : f.used;
+      const url = pathToFileURL(target);
+      if (kind === "query" || kind === "host-query") {
         url.search = "?generation=1";
       }
+      if (kind === "host-hash") {
+        url.hash = "generation=1";
+      }
+      expect(resolvePluginNativeAliasForParent("openclaw/plugin-sdk/used", parent)).toBe(
+        parent === f.entry ? f.used : undefined,
+      );
       await expect(metadata.loadEsm(url.href)).resolves.toMatchObject({ url: url.href });
     },
   );
+
+  it.each(["alias", "relative"] as const)(
+    "does not hide async SDK graphs from plugins (%s)",
+    async (kind) => {
+      const f = fixture();
+      fs.writeFileSync(f.used, "await Promise.resolve(); export const value = true;");
+      const load = createPluginModuleLoader({ devSourceRoot: f.root, pluginSdkResolution: "dist" });
+      const metadata = load(f.entry) as { loadEsm: (name: string) => Promise<unknown> };
+      await expect(
+        metadata.loadEsm(
+          kind === "alias" ? "openclaw/plugin-sdk/used" : "../../plugin-sdk/used.js",
+        ),
+      ).rejects.toMatchObject({ code: "ERR_REQUIRE_ASYNC_MODULE" });
+    },
+  );
+
+  it("preserves host SDK evaluation errors and shared module identity", async () => {
+    const f = fixture();
+    fs.writeFileSync(f.used, "export const value = {};");
+    const load = createPluginModuleLoader({ devSourceRoot: f.root, pluginSdkResolution: "dist" });
+    load(f.entry);
+    const parent = writeFile(
+      f.root,
+      "dist/catalog.cjs",
+      "module.exports = { loadEsm: (name) => import(name) };",
+    );
+    const host = requireFixture(parent) as {
+      loadEsm: (name: string) => Promise<{ value: unknown }>;
+    };
+    const imported = await host.loadEsm("./plugin-sdk/used.js");
+    expect(imported).toBe(await host.loadEsm(pathToFileURL(f.used).href));
+    expect(imported.value).toBe(createRequire(f.entry)("openclaw/plugin-sdk/used").value);
+    fs.writeFileSync(
+      f.unused,
+      'throw Object.assign(new Error("SDK evaluation failed"), { code: "SDK_FAILURE" });',
+    );
+    await expect(host.loadEsm("./plugin-sdk/unused.js")).rejects.toMatchObject({
+      code: "SDK_FAILURE",
+    });
+  });
 
   it("captures private QA denial before late use even if ambient authorization changes", async () => {
     const f = fixture();

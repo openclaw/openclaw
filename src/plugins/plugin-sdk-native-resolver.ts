@@ -244,6 +244,30 @@ function resolveAliasTargetForParentUrl(
   }
 }
 
+function resolveHostSdkTargetForParentUrl(
+  request: string,
+  parentUrl: string | undefined,
+  filename: string,
+): string | undefined {
+  if (!parentUrl?.startsWith("file:")) {
+    return undefined;
+  }
+  // Core chunks share SDK modules with plugins without becoming plugin alias parents.
+  const sdkRoot = path.dirname(filename);
+  if (path.dirname(fileURLToPath(parentUrl)) !== path.dirname(sdkRoot)) {
+    return undefined;
+  }
+  for (const aliases of getPluginCache().sdk.contexts.values()) {
+    if (aliases.sdkRoots.includes(sdkRoot)) {
+      const target = aliases.resolveAlias(request);
+      if (target && path.normalize(target) === filename) {
+        return target;
+      }
+    }
+  }
+  return undefined;
+}
+
 export function resolvePluginNativeAliasForParent(
   request: string,
   parentFilename: string | undefined,
@@ -380,20 +404,32 @@ function installResolver(): void {
           : nextResolve(specifier, context);
         if (context.conditions.includes("import") && resolved.url.startsWith("file:")) {
           const filename = fileURLToPath(resolved.url);
-          const sdkTarget = isPluginSdkAliasSpecifier(specifier)
+          const sdkRequest = Array.from(getPluginCache().sdk.contexts.values()).some(
+            ({ sdkRoots }) => sdkRoots.includes(path.dirname(filename)),
+          )
+            ? `openclaw/plugin-sdk/${path.basename(filename, path.extname(filename))}`
+            : undefined;
+          const pluginSdkTarget = isPluginSdkAliasSpecifier(specifier)
             ? aliasTarget
-            : Array.from(getPluginCache().sdk.contexts.values()).some(({ sdkRoots }) =>
-                  sdkRoots.includes(path.dirname(filename)),
-                )
-              ? resolveAliasTargetForParentUrl(
-                  `openclaw/plugin-sdk/${path.basename(filename, path.extname(filename))}`,
-                  context.parentURL,
-                )
+            : sdkRequest
+              ? resolveAliasTargetForParentUrl(sdkRequest, context.parentURL)
               : undefined;
-          // Built plugins use relative SDK URLs. Match the authorized host alias before
+          const hostSdkTarget =
+            !pluginSdkTarget && sdkRequest
+              ? resolveHostSdkTargetForParentUrl(sdkRequest, context.parentURL, filename)
+              : undefined;
+          const sdkTarget = pluginSdkTarget ?? hostSdkTarget;
+          // Built plugins and adjacent core chunks use relative SDK URLs. Match the alias before
           // evaluation so later synchronous loads never inherit an uninstantiated job.
           if (sdkTarget && pathToFileURL(sdkTarget).href === resolved.url) {
-            Module.createRequire(import.meta.url)(sdkTarget);
+            try {
+              Module.createRequire(import.meta.url)(sdkTarget);
+            } catch (error) {
+              // Only host-path imports may retain a native async-only ESM graph.
+              if (!hostSdkTarget || !isRecord(error) || error.code !== "ERR_REQUIRE_ASYNC_MODULE") {
+                throw error;
+              }
+            }
           }
         }
         return resolved;

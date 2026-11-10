@@ -30,7 +30,10 @@ At startup, OpenClaw does roughly this:
 Native plugin imports evaluate each requested SDK entry synchronously before
 linking the plugin's asynchronous module graph. This lets CommonJS bundles
 `require()` the same SDK entry during concurrent channel startup without seeing
-an unfinished ESM module. Unused SDK entries remain unloaded.
+an unfinished ESM module. The same preparation applies when an adjacent host
+chunk imports that exact exported SDK file. Host-only asynchronous SDK graphs
+retain native ESM evaluation; this does not grant host chunks plugin aliases or
+change query/fragment module identities. Unused SDK entries remain unloaded.
 
 Bundled channel entries and channel metadata modules use the shared cached module
 loader. It prepares SDK aliases before evaluation and owns native-to-source
