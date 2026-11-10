@@ -58,7 +58,6 @@
 
 /* Host controls own their space; plugin and iframe content can use every canvas pixel. */
 .chat-dashboard-menu {
-  position: relative;
   align-self: flex-end;
   flex: 0 0 auto;
   margin: 6px 12px;
