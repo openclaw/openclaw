@@ -1,6 +1,12 @@
-import type { LocalWorkspacePauseReason } from "../../agents/sandbox/local-workspace-quiescence.js";
+import type {
+  LocalWorkspacePausePhase,
+  LocalWorkspacePauseReason,
+} from "../../agents/sandbox/local-workspace-quiescence.js";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
-import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
+import {
+  startWorktreePreparationPhase,
+  timeWorktreePreparationPhase,
+} from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRegistryReadGuard,
   prepareWorktreeRegistryGuard,
@@ -371,32 +377,57 @@ export async function withSettledLocalWorkspacePath<T>(
 }
 
 /** An unchanged turn needs no filesystem effects and can leave its runtimes running. */
-export function reuseLocalWorkspaceProjection(
+export async function reuseLocalWorkspaceProjection(
   owner: LocalWorkspaceOwner,
   signal?: AbortSignal,
   beginCapture?: () => void,
 ) {
-  return withLocalWorkspaceStore(
-    { ...owner, worktreeId: owner.worktree.id, signal },
-    async (store) => {
-      using phases = observeDiagnosticsTimelinePhases(
-        "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
-      );
-      try {
-        if (store.get()?.baseline_ref) {
-          beginCapture?.();
-        }
-        return (
-          (await probeUnchangedLocalWorkspace(owner, store, ["canonical", "projection"])) ??
-          (await runLocalWorkspaceProjection(owner, store, (state) => state.reuse(), {
-            reason: "preparation",
-          }))
+  let finishPhase = startWorktreePreparationPhase("reuse.acquire");
+  const markPhase = (
+    phase:
+      | LocalWorkspacePausePhase
+      | "capturePreparation"
+      | "probeCanonical"
+      | "probeProjection"
+      | "release",
+  ) => {
+    finishPhase();
+    finishPhase = startWorktreePreparationPhase(`reuse.${phase}`);
+  };
+  try {
+    return await withLocalWorkspaceStore(
+      { ...owner, worktreeId: owner.worktree.id, signal },
+      async (store) => {
+        using phases = observeDiagnosticsTimelinePhases(
+          "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
         );
-      } finally {
-        phases.mark("attempt.setup.sandbox.workspace_selection.reuse.release");
-      }
-    },
-  );
+        try {
+          markPhase("operation");
+          if (store.get()?.baseline_ref) {
+            beginCapture?.();
+          }
+          return (
+            (await probeUnchangedLocalWorkspace(
+              owner,
+              store,
+              ["canonical", "projection"],
+              undefined,
+              (target) => markPhase(target === "canonical" ? "probeCanonical" : "probeProjection"),
+            )) ??
+            (await runLocalWorkspaceProjection(owner, store, (state) => state.reuse(), {
+              reason: "preparation",
+              onPhase: markPhase,
+            }))
+          );
+        } finally {
+          markPhase("release");
+          phases.mark("attempt.setup.sandbox.workspace_selection.reuse.release");
+        }
+      },
+    );
+  } finally {
+    finishPhase();
+  }
 }
 
 /** A live probe can prove there is nothing to publish; changed bytes still require quiescence. */
@@ -405,6 +436,7 @@ async function probeUnchangedLocalWorkspace(
   store: LocalWorkspaceStore,
   targets: readonly ("canonical" | "projection")[],
   observeProbe?: (entries: number, elapsedMs: number) => void,
+  markProbe?: (target: "canonical" | "projection") => void,
 ) {
   let row = store.get();
   if (
@@ -421,6 +453,7 @@ async function probeUnchangedLocalWorkspace(
   // Bind the row before observation; acceptance retains the same lease and live authority.
   projectionOperations(owner, store, row).current();
   for (const target of targets) {
+    markProbe?.(target);
     const selected = row;
     const started = performance.now();
     const snapshot = await timeWorktreePreparationPhase(
