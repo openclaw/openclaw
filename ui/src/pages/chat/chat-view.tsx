@@ -472,10 +472,13 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
       input.props,
       (replacement) => {
         const replacementElement = replacement && replacementComposer.read();
+        const footer = getComposerFooter();
         const target =
-          replacementElement ||
-          getChatComposerState(input.props.paneId).composerTextarea ||
-          getComposerFooter();
+          replacementElement || getChatComposerState(input.props.paneId).composerTextarea || footer;
+        // The fallback is a keyboard destination, not a pointer-focusable editor ancestor.
+        if (target === footer) {
+          footer?.setAttribute("tabindex", "-1");
+        }
         target?.focus({ preventScroll: true });
       },
       // This view mounts only while its pane's question source exists.
@@ -682,7 +685,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                     <div
                       id={composerTargetId}
                       class="chat-footer"
-                      tabindex={-1}
+                      onBlur={(event) => event.currentTarget.removeAttribute("tabindex")}
                       ref={[bindComposerFooter, elementRef(input.props.onFooterElementRef)]}
                     >
                       <ChatSurface
