@@ -146,3 +146,59 @@ it("keeps missing selected profiles terminal despite prepared native CLI authent
     runtimeAuth: { id: "claude-cli", source: "native" },
   });
 });
+
+it("keeps a prepared Claude CLI login available when only plugin metadata declares the backend", () => {
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [{ id: "anthropic", cliBackends: ["claude-cli"], providers: ["anthropic"] }],
+  });
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [],
+    resolvePluginSetupCliBackend: (params) => {
+      const owner = params.metadataSnapshot?.manifestRegistry.plugins.find((plugin) =>
+        plugin.cliBackends.includes("claude-cli"),
+      );
+      return owner
+        ? {
+            pluginId: owner.id,
+            backend: {
+              id: "claude-cli",
+              modelProvider: "anthropic",
+              config: { command: "claude" },
+            },
+          }
+        : undefined;
+    },
+  });
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: { models: { "anthropic/model-99": { agentRuntime: { id: "claude-cli" } } } },
+    },
+  };
+  const createResolver = (prepared: boolean) =>
+    createModelAuthAvailabilityResolver({
+      cfg,
+      agentId: "main",
+      authStore,
+      metadataSnapshot: snapshot,
+      env: {},
+      ...(prepared
+        ? { preparedRuntimeAuthModes: { "claude-cli": { source: "native", mode: "oauth" } } }
+        : {}),
+    });
+
+  expect(createResolver(true).evaluateRuntimeModelAuth("anthropic", route)).toMatchObject({
+    availability: true,
+    evidence: "runtime",
+    selectedAuthMode: "oauth",
+    runtimeAuth: { id: "claude-cli", source: "native" },
+  });
+  expect(createResolver(false).evaluateRuntimeModelAuth("anthropic", route).availability).toBe(
+    false,
+  );
+  expect(
+    createResolver(true).evaluateRuntimeModelAuth("anthropic", {
+      ...route,
+      pinnedProfileId: "anthropic:missing",
+    }).availability,
+  ).toBe(false);
+});

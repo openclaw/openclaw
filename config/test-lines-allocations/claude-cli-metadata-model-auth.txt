@@ -1,0 +1,3 @@
+# Model selection must keep a prepared Claude CLI login when plugin metadata
+# declares the backend and the process has not registered it yet.
+55
