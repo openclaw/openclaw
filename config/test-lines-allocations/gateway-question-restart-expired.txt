@@ -1,2 +1,2 @@
-# Gateway question restart: session-marker resume, second-restart carry, and private-question regressions, plus revival of a question restored after a reconnect.
-117
+# Gateway question restart: session-marker resume, second-restart carry, and private-question regressions, revival after a reconnect, restored-outcome publication, and restart-vs-disconnect labels.
+134

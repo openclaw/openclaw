@@ -164,7 +164,11 @@ function QuestionPageContent(
     }
     operationGeneration += 1;
     clientOwner = nextClient;
-    setQuestionPromptClient(questionState, canUseQuestionPrompts(snapshot) ? nextClient : null);
+    setQuestionPromptClient(
+      questionState,
+      canUseQuestionPrompts(snapshot) ? nextClient : null,
+      snapshot.hello?.server?.bootId,
+    );
     if (!nextClient) {
       if (listQuestionPrompts(questionState).some((candidate) => candidate.id === questionId())) {
         failRead("connection");

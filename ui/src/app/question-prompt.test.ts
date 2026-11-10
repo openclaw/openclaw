@@ -593,31 +593,33 @@ describe("refreshPendingQuestions", () => {
     });
   });
 
-  it("revives a presumed-dropped question when the restarted Gateway restores it", async () => {
-    const request = vi.fn<RequestFn>(async (method) => {
-      if (method === "question.list") {
-        return { questions: [] };
+  it.each([
+    ["boot-b", "expired", "gateway-restart"],
+    ["boot-a", "unavailable", undefined],
+  ] as const)(
+    "labels a pending question missing after reconnecting to %s as %s",
+    async (bootId, status, resolvedBy) => {
+      const request = vi.fn<RequestFn>(async (method) => {
+        if (method === "question.list") {
+          return { questions: [] };
+        }
+        throw questionNotFoundError();
+      });
+      const { state, client } = createConnectedState(request);
+      setQuestionPromptClient(state, client, "boot-a");
+      setQuestionPromptClient(state, null);
+      setQuestionPromptClient(state, client, bootId);
+
+      refreshPendingQuestionsWithRetry(state, client);
+      await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe(status));
+      expectPrompt(state, { status, resolvedBy, locallyExpired: false, submitting: false });
+      if (resolvedBy) {
+        // Restart resume restores the carried question after this client reconnected.
+        expect(requestQuestion(state)).toBe(true);
+        expectPrompt(state, { status: "pending" });
       }
-      throw questionNotFoundError();
-    });
-    const { state, client } = createConnectedState(request);
-
-    refreshPendingQuestionsWithRetry(state, client);
-    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("expired"));
-
-    expectPrompt(state, {
-      status: "expired",
-      resolvedBy: "gateway-restart",
-      answeredElsewhere: false,
-      locallyExpired: false,
-      submitting: false,
-      error: null,
-    });
-    // Restart resume restores the carried question after this client reconnected.
-    expect(requestQuestion(state)).toBe(true);
-    expectPrompt(state, { status: "pending" });
-    expect(state.prompts.get("question-1")).not.toHaveProperty("resolvedBy");
-  });
+    },
+  );
 
   it("stops retrying an unmatched resolution after its gateway tombstone ages out", async () => {
     vi.useFakeTimers();

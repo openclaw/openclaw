@@ -14,6 +14,7 @@ import {
 } from "../session-restart-resume.js";
 import * as systemTurnAuthority from "../session-system-turn-authority.js";
 import * as support from "./question.test-support.js";
+import type { GatewayClient } from "./types.js";
 
 support.installQuestionTestHooks();
 const cfg = { agents: { entries: { main: {} } } };
@@ -51,6 +52,14 @@ function withAskingSession(run: () => Promise<void>) {
 it("keeps an ordinary question answerable across restarts and continues the session once", () =>
   withAskingSession(async () => {
     const enqueue = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+    // A second client that did not ask or answer: what restored-question events reach it.
+    const otherClient = { connect: { scopes: ["operator.admin"] } } as GatewayClient;
+    const reached: unknown[][] = [];
+    support.broadcast.mockImplementation((event, payload, options) => {
+      if (options?.questionRecipient?.(otherClient)) {
+        reached.push([event, payload]);
+      }
+    });
     const requested = await support.callQuestionRpc(
       "question.request",
       { ...support.requestParams, timeoutMs: 60_000 },
@@ -64,15 +73,21 @@ it("keeps an ordinary question answerable across restarts and continues the sess
       questions: [{ id, status: "pending" }],
     });
     // Clients that reconnected before restore learn the question is answerable again.
-    expect(support.broadcast).toHaveBeenLastCalledWith(
+    expect(reached.at(-1)).toEqual([
       "question.requested",
       expect.objectContaining({ id, status: "pending" }),
-      expect.objectContaining({ questionRecipient: expect.any(Function) }),
-    );
+    ]);
     // The generic restart resume turn is skipped while the question waits.
     expect(enqueue).not.toHaveBeenCalled();
     const answer = { id, answers: { answers: { destination: ["Paris"] } } };
     expect((await support.callQuestionRpc("question.resolve", answer))[0]).toBe(true);
+    // Other clients see the answer, as they would for a live question.
+    await vi.waitFor(() =>
+      expect(reached.at(-1)).toEqual([
+        "question.resolved",
+        { id, status: "answered", answers: { answers: { destination: ["Paris"] } } },
+      ]),
+    );
     await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(1));
     expect(enqueue).toHaveBeenCalledWith(
       formatRestartedQuestionResult(support.manager.get(id)!),

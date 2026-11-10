@@ -1,5 +1,8 @@
 // Continues a session whose question outlived the Gateway restart that ended its tool call.
-import type { QuestionRecord } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  QuestionRecord,
+  QuestionResolvedEvent,
+} from "../../packages/gateway-protocol/src/index.js";
 import { formatRestartedQuestionResult } from "../agents/tools/ask-user-tool-normalization.js";
 import {
   captureSessionEventTargetForHost,
@@ -9,7 +12,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
-import type { ResumableQuestion } from "./question-manager.js";
+import type { QuestionObservation, ResumableQuestion } from "./question-manager.js";
 import { questionBroadcastOptions } from "./question-session-access.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
@@ -46,7 +49,7 @@ export function markerQuestions(
 /**
  * Restores a restart marker's questions; true when any now waits to continue the session.
  * Clients that reconnected before this ran saw the question as missing, so it is announced
- * again to the recipients the original request would reach.
+ * again, and its outcome is published, to the recipients the original request would reach.
  */
 export function restoreMarkerQuestions(
   context: GatewayRequestContext,
@@ -54,30 +57,33 @@ export function restoreMarkerQuestions(
   marker: { questions?: QuestionRecord[] },
 ): boolean {
   const manager = context.questionManager;
-  let restored = false;
-  for (const record of marker.questions ?? []) {
-    const continueSession = (outcome: QuestionRecord) => {
-      void resumeRestoredQuestion(context, session, outcome);
-    };
-    if (!manager?.restore({ record, sessionId: session.sessionId }, continueSession)) {
-      continue;
-    }
-    restored = true;
+  const publish = (event: string, payload: unknown, observation: QuestionObservation | null) => {
     const cfg = context.getRuntimeConfig();
     let publishing = true;
     const recipients = questionBroadcastOptions({
-      observation: manager.observe(record.id, record),
-      expectedRecord: record,
+      observation,
+      ...(event === "question.requested" ? { expectedRecord: observation?.record } : {}),
       cfg,
       isPublishing: () => publishing,
     });
-    context.broadcast("question.requested", record, {
+    context.broadcast(event, payload, {
       ...(cfg.gateway?.roles
         ? { sessionKeys: [session.sessionKey], agentId: session.agentId }
         : {}),
       ...recipients,
     });
     publishing = false;
+  };
+  let restored = false;
+  for (const record of marker.questions ?? []) {
+    const onResolved = (event: QuestionResolvedEvent, observation: QuestionObservation) => {
+      publish("question.resolved", event, observation);
+      void resumeRestoredQuestion(context, session, observation.record);
+    };
+    if (manager?.restore({ record, sessionId: session.sessionId }, onResolved)) {
+      restored = true;
+      publish("question.requested", record, manager.observe(record.id, record));
+    }
   }
   return restored;
 }

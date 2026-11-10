@@ -60,6 +60,9 @@ type QuestionPromptState = QuestionClientResolutionOwner & {
   revision: number;
   expiryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   refreshRetryTimer: ReturnType<typeof globalThis.setTimeout> | null;
+  /** Boot id from the connected Gateway's hello; a change proves it restarted. */
+  gatewayBootId?: string;
+  gatewayRestarted: boolean;
   onChange: () => void;
   subscribe: (listener: () => void) => () => void;
 };
@@ -132,6 +135,7 @@ export function createQuestionPromptState(onChange: () => void = () => {}): Ques
     revision: 0,
     expiryTimer: null,
     refreshRetryTimer: null,
+    gatewayRestarted: false,
     onChange: () => {
       snapshot = [...state.prompts.values()].toSorted(
         (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
@@ -326,9 +330,9 @@ export function questionExpiredLabelKey(prompt: QuestionPrompt) {
 function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPrompt): void {
   // QUESTION_NOT_FOUND means the gateway tombstone aged out. It proves the prompt is
   // no longer actionable, but not whether it was answered, cancelled, or expired.
-  // A still-live pending prompt with no record at all was dropped by a Gateway restart
-  // (rarely, it was answered elsewhere during a disconnect longer than the tombstone).
-  const dropped = prompt.status === "pending" && !prompt.locallyExpired;
+  // Only a Gateway restart drops a still-live pending prompt with no tombstone; after an
+  // ordinary disconnect the tombstone simply aged out, so the outcome stays unknown.
+  const dropped = state.gatewayRestarted && prompt.status === "pending" && !prompt.locallyExpired;
   prompt.status = dropped ? "expired" : "unavailable";
   prompt.resolvedBy = dropped ? "gateway-restart" : undefined;
   clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
@@ -473,8 +477,13 @@ export function refreshPendingQuestionsWithRetry(
 export function setQuestionPromptClient(
   state: QuestionPromptState,
   client: QuestionClient | null,
+  gatewayBootId?: string,
 ): void {
   clearQuestionPromptTimer(state, "refreshRetryTimer");
+  if (client && gatewayBootId) {
+    state.gatewayRestarted = Boolean(state.gatewayBootId && state.gatewayBootId !== gatewayBootId);
+    state.gatewayBootId = gatewayBootId;
+  }
   if (state.client === client) {
     return;
   }

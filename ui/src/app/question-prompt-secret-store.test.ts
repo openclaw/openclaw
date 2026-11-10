@@ -202,7 +202,7 @@ describe("store-bound question terminal cleanup", () => {
     expect(prompt.drafts.has("secret_value")).toBe(false);
   });
 
-  it("forgets the secret draft when recovery proves a restart dropped the question", async () => {
+  it("forgets the secret draft when recovery proves the question unavailable", async () => {
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "question.list") {
         return { questions: [] };
@@ -219,7 +219,7 @@ describe("store-bound question terminal cleanup", () => {
     }
 
     refreshPendingQuestionsWithRetry(state, client);
-    await waitForFast(() => expect(prompt.status).toBe("expired"));
+    await waitForFast(() => expect(prompt.status).toBe("unavailable"));
 
     expect(prompt.drafts.has("secret_value")).toBe(false);
   });

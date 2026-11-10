@@ -249,7 +249,7 @@ export class QuestionManager {
    */
   restore(
     { record, sessionId }: ResumableQuestion,
-    continueSession: (record: QuestionRecord) => void,
+    onResolved: (event: QuestionResolvedEvent, observation: QuestionObservation) => void,
   ): boolean {
     if (this.closed || this.entries.has(record.id)) {
       return false;
@@ -267,7 +267,7 @@ export class QuestionManager {
         },
       }),
       waiters: new Set(),
-      onResolved: (_event, observation) => continueSession(observation.record),
+      onResolved,
       admissionContinuation: null,
     });
     return true;
