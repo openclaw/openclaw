@@ -79,10 +79,11 @@ const controlUiPerformanceBudgets = {
   largestCssGzipBytes: 58_315,
   // Vincent Koc accepted the interface-wide text-scale cost in #196468
   // (2026-11-10): +2,284 B gzip / +30,654 B raw versus a7ba22b9.
-  // Include the 93 B raw CSS already added by main 1004b4fb; the typography
-  // delta is unchanged. Retain the accepted gzip ceiling and no raw headroom.
-  totalCssGzipBytes: 328_754,
-  totalCssRawBytes: 1_712_757,
+  // Add only that accepted delta to the prior fixed ceilings (326,575 /
+  // 1,682,231). Preserve their existing allowance for concurrent main changes,
+  // rather than subtracting it by binding the caps to one stale build total.
+  totalCssGzipBytes: 328_859,
+  totalCssRawBytes: 1_712_885,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
