@@ -442,6 +442,9 @@ try {
     assert(typeof branch === "string");
     const git = (...args: string[]) =>
       execFileSync("git", ["-C", worktreePath, ...args], { encoding: "utf8" }).trim();
+    if (values["ledger-snapshot"] === "exact") {
+      git("checkout", "--detach", "HEAD");
+    }
     const exactState =
       values["ledger-snapshot"] === "exact"
         ? {
