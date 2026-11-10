@@ -125,6 +125,22 @@ describe("runMessageAction send validation", () => {
     );
   });
 
+  const table = { type: "table", caption: "Hosts", headers: ["Name", "State"] };
+  it.each([
+    { title: "Hosts", blocks: [{ ...table, caption: undefined, rows: [["web", "running"]] }] },
+    { blocks: [{ ...table, rows: [["web", ""]] }] },
+    { blocks: [{ type: "chart", chartType: "bar", categories: ["Mon"], series: [] }] },
+  ])("rejects presentation data blocks that normalization would drop: %j", async (presentation) => {
+    await expect(runDrySend({ message: "Hosts", presentation })).rejects.toThrow(
+      /presentation\.blocks\[0\] \((table|chart)\) is invalid/,
+    );
+  });
+
+  it("keeps valid presentation tables on send", async () => {
+    const presentation = { blocks: [{ ...table, rows: [["web", "running"]] }] };
+    expect((await runDrySend({ message: "Hosts", presentation })).kind).toBe("send");
+  });
+
   it("keeps rejecting a non-empty event location string on send", async () => {
     await expect(
       runDrySend({

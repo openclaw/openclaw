@@ -86,6 +86,29 @@ function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["
     : undefined;
 }
 
+// The tool schema stays flat for provider validators, so normalization is where
+// table and chart shapes are enforced. It drops a malformed block, which would
+// otherwise deliver the rest of the message and report success without the data.
+function assertPresentationDataBlocksKept(raw: unknown): void {
+  const blocks = (raw as { blocks?: unknown } | null | undefined)?.blocks;
+  if (!Array.isArray(blocks)) {
+    return;
+  }
+  blocks.forEach((block, index) => {
+    const type = (block as { type?: unknown } | null)?.type;
+    if (
+      (type === "table" || type === "chart") &&
+      !normalizeMessagePresentation({ blocks: [block] })
+    ) {
+      throw new Error(
+        type === "table"
+          ? `presentation.blocks[${index}] (table) is invalid: it needs a caption, unique non-empty headers, and rows with one non-empty string or finite number per header.`
+          : `presentation.blocks[${index}] (chart) is invalid: it needs a title and either pie segments or categories with one finite value per category in every series.`,
+      );
+    }
+  });
+}
+
 export async function buildMessagePayload(params: {
   actionParams: Record<string, unknown>;
   input: MessageActionInput;
@@ -300,6 +323,7 @@ export async function buildMessagePayload(params: {
       ? (rawDelivery as ReplyPayloadDelivery)
       : undefined;
   const channelData = asOptionalRecord(actionParams.channelData);
+  assertPresentationDataBlocksKept(actionParams.presentation);
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
   const payload: ReplyPayload = {

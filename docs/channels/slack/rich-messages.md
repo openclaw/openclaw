@@ -95,6 +95,11 @@ No additional OAuth scope or Slack configuration is required beyond normal
 }
 ```
 
+`caption`, unique non-empty `headers`, and a non-empty string or finite number
+in every cell are required ([table semantics](/plugins/message-presentation)).
+A `message` send with a table missing any of them fails with an error instead
+of posting the rest of the message without the table.
+
 OpenClaw maps header and string cells to Slack `raw_text` cells. Numeric cells
 map to `raw_number`, with the finite numeric value preserved for native sorting
 and filtering. `rowHeaderColumnIndex`, when present, marks that zero-based
