@@ -1,3 +1,4 @@
 # Bundled skill Add, archive, and consent regressions: 585 net lines; 94 already
-# allocated and 459 covered by incoming slack leave exactly 32 uncovered lines.
-32
+# allocated and 439 covered by incoming slack leave exactly 52 uncovered lines.
+# Twenty lines move from the dependent plugin allocation; total stack credit falls by three.
+52
