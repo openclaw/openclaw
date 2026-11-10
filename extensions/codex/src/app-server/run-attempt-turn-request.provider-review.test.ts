@@ -1,7 +1,6 @@
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as clientRuntime from "./client-runtime.js";
 import {
   CODEX_INFERENCE_GENERATION_KEY,
   createCodexInferenceContext,
@@ -520,40 +519,3 @@ it.each(["release", "abort"])(
     }
   },
 );
-
-it("rejects lost relay ownership at protected continuation dispatch", async () => {
-  const context = createCodexInferenceContext(() => {});
-  inference.route = { context };
-  const protectedWork = vi
-    .spyOn(clientRuntime, "isCodexAppServerLiveThreadProtected")
-    .mockReturnValue(true);
-  const native = createNativeThread();
-  try {
-    const attempt = await prepare(undefined, native, false, (resources) => {
-      const runtime = resources.prompt.context.runtime;
-      runtime.runtimeParams.extraSystemPrompt = "Current internal continuation.";
-      runtime.runtimeParams.extraSystemPromptTurnContext = {
-        start: 0,
-        text: "Current internal continuation.",
-      };
-      runtime.connection.assertLegacyCurrent = () => {};
-      runtime.connection.params.hostCapabilities = {
-        assertActive() {},
-      } as typeof runtime.connection.params.hostCapabilities;
-    });
-    attempt.route.armTurn.mockImplementationOnce(() => {
-      inference.route = undefined;
-    });
-    await expect(attempt.prepared.startCodexTurn()).rejects.toThrow(
-      "requires a current parent-local inference relay",
-    );
-    expect(native.latest.status).toBe("failed");
-    expect(attempt.nativeProcessAuthority.bindTurn).not.toHaveBeenCalled();
-    expect(attempt.route.cancelTurn).toHaveBeenCalledOnce();
-    expect(cleanup.interrupt).not.toHaveBeenCalled();
-    expect(cleanup.retire).not.toHaveBeenCalled();
-  } finally {
-    protectedWork.mockRestore();
-    context.close();
-  }
-});

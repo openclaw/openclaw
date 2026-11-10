@@ -15,7 +15,6 @@ import {
   isCodexPluginThreadBindingStale,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
-import { assertCodexProtectedContextCarrier } from "./protected-context-carrier.js";
 import {
   assertCodexBindingMayBeReplaced,
   type CodexAppServerPendingSupervisionBranch,
@@ -140,12 +139,6 @@ export async function startOrResumeThread(
         throwIfAborted,
       });
       serviceTierAdmission = context.serviceTierAdmission;
-      assertCodexProtectedContextCarrier(
-        params.client,
-        binding?.threadId,
-        Boolean(params.inferenceRoute),
-        splitCodexExtraSystemPrompt(params.params).turn,
-      );
       // Managed requests own a parent-local carrier. Only uncovered connections
       // put refreshable instructions in native thread state; recompute after route changes.
       params.refreshableInstructions = params.inferenceRoute

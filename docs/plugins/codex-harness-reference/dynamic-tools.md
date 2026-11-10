@@ -91,11 +91,3 @@ conversation context before the host can refresh it. No new durable cache is add
 Configured conversation policy, execution hints, and caller-added instructions
 remain part of persistent thread identity. Invalid or stale annotations leave the
 full prompt persistent. Other harnesses still receive the complete prompt unchanged.
-
-Protected continuations carrying producer-annotated conversation context require
-a current parent-local inference relay even when conversation bytes are unchanged.
-Without that carrier, OpenClaw rejects before
-native turn dispatch and preserves active native work. This avoids relying on
-native compaction to retain instructions. Ordinary idle no-relay turns continue
-to use native creation/resume instructions and retain their existing compaction
-limitation; they do not gain authority from a saved catalog or prompt.
