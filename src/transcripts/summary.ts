@@ -6,6 +6,7 @@ import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-
 import type { TranscriptsGetResult } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
+import { escapeMarkdownText } from "../shared/text/escape-markdown.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 
 type TranscriptSummaryWire = NonNullable<TranscriptsGetResult["summary"]>;
@@ -103,19 +104,23 @@ export function summarizeTranscripts(params: {
 }
 
 function renderList(items: string[]): string {
-  return items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : "- None captured";
+  return items.length > 0
+    ? items.map((item) => `- ${escapeMarkdownText(item)}`).join("\n")
+    : "- None captured";
 }
 
 /** Render a transcript summary as markdown for local artifacts. */
 export function renderTranscriptsMarkdown(summary: TranscriptsSummary): string {
   return [
-    `# ${summary.title}`,
+    `# ${escapeMarkdownText(summary.title)}`,
     "",
     `Generated: ${summary.generatedAt}`,
-    `Session: ${sanitizeTerminalText(summary.sessionId)}`,
+    `Session: ${escapeMarkdownText(sanitizeTerminalText(summary.sessionId))}`,
     "",
     "## Overview",
-    summary.overview,
+    // Summary fields are transcript data, not authored Markdown. Encode only
+    // at rendering so structured notes retain their original text.
+    escapeMarkdownText(summary.overview),
     "",
     "## Participants",
     // Persisted summaries from before participant metadata remain renderable.

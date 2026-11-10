@@ -1,3 +1,4 @@
+import { marked } from "marked";
 import { expect, it } from "vitest";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { renderTranscriptsMarkdown, summarizeTranscripts } from "./summary.js";
@@ -46,7 +47,7 @@ it("strips terminal control sequences from imported text, speaker labels, and ti
     utteranceCount: 3,
   });
   expect(markdown).toContain("Session: ansi");
-  expect(markdown).toContain("ADMIN APPROVED decision: ship it");
+  expect(markdown).toContain("ADMIN APPROVED decision\\: ship it");
   expect(markdown).not.toContain(ESC);
   expect(markdown).not.toContain(C1_CSI);
 });
@@ -73,7 +74,7 @@ it("lists participants once in first-appearance order after the overview", () =>
   ]);
   expect(summary.participants).toEqual(["Zoe", "Alex"]);
   expect(renderTranscriptsMarkdown(summary)).toContain(
-    `${summary.overview}\n\n## Participants\n- Zoe\n- Alex\n\n## Decisions`,
+    "## Participants\n- Zoe\n- Alex\n\n## Decisions",
   );
 });
 
@@ -90,7 +91,21 @@ it("keeps decisions, actions, and risks ahead of long transcripts for bounded re
     "## Overview|## Participants|## Decisions|## Action Items|## Risks|## Transcript".split("|"),
   );
   expect(markdown.slice(0, 12_000)).toContain(
-    "## Decisions\n- We agreed on the design.\n\n## Action Items\n- Sam will send the prototype.\n\n## Risks\n- The deadline is a risk.",
+    "## Decisions\n- We agreed on the design\\.\n\n## Action Items\n- Sam will send the prototype\\.\n\n## Risks\n- The deadline is a risk\\.",
   );
   expect(markdown.endsWith("\n\nTranscript utterances: 5")).toBe(true);
 });
+
+it.each(["heuristic", "model"] as const)(
+  "renders %s notes as literal transcript data",
+  (source) => {
+    const text = "We decided to ship **literal** &copy; <options> and `PATH`.";
+    const summary = summarize([line(text, "Sam **QA**")], { title: "Weekly **sync**" });
+    const html = marked.parse(renderTranscriptsMarkdown({ ...summary, source }));
+    expect(html).toContain("<h1>Weekly **sync**</h1>");
+    expect(html).toContain("<li>Sam **QA**</li>");
+    expect(html).toContain("We decided to ship **literal** &amp;copy; &lt;options&gt; and `PATH`.");
+    expect(html).not.toMatch(/<(?:strong|code|options)>/);
+    expect(summary.transcript).toEqual([`Sam **QA**: ${text}`]);
+  },
+);
