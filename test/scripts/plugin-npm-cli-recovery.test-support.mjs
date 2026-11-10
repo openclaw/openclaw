@@ -2,9 +2,7 @@
 // These are external producer records, not substituted authentication results.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import {
-  buildFullReleaseCandidateBinding,
-} from "../../scripts/full-release-candidate-contract.mjs";
+import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   createPublicationAdmission,
   createPublicationSourceFact,

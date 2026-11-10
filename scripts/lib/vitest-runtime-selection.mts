@@ -39,12 +39,18 @@ const runtimeOnlyUnitFiles = new Set([
   "src/auto-reply/reply/dispatch-from-config.test.ts",
   "src/auto-reply/reply/followup-runner.test.ts",
   "src/auto-reply/reply/groups.test.ts",
+  "src/commands/doctor-config-preflight.container-upgrade.test.ts",
+  "src/commands/doctor-maintenance.schema-preflight.test.ts",
+  "src/commands/doctor-maintenance.stopped-systemd.test.ts",
+  "src/commands/doctor-plugin-package-consent.test.ts",
   "src/config/io.load-async.test.ts",
+  "src/flows/doctor-health.update-schema.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
   "src/gateway/server-methods/session-catalog-privacy.test.ts",
   "src/gateway/server.beam-owned-view.test.ts",
   "src/gateway/talk/client-permission-parity.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
+  "src/plugins/doctor-repair-setup.test.ts",
   "src/plugins/loader.runtime-registry.test.ts",
   "src/plugins/plugin-generation-source-inspection.worker.test.ts",
   "src/plugins/plugin-generation-worker.test.ts",
@@ -216,6 +222,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
       config === "test/vitest/vitest.agents-spawn-production-boundary.config.ts" ||
       config === "test/vitest/vitest.auto-reply.config.ts" ||
       config === "test/vitest/vitest.auto-reply-reply.config.ts" ||
+      config === "test/vitest/vitest.commands.config.ts" ||
       config === "test/vitest/vitest.infra.config.ts" ||
       config === "test/vitest/vitest.runtime-config.config.ts" ||
       config === "test/vitest/vitest.plugins.config.ts" ||

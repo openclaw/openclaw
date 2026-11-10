@@ -254,6 +254,10 @@ function run(command: string, args: string[], options: CommandOptions = {}) {
   }
   const output = execFileSync(command, args, {
     encoding: "utf8",
+    env:
+      command === "git" && args[0] === "rev-parse"
+        ? { ...process.env, GIT_NO_LAZY_FETCH: "1" }
+        : process.env,
     maxBuffer: MAX_LOCAL_COMMAND_OUTPUT_BYTES,
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
   });
@@ -267,6 +271,10 @@ function runStatus(command: string, args: string[], options: CommandOptions = {}
   }
   return spawnSync(command, args, {
     encoding: "utf8",
+    env:
+      command === "git" && args[0] === "rev-parse"
+        ? { ...process.env, GIT_NO_LAZY_FETCH: "1" }
+        : process.env,
     killSignal: "SIGKILL",
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
     timeout: options.timeoutMs ?? GH_READ_TIMEOUT_MS,
