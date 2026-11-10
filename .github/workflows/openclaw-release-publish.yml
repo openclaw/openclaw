@@ -36,6 +36,7 @@ on:
         options:
           - full-release-validation
           - authorized-beta-focused-v1
+          - emergency-patch-v1
       focused_release_evidence_run_id:
         description: Successful Authorized Beta Focused Validation run id
         required: false
@@ -233,6 +234,11 @@ jobs:
               fi
               if [[ -z "${FOCUSED_RELEASE_EVIDENCE_RUN_ID//[[:space:]]/}" || -z "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT//[[:space:]]/}" ]]; then
                 echo "authorized-beta-focused-v1 requires the exact focused evidence run id and attempt." >&2
+                exit 1
+              fi
+            elif [[ "${RELEASE_EVIDENCE_MODE}" == "emergency-patch-v1" ]]; then
+              if [[ "${RELEASE_NPM_DIST_TAG}" != "latest" || "${PUBLISH_OPENCLAW_NPM}" != "true" || -n "${FULL_RELEASE_VALIDATION_RUN_ID}${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}${FOCUSED_RELEASE_EVIDENCE_RUN_ID}${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" ]]; then
+                echo "Emergency patch publication requires latest, core npm, and no full/focused validation inputs." >&2
                 exit 1
               fi
             else
@@ -459,6 +465,17 @@ jobs:
           fetch-depth: 1
           sparse-checkout: scripts
           persist-credentials: false
+
+      - name: Check emergency patch eligibility
+        if: ${{ inputs.release_evidence_mode == 'emergency-patch-v1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          TARGET_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          node .release-validation-tooling/scripts/release-emergency-patch.mjs --root . --tag "${RELEASE_TAG}" --npm-dist-tag "${RELEASE_NPM_DIST_TAG}" --expected-sha "${TARGET_SHA}"
 
       - name: Resolve full release validation run
         id: full_run
@@ -1046,7 +1063,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
-          RELEASE_PROFILE: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 'beta' || (steps.full_manifest.outputs.release_profile || inputs.release_profile) }}
+          RELEASE_PROFILE: ${{ inputs.release_evidence_mode == 'emergency-patch-v1' && 'emergency-patch-v1' || (inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 'beta' || (steps.full_manifest.outputs.release_profile || inputs.release_profile)) }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
         run: |
@@ -1345,7 +1362,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_release_target.outputs.sha }}
-          fetch-depth: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 0 || 1 }}
+          fetch-depth: ${{ inputs.release_evidence_mode != 'full-release-validation' && '0' || 1 }}
           persist-credentials: false
 
       - name: Checkout trusted release tooling
@@ -1410,6 +1427,17 @@ jobs:
             --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
             --producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
             --producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"
+
+      - name: Check approved emergency patch
+        if: ${{ inputs.release_evidence_mode == 'emergency-patch-v1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/release-emergency-patch.mjs --root . --tag "${RELEASE_TAG}" --npm-dist-tag "${RELEASE_NPM_DIST_TAG}" --expected-sha "${TARGET_SHA}" --output "${RUNNER_TEMP}/emergency-patch-evidence.json"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1813,6 +1841,10 @@ jobs:
           fi
           resolve_clawhub_release_plan
 
+          if [[ "${RELEASE_EVIDENCE_MODE}" == "emergency-patch-v1" ]]; then
+            node .release-harness/scripts/release-emergency-patch.mjs --root . --tag "${RELEASE_TAG}" --npm-dist-tag "${RELEASE_NPM_DIST_TAG}" --expected-sha "${TARGET_SHA}"
+          fi
+
           bootstrap_workflow_sha=""
           if [[ "$(jq -r '.bootstrap.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
             bootstrap_workflow_sha="$(verify_bootstrap_workflow_sha)"
@@ -1987,7 +2019,7 @@ jobs:
               -f focused_release_evidence_run_id="${FOCUSED_RELEASE_EVIDENCE_RUN_ID}"
               -f focused_release_evidence_run_attempt="${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}"
             )
-          else
+          elif [[ "${RELEASE_EVIDENCE_MODE}" == "full-release-validation" ]]; then
             evidence_args+=(
               -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}"
               -f full_release_validation_run_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"

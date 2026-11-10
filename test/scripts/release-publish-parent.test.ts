@@ -422,6 +422,7 @@ append_clawhub_dispatch_args() { clawhub_dispatch_args=(); }
     PUBLISH_OPENCLAW_NPM: "true",
     WAIT_FOR_CLAWHUB: "false",
     RELEASE_CHILD_SWEEP_TIMEOUT_SECONDS: "0",
+    RELEASE_EVIDENCE_MODE: "full-release-validation",
   });
   expect(result.status, result.stderr).toBe(blocked ? 1 : 0);
   expect(result.stderr).toContain("needs a reviewer:");

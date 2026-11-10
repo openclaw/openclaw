@@ -83,7 +83,7 @@ qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
 including Windows packaged install/upgrade checks in Release Checks. A cancelled
 run still blocks. The selected `openclaw/ci-gate` must succeed; failed, missing,
 skipped, or cancelled coverage blocks. Only exact failed live-provider or
-Telegram leaves may use the checked-in release-tooling policy. FRV itself must
+Telegram leaves may use the checked-in release-tooling policy. Outside the emergency patch exception below, FRV itself must
 conclude **success** before publication; the publisher has no waiver path.
 Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
@@ -130,6 +130,51 @@ reason to wait, re-cut, or pause.
 
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.
+
+### Emergency patch fast track
+
+The exceptional `emergency-patch-v1` publication mode skips Full Release
+Validation, source CI, cross-OS validation, live-provider checks, soak, and
+performance cycles. It does not report those checks as passed. Use it only for
+urgent, narrowly reviewed fixes when the release manager accepts that loss of
+coverage; ordinary releases keep the requirements above.
+
+Eligibility is bounded by the **complete** delta from the currently published
+npm `latest` release: at most three commits, 20 changed files, and 500 added plus
+deleted lines, including version and changelog changes. Binary changes are not
+eligible. The candidate must descend from that baseline and be its next regular
+stable patch or correction in the same month; beta and extended-stable are not
+supported by this exception.
+
+To prepare an emergency release:
+
+1. Freeze the candidate and create its signed, immutable release tag. Run the
+   normal OpenClaw npm preflight to build and qualify the exact publication bytes.
+2. Have a release manager review a change to
+   `scripts/release-emergency-patch-policy.json`. Add one entry in `approvals`
+   containing `releaseTag`, `baseTag`, `baseSha`, `candidateSha`, and `reason`.
+   The reason records the emergency and accepted risk. These policy paths are
+   release-manager-owned. Pin publication tooling containing the reviewed policy;
+   the empty default policy authorizes no release.
+3. Dispatch OpenClaw Release Publish with `release_evidence_mode=emergency-patch-v1`,
+   `npm_dist_tag=latest`, the candidate tag, and the successful `preflight_run_id`.
+   Omit full/focused validation IDs. The existing `npm-release` environment
+   approval and authenticated human approval receipt remain required.
+
+The shared publisher checks the current npm baseline, verified signatures, exact
+candidate, and full delta before approval and again before dispatch. The npm
+publisher repeats admission before publication. Existing package integrity,
+SDK acknowledgement, registry identity, exact-tarball, and postpublish checks
+remain intact. The GitHub release retains an emergency evidence asset listing
+the approved delta and deliberately skipped coverage. The historical beta
+focused-evidence mode is unchanged and cannot authorize this stable exception.
+
+A changed candidate, moved baseline, unsigned tag, or over-budget delta requires
+normal full validation or a newly reviewed eligible candidate; a manager cannot
+raise the hard limits with a dispatch input. If npm already points to the exact
+approved candidate, admission allows the existing exact-byte/provenance recovery
+path to finish without republishing. Remove the one-release policy entry after
+publication and all recovery work completes. This code change does not itself approve or publish any release.
 
 ### Operator capabilities
 
