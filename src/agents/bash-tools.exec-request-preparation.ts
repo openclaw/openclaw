@@ -493,6 +493,15 @@ export function resolvePreparedExecEnvironment(params: {
   const requestedEnv: Record<string, string> | undefined = params.storeSecretEnv
     ? { ...storeEnv, ...params.storeSecretEnv, ...explicitEnv }
     : untrustedRequestedEnv;
+  if (params.storeSecretEnv) {
+    for (const name of Object.keys(params.storeSecretEnv)) {
+      if (params.execParams.env?.[name] === undefined && inheritedBaseEnv[name] !== undefined) {
+        params.warnings.push(
+          `Warning: secret store entry "${name}" overrides the inherited "${name}" value with a protected sentinel. The sentinel is regenerated on every Gateway restart and substitutes only for its bound hosts; remove the same-name store entry or rename one side if the command needs a stable local value.`,
+        );
+      }
+    }
+  }
   const hostEnvResult =
     params.host === "sandbox"
       ? null
