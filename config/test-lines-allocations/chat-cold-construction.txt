@@ -1,2 +1,3 @@
-# Restored-frame and expired-hold regressions, plus asynchronous row admission and retained scroll proof.
-57
+# 93 regression lines for restored frames, asynchronous row admission, and retained scroll.
+# Plus exactly 70 existing debt lines, coordinator-accepted for this PR; no added headroom.
+163
