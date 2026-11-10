@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { assertMessagePresentationTablesHaveCaptions } from "./payload-presentation-tables.js";
 import type {
   MessagePresentationAction,
   MessagePresentationBlock,
   ModelPickerAction,
 } from "./payload.js";
 import {
-  assertMessagePresentationTablesHaveCaptions,
   hasReplyChannelData,
   hasReplyContent,
   hasReplyPayloadContent,
