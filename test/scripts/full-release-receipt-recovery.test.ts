@@ -18,13 +18,13 @@ import {
   validateReceiptRecoveryRequest,
   verifyOriginalReceiptQualification,
 } from "../../scripts/full-release-receipt-recovery.mjs";
-import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
-import * as qualificationAuthority from "../../scripts/release-qualification-admission.mjs";
-import * as toolingAuthority from "../../scripts/release-tooling-identity.mjs";
 import * as candidateReuse from "../../scripts/lib/full-release-candidate-reuse.mjs";
 import * as childReuse from "../../scripts/lib/full-release-child-reuse.mjs";
 import { retainedPublicationArtifactSource } from "../../scripts/lib/release-evidence-identity.mjs";
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
+import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
+import * as qualificationAuthority from "../../scripts/release-qualification-admission.mjs";
+import * as toolingAuthority from "../../scripts/release-tooling-identity.mjs";
 import {
   canonicalTestSha256,
   fullReleaseCandidateBindingFixture,

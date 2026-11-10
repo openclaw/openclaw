@@ -326,7 +326,8 @@ export function addRecoveryGraph({
     upgradeSurvivorBaseline: baselines.upgradeBaseline,
     upgradeSurvivorBaselines: baselines.upgradeSurvivorBaselines.join(" "),
   });
-  for (const key of ["producer", "publisher"]) candidate[key].runId = f.runId;
+  for (const key of ["producer", "publisher"])
+    candidate[key].runId = f.runId;
   const constituents = [
     [
       candidate.package,
@@ -351,7 +352,8 @@ export function addRecoveryGraph({
       put(103, candidate.sharedImage.artifact.name, { "image.tar": "shared image" }, f.runId),
     ],
   ];
-  for (const [part, meta] of constituents) part.artifact = artifactIdentity(meta);
+  for (const [part, meta] of constituents)
+    part.artifact = artifactIdentity(meta);
   candidate.package.fileName = packageFile;
   candidate.package.packageSha256 = hash(packageBytes);
   candidate.sharedImage.packageSha256 = hash(packageBytes);
@@ -647,7 +649,8 @@ export function addRecoveryGraph({
   );
   // The plugin producer current endpoint is distinct from the live publisher.
   recordRun(run(producer.runId, producer.workflowPath), []);
-  for (const id of [6001, 6002, producer.runId, 9900]) list(id);
+  for (const id of [6001, 6002, producer.runId, 9900])
+    list(id);
   return {
     runId: aggregate.runId,
     manifest,

@@ -558,7 +558,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     );
   }
   await revalidateReceiptRecoveryRuns(request, client);
-  revalidateQualificationAdmissionAuthority({
+  client.revalidateQualificationAdmissionAuthority({
     descriptor: request.qualificationAdmission,
     admission,
   });
@@ -766,7 +766,7 @@ export async function authenticateReceiptRecovery({
     requireValue(expectedRunAttempts.size === 0, "unexpected run-attempt constraints");
   }
   await revalidateReceiptRecoveryRuns(request, client);
-  revalidateQualificationAdmissionAuthority({
+  client.revalidateQualificationAdmissionAuthority({
     descriptor: request.qualificationAdmission,
     admission: verified.admission,
   });

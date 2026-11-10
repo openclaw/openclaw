@@ -2127,6 +2127,13 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutableReads } = {}) {
   const normalizedRepository = normalizeRepository(repository);
+  const runAdmissionGh = (args) => {
+    const route = args[1].replace("repos/" + normalizedRepository + "/", "");
+    const load = () => runQualificationAdmissionGh(args);
+    return route.endsWith("/zip")
+      ? immutableReads.bytes(route, load)
+      : immutableReads.text(route, load);
+  };
   return {
     validateChildReuse(selection, request, { deadlineMs } = {}) {
       return validateReusableReleaseChild(selection, request, { immutableReads, deadlineMs });
@@ -2199,20 +2206,16 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         }
         immutableReads.observeRun(route, current);
       }
-      const runGh = (args) => {
-        const route = args[1].replace("repos/" + normalizedRepository + "/", "");
-        const load = () => runQualificationAdmissionGh(args);
-        return route.endsWith("/zip")
-          ? immutableReads.bytes(route, load)
-          : immutableReads.text(route, load);
-      };
       return verifyQualificationAdmission({
         ...options,
-        ...(immutableReads ? { runGh, downloadArchive: runGh } : {}),
+        ...(immutableReads ? { runGh: runAdmissionGh, downloadArchive: runAdmissionGh } : {}),
       });
     },
     revalidateQualificationAdmissionAuthority(options) {
-      return revalidateQualificationAdmissionAuthority(options);
+      return revalidateQualificationAdmissionAuthority({
+        ...options,
+        ...(immutableReads ? { runGh: runAdmissionGh } : {}),
+      });
     },
     verifyRetainedPublicationArtifacts(root, env, options) {
       return verifyRetainedPublicationArtifacts(root, env, { ...options, immutableReads });

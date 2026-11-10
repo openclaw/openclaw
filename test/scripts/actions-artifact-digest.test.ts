@@ -164,10 +164,10 @@ describe("exact artifact streaming digest verification", () => {
     });
     expect(result.archiveBytes).toEqual(Buffer.alloc(4, 7));
     expect(
-      params.fetchImpl.mock.calls.map(([url]) => (url instanceof Request ? url.url : url.toString())),
-    ).toEqual([
-      "https://api.github.com/repos/openclaw/openclaw/actions/artifacts/777",
-    ]);
+      params.fetchImpl.mock.calls.map(([url]) =>
+        url instanceof Request ? url.url : url.toString(),
+      ),
+    ).toEqual(["https://api.github.com/repos/openclaw/openclaw/actions/artifacts/777"]);
 
     params.metadata.expired = true;
     await expect(

@@ -49,6 +49,8 @@ it(
     expect(new Set(starts.map((row) => row.pid)).size).toBe(5);
 
     const counts = Object.fromEntries(phases.map((name) => [name, requests(name).length]));
+    // Authenticate the carrier producer before trusting anything inside the carrier.
+    const carrierJobsRoute = "actions/runs/800/attempts/2/jobs?per_page=100";
     const categoryCounts = (name: string) => {
       const categories = { live: 0, immutable: 0, carrier: 0, selectedPackage: 0 };
       for (const { route = "" } of requests(name)) {
@@ -56,6 +58,8 @@ it(
           categories.carrier += 1;
         } else if (route === "actions/artifacts/9002/zip") {
           categories.selectedPackage += 1;
+        } else if (route === carrierJobsRoute) {
+          categories.live += 1;
         } else if (
           route.endsWith("/zip") ||
           route.startsWith("contents/") ||
@@ -118,6 +122,7 @@ it(
       // Bound all immutable work, including routes not listed in the fixture inventory.
       expect(categoriesByProcess[name]!.immutable, name + " reacquired immutable evidence").toBe(0);
       const calls = requests(name);
+      expect(calls.filter((row) => row.route === carrierJobsRoute)).toHaveLength(1);
       expect(calls.filter((row) => row.route === "actions/artifacts/900/zip")).toHaveLength(1);
       expect(calls.filter((row) => row.route === "actions/artifacts/9002/zip")).toHaveLength(
         name.startsWith("consume") ? 1 : 0,
@@ -143,6 +148,8 @@ it(
         "actions/artifacts/6201",
         "actions/artifacts/6301",
         "actions/artifacts/91",
+        "actions/artifacts/70",
+        "actions/runs/40",
         "actions/runs/6001",
         "actions/runs/6002",
         "actions/runs/9900",
@@ -157,10 +164,11 @@ it(
       expect(calls.some((row) => row.route?.startsWith("git/ref/"))).toBe(true);
     }
     for (const id of f.recovery.metadataOnlyPayloadIds) {
-      for (const name of phases)
-        expect(
-          requests(name).some((row) => row.route === "actions/artifacts/" + id + "/zip"),
-        ).toBe(false);
+      for (const name of phases) {
+        expect(requests(name).some((row) => row.route === "actions/artifacts/" + id + "/zip")).toBe(
+          false,
+        );
+      }
     }
 
     const reject = (invocation: string, pattern: RegExp, authorize = false) => {
@@ -189,6 +197,12 @@ it(
       reject("reject-" + route.replaceAll("/", "-"), pattern, true);
       f.responses[route] = original;
     }
+    const carrierJobs = f.responses[carrierJobsRoute]!;
+    const failedProducer = JSON.parse(carrierJobs.data);
+    failedProducer.jobs[0].conclusion = "failure";
+    f.json(carrierJobsRoute, failedProducer);
+    reject("failed-carrier-producer", /producer|successful|success/iu, true);
+    f.responses[carrierJobsRoute] = carrierJobs;
     // Changes occurring after the last package acquisition must be observed at
     // the consume effect boundary, not only when the carrier was authenticated.
     const selectedRoute = "actions/artifacts/9002/zip";

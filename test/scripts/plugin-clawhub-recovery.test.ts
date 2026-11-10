@@ -315,7 +315,9 @@ describe("sealed ClawHub recovery manifest", () => {
           report: (message: string) => messages.push(message),
         }),
       ).rejects.toThrow(`Independent recoveries completed: ${sibling.name}@${version}`);
-      expect(mutations).toEqual(["https://clawhub.ai/api/v1/publish/attempts/sibling-original/recover"]);
+      expect(mutations).toEqual([
+        "https://clawhub.ai/api/v1/publish/attempts/sibling-original/recover",
+      ]);
       expect(messages.join("\n")).toContain("Cannot bind the original attempt");
       expect(messages.join("\n")).toContain(
         `registry state ${state === "legacy-not-found" ? "unpublished" : state}`,
