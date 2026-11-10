@@ -7,7 +7,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { hasErrnoCode } from "./errno.js";
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
-import { isManagedServiceInspectionCommand } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import { isManagedServiceInspectionCommand } from "./update-managed-service-handoff-command.test-support.js";
 
 export async function prepareManagedServiceProfileRequester(
   options: ManagedServiceBoundaryOptions | undefined,

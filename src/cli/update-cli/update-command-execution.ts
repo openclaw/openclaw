@@ -121,7 +121,7 @@ export async function executeMutableUpdate(
       : (params.packageInstallTarget?.manager ?? "unknown");
   if (opts.recovery) {
     throw new UpdatePreMutationError(
-      "rollback-state-unverified",
+      "update-recovery-pending",
       "Full-state checkpoint recovery is deferred.",
     );
   }

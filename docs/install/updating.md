@@ -45,6 +45,17 @@ ownership before rechecking profile-backed requester authority. Service custody
 remains with the updater; the next Doctor acquires its own database ownership.
 This avoids refusing the updater's own policy reads during its maintenance window.
 
+A managed update whose updater process dies keeps recovery with its surviving
+helper and original run. The helper retires an untouched preparation or completes
+interrupted package publication and post-core repair, then restores the verified
+Gateway. `openclaw update repair` also restores an update-owned stopped service
+when its owners are gone. Named data risk, lost ownership, and later operator
+stops remain refusals. Final failed-update recovery can restart a safely owned
+Gateway once when no data is at risk; migrated candidates pass schema admission
+even when a normally exited Doctor produced no cancellation-settlement receipt.
+These changes must be present in the installed updater/helper; downloading a
+fixed candidate cannot change a helper already running.
+
 Update inspection and snapshot workers bind plugin metadata discovery to the
 selected installation's state directory, including requests from older installed
 updaters. A different profile's database version must not block that inspection.

@@ -6,6 +6,7 @@ import {
 import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { adoptCandidateManagedServiceStop } from "../../infra/update-candidate-predecessor-stop.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -248,7 +249,7 @@ export async function settlePostUpdateWindowsAutoStartFailure(
   finalResult.status = "error";
   finalResult.reason =
     result.status === "error" ? result.reason : "windows-task-autostart-restore-failed";
-  finalResult.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+  finalResult.recovery = unsafeUpdateRecovery(finalResult.recovery);
   finalResult.steps = finalResult.steps.concat({
     name: "windows-task-autostart-recovery",
     command: "openclaw update",

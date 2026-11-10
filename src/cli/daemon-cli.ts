@@ -72,6 +72,7 @@ export async function waitForGatewayUpdateRecovery(
 export {
   adoptUpdateRun,
   getUpdateRun,
+  listUpdateRuns,
   recordUpdateRunDiagnostic,
   recordUpdateRunStep,
   recordUpdateRunVerification,

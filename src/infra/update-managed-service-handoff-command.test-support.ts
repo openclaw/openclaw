@@ -12,6 +12,10 @@ import type {
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 
+export function isManagedServiceInspectionCommand(command: string): boolean {
+  return /^(?:--user )?(?:show|print) /.test(command);
+}
+
 const testNodeExecPath = resolveTestNodeExecPath();
 const recoveryReadyMarker = "OPENCLAW_TEST_RECOVERY_DESCENDANT_READY";
 

@@ -2,6 +2,21 @@ import type { ManagedServiceManagerBoundaryOptions } from "./update-managed-serv
 import type { UpdateRunRecord } from "./update-run-record.js";
 
 export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions & {
+  updaterStopped?: "native" | "legacy";
+  recoveryInterruption?: {
+    effect: "stop-retired" | "lease-replaced";
+    at: "inspection" | "bootstrap-retry" | "kickstart";
+  };
+  interruptedUpdate?:
+    | "before"
+    | "prepared"
+    | "publishing"
+    | "after"
+    | "risk"
+    | "operator-stop"
+    | "finalize-failure"
+    | "post-finalize-risk"
+    | "schema-advance";
   trigger?: "cli" | "api" | "campaign";
   origin?: UpdateRunRecord["origin"];
   controlDisconnect?: "transferred" | "unarmed" | "dead-parent";

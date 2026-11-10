@@ -9,6 +9,7 @@ import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import { prepareManagedServiceRecoveryClockPreload } from "./update-managed-service-handoff-command.test-support.js";
+import { prepareInterruptedManagedServiceFixture } from "./update-managed-service-handoff-interrupted.test-support.js";
 import {
   prepareManagedServiceTriageClockPreload,
   type ManagedServiceManagerBoundaryResult,
@@ -24,10 +25,14 @@ export async function prepareManagedServiceRuntimeFixture(params: {
   activationGatePath: string;
   activationReleasePath: string;
   ledger: boolean;
+  root: string;
+  runId?: string;
   options?: {
     replaceLedgerWriter?: boolean;
     requester?: UpdateRequester;
     cancelAtActivation?: "requester" | "inspection";
+    interruptedUpdate?: ManagedServiceBoundaryOptions["interruptedUpdate"];
+    updaterStopped?: ManagedServiceBoundaryOptions["updaterStopped"];
   };
 }) {
   const {
@@ -38,6 +43,8 @@ export async function prepareManagedServiceRuntimeFixture(params: {
     activationGatePath,
     activationReleasePath,
     ledger,
+    root,
+    runId,
     options,
   } = params;
   // Source children run from the helper's durable cwd, outside this checkout.
@@ -53,11 +60,23 @@ export async function prepareManagedServiceRuntimeFixture(params: {
       recoveryModulePath,
       `
       ${ledgerRuntimeImport}
-      export const { adoptUpdateRun, getUpdateRun, recordUpdateRunStep, recordUpdateRunVerification } = ledger;
+      export const { adoptUpdateRun, getUpdateRun, listUpdateRuns, recordUpdateRunStep, recordUpdateRunVerification } = ledger;
       ${options?.replaceLedgerWriter ? 'export function finishUpdateRun() { throw new Error("the previous runtime must not finalize the candidate"); }' : "export const { finishUpdateRun } = ledger;"}
     `,
     );
   }
+  const interrupted =
+    options?.interruptedUpdate && runId
+      ? await prepareInterruptedManagedServiceFixture({
+          root,
+          statePath,
+          recoveryModulePath,
+          ledgerRuntimeImport,
+          runId,
+          cut: options.interruptedUpdate,
+          updaterStopped: options.updaterStopped,
+        })
+      : undefined;
   if (options?.requester) {
     await fs.writeFile(statePath, "{}");
     if (options.requester.authorizationSource?.startsWith("profile:")) {
@@ -68,7 +87,7 @@ export async function prepareManagedServiceRuntimeFixture(params: {
         export const { prepareManagedUpdateRequesterIdentity } = requesterRuntime;
       `,
       );
-      return { sourceRuntimeImport, ledgerRuntimeImport };
+      return { sourceRuntimeImport, ledgerRuntimeImport, interrupted };
     }
     await fs.writeFile(
       configPath,
@@ -98,7 +117,7 @@ export async function prepareManagedServiceRuntimeFixture(params: {
     `,
     );
   }
-  return { sourceRuntimeImport, ledgerRuntimeImport };
+  return { sourceRuntimeImport, ledgerRuntimeImport, interrupted };
 }
 
 export async function prepareManagedServiceSpawn(

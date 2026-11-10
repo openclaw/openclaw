@@ -12,6 +12,24 @@ What happens when an update fails, and the subcommands that finish the job. Part
 
 ## Recover a failed update
 
+If a managed updater exits without a result, including after SIGKILL or an
+out-of-memory kill, its surviving helper attempts recovery under the same update
+run. An untouched package preparation is retired and the original Gateway is
+restored. Once package publication has started, recovery completes publication
+and post-core maintenance before restoring the verified Gateway. Named data
+risk, lost ownership, and an operator stop still prevent automatic restart.
+
+If the helper also exits, run `openclaw update repair` with the original profile
+and state/config overrides. Repair restores a managed Gateway only when update
+history records an unfulfilled update-owned stop. A later recorded start prevents
+repair from undoing a subsequent operator stop. Reclaiming a retained handoff
+still requires its normal recovery grace and a complete process census, even
+when its recorded owners are dead. Unmanaged services receive a manual next step
+instead of a restart.
+
+The installed updater and helper must contain this recovery behavior. Updating
+to a fixed candidate cannot retrofit a helper that is already running.
+
 After a failed interactive update or repair, OpenClaw finishes cleanup and offers
 **Diagnose update failure**, **Report update failure**, or **Exit**. Reporting
 previews the sanitized issue body and requires separate confirmation.
