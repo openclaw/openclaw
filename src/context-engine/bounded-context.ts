@@ -80,6 +80,10 @@ export function boundContextEngineAssembly(
   return {
     ...assembled,
     messages: retained,
+    // Record the omission on the result itself: the byte bound is the only
+    // step that drops assembled history, so a fitting assembly keeps this
+    // field absent and callers can distinguish it from a truncated one.
+    hostOmittedMessages: messages.length - retained.length,
     estimatedTokens: retained.reduce((sum, message) => {
       const extraBytes = additionalBytes?.get(message) ?? 0;
       return (
