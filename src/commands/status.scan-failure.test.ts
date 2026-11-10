@@ -10,9 +10,7 @@ const mocks = vi.hoisted(() => ({
   node: vi.fn(),
 }));
 vi.mock("./node-runtime-diagnostics.js", () => ({ collectNodeRuntimeFindings: async () => [] }));
-// mock-isolation: The deep-status regression only asserts the gateway health failure path;
-// the real security audit must stay outside this fixture so the throw is exercised without
-// running audit collectors or touching operator state.
+// mock-isolation: the real security audit stays outside this fixture so the throw is exercised without running audit collectors or touching operator state.
 vi.mock("../security/audit.runtime.js", () => ({
   runSecurityAudit: async () => ({ summary: { critical: 0, warn: 0, info: 0 }, findings: [] }),
 }));
