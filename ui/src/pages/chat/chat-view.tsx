@@ -661,12 +661,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                         input.props.detailsEnabled || (input.props.taskSuggestions?.length ?? 0) > 0
                       }
                     >
-                      <div
-                        class={[
-                          "chat-gutter-stack",
-                          { "chat-gutter-stack--details": input.props.detailsEnabled },
-                        ]}
-                      >
+                      <div class="chat-gutter-stack">
                         <div class="chat-gutter-header" hidden={!input.props.detailsEnabled}>
                           <Show when={input.props.detailsEnabled}>
                             <ChatTopbarNotices {...input.props} />
