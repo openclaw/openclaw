@@ -1,5 +1,6 @@
 // Hands running turns to a reloaded plugin at their next step boundary (#182024).
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
 import { pluginHandsOverTurns } from "../plugins/plugin-turn-handover-eligibility.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -8,13 +9,15 @@ import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 const log = createSubsystemLogger("agents/plugin-turn-handover");
 
 // Every plugin these registries hold that a reload has reserved.
-function reservedPluginIds(registries: readonly PluginRegistry[]): Set<string> {
+function reservedPluginIds(
+  registries: readonly PluginRegistry[],
+  instances?: () => Iterable<PluginInstanceHandle>,
+): Set<string> {
   const reserved = new Set<string>();
-  for (const registry of registries) {
-    for (const instance of collectRegistryInvocationInstances(registry)) {
-      if (instance.replacementPending) {
-        reserved.add(instance.pluginId);
-      }
+  for (const instance of instances?.() ??
+    registries.flatMap((registry) => [...collectRegistryInvocationInstances(registry)])) {
+    if (instance.replacementPending) {
+      reserved.add(instance.pluginId);
     }
   }
   return reserved;
@@ -37,6 +40,7 @@ function reservedPluginIds(registries: readonly PluginRegistry[]): Set<string> {
  */
 export function captureTurnHandoverRequest(
   registries: Iterable<PluginRegistry>,
+  instances?: () => Iterable<PluginInstanceHandle>,
 ): (pluginId: string, yieldHold: () => void) => void {
   const refresh = captureAgentPluginRuntimeRefresh();
   const held = [...registries];
@@ -44,7 +48,7 @@ export function captureTurnHandoverRequest(
   let scheduled = false;
   // Every plugin the reload reserved is still reserved, and every one can hand over.
   const handoverReady = () => {
-    const reserved = [...reservedPluginIds(held)];
+    const reserved = [...reservedPluginIds(held, instances)];
     return (
       reserved.length > 0 && reserved.every((pluginId) => pluginHandsOverTurns(held, pluginId))
     );
@@ -52,7 +56,7 @@ export function captureTurnHandoverRequest(
   const decide = () => {
     scheduled = false;
     const pendingYields = yields.splice(0);
-    const reserved = [...reservedPluginIds(held)];
+    const reserved = [...reservedPluginIds(held, instances)];
     const pinning = reserved.filter((pluginId) => !pluginHandsOverTurns(held, pluginId));
     if (!reserved.length || pinning.length) {
       if (pinning.length) {

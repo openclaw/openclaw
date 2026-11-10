@@ -13,9 +13,12 @@ import {
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { getPluginInstance, pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginTools } from "../plugins/tools.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
+import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
+import { createPreparedModelRuntimeLease } from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   loadAgentRuntimePluginRegistryHandle,
   withAgentPluginRegistry,
@@ -107,4 +110,98 @@ it("blocks a tool call through the run's before_tool_call hook when no process r
     run: async () => runBeforeToolCallHook({ toolName: "exec", params: { command: "ls -a" } }),
   });
   expect(outcome).toMatchObject({ blocked: true, reason: expect.stringContaining("guarded exec") });
+});
+
+it("retains resolved capabilities through nested runtime scopes without pinning an unused plugin", async () => {
+  const empty = writePlugin({ id: "unused-advisor", registration: "" });
+  const tool = writePlugin({
+    id: "resolved-tool",
+    registration: `api.registerTool(() => ({ name: "lease_probe", description: "Probe", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [] }) }), { names: ["lease_probe"] });`,
+  });
+  fs.writeFileSync(
+    path.join(tool.dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: tool.id,
+      configSchema: { type: "object", additionalProperties: false },
+      contracts: { tools: ["lease_probe"] },
+    }),
+  );
+  const hook = writePlugin({
+    id: "terminal-hook",
+    registration: `api.on("agent_end", async () => {});`,
+  });
+  const provider = writePlugin({
+    id: "fallback-provider",
+    registration: `api.registerProvider({ id: "fallback-provider", label: "Fallback", auth: [] });`,
+  });
+  const plugins = [empty, tool, hook, provider];
+  const config: OpenClawConfig = {
+    plugins: {
+      load: { paths: plugins.map(({ file }) => file) },
+      allow: plugins.map(({ id }) => id),
+      entries: Object.fromEntries(
+        plugins.map(({ id }) => [id, { enabled: true, hooks: { allowConversationAccess: true } }]),
+      ),
+      slots: { memory: "none" },
+    },
+  };
+  const workspaceDir = makePluginLoaderTempDir();
+  await withAgentPluginRegistry({
+    config,
+    workspaceDir,
+    run: async (registry) => {
+      const snapshot = createModelRuntimeChoiceOwnerFixture(config, () => true, {
+        pluginRegistry: registry,
+      });
+      const generation = {
+        pluginRegistry: registry,
+        pluginMetadataSnapshot: snapshot.metadataSnapshot,
+        remoteCatalog: null,
+        inlineProviderModels: [],
+        configuredCatalogEntries: [],
+      };
+      const leases = Array.from({ length: 17 }, () =>
+        createPreparedModelRuntimeLease(snapshot, generation),
+      );
+      const instance = (id: string) =>
+        getPluginInstance(registry.plugins.find((record) => record.id === id)!)!;
+      let toolOwner: ReturnType<typeof getPluginInstance>;
+      try {
+        expect(instance(empty.id).retainedWorkCount).toBe(0);
+        expect(instance(tool.id).retainedWorkCount).toBe(0);
+        // Late terminal hooks and fallback providers cannot discard their captured generation.
+        expect(instance(hook.id).retainedWorkCount).toBe(17);
+        expect(instance(provider.id).retainedWorkCount).toBe(17);
+        await leases[0]!.run(() =>
+          withAgentPluginRegistry({
+            config,
+            workspaceDir,
+            selections: [],
+            run: async (nested) => {
+              const resolved = resolvePluginTools({
+                context: { config, workspaceDir },
+                runtimeRegistry: nested,
+              });
+              expect(resolved.map(({ name }) => name)).toContain("lease_probe");
+              const held = pluginInvocationContext.getStore()!.retainedInstances!;
+              const toolOwners = held.filter(({ pluginId }) => pluginId === tool.id);
+              expect(toolOwners).toHaveLength(1);
+              toolOwner = toolOwners[0];
+              expect(held.some(({ pluginId }) => pluginId === empty.id)).toBe(false);
+              expect(toolOwner!.retainedWorkCount).toBe(1);
+              expect(instance(tool.id).retainedWorkCount).toBe(0);
+              expect(instance(empty.id).retainedWorkCount).toBe(0);
+            },
+          }),
+        );
+        expect(toolOwner!.retainedWorkCount).toBe(1);
+      } finally {
+        for (const lease of leases) {
+          await lease[Symbol.asyncDispose]();
+        }
+      }
+      expect(plugins.map(({ id }) => instance(id).retainedWorkCount)).toEqual([0, 0, 0, 0]);
+      expect(toolOwner!.retainedWorkCount).toBe(0);
+    },
+  });
 });

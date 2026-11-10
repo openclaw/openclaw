@@ -1,8 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  getPreparedModelRuntimeBorrowedSnapshot,
-  getPreparedModelRuntimePluginGeneration,
-} from "../agents/prepared-model-runtime-generation-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -21,7 +17,6 @@ import {
   pluginInvocationContext,
   type PluginInstanceHandle,
 } from "../plugins/plugin-instance-scope.js";
-import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
 import { pluginHandsOverTurns } from "../plugins/plugin-turn-handover-eligibility.js";
 import { getPluginRegistryGatewayOwner } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -55,10 +50,19 @@ function logRetainedReferences(
   );
 }
 
-export class PluginAdmittedWorkTimeoutError extends Error {
+export class PluginAdmittedWorkDeferredError extends Error {
   /** Instances from the current generation and blocking predecessor retirement transactions. */
-  readonly instances: readonly PluginInstanceHandle[];
+  constructor(
+    message: string,
+    readonly instances: readonly PluginInstanceHandle[],
+    options?: ErrorOptions,
+    readonly retirements: readonly Promise<unknown>[] = [],
+  ) {
+    super(message, options);
+  }
+}
 
+class PluginAdmittedWorkTimeoutError extends PluginAdmittedWorkDeferredError {
   constructor(
     pluginIds: ReadonlySet<string>,
     instances: readonly PluginInstanceHandle[],
@@ -68,9 +72,9 @@ export class PluginAdmittedWorkTimeoutError extends Error {
     const ids = [...pluginIds].join(", ");
     super(
       `plugin ${ids} admitted work did not settle within ${timeoutMs / 1_000}s; the previous plugin generation stays active. Retry \`openclaw plugins reload ${[...pluginIds].join(" ")}\` after the work finishes, or use --wait for a bounded 10-minute drain that blocks new agent runs. If an agent turn holds this plugin, end that turn first or use the plugins tool with action reloadAndResume; waiting inside the same turn cannot make progress.`,
+      instances,
       { cause },
     );
-    this.instances = instances;
   }
 }
 
@@ -540,28 +544,35 @@ export function createPluginReloadCleanup({
       pendingServiceCleanup && pendingServiceCleanup.error !== error
         ? new AggregateError([pendingServiceCleanup.error, error], "Previous plugin cleanup failed")
         : error,
-    assertResourceHandoff: (pluginIds: ReadonlySet<string>) => {
+    assertResourceHandoff: (pluginIds: ReadonlySet<string>, automatic = false) => {
       const releases: Array<() => void> = [];
-      const generation = getPreparedModelRuntimePluginGeneration();
-      const heldInstances =
-        generation && getPreparedModelRuntimeBorrowedSnapshot(generation)
-          ? new Set(
-              [generation.pluginRegistry, generation.inboundPluginRegistry].flatMap((registry) =>
-                registry ? Array.from(collectRegistryInvocationInstances(registry)) : [],
-              ),
-            )
-          : undefined;
-      for (const instance of [
+      const heldInstances = new Set(pluginInvocationContext.getStore()?.retainedInstances);
+      const predecessors = pendingPredecessors();
+      const instances = [
         ...previousInstances(pluginIds),
-        ...pendingPredecessors().flatMap((owner) => owner.instances),
-      ]) {
+        ...predecessors.flatMap((owner) => owner.instances),
+      ];
+      // Automatic edits must not fence unrelated turns while waiting for plugin work.
+      if (
+        automatic &&
+        (predecessors.length ||
+          instances.some((instance) => instance.retainedWorkCount || instance.ordinaryCallCount))
+      ) {
+        throw new PluginAdmittedWorkDeferredError(
+          `Plugin ${[...pluginIds].join(", ")} reload is waiting for retained work, calls, or previous-generation cleanup; the previous plugin configuration remains active.`,
+          instances,
+          undefined,
+          predecessors.map(({ registry }) => waitForPluginRegistryRetirement(registry)),
+        );
+      }
+      for (const instance of instances) {
         if (instance.hasActiveCall) {
           throw new Error(
             `Plugin ${instance.pluginId} cannot replace itself from its own active call; retry after the call finishes.`,
           );
         }
         // A turn retains its instances between callbacks; waiting here would wait on itself.
-        if (heldInstances?.has(instance)) {
+        if (heldInstances.has(instance)) {
           throw new Error(
             `Plugin ${instance.pluginId} cannot replace itself from its own active turn; retry after the turn finishes.`,
           );
