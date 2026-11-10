@@ -4,8 +4,8 @@
 .session-worker-stop {
   padding: var(--overlay-modal-padding);
   color: var(--text);
-  font-size: 13px;
-  line-height: 18px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 .session-worker-stop__heading {
   display: flex;
@@ -17,7 +17,7 @@
 .session-worker-stop__heading h2 {
   margin: 0;
   font-size: var(--overlay-modal-title-size);
-  line-height: 22px;
+  line-height: calc(22px * var(--control-ui-text-scale));
   font-weight: 600;
   letter-spacing: -0.2px;
 }
@@ -85,8 +85,6 @@
 .session-worker-stop__spinner {
   width: 14px;
   height: 14px;
-  background: currentColor;
-  mask: var(--spinner-mask);
   border-radius: 50%;
   animation: btn-spinner-spin 0.8s linear infinite;
 }

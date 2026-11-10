@@ -403,24 +403,44 @@ suite.define(() => {
         .getByRole("menuitem", { name: "Archive session", exact: true });
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await page.getByText("Research thread content").waitFor({ state: "visible" });
+      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const archivedBanner = page.locator(".agent-chat__disabled-banner", {
+        hasText: "This session is archived.",
+      });
+      await composer.fill("Keep this unsent draft");
       await captureUiProof(suite, page, "archive-current-thread-before.png");
       await row.hover();
       await activateSelfRemovingControl(row.locator("[data-sidebar-session-archive]"));
 
-      // The archive is held behind Undo: the row hides at once and nothing is sent.
+      // The archive is held behind Undo: the row hides and the open conversation looks
+      // archived at once, while nothing is sent.
       await row.waitFor({ state: "detached" });
       const held = page.locator(".app-toast", { hasText: "Session archived" });
       await held.getByRole("button", { name: "Undo", exact: true }).waitFor();
+      await archivedBanner.waitFor({ state: "visible" });
+      await composer.waitFor({ state: "detached" });
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await page.getByText("Research thread content").waitFor({ state: "visible" });
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       await captureUiProof(suite, page, "archive-current-thread-held.png");
 
-      // Undo cancels locally, so the row returns without waiting on the Gateway.
+      // Undo cancels locally, so the row and the unsent draft return without the Gateway.
       await held.getByRole("button", { name: "Undo", exact: true }).click();
       await row.waitFor({ state: "visible" });
+      await archivedBanner.waitFor({ state: "detached" });
+      await expect.poll(() => composer.inputValue()).toBe("Keep this unsent draft");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       await captureUiProof(suite, page, "archive-current-thread-undone.png");
+
+      // The conversation's own Unarchive cancels the held archive and retires the notice.
+      await row.hover();
+      await activateSelfRemovingControl(row.locator("[data-sidebar-session-archive]"));
+      await archivedBanner.waitFor({ state: "visible" });
+      await archivedBanner.getByRole("button", { name: "Unarchive", exact: true }).click();
+      await row.waitFor({ state: "visible" });
+      await held.waitFor({ state: "detached" });
+      await expect.poll(() => composer.inputValue()).toBe("Keep this unsent draft");
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       // Closing the window sends the archive; the row stays hidden while it runs.
       await row.hover();
@@ -428,6 +448,14 @@ suite.define(() => {
       await row.waitFor({ state: "detached" });
       await closeArchiveUndoToast(page);
       await gateway.waitForRequest("sessions.patch");
+      // Once sending, the archive can no longer be cancelled; Unarchive waits for it.
+      await expect
+        .poll(() =>
+          archivedBanner
+            .getByRole("button", { name: "Unarchive", exact: true })
+            .getAttribute("aria-busy"),
+        )
+        .toBe("true");
       await page.locator(".chat-header-session-menu__trigger").click();
       const pendingAction = page
         .locator("openclaw-chat-header-session-menu")

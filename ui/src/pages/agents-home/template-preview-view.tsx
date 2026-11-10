@@ -141,19 +141,13 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
         </button>
       </header>
       <div ref={(element) => (body = element)} class="template-preview__body">
-        <For each={[props.view.detailRequest ?? props.view.catalogRequest]}>
+        <For each={[props.view.detailRequest]}>
           {() => (
             <Errored
               fallback={(error) => (
                 <InlineAlert tone="danger" role="alert">
                   {formatUiError(error())}
-                  <button
-                    type="button"
-                    class="btn"
-                    onClick={() =>
-                      props.view.selected ? props.view.onRetryDetail() : props.view.onRetryCatalog()
-                    }
-                  >
+                  <button type="button" class="btn" onClick={() => props.view.onRetryDetail()}>
                     {t("common.retry")}
                   </button>
                 </InlineAlert>
@@ -166,9 +160,6 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                   </p>
                 }
               >
-                <Show when={props.view.readEntries().length === 0}>
-                  <span />
-                </Show>
                 <Show when={contents()}>
                   <Show
                     when={category()}

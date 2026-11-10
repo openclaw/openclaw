@@ -179,8 +179,11 @@ a current recap does not trigger restoration. New activity and terminal runs sti
 request recap work.
 Text search excludes cold transcript contents and
 reports how many archived transcripts it excluded; restored transcripts become
-searchable again. Import and cross-store repair refuse cold transcripts that
-have not been restored, rather than copying an incomplete history.
+searchable again. Doctor's canonical session-key repair restores affected cold
+generations through their physical store owner before copying or archiving history,
+including keys retained from a renamed agent. Archive verification failures preserve
+the cold history and stop that repair. Other imports and cross-store repairs require
+restoration before copying history.
 
 After restoration, the running Gateway keeps that transcript hot for 24 hours
 to avoid repeatedly extracting recently viewed history. This cooldown is local

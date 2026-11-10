@@ -110,15 +110,6 @@ export type ModelProvidersCatalogData = Pick<
   "providerOutcomes" | "pendingProviders" | "catalogRequestFailed" | "catalogError"
 >;
 
-export async function loadModelProvidersData(
-  client: GatewayBrowserClient,
-  opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
-): Promise<ModelProvidersData> {
-  const read = startModelProvidersData(client, opts);
-  const [auth, catalog] = await Promise.all([read.auth, read.catalog]);
-  return { ...EMPTY_MODEL_PROVIDERS_DATA, ...auth, ...catalog };
-}
-
 /** Names the providers whose listing failed, so the warning points at its cause. */
 export function catalogDiscoveryError(result: ModelCatalogResult): string | null {
   const failed = new Set(

@@ -11,7 +11,6 @@ import {
   listSpeechVoices,
   prepareTtsRequest,
   prefsPathFor,
-  requireFirstCallParam,
   requireFirstSynthesisRequest,
   requireRecord,
   resetTtsRuntime,
@@ -230,11 +229,9 @@ describe("TTS runtime native voice-note routing", () => {
     });
     await expectVoiceMemo("caf");
     expect(transcodeAudioBufferMock).toHaveBeenCalledOnce();
-    const transcodeRequest = requireRecord(
-      requireFirstCallParam(transcodeAudioBufferMock.mock.calls as unknown[][], "transcode"),
-      "transcode request",
+    expect(transcodeAudioBufferMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceExtension: "mp3", targetExtension: "caf" }),
     );
-    expect(transcodeRequest).toMatchObject({ sourceExtension: "mp3", targetExtension: "caf" });
   });
 
   it("falls back to the original mp3 buffer when the host transcoder fails", async () => {

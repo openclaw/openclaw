@@ -354,6 +354,7 @@ export function ApplicationShell(props: {
           <resizable-divider
             class="sidebar-resizer"
             prop:label={t("nav.resize")}
+            prop:measureSize={() => view().shellWidth}
             prop:splitRatio={view().expandedNavWidth / view().shellWidth}
             prop:minRatio={(NAV_WIDTH_MIN + view().railWidth) / view().shellWidth}
             prop:maxRatio={(NAV_WIDTH_MAX + view().railWidth) / view().shellWidth}

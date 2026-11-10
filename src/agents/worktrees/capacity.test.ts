@@ -208,13 +208,29 @@ describe("worktree Git size estimates", () => {
     },
   );
 
-  it("keeps the hydration fetch from starting Git auto-maintenance on the source repository", async () => {
+  it("hydrates without reading unrelated ref tips or starting auto-maintenance", async () => {
     const { root, clone, commit } = await partialClone();
+    const tree = await git(clone, "rev-parse", `${commit}^{tree}`);
+    // Clones do not inherit the fixture's repo-local identity; CI has no global one.
+    await git(clone, "config", "user.name", "OpenClaw Test");
+    await git(clone, "config", "user.email", "openclaw-test@example.invalid");
+    const unrelated = await git(clone, "commit-tree", tree, "-m", "unrelated session");
+    await git(clone, "update-ref", "refs/heads/unrelated", unrelated);
+    const packed = await runGit(clone, ["pack-objects", ".git/objects/pack/pack"], {
+      input: `${unrelated}\n`,
+    });
+    expect(packed.code).toBe(0);
+    await fs.unlink(path.join(clone, ".git/objects", unrelated.slice(0, 2), unrelated.slice(2)));
+    const packAccess = path.join(root, "hydrate-pack-access.log");
+    vi.stubEnv("GIT_TRACE_PACK_ACCESS", packAccess);
     const traceDir = path.join(root, "hydrate-trace2");
     await fs.mkdir(traceDir);
     // A directory target gives one event file per Git process, so nothing interleaves.
     vi.stubEnv("GIT_TRACE2_EVENT", traceDir);
     await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
+    expect(await fs.readFile(packAccess, "utf8")).not.toContain(
+      `pack-${packed.stdout.trim()}.pack`,
+    );
     const events = (
       await Promise.all(
         (await fs.readdir(traceDir)).map(async (name) =>

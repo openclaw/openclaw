@@ -77,8 +77,15 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 async function proofContentPainted(page: Page, proof: Buffer, content: Locator): Promise<boolean> {
-  const contentBounds = await content.boundingBox();
-  expect(contentBounds).not.toBeNull();
+  const contentBounds = await content.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      x: bounds.left + element.clientLeft,
+      y: bounds.top + element.clientTop,
+      width: element.clientWidth,
+      height: element.clientHeight,
+    };
+  });
   return page.evaluate(
     async ({ png, bounds }) => {
       const image = new Image();
@@ -95,7 +102,7 @@ async function proofContentPainted(page: Page, proof: Buffer, content: Locator):
         (value, index) => index % 4 !== 3 && Math.abs(value - pixels[index % 4]!) > 10,
       );
     },
-    { png: proof.toString("base64"), bounds: contentBounds! },
+    { png: proof.toString("base64"), bounds: contentBounds },
   );
 }
 
@@ -166,6 +173,12 @@ suite.define(() => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.locator(".topbar--navigation-locked").waitFor();
+    expect(
+      await page
+        .locator(".topbar-connection-brand svg")
+        .filter({ visible: true })
+        .evaluate((element) => (element as SVGSVGElement).getBBox().width),
+    ).toBeGreaterThan(0);
     const navigation = page.locator(".shell-nav");
     expect(await navigation.getAttribute("aria-hidden")).toBe("true");
     expect(

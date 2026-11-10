@@ -658,10 +658,14 @@ public actor GatewayChannelActor {
                 explicitGatewayToken: self.token?.trimmedNonEmpty,
                 storedToken: selectedAuth.storedToken,
                 attemptedDeviceTokenRetry: selectedAuth.authDeviceToken != nil)
+            // A rejected Share token marks a revoked or removed companion. Keeping it prevents
+            // the paired app from automatically enrolling Share again.
+            let clearsRejectedToken = options.deviceIdentityProfile != .shareExtension
             if shouldRetryWithDeviceToken {
                 self.pendingDeviceTokenRetry = true
                 self.deviceTokenRetryBudgetUsed = true
-            } else if selectedAuth.authDeviceToken != nil,
+            } else if clearsRejectedToken,
+                      selectedAuth.authDeviceToken != nil,
                       let identity,
                       (error as? GatewayConnectAuthError)?.detail == .authDeviceTokenMismatch
             {
@@ -672,6 +676,22 @@ public actor GatewayChannelActor {
                     gatewayID: options.deviceAuthGatewayID,
                     profile: options.deviceIdentityProfile,
                     observedToken: selectedAuth.authDeviceToken)
+            } else if clearsRejectedToken,
+                      let identity,
+                      let rejectedToken = Self.rejectedStoredDeviceTokenOnlyAuth(
+                          selectedAuth: selectedAuth,
+                          explicitGatewayToken: self.token?.trimmedNonEmpty,
+                          error: error)
+            {
+                // The stored device token was the only credential and the gateway rejected it
+                // (device revoked or gateway state reset). Clear it so reconnect falls back to
+                // pairing instead of resending the same token until the auth rate limit trips.
+                DeviceAuthStore.clearToken(
+                    deviceId: identity.deviceId,
+                    role: role,
+                    gatewayID: options.deviceAuthGatewayID,
+                    profile: options.deviceIdentityProfile,
+                    observedToken: rejectedToken)
             }
             throw error
         }
@@ -1299,6 +1319,24 @@ extension GatewayChannelActor {
               let authError = error as? GatewayConnectAuthError
         else { return false }
         return authError.canRetryWithDeviceToken
+    }
+
+    /// Returns the stored device token when it was sent as the only credential and the gateway
+    /// rejected it. The gateway cannot tell a stored device token from a shared token in
+    /// `auth.token`, so it may report either mismatch code.
+    private static func rejectedStoredDeviceTokenOnlyAuth(
+        selectedAuth: SelectedConnectAuth,
+        explicitGatewayToken: String?,
+        error: Error) -> String?
+    {
+        guard explicitGatewayToken == nil,
+              selectedAuth.authDeviceToken == nil,
+              let storedToken = selectedAuth.storedToken,
+              selectedAuth.authToken == storedToken,
+              let detail = (error as? GatewayConnectAuthError)?.detail,
+              detail == .authTokenMismatch || detail == .authDeviceTokenMismatch
+        else { return nil }
+        return storedToken
     }
 
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {

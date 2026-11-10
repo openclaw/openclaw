@@ -1,0 +1,2 @@
+# Upward-key intent at the native end must lock follow before native movement.
+24

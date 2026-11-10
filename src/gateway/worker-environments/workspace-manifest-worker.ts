@@ -233,6 +233,14 @@ export async function captureWorkspaceManifestDocument(params: WorkspaceCaptureA
   return await captureWorkspace("workspace.manifest.document", params);
 }
 
+/** Only the template owner supplies a previous generation after validating immutable source. */
+export async function captureTemplateWorkspaceManifest(
+  input: WorkspaceManifestValueInputs["workspace.manifest.template"],
+  signal?: AbortSignal,
+) {
+  return await computeValue("workspace.manifest.template", input, signal);
+}
+
 export async function captureWorkspaceManifestReference(params: WorkspaceCaptureArguments) {
   return await captureWorkspace("workspace.manifest.reference", params);
 }

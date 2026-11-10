@@ -1,3 +1,4 @@
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   chunkMarkdown,
   extractCuratedEntryRecallMetadata,
@@ -9,7 +10,6 @@ import {
   type MemoryEntryProvenance,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
-import type { EmbeddingProvider } from "./embeddings.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { chunkSessionContentAtResetBoundary } from "./manager-reset-chunk-boundary.js";
 import type { resolveMemoryPathClassification } from "./memory-path-provenance.js";
@@ -35,7 +35,7 @@ export type MemoryIndexPreparationInput = {
   pathClassification: Awaited<ReturnType<typeof resolveMemoryPathClassification>>;
   chunking: { tokens: number; overlap: number };
   cutoffLine?: number;
-  provider?: Pick<EmbeddingProvider, "id" | "maxInputTokens">;
+  provider?: Pick<MemoryEmbeddingProvider, "id" | "maxInputTokens">;
   hardMaxInputTokens: number;
 };
 

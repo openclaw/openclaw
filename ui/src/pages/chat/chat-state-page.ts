@@ -33,7 +33,7 @@ import {
 import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
-import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
+import { chatSessionPresentationKey, watchPresentation } from "./chat-pane-session-presentation.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
@@ -681,7 +681,7 @@ export function createPageState(
         ),
       subscribe: (_owner, notify) => {
         onChange = notify;
-        const stop = context.sessions.subscribe(notify);
+        const stop = watchPresentation(context.sessions, notify);
         return () => {
           onChange = undefined;
           stop();

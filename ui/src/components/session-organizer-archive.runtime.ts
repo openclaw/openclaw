@@ -4,16 +4,21 @@ import { t } from "../i18n/index.ts";
 import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { listen } from "../lib/reactive/listener.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
 import { customSnoozeStorageKey, rememberCustomSnooze } from "../lib/sessions/custom-snooze.ts";
-import { resolveUiSessionRowAgentId, isSubagentSessionKey } from "../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  resolveUiSessionNavigationParentKey,
+  resolveUiSessionRowAgentId,
+  isSubagentSessionKey,
+} from "../lib/sessions/session-key.ts";
 import { formatSessionSnoozeWakeTime } from "../lib/sessions/session-snooze.ts";
 import { showToast } from "../lib/toast.ts";
 import { startSidebarArchiveExit } from "./app-sidebar-archive-exit.ts";
 import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts";
 import { showConfirmChoiceDialog, showConfirmDialog } from "./confirm-dialog.ts";
+import { holdArchive } from "./session-archive-hold.ts";
 import {
   confirmWithBoundAutomations,
   withBoundAutomationNotice,
@@ -137,6 +142,11 @@ export async function confirmSessionArchive(
         rows.push(row);
         ancestorsByKey.set(row.key, ancestors);
       }
+      // Fresh Gateway rows already carry the complete visible child keys. A
+      // leaf (including a hidden worker) needs no additional list request.
+      if (!row.childSessions?.length) {
+        continue;
+      }
       const children = await fetchChildSessionRows({
         sessions: scope.sessions,
         parentKey: row.key,
@@ -146,7 +156,18 @@ export async function confirmSessionArchive(
         return null;
       }
       const nextAncestors = persistent ? [row, ...ancestors] : ancestors;
-      pending.push(...children.map((child) => ({ row: child, ancestors: nextAncestors })));
+      // Child lists also include live control relationships. Archive follows
+      // navigation ancestry, as the sidebar does, not a foreign controller.
+      pending.push(
+        ...children
+          .filter((child) =>
+            areUiSessionKeysEquivalent(
+              resolveUiSessionNavigationParentKey(child) ?? row.key,
+              row.key,
+            ),
+          )
+          .map((child) => ({ row: child, ancestors: nextAncestors })),
+      );
     }
     if (!isCurrent()) {
       return null;
@@ -368,7 +389,7 @@ export function archiveConfirmedSessionsWithUndo(
   const accepted = pending.map(({ row }) => row);
   const single = accepted.length === 1 && !accepted[0]!.archiveGuard ? accepted[0] : undefined;
   holdArchiveForUndo({
-    count: accepted.length,
+    keys: accepted.map((row) => row.key),
     commit: () =>
       single
         ? patchSession(outcomeHost, single, { archived: true }, scope, { sessionScope: true })
@@ -385,9 +406,6 @@ export function archiveConfirmedSessionsWithUndo(
   return "completed";
 }
 
-const heldArchives = new Set<() => void>();
-let commitsHeldArchivesOnPageHide = false;
-
 /**
  * Archive is a deferred commit. The rows are already hidden; the toast holds the
  * request until its Undo window closes, so Undo only releases local state and the
@@ -397,47 +415,44 @@ let commitsHeldArchivesOnPageHide = false;
  * unarchived and it simply reappears.
  */
 function holdArchiveForUndo(archive: {
-  count: number;
+  keys: readonly string[];
   commit: () => Promise<unknown>;
   publishError: (error: unknown) => void;
   release: () => void;
 }) {
   let settled = false;
-  const settle = (commit: boolean) => {
-    if (settled) {
-      return;
-    }
-    settled = true;
-    heldArchives.delete(commitNow);
-    if (!commit) {
-      archive.release();
-      return;
-    }
-    // Keep the rows hidden until the archive confirms or fails.
-    void archive.commit().catch(archive.publishError).finally(archive.release);
-  };
-  const commitNow = () => settle(true);
-  heldArchives.add(commitNow);
-  if (!commitsHeldArchivesOnPageHide) {
-    commitsHeldArchivesOnPageHide = true;
-    listen(globalThis, "pagehide", () => {
-      // Each commit removes only itself, which Set iteration tolerates.
-      for (const commit of heldArchives) {
-        commit();
+  const toast = new AbortController();
+  const held = {
+    keys: archive.keys,
+    settle: (commit: boolean) => {
+      if (settled) {
+        return;
       }
-    });
-  }
+      settled = true;
+      unhold();
+      if (!commit) {
+        // Undo can come from the session's own banner; retire the notice too.
+        toast.abort();
+        archive.release();
+        return;
+      }
+      // Keep the rows hidden until the archive confirms or fails.
+      void archive.commit().catch(archive.publishError).finally(archive.release);
+    },
+  };
+  const unhold = holdArchive(held);
   showToast({
     severity: "success",
     message:
-      archive.count === 1
+      archive.keys.length === 1
         ? t("sessionsView.sessionArchived")
-        : t("sessionsView.sessionsArchived", { count: String(archive.count) }),
+        : t("sessionsView.sessionsArchived", { count: String(archive.keys.length) }),
     actionLabel: t("common.undo"),
-    onAction: () => settle(false),
+    signal: toast.signal,
+    onAction: () => held.settle(false),
     onDismiss: (reason) => {
       if (reason !== "action") {
-        commitNow();
+        held.settle(true);
       }
     },
   });

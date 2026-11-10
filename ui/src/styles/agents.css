@@ -12,7 +12,12 @@
   padding-block-start: var(--space-5);
 }
 
+/* One toolbar row: the quiet refresh icon, the bordered action and the menu
+   trigger share the settings control height (settings-controls.css) and the
+   field radius. */
 .agents-toolbar-actions {
+  --icon-button-radius: var(--field-radius);
+
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -26,8 +31,8 @@
 }
 
 .btn.agents-page-menu__trigger {
-  width: 33px;
-  height: 33px;
+  width: var(--settings-control-height);
+  height: var(--settings-control-height);
   padding: 0;
 }
 
@@ -56,7 +61,7 @@
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   color: var(--muted);
   background: transparent;
@@ -330,6 +335,13 @@
   transform: translateY(-50%);
 }
 
+/* Nested 3px inside the 32px field, so its box and radius are the field's minus that inset. */
+.agent-identity-editor__emoji-control .agent-emoji-picker__trigger {
+  width: 26px;
+  height: 26px;
+  border-radius: calc(var(--field-radius) - 3px);
+}
+
 @media (max-width: 640px) {
   .agent-overview .settings-row__control > .agent-fallbacks {
     width: 100%;
@@ -356,7 +368,7 @@
   background: transparent;
   color: var(--accent);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   padding: 2px 0;
   word-break: break-all;
   text-align: left;
@@ -389,7 +401,7 @@
 
 .agent-file-sub {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   margin-top: 4px;
 }
 
@@ -419,7 +431,7 @@
 
 .md-preview-dialog__path {
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -728,7 +740,7 @@
 
 .agent-tools-runtime-chip__meta {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 
@@ -949,7 +961,7 @@
   display: flex;
   align-items: center;
   font-weight: 600;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);
@@ -1079,11 +1091,6 @@
   .agents-layout > *,
   .agents-main > * {
     min-width: 0;
-  }
-
-  .btn.agents-page-menu__trigger {
-    width: 44px;
-    height: 44px;
   }
 
   /* With the menu in the floating header, no row is left above the tabs. */

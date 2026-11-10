@@ -94,8 +94,6 @@ export function createModelProviders(
       }
     },
     onComplete: ({ client, data }) => {
-      // A page refresh settles its feedback; an overlapping picker Retry is best effort.
-      core.resetCatalog();
       supplemental.adoptCoreData(client, data);
     },
     onCatalogComplete: (result) => {
@@ -106,7 +104,7 @@ export function createModelProviders(
     },
   });
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => loaderPending || !routeDataObserved || core.loading || supplemental.loading,
+    isLoading: () => loaderPending || !routeDataObserved || supplemental.loading,
     reload: () => supplemental.loadUsage(),
     onIncompleteUsageExhausted: notify,
   });

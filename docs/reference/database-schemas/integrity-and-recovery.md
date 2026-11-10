@@ -41,6 +41,14 @@ inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new
 facts after their DDL. Doctor migrations, repairs, and explicit verification retain
 their required checks; ordinary current-schema opens follow the policy below.
 
+Cold shared-state readiness readers adopt the seal's catalog before consuming
+its completed validation facts. Startup's `database-readiness` diagnostics report
+`statePreflightMs` and `agentPreflightMs` separately; the existing schema counters
+cover agent inspections only. `stateSealCount`, `stateIntegrityCheckCount`, and
+`stateIntegrityMs` distinguish reuse from a required state integrity and foreign-key
+check. State preflight time also includes reader startup, schema and ownership
+inspection, target registry reads, and cleanup.
+
 A clean-close seal whose schema identity changed also takes bounded admission on
 an otherwise current agent database. The writable owner repairs canonical
 non-unique indexes transactionally, verifies the touched tables, and validates

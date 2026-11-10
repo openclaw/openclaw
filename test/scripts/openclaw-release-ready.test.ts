@@ -381,7 +381,7 @@ function bridgeFixture(releaseRunAttempt = 1, conclusion = "success") {
       `${moduleName}.mjs`,
       `
       import { trace, preparedPackage } from './fixture-trace.mjs';
-      export { prepared${prefix}ArtifactName${target === "npm" ? ", validatePreparedNpmArtifactDescriptor" : ""} } from ${JSON.stringify(pathToFileURL(resolve(`scripts/${moduleName}.mjs`)).href)};
+      export { prepared${prefix}ArtifactName${target === "npm" ? ", validatePreparedNpmArtifactDescriptor, createPreparedNpmCapacityObserver" : ""} } from ${JSON.stringify(pathToFileURL(resolve(`scripts/${moduleName}.mjs`)).href)};
       ${
         target === "npm"
           ? `

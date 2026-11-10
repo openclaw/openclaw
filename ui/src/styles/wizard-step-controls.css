@@ -15,7 +15,7 @@
 
 .wizard-step__message p + p {
   margin-top: 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.6;
 }
 
@@ -34,7 +34,7 @@
   padding: 8px 16px;
   border: 1px dashed var(--border);
   border-radius: var(--radius-md);
-  font-size: 24px;
+  font-size: calc(24px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: 0.15em;
 }
@@ -106,8 +106,6 @@
   height: 18px;
   flex: 0 0 18px;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask);
   border-radius: 50%;
   animation: btn-spinner-spin 800ms linear infinite;
 }

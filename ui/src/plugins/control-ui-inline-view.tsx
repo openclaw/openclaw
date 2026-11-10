@@ -25,7 +25,8 @@ export function PluginInlineView(props: {
   let root!: HTMLDivElement;
   createIntersectionObserver(
     () => [root],
-    ([entry]) => setNear(entry?.isIntersecting === true),
+    // Scrolling can queue offscreen and onscreen entries in one native delivery.
+    (entries) => setNear(entries.at(-1)?.isIntersecting === true),
     { rootMargin: "400px 0px" },
   );
   createResizeObserver(

@@ -1002,14 +1002,19 @@ check_suspension() {
 }
 
 arm_suspension_handoff() {
-	local params response
+	local params response failure_code diagnostic
 	((suspension_cleanup_only == 0)) || { fail 'suspension offer is cleanup-only, not continued authority'; return 1; }
 	assert_protected_identity && assert_policy || return 1
 	params="$(proof suspension-handoff-params "$held_suspension" "$suspension_pid" "$suspension_instance")" || return 1
 	# An uncertain RPC may already have committed shutdown; never renew after sending it.
 	suspension_handoff_started=1
 	response="$(run_gateway "$suspension_release" gateway call gateway.suspend.handoff \
-		--params "$params" --json --timeout 30000)" || return 1
+		--params "$params" --json --timeout 30000)" || {
+		failure_code=$?
+		diagnostic="$(proof_json suspension-handoff-failure "$response" "$failure_code" 2>/dev/null)" || diagnostic=unclassified
+		printf 'SUSPENSION_HANDOFF_FAILED exit=%s details=%s\n' "$failure_code" "$diagnostic" >&2
+		return 1
+	}
 	proof_json suspension-handoff "$response" "$held_suspension" "$suspension_expiry" >/dev/null || return 1
 	# The host now owns one-way shutdown; its retired lease cannot reopen admission.
 	printf 'HANDOFF_COMMITTED lease=%s expiresAtMs=%s pid=%s\n' "$held_suspension" "$suspension_expiry" "$suspension_pid"
@@ -2750,6 +2755,7 @@ recover_journal() {
 			fi
 			return 1
 		fi
+		verified_markers record "$current_sha" || return 1
 		proof recovery-finish "$journal_file" "$evidence" "$serving_root" "$recovery_position" >/dev/null || return 1
 		if [[ -n "$reconcile_evidence" ]]; then
 			printf 'RECOVERY_CONFIG_RECONCILED config_sha256=%s journal_sha256=%s original-journal=retired-without-rewrite\n' "$reconcile_config_hash" "$reconcile_journal_hash"
@@ -2790,14 +2796,16 @@ prepare_retained_repair() {
 		[[ ("$enabled" == disabled || "$enabled" == not-found) && "$active" == inactive ]] ||
 			fail 'retained repair preparation requires disabled inactive deployment timers'
 	done
-	binding="$("$node_bin" -e 'const [operation,target,current,pid,generation,journalSha256,configSha256]=process.argv.slice(1);process.stdout.write(JSON.stringify({operation,target,current,pid:Number(pid),generation,journalSha256,...(configSha256?{configSha256}:{})}));' \
-		"$repair_operation" "$requested_sha" "$operator_expected_sha" "$operator_expected_pid" "$operator_expected_generation" "$repair_journal_hash" "${repair_config_hash:-}")"
+	# Freeze once under the deployment lock before selecting the new intent's target.
+	freeze_origin_main
+	binding="$("$node_bin" -e 'const [operation,target,current,pid,generation,journalSha256,configSha256,frozenMain]=process.argv.slice(1);process.stdout.write(JSON.stringify({operation,target,current,pid:Number(pid),generation,journalSha256,...(configSha256?{configSha256}:{}),...(target==="main"?{frozenMain}:{})}));' \
+		"$repair_operation" "$requested_sha" "$operator_expected_sha" "$operator_expected_pid" "$operator_expected_generation" "$repair_journal_hash" "${repair_config_hash:-}" "$frozen_main")"
 	request="$(printf '%s' "$binding" | proof retained-repair-build request "$serving_root" @stdin)"
+	requested_sha="$(printf '%s' "$request" | "$node_bin" -e 'let s="";process.stdin.on("data",v=>s+=v).on("end",()=>process.stdout.write(JSON.parse(s).target.sha));')"
 	printf '%s' "$request" | proof retained-repair-build begin "$serving_root" @stdin >/dev/null
 	operation="$("$node_bin" -e 'process.stdout.write(JSON.stringify({operation:process.argv[1]}));' "$repair_operation")"
 	# Never waive the ordinary pending-journal gate: this separate owner binds it.
-	# Existing fetch/build/prewarm/seal owners run in ordinary errexit context.
-	freeze_origin_main
+	# Existing build/prewarm/seal owners run in ordinary errexit context.
 	printf '%s' "$operation" | proof retained-repair-build origin "$serving_root" @stdin >/dev/null
 	# A replay may see newer official main. The original exact C remains pinned.
 	frozen_main="$requested_sha"
@@ -4298,7 +4306,7 @@ if [[ "$mode" == retained-repair || "$mode" == retire-retained-repair ]]; then o
 
 if [[ "$mode" == prepare-retained-repair ]]; then
 	[[ "$repair_operation" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ &&
-		"$requested_sha" =~ ^[a-f0-9]{40}$ && "$operator_expected_sha" =~ ^[a-f0-9]{40}$ &&
+		( "$requested_sha" == main || "$requested_sha" =~ ^[a-f0-9]{40}$ ) && "$operator_expected_sha" =~ ^[a-f0-9]{40}$ &&
 		"$requested_sha" != "$operator_expected_sha" && "$operator_expected_pid" =~ ^[1-9][0-9]*$ &&
 		"$operator_expected_generation" =~ ^[1-9][0-9]*$ && "$repair_journal_hash" =~ ^[a-f0-9]{64}$ &&
 		-z "$reconcile_config_hash" && "$start_stopped_current" == 0 ]] || fail 'invalid retained repair incident binding'

@@ -1,3 +1,3 @@
-45
-# Exact net growth for pinned-scan ancestry and patch-only qualification regressions.
-# Exercises actual Git repositories; does not grant credit for inherited test debt.
+55
+# Exact net growth for pinned-scan ancestry, patch-only qualification,
+# and the negotiated partial-clone CLI regression under the same scan contract.

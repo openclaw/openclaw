@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { connections } from "./connections.js";
-import { markdown, resolveLinks } from "./markdown-links.js";
+import { linkSpans, markdown, resolveLinks } from "./markdown-links.js";
 import { effectiveRecord } from "./merge.js";
 import type { Envelope, LoadedRecord } from "./model.js";
 import { recordPath } from "./record-path.js";
@@ -101,6 +101,26 @@ it("Markdown tokenization excludes code, escapes, HTML, images and generated bac
     resolveLinks(record("source", "Source", "source.md", body), []).map(({ href }) => href),
   ).toStrictEqual(["../people/alex.md", "#wiki=Alex", "people/alex.md"]);
 });
+it("ignores image-alt links while retaining visible links in containers", () => {
+  const body = [
+    "> ![alt [[Hidden wiki]]](image.png) [[Quoted]]",
+    "",
+    "- ![alt [Hidden](hidden.md)](image.png) [Listed](listed.md)",
+    "",
+    "| Links |",
+    "| --- |",
+    "| ![alt [[Hidden cell]]](image.png) [[Cell]] |",
+  ].join("\n");
+  const rendered = markdown.parse(body);
+  const expected = ["#wiki=Quoted", "listed.md", "#wiki=Cell"];
+  expect(
+    resolveLinks(record("source", "Source", "source.md", body), []).map(({ href }) => href),
+  ).toStrictEqual(expected);
+  expect(linkSpans(body).map(({ href }) => href)).toStrictEqual(expected);
+  expect(rendered).not.toMatch(/<a href="(?:#wiki=Hidden|hidden\.md)/);
+  expect(markdown.parse(body)).toBe(rendered);
+});
+
 it("comments are invisible while code examples and other HTML stay escaped", () => {
   const source =
     "Before <!-- project: path:/private/workspace --> after\n\n<!-- hidden\n[[Secret]]\n-->\n\n`<!-- inline example -->`\n\n```html\n<!-- fenced example -->\n```\n\n&lt;!-- escaped example --&gt;\n\n<script>unsafe()</script>";

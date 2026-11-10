@@ -184,6 +184,11 @@ The macOS critical-security CodeQL job temporarily stays on `macos-26-intel` wit
 
 The earlier hosted-routing validation used `macos-26`: repeated first attempts left the Blacksmith macOS jobs unassigned while other CI completed. In [run 33616182173](https://github.com/openclaw/openclaw/actions/runs/33616182173), the hosted retry assigned all three waiting Mac jobs within eight seconds; the Debug/simulator job passed in 15m31s. That historical result predates Xcode 27. Complete native evidence remains required for full manual qualification.
 
+Linux Node setup probes Git's `--no-lazy-fetch` support before running checks.
+Capable installations are unchanged. Ubuntu images missing it install current Git
+from the Git project's recommended PPA; other images must provision Git 2.45 or
+newer. Package operations are noninteractive and bounded.
+
 The Node test planner marks only shards that run the real native grep fixture.
 Those Linux jobs install the `ripgrep` package when the selected runner image
 does not provide it. Other Node shards do not pay that setup cost.

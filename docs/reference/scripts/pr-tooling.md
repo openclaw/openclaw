@@ -57,16 +57,40 @@ See the [merge recovery contract](/reference/scripts/merge-recovery).
 Materialized anchors use `openclaw-pr-anchor-v3.<creator-pid>.<suffix>` directories.
 The creator owns retirement across its exec chain through the directory identity
 held on FD 9; an inherited path or a descendant does not grant deletion authority.
-Before an operation child starts, authenticated creator cleanup may retire the
-anchor. After dispatch, the supervisor retires it only after the process group
-has exited and the notification pipe has closed. A creator crash, uncertain drain,
-or changed creation evidence never automatically releases dependency holds. A
-closed output reader, as in `scripts/pr --help | head`, is an ordinary exit: the
-creator still retires its anchor and releases its holds, then exits 141. A selected
-revision older than the lifetime owner cannot release the hold its parent took.
-There is no startup stale-anchor sweep: PID death, age, and path disappearance on
-their own never authorize release or prove that inherited consumers finished. The
-only operator exception is [Release finished dependency holds](#release-finished-dependency-holds).
+New materializations also inherit FD 7, holding a shared `flock` on a private
+lifetime file outside the anchor. Shell children inherit it; the bootstrap Node
+preload preserves it through Node and Bun subprocess APIs, which otherwise close
+extra descriptors. A nested operation with its own cache namespace or lifetime
+retains enclosing leases on additional descriptors, so its children protect both
+operations even after both creators exit. This descriptor grants liveness protection, not creator
+retirement authority. Python 3's standard-library `fcntl` supplies the kernel lock.
+Lifetime registration also covers operations that reuse installed dependencies
+without acquiring a cache entry. Creation intent precedes the lifetime file;
+the operation registers its shared lock before materializing or dispatching tools.
+Interrupted pre-registration intent has no dependency consumers yet: recovery
+requires the creator incarnation to be gone, no current filesystem references,
+and an exclusive lock if its lifetime file was created.
+Collection requires a non-blocking exclusive lock and keeps it through anchor
+removal. Killing the creator cannot release a surviving child's shared lock.
+Normal completion also leaves retirement to the next invocation, after the
+creator's final descriptor closes. A closed output reader still exits 141.
+Programs must preserve the lifetime descriptor while using the anchored tools;
+the preload refuses a missing or conflicting descriptor instead of launching an
+unprotected Node consumer.
+
+Pre-lease anchors use the disposable-scratch policy: the anchor must be older
+than 24 hours, its creator incarnation must be gone, and no process may reference
+the anchor or its entries through cwd, open descriptors, or mappings. Linux uses
+`/proc`; macOS uses `ps` and `lsof`. Failed observation retains the resources.
+An unreaped Linux zombie with no surviving threads has already released its
+filesystem references; unreadable live processes still prevent collection.
+PID reuse is checked against anchor creation time; ambiguous timestamps retain
+the anchor. This deliberately accepts an old, dormant legacy child that keeps
+only a pathname in memory: scratch older than 24 hours can disappear and must be
+reinstalled on miss. This age-based tradeoff never substitutes for a new hold's
+flock evidence. Missing or changed new lifetime files retain their holds.
+Explicit [release of finished dependency holds](#release-finished-dependency-holds)
+remains available and also respects new shared locks.
 A retained PR operation lock requires its separate `lock-recover` procedure after
 verifying that no child tools remain.
 
@@ -117,24 +141,32 @@ The current wrapper can prepare dependencies for older retained workflows withou
 changing their binding or executing newer workflow code in their place.
 
 Each acquisition records an anchor hold in SQLite and marks the installation
-unsettled. The hold remains committed throughout creator-authorized anchor
-retirement. After confirmed anchor removal, the owner revalidates ledger,
+unsettled. Additive tables in the same ledger record operation lifetimes and
+pending lifetime creation, installation, or eviction transitions; the ledger version is unchanged.
+The hold remains committed throughout anchor retirement. After confirmed anchor removal, the owner revalidates ledger,
 installation, and hold identities before releasing that anchor's holds in SQLite.
 The installation becomes settled only when no holds remain. Failed settlement
 retains the recorded holds even if the anchor is already absent.
 
-Each materialization keeps the current entry and the four most recently used
-other settled installations with no holds. Reuse order comes from the ledger's
+Each ordinary invocation collects before acquiring dependencies, including when
+an installed checkout can supply them. Discovery and explicit recovery commands
+retain their independent bootstrap behavior. Collection keeps the four most recently used
+settled installations with no holds. Reuse order comes from the ledger's
 sequence, not filesystem modification times. Held or unsettled installations
-remain protected. Collection rechecks recorded directory identities and detaches
-eligible entries before deleting their contents; it never infers eligibility
-from dead PIDs, missing anchors, or age.
+remain protected until their lifetime evidence permits settlement. Collection
+retires at most four anchor, stage, or entry directories per invocation; subsequent
+invocations drain a larger backlog. This bounds deletion count, not the time to
+inspect or remove one directory. It rechecks physical identities and never follows
+aliases. The metadata critical section also has an inherited kernel lock, so a
+killed owner cannot strand its mutex or abandon a still-running deletion helper.
 
-The installing wrapper removes its own staging directory on ordinary failure.
-Abrupt interruption, incomplete publication, or uncertain ownership can leave
-staging directories, unregistered entries, or detached entries retained; no
-24-hour sweep adopts or removes them. Preserve these resources until their
-consumers and recovery obligations are resolved.
+Stage intent commits before directory creation. Publication keeps that intent
+until the installation and hold commit; eviction records detach intent in the
+same transaction that removes reuse eligibility. The next collector can finish
+either side of an interrupted rename. Existing unregistered hash entries, stages,
+and detached entries are disposable orphans: collection requires their newest
+recursive mtime to be older than 24 hours and no cwd, descriptor, or mapping
+reference. Recent orphans and live pending installations stay intact.
 
 The canonical and explicit tooling roots are never fetched, fast-forwarded, or
 reinstalled by this path. Explicit-root identity checks remain unchanged, and
@@ -168,16 +200,88 @@ lock, workflow-binding, and merge-outcome owners.
 Native PR tooling already supports an operator-provisioned symlink at the
 canonical `.worktrees` parent. The preflight resolves that target, and provisioning
 uses native Git there while keeping the same canonical repository and state
-owners. An existing allowed target can avoid a full clone. Do not repoint a
+owners. Reuse this object store instead of cloning for each task. Do not repoint a
 shared parent or move existing PR worktrees to solve one task’s access problem;
 provisioning that shared layout belongs to its operator, not the caller.
 
-If no existing supported location is accessible, use a fresh full ordinary
+If no existing supported location is accessible, create a separate ordinary
 checkout inside the allowed workspace **before starting the PR workflow**, then
-repeat this preflight. Preserve full history and blobs; do not use a shallow,
-sparse, or linked checkout as a substitute. Never move an active or uncertain
+repeat this preflight:
+
+```bash
+git clone --filter=blob:none --single-branch --branch main \
+  https://github.com/openclaw/openclaw.git /allowed/workspace/openclaw
+```
+
+Keep full commit history (no `--depth`) and a full working tree (no `--sparse`);
+historical blobs can stay omitted. `--single-branch` alone does **not** limit blob
+history. This fallback still downloads commits, trees, and checkout blobs; use
+the existing base whenever its canonical paths are accessible. `--reference`
+rejects shallow donors, and `--dissociate` copies borrowed objects, so neither is
+the default replacement for a shared worktree. Never move an active or uncertain
 operation to another clone: first reconcile it through the native recovery owner
 in the original repository. A new clone has a different lock/outcome namespace.
+
+## Reuse the base and fetch only needed history
+
+Never use `fetch --depth`, `pull --depth`, `--shallow-since`, or
+`--shallow-exclude` in a managed base or its linked worktrees: their shallow
+boundary is shared. Fetch the required ref without a depth limit. If a managed
+base is already shallow, use `openclaw doctor --fix`; keep `blob:none`.
+
+Start in the assigned managed/task worktree. `scripts/pr review-init <PR>`
+provisions `.worktrees/pr-<PR>` through the worktree owner; it shares the canonical
+object store. Do not manually create that PR directory or clone into scratch to
+obtain main. For ordinary task isolation outside the managed lifecycle, native
+`git -C <base> worktree add -b <task-branch> <allowed-task-path> <start-commit>`
+also shares objects. A linked worktree still requires access to its canonical
+Git directory and does not fix an inaccessible `scripts/pr workspace` result.
+
+PR review and landing need commits and trees for merge-base, ancestry checks,
+and log ranges, plus blobs for the checked-out files, diffs, and merges. They do
+not need every historical blob. The source-acquisition owner retains the base's
+promisor filter; missing checkout/diff blobs are fetched on demand. Do not clear
+promisor settings, fetch with `--no-filter`, or repack just to review a PR.
+
+If ancestry fails, first distinguish a shallow boundary from an unavailable
+commit or genuinely unrelated histories:
+
+```bash
+git rev-parse --is-shallow-repository
+git --no-lazy-fetch merge-base --all "$main_sha" "$head_sha"
+```
+
+Use the exact main and PR head SHAs from the current PR observation. For a
+registry-owned managed base, the existing migration is `openclaw doctor --fix`:
+it fetches full commit history with `blob:none` under the project checkout
+lifecycle lease, skipping busy clones. The operator must own that repair; do not
+manually deepen a live managed base or run a broad Doctor repair outside task
+authority. See [project clone repair](/gateway/doctor/gateway-and-services#11e-project-clone-shape).
+
+For a task-owned ordinary shallow clone, acquire only the required range before
+workflow admission (or after the failed command has exited and its native lock
+is settled):
+
+```bash
+git fetch --deepen=256 --filter=blob:none --no-tags --no-auto-maintenance \
+  --no-write-fetch-head --refmap= origin "$main_sha" "$head_sha"
+git --no-lazy-fetch merge-base --all "$main_sha" "$head_sha"
+```
+
+This preserves shared refs and `FETCH_HEAD`; it extends the shared shallow
+boundary, so coordinate with other users of that object store. Stop once the
+needed merge-base is available. If 256 commits are insufficient, use one larger
+batch (`--deepen=1024`) and check again. A release-wide history audit or an older
+PR may need complete commit history: use `--unshallow` in place of `--deepen`
+while retaining the other flags, then rerun the failed history operation.
+Full commit history and full blob history are different requirements.
+
+A failed fetch, a still-shallow origin, or a missing local-only snapshot parent
+is not repaired by repeatedly cloning GitHub. Preserve the checkout and native
+workflow evidence; report the failing command and missing object/ref, restore
+origin access or recover the parent from its original repository, and retry
+through the same owner. An available merge-base proves that range, not arbitrary
+older ancestry; qualify any older refs required by release or recovery separately.
 
 ## Keep the admitted workflow across commands
 
@@ -374,7 +478,8 @@ scripts/pr dependency-cache-recover <plan.json> \
 This shared-cache operation uses the existing metadata mutex, not a PR lock or
 workflow binding. It requires the official OpenClaw origin and authenticates the
 complete official-main wrapper before opening the ledger, using only Git and
-Node built-ins. Origin admission runs before wrapper substitution or bootstrap.
+Node built-ins for authentication. The metadata lock uses Python's standard
+library. Origin admission runs before wrapper substitution or bootstrap.
 Review and land tooling repairs before use. Developer-wrapper opt-in and unlanded
 code do not authorize recovery. The command does not install packages or select
 another dependency donor.
@@ -391,23 +496,34 @@ The SHA-256 seals exact UTF-8 JSON bytes. The version-1 plan contains:
 - `before`: complete `owner`, `installations`, and `holds` row arrays. Include
   every column and preserve SQLite value types. Sort owner rows by `id`,
   installations by `key`, and holds by `entry_key`, `anchor_path`, `anchor_dev`,
-  then `anchor_ino`.
+  then `anchor_ino`. When any additive lifetime table has rows, also include all
+  three arrays: `pending_lifetimes`, `operation_lifetimes`, and
+  `dependency_transitions`. Sort lifetimes by `anchor_path`, `anchor_dev`, then
+  `anchor_ino`, and transitions by `path`.
 - `physical`: `cache` and `database` identities, plus an `installations` array
   ordered by key. Each installation has `key` and its physical identity.
   Identities contain decimal strings for `dev`, `ino`, `uid`, and `mode` from
   `lstat`. The database is the existing `lifetime.sqlite` file.
+- With additive rows, `physical.resources` seals their anchor and lease paths,
+  plus both names of each pending filesystem transition outside registered
+  installations. Each element is `{ path, identity }`, sorted by path using
+  `localeCompare`; `identity` is the same four-field record, or `null` for an
+  absent resource. Plans for old ledgers or empty additive tables omit these
+  extra arrays and resources.
 
 Preserve the sealed plan until reconciliation finishes. Exclude manual ledger
 writers and cache-directory replacement throughout inspection and recovery; the
 metadata mutex serializes native owners only. The cache must contain exactly the
-ledger and registered installations, with no unresolved journal or unknown
-entries. Recorded cache, database, and installation device numbers must identify
+ledger, registered installations, and sealed lifetime/transition resources, with
+no unresolved journal or unknown entries. Recorded cache, database, and installation device numbers must identify
 one old device, and their current identities must identify one new device. Inodes,
 owners, modes, schema, and integrity must match.
 
 The owner compares the complete logical preimage inside one synchronous SQLite
 write transaction. It updates only `owner.cache_dev`, `owner.db_dev`, and each
-registered `installations.dev`. It preserves all holds, including absent anchors,
+registered `installations.dev`, plus device cells in lifetime, transition, and
+hold rows whose present resource identities prove the same device change.
+Absent resources retain their recorded identities. It preserves all holds,
 and preserves sequence, settlement, reuse order, and installed contents. Recovery
 grants no collection, anchor retirement, or hold-release authority.
 
