@@ -948,10 +948,11 @@ async function authenticateClawHubParentRequest({
     },
     "sealed-producer",
   );
+  const currentFullRef = current.path.split("@")[1];
   if (
     current.status !== "in_progress" ||
     current.conclusion !== null ||
-    current.path !== `${PARENT_WORKFLOW}@${env.GITHUB_REF}`
+    (currentFullRef !== undefined && currentFullRef !== env.GITHUB_REF)
   ) {
     throw new Error("ClawHub recovery requires the executing tooling's active parent.");
   }
@@ -968,7 +969,7 @@ async function authenticateClawHubParentRequest({
     parentRunId: inputs.release_publish_run_id,
     parentRunAttempt: inputs.release_publish_run_attempt,
     toolingRef: current.head_branch,
-    toolingFullRef: current.path.split("@")[1],
+    toolingFullRef: env.GITHUB_REF,
     toolingSha: current.head_sha,
     parentStatePolicy: "active",
   };

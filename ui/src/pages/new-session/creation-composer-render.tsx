@@ -95,7 +95,11 @@ export function CreationComposer(props: {
         const questions = createComposerQuestions("creation-" + composer.id, prepared);
         const error = () => {
           owner()?.read();
-          return composer.error;
+          return composer.error ?? composer.recovery?.error;
+        };
+        const errorAction = () => {
+          owner()?.read();
+          return composer.recovery;
         };
         return (
           <section
@@ -104,7 +108,22 @@ export function CreationComposer(props: {
             aria-label={t("newSession.followUps")}
           >
             <Show when={error()}>
-              <InlineAlert tone="danger" role="alert">
+              <InlineAlert
+                tone="danger"
+                role="alert"
+                action={
+                  <Show when={errorAction()}>
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      disabled={errorAction()?.pending}
+                      onClick={() => errorAction()?.retry()}
+                    >
+                      {errorAction()?.label}
+                    </button>
+                  </Show>
+                }
+              >
                 {error()}
               </InlineAlert>
             </Show>

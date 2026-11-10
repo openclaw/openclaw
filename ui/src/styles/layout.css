@@ -81,9 +81,8 @@
     "nav content"
     "nav save-status";
   gap: 0;
-  transition:
-    grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease),
-    grid-template-rows var(--shell-focus-duration) var(--shell-focus-ease);
+  /* Route chrome changes atomically; only explicit sidebar resizing animates. */
+  transition: grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease);
   overflow: hidden;
 }
 

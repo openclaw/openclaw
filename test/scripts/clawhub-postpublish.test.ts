@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1268,6 +1269,74 @@ describe("ClawHub prepared publication", () => {
 });
 
 describe("original sealed ClawHub source", () => {
+  it("settles the native original CLI after dynamically loading FRV evidence", () => {
+    const f = originalPackedFixture();
+    const runId = f.request.inputs.full_release_validation_run_id;
+    const artifact = {
+      name: `full-release-validation-${runId}-1`,
+      expired: false,
+      workflow_run: { id: Number(runId) },
+    };
+    f.metadata.set(artifactsPath(Number(runId)), { artifacts: [artifact, artifact] });
+    const request = join(f.directory, "original-request.json");
+    const output = join(f.directory, "original-descriptor.json");
+    const preload = join(f.directory, "cli-io.mjs");
+    writeFileSync(request, JSON.stringify(f.request));
+    // Replace only external I/O: importing any release module here would finish
+    // its evaluation before the CLI and conceal the top-level-await cycle.
+    writeFileSync(
+      preload,
+      String.raw`import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const metadata = new Map(${JSON.stringify([...f.metadata])});
+const archives = new Map(${JSON.stringify([...f.archives].map(([id, bytes]) => [id, bytes.toString("base64")]))});
+function read(path) {
+  if (!metadata.has(path)) throw new Error("Unexpected CLI fixture request: " + path);
+  return metadata.get(path);
+}
+childProcess.execFileSync = (command, args) => {
+  if (command !== "gh" || args[0] !== "api") throw new Error("Unexpected CLI fixture command");
+  return JSON.stringify(read(args[1].replace("repos/openclaw/openclaw/", "")));
+};
+syncBuiltinESMExports();
+globalThis.fetch = async (input, init) => {
+  if (init?.method && init.method !== "GET") throw new Error("Unexpected CLI fixture write");
+  const url = new URL(input);
+  if (url.origin !== "https://api.github.com") throw new Error("Unexpected CLI fixture origin");
+  const path = url.pathname.replace("/repos/openclaw/openclaw/", "") + url.search;
+  const archive = /^actions\/artifacts\/(\d+)\/zip$/u.exec(path);
+  return archive ? new Response(Buffer.from(archives.get(Number(archive[1])), "base64"))
+    : Response.json(read(path));
+};
+`,
+    );
+    const result = spawnSync(
+      "node",
+      [
+        "--import",
+        preload,
+        "scripts/clawhub-prepared-artifact.mjs",
+        "original",
+        "--request",
+        request,
+        "--output",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...f.options.env },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `multiple release validation manifest artifacts found: ${runId}`,
+    );
+    expect(result.stderr).toContain("[clawhub-prepared-artifact] FAILED (exit 1)");
+    expect(existsSync(output)).toBe(false);
+  });
+
   it("resolves package directories without expanding a huge unrelated source subtree", async () => {
     const f = originalPackedFixture();
     const hugeTree = {
@@ -1330,69 +1399,74 @@ describe("original sealed ClawHub source", () => {
     },
   );
 
-  it("hands selected original bytes to a fresh transaction without original parent authorization", async () => {
-    const f = originalPackedFixture();
-    const descriptor = await createOriginalPackedClawHubDescriptor(f.options);
-    expect(descriptor).toEqual({ kind: "openclaw-clawhub-original-packed", request: f.request });
-    const eventPath = join(f.directory, "child-event.json");
-    writeFileSync(eventPath, JSON.stringify({ inputs: f.request.inputs }));
-    const childOptions = {
-      ...f.options,
-      event: undefined,
-      env: {
-        ...f.options.env,
-        GITHUB_WORKFLOW_REF: `${repository}/${childWorkflow}@${f.options.env.GITHUB_REF}`,
-        GITHUB_EVENT_PATH: eventPath,
-        GITHUB_RUN_ID: "50",
-      },
-    };
-    const matrix = await resolvePreparedClawHubMatrix({
-      ...childOptions,
-      descriptor,
-      candidateSha: f.transactions.identity.candidateSha,
-      selectionMode: "selected",
-      plugins: f.entry.name,
-    });
-    expect(matrix).toMatchObject([
-      {
-        packageName: f.entry.name,
-        packageDir: "extensions/actual-directory",
-        alreadyPublished: false,
-        publication: { state: "absent" },
-        prepared: {
-          tarballSha256: f.entry.artifactSha256,
-          inventoryDigest: f.entry.inventoryDigest,
+  it.each(["bare", "qualified"])(
+    "hands selected original bytes to a fresh transaction with a %s parent path",
+    async (path) => {
+      const f = originalPackedFixture();
+      f.current.path =
+        path === "bare" ? parentWorkflow : `${parentWorkflow}@${f.options.env.GITHUB_REF}`;
+      const descriptor = await createOriginalPackedClawHubDescriptor(f.options);
+      expect(descriptor).toEqual({ kind: "openclaw-clawhub-original-packed", request: f.request });
+      const eventPath = join(f.directory, "child-event.json");
+      writeFileSync(eventPath, JSON.stringify({ inputs: f.request.inputs }));
+      const childOptions = {
+        ...f.options,
+        event: undefined,
+        env: {
+          ...f.options.env,
+          GITHUB_WORKFLOW_REF: `${repository}/${childWorkflow}@${f.options.env.GITHUB_REF}`,
+          GITHUB_EVENT_PATH: eventPath,
+          GITHUB_RUN_ID: "50",
         },
-      },
-    ]);
-    const outputDir = join(f.directory, "fresh-package");
-    await restorePreparedClawHubPackage({
-      ...childOptions,
-      descriptor,
-      entry: matrix[0]!.prepared,
-      token: "fixture-token",
-      outputDir,
-      artifactName: "fresh-parent-package",
-    });
-    expect(readFileSync(join(outputDir, "example.tgz"))).toEqual(f.tarball);
-    expect(f.recoveryWrites).toEqual([]);
-    expect(f.qualification.admission.calls).toContain(`repos/${repository}/actions/artifacts/70`);
-    f.setPending();
-    await expect(checkOriginalPackedClawHubAbsent({ ...childOptions, descriptor })).rejects.toThrow(
-      "not absent",
-    );
-    const blockedOutput = join(f.directory, "blocked-package");
-    await expect(
-      restorePreparedClawHubPackage({
+      };
+      const matrix = await resolvePreparedClawHubMatrix({
+        ...childOptions,
+        descriptor,
+        candidateSha: f.transactions.identity.candidateSha,
+        selectionMode: "selected",
+        plugins: f.entry.name,
+      });
+      expect(matrix).toMatchObject([
+        {
+          packageName: f.entry.name,
+          packageDir: "extensions/actual-directory",
+          alreadyPublished: false,
+          publication: { state: "absent" },
+          prepared: {
+            tarballSha256: f.entry.artifactSha256,
+            inventoryDigest: f.entry.inventoryDigest,
+          },
+        },
+      ]);
+      const outputDir = join(f.directory, "fresh-package");
+      await restorePreparedClawHubPackage({
         ...childOptions,
         descriptor,
         entry: matrix[0]!.prepared,
         token: "fixture-token",
-        outputDir: blockedOutput,
-      }),
-    ).rejects.toThrow("not absent");
-    expect(existsSync(blockedOutput)).toBe(false);
-  });
+        outputDir,
+        artifactName: "fresh-parent-package",
+      });
+      expect(readFileSync(join(outputDir, "example.tgz"))).toEqual(f.tarball);
+      expect(f.recoveryWrites).toEqual([]);
+      expect(f.qualification.admission.calls).toContain(`repos/${repository}/actions/artifacts/70`);
+      f.setPending();
+      await expect(
+        checkOriginalPackedClawHubAbsent({ ...childOptions, descriptor }),
+      ).rejects.toThrow("not absent");
+      const blockedOutput = join(f.directory, "blocked-package");
+      await expect(
+        restorePreparedClawHubPackage({
+          ...childOptions,
+          descriptor,
+          entry: matrix[0]!.prepared,
+          token: "fixture-token",
+          outputDir: blockedOutput,
+        }),
+      ).rejects.toThrow("not absent");
+      expect(existsSync(blockedOutput)).toBe(false);
+    },
+  );
 
   it.each([
     "executed publisher",
@@ -1401,10 +1475,15 @@ describe("original sealed ClawHub source", () => {
     "outside admission",
     "tampered seal",
     "changed request",
+    "mismatched parent full ref",
+    "completed parent",
+    "non-null parent conclusion",
+    "other executing attempt",
   ] as const)("refuses original source for %s", async (change) => {
     const f = originalPackedFixture(
       change === "outside admission" ? "omitted sibling" : "selected",
     );
+    f.current.path = parentWorkflow;
     const inventory = f.metadata.get(jobsPath(20, 1)) as { jobs: ReturnType<typeof job>[] };
     if (change === "executed publisher") {
       f.publisher.conclusion = "failure";
@@ -1428,6 +1507,14 @@ describe("original sealed ClawHub source", () => {
         f.archives.set(f.recoveryArtifact.id, tampered);
       } else if (change === "changed request") {
         f.request.inputs.reason = "Not the uploaded request";
+      } else if (change === "mismatched parent full ref") {
+        f.current.path = `${parentWorkflow}@refs/heads/main`;
+      } else if (change === "completed parent") {
+        Object.assign(f.current, completed);
+      } else if (change === "non-null parent conclusion") {
+        Object.assign(f.current, { conclusion: "success" });
+      } else if (change === "other executing attempt") {
+        f.options.env.GITHUB_RUN_ATTEMPT = "2";
       }
       await expect(createOriginalPackedClawHubDescriptor(f.options)).rejects.toThrow(
         change === "missing publisher"
@@ -1438,7 +1525,13 @@ describe("original sealed ClawHub source", () => {
               ? /outside the original admitted/u
               : change === "changed request"
                 ? /authenticated parent request/u
-                : /size|digest/u,
+                : change === "mismatched parent full ref" || change === "completed parent"
+                  ? /active parent/u
+                  : change === "non-null parent conclusion"
+                    ? /parent state/u
+                    : change === "other executing attempt"
+                      ? /executing current parent attempt/u
+                      : /size|digest/u,
       );
     }
     expect(f.recoveryWrites).toEqual([]);

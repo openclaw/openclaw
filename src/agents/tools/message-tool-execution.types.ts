@@ -1,4 +1,5 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { ThinkLevel } from "../../auto-reply/thinking.shared.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
@@ -47,4 +48,8 @@ export type MessageToolOptions = {
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   workspaceDir?: string;
+  /** Calling run's model selection, for model tokens in responsePrefix. */
+  modelProvider?: string;
+  modelId?: string;
+  requesterThinkingLevel?: ThinkLevel;
 };

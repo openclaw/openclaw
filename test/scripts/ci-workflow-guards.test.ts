@@ -584,6 +584,43 @@ describe("ci workflow guards", () => {
     expect(evidence.with.path).toContain("wearScreenshots/*.jpg");
   });
 
+  it.each([
+    ["openclaw-performance", ["kova", "source_performance", "gateway_concurrency"]],
+    [
+      "qa-live-transports-convex",
+      [
+        "run_mock_parity",
+        "run_live_runtime_token_efficiency",
+        "run_live_matrix",
+        "run_live_buzz",
+        "run_live_telegram",
+        "run_live_discord",
+        "run_live_whatsapp",
+        "run_live_slack",
+      ],
+    ],
+  ] as const)("routes %s runtime jobs to hosted Ubuntu in Boat mode", (name, jobs) => {
+    const workflow = readWorkflow(`.github/workflows/${name}.yml`);
+    for (const runnerBackend of ["", "blacksmith", "hybrid", "runson", "github", "boat"] as const) {
+      const labels = ["github", "boat"].includes(runnerBackend)
+        ? "ubuntu-24.04"
+        : "blacksmith-4vcpu-ubuntu-2404";
+      for (const group of ["", "release-runners"]) {
+        for (const job of jobs) {
+          expect(
+            evaluateWorkflowRunner(workflow.jobs[job]["runs-on"], {
+              runnerBackend,
+              runnerGroup: group,
+              releaseRunnerGroup: group,
+              dispatchId: "full-release-validation-routing-proof",
+            }),
+            job,
+          ).toEqual(group ? { group, labels } : labels);
+        }
+      }
+    }
+  });
+
   it("separates release QA lanes without weakening their resource locks", () => {
     const workflow = readWorkflow(".github/workflows/qa-live-transports-convex.yml");
     const releaseWorkflow = readReleaseChecksWorkflow();
@@ -6834,7 +6871,7 @@ it("pins generated publisher and maturity owners before credentials and selected
   ]);
   expect(action.runs.steps[0]).toEqual({
     ...PINNED_GIT_OWNER,
-    uses: "openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae",
+    uses: "openclaw/openclaw/.github/actions/git-owner@8743f1bfafa41aebdb3a33a7137eaa6d70bd0eb7",
   });
   const sanitySteps: WorkflowStep[] = readWorkflowSanityWorkflow().jobs.actionlint.steps;
   const audit = sanitySteps.findIndex(

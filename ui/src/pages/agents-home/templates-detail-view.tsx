@@ -278,8 +278,7 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
             Boolean(detail()) &&
             !view().applying &&
             !view().consentWarning &&
-            !view().reviewPlan &&
-            !view().addedAgentId;
+            !view().reviewPlan;
           return (
             <SettingsPage wide carapace>
               <PluginDetailShell
@@ -373,16 +372,10 @@ export function TemplateAddFeedback(props: { view: TemplatesCatalogViewProps }) 
     <>
       <Show when={props.view.addError}>
         <InlineAlert tone="danger" role="alert">
-          {props.view.addError}
-          <Show when={props.view.addedAgentId}>
-            <button
-              type="button"
-              class="btn btn--sm"
-              onClick={() => void props.view.onRetryOpenChat()}
-            >
-              {t("templatesCatalog.openChat")}
-            </button>
-          </Show>
+          <span>{props.view.addError}</span>{" "}
+          <button type="button" class="btn btn--sm" onClick={() => props.view.onRetryDetail()}>
+            {t("common.retry")}
+          </button>
         </InlineAlert>
       </Show>
       <Show when={!props.view.consentWarning}>

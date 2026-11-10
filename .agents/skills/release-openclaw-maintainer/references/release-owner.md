@@ -97,8 +97,12 @@ fixes go directly to the branch with an owned post-release forward-port.
 
 Make intake explicit:
 
-- **Open preparation:** batch approved changes before freezing C/Q. If the
-  operator requests early diagnostic validation while more backports arrive,
+- **Open preparation:** integrate each approved, dependency-closed group as it
+  becomes ready while independent discovery continues; do not wait for unrelated
+  audit lanes. Serialize changes to the canonical branch and record source and
+  destination commits plus focused proof before taking the next group. Finish
+  the complete inventory and resolve the final selection before freezing C/Q.
+  If the operator requests early diagnostic validation while more backports arrive,
   record that it is provisional; it qualifies publication only if the final
   candidate and all required inputs remain exactly unchanged and eligible.
 - **Frozen/validating:** new opportunities normally queue for the next release;

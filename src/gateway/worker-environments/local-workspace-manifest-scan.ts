@@ -611,14 +611,14 @@ export async function executeLocalWorkspaceManifestRead(
     });
   } catch (error) {
     if (error === changedDuringProbe) {
-      return { kind: "rescan" };
+      return { kind: "rescan", entryCount: records.size };
     }
     throw error;
   }
   for (const entryPath of records.keys()) {
     if (entryPath !== "" && !seen.has(entryPath)) {
       if (action.kind === "probe") {
-        return { kind: "rescan" };
+        return { kind: "rescan", entryCount: records.size };
       }
       changes.push({ path: entryPath });
     }

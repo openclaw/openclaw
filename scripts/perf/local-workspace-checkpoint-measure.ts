@@ -17,6 +17,10 @@
  * Run on a btrfs fixture for native filesystem proof; pause durations conservatively
  * include pause/unpause CLI latency. Reports command latency plus finalization,
  * per-command main-process CPU and main-isolate allocation, and raw pause samples.
+ * --mode reconcile instead calls the ordinary projection synchronization owner once
+ * per request. --reconcile-target canonical|projection selects guest export or host
+ * import; --reconcile-changed-files N changes N existing files at their original size.
+ * Freeze complete source arms for this mode so real worker entrypoints match the owner.
  * --mode file-read uses the same Gateway with a real Docker guest continuously
  * writing its private projection. Use --requests 30 --burst 1 --read-interval-ms 2000
  * --files 62000 --file-bytes 19050 for a minute of Control UI file reads. Reports
@@ -128,6 +132,7 @@ import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
+import { createConnection } from "node:net";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
@@ -174,7 +179,10 @@ const { values } = parseArgs({
     "read-interval-ms": { type: "string", default: "2000" },
     "guest-image": { type: "string", default: "node:24-bookworm" },
     "native-turns": { type: "boolean", default: false },
+    "settlement-socket": { type: "string" },
     "all-mutating": { type: "boolean", default: false },
+    "reconcile-target": { type: "string", default: "canonical" },
+    "reconcile-changed-files": { type: "string", default: "1" },
     requests: { type: "string", default: "2048" },
     burst: { type: "string", default: "64" },
     files: { type: "string", default: "1000" },
@@ -325,6 +333,7 @@ assert(
       "gateway",
       "file-read",
       "turn-loop",
+      "reconcile",
       "maintenance",
       "publication",
       "heartbeat",
@@ -333,9 +342,16 @@ assert(
 );
 assert(!values.absent || values.mode !== "owner");
 const fileReads = values.mode === "file-read";
-const turnLoop = values.mode === "turn-loop";
+const reconcile = values.mode === "reconcile";
+const turnLoop = values.mode === "turn-loop" || reconcile;
+const reconcileTarget = values["reconcile-target"];
+assert(reconcileTarget === "canonical" || reconcileTarget === "projection");
+const reconcileChangedFiles = Number(values["reconcile-changed-files"]);
+assert(Number.isSafeInteger(reconcileChangedFiles) && reconcileChangedFiles > 0);
+assert(!reconcile || reconcileChangedFiles < Number(values.files));
 const nativeTurns = values["native-turns"];
 assert(!nativeTurns || (turnLoop && values["sandbox-backend"] === "podman"));
+assert(!values["settlement-socket"] || nativeTurns);
 assert(!values["all-mutating"] || turnLoop);
 assert(!turnLoop || Number(values.burst) === 1);
 const gatewayMode = values.mode === "gateway" || fileReads;
@@ -440,7 +456,7 @@ const observeWorker = (worker: Worker) => {
     workers.delete(worker);
   });
 };
-if (values.instrument === "retention" || serialTurns) {
+if (values.instrument === "retention" || values.instrument === "allocation" || serialTurns) {
   if (values.instrument === "retention") {
     assert(globalThis.gc, "Retention samples require --expose-gc");
   }
@@ -461,6 +477,39 @@ const sampleWorkerAllocation = async () => {
   } finally {
     clearInterval(keepAlive);
   }
+};
+const summarizeWorkerAllocation = (
+  before: Awaited<ReturnType<typeof sampleWorkerAllocation>>,
+  after: Awaited<ReturnType<typeof sampleWorkerAllocation>>,
+  started: number,
+  exited: number,
+) => {
+  const matched = after.flatMap((sample) => {
+    const previous = before.find((entry) => entry.threadId === sample.threadId);
+    if (previous?.bytes == null || sample.bytes == null) {
+      return [];
+    }
+    assert(sample.bytes >= previous.bytes, "Worker allocation counter must be monotonic");
+    return [{ threadId: sample.threadId, allocatedBytes: sample.bytes - previous.bytes }];
+  });
+  return {
+    before,
+    after,
+    started,
+    exited,
+    matched,
+    matchedAllocatedBytes: matched.reduce((sum, sample) => sum + sample.allocatedBytes, 0),
+    unavailableBefore: before.filter((sample) => sample.bytes == null).length,
+    unavailableAfter: after.filter((sample) => sample.bytes == null).length,
+    unmatchedBefore: before.filter(
+      (sample) => !after.some((entry) => entry.threadId === sample.threadId),
+    ).length,
+    unmatchedAfter: after.filter(
+      (sample) => !before.some((entry) => entry.threadId === sample.threadId),
+    ).length,
+    accounting:
+      "Samples are outside CPU/latency timing. Delta covers only workers sampled at both boundaries; new-worker values are lifetime totals. Exited or unavailable workers are unmeasured.",
+  };
 };
 const collectRetainedMemory = async () => {
   assert(globalThis.gc, "Retention samples require --expose-gc");
@@ -567,8 +616,11 @@ const finalizations: Array<{
   processCpuMs: number;
   allocatedBytes: number;
   pauses: number;
+  pausedDurationMs: number;
+  maxPauseDurationMs: number;
 }> = [];
 const pauseDurationsMs: number[] = [];
+const nativeRemovals = new Set<Promise<unknown>>();
 const checkpointPhases: Array<{
   name: string;
   durationMs: number;
@@ -606,9 +658,14 @@ Object.assign(globalThis, {
     const pausedAtStart = pauseBegan !== undefined;
     const cpu = process.cpuUsage();
     const allocated = getHeapStatistics().total_allocated_bytes;
+    const completion = operation();
+    if (name === "nativeWorktreeFilesystem:remove") {
+      nativeRemovals.add(completion);
+    }
     try {
-      return await operation();
+      return await completion;
     } finally {
+      nativeRemovals.delete(completion);
       const used = process.cpuUsage(cpu);
       checkpointPhases.push({
         name,
@@ -625,9 +682,11 @@ Object.assign(globalThis, {
     if (args[0] === "pause") {
       assert(!fakePaused, "Cannot pause an already-paused fixture");
       fakePaused = true;
+      pauseBegan = performance.now();
     } else if (args[0] === "unpause") {
       assert(fakePaused, "Cannot resume a running fixture");
       fakePaused = false;
+      nativeCommandFinished("unpause", performance.now(), 0);
     } else {
       assert.equal(args[0], "inspect", `Unexpected engine command: ${args.join(" ")}`);
     }
@@ -680,7 +739,7 @@ registerHooks({
         "applyStagedWorkerWorkspace",
       ],
     };
-    if (nativeTurns && phaseFunctions[relative]) {
+    if (turnLoop && phaseFunctions[relative]) {
       code ??= fs.readFileSync(path.join(root, relative), "utf8");
       for (const name of phaseFunctions[relative]) {
         const sourceText: string = code;
@@ -745,7 +804,7 @@ ${anchor}
         "globalThis.__checkpointMeasure();\nconst env = params.env ?? process.env;",
       );
       code = code.replace(anchor, anchor + "\nglobalThis.__checkpointMeasure(action.kind);");
-      if (nativeTurns) {
+      if (turnLoop) {
         const manifestOwner = "manifest: readManifest,";
         assert(code.includes(manifestOwner));
         code = code.replace(
@@ -985,6 +1044,33 @@ const owner: LocalWorkspaceOwner = {
 };
 const projection =
   await import("../../src/gateway/worker-environments/local-workspace-projection.js");
+const { withLocalWorkspaceStore } =
+  await import("../../src/gateway/worker-environments/local-workspace-store.js");
+const settleCheckpointCleanup = async () => {
+  await withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async () => {});
+  await Promise.all(nativeRemovals);
+  if (fs.statfsSync(output).type === 0x9123683e) {
+    // Native subvolume deletion defers extent retirement to kernel threads.
+    const settlementSocket = values["settlement-socket"];
+    if (settlementSocket) {
+      await new Promise<void>((resolve, reject) => {
+        const socket = createConnection(settlementSocket);
+        let reply = "";
+        socket.setEncoding("utf8");
+        socket.setTimeout(120_000, () => socket.destroy(new Error("Kernel settlement timed out")));
+        socket.once("connect", () => socket.end("settle\n"));
+        socket.on("data", (data: string) => {
+          reply += data;
+        });
+        socket.once("error", reject);
+        socket.once("end", () => (reply === "settled\n" ? resolve() : reject(new Error(reply))));
+      });
+    } else {
+      execFileSync("sync", ["-f", output], { stdio: "ignore" });
+      execFileSync("btrfs", ["subvolume", "sync", output], { stdio: "ignore" });
+    }
+  }
+};
 const { prepareLocalSandboxWorkspace } =
   await import("../../src/agents/sandbox/local-workspace.js");
 const { resolveSandboxConfigForAgent } = await import("../../src/agents/sandbox/config.js");
@@ -1145,6 +1231,10 @@ measurement: try {
     const { createHostSandboxFsBridge } =
       await import("../../src/agents/test-helpers/host-sandbox-fs-bridge.js");
     if (nativeTurns) {
+      assert(
+        process.getuid && process.getgid,
+        "Native Podman proof requires a POSIX workspace owner",
+      );
       guestName = `openclaw-checkpoint-measure-${process.pid}`;
       execFileSync("podman", ["image", "inspect", values["guest-image"]], { stdio: "ignore" });
       execFileSync(
@@ -1152,8 +1242,11 @@ measurement: try {
         [
           "run",
           "--detach",
+          "--init",
           "--name",
           guestName,
+          "--user",
+          `${process.getuid()}:${process.getgid()}`,
           "--network",
           "none",
           "--cap-drop",
@@ -1218,6 +1311,78 @@ measurement: try {
     });
     let edit = 0;
     runTurn = async () => {
+      if (reconcile) {
+        const commandBegan = performance.now();
+        const commandCpu = process.cpuUsage();
+        const commandAllocated = getHeapStatistics().total_allocated_bytes;
+        const seed = `synthetic reconcile ${++edit}`;
+        const writeRoot = reconcileTarget === "canonical" ? workspace! : canonical;
+        const writeFiles = `
+          const fs = require("node:fs");
+          const [root, seed, count, bytes] = process.argv.slice(1);
+          for (let i = 1; i <= Number(count); i++) {
+            fs.writeFileSync(root + "/file-" + i + ".txt",
+              (seed + " file-" + i + "\\n").padEnd(Number(bytes), "."));
+          }
+        `;
+        assert(pauseBegan === undefined, "Fixture mutation must begin with the guest running");
+        if (nativeTurns && reconcileTarget === "canonical") {
+          execFileSync("podman", [
+            "exec",
+            turnRuntime,
+            "node",
+            "-e",
+            writeFiles,
+            "/workspace",
+            seed,
+            String(reconcileChangedFiles),
+            String(fileBytes),
+          ]);
+        } else {
+          execFileSync(process.execPath, [
+            "-e",
+            writeFiles,
+            writeRoot,
+            seed,
+            String(reconcileChangedFiles),
+            String(fileBytes),
+          ]);
+        }
+        const began = performance.now();
+        const beforePauses = pauseDurationsMs.length;
+        await projection.withLocalWorkspaceProjection(owner, (operations) =>
+          operations.synchronize(reconcileTarget),
+        );
+        const ended = performance.now();
+        const usedCpu = process.cpuUsage(commandCpu);
+        const paused = pauseDurationsMs.slice(beforePauses);
+        finalizations.push({
+          changed: true,
+          durationMs: ended - began,
+          commandDurationMs: ended - commandBegan,
+          processCpuMs: (usedCpu.user + usedCpu.system) / 1000,
+          allocatedBytes: getHeapStatistics().total_allocated_bytes - commandAllocated,
+          pauses: pauseDurationsMs.length - beforePauses,
+          pausedDurationMs: paused.reduce((sum, duration) => sum + duration, 0),
+          maxPauseDurationMs: Math.max(0, ...paused),
+        });
+        assert(pauseBegan === undefined, "Reconciliation must resume the guest");
+        for (let i = 1; i <= reconcileChangedFiles; i++) {
+          const expected = `${seed} file-${i}\n`.padEnd(fileBytes, ".");
+          for (const directory of [canonical, workspace!]) {
+            assert.equal(fs.readFileSync(path.join(directory, `file-${i}.txt`), "utf8"), expected);
+          }
+        }
+        if (nativeTurns) {
+          assert.equal(
+            execFileSync("podman", ["exec", turnRuntime, "cat", "/workspace/file-1.txt"], {
+              encoding: "utf8",
+            }),
+            `${seed} file-1\n`.padEnd(fileBytes, "."),
+          );
+        }
+        return;
+      }
       for (let tool = 0; tool < 10; tool++) {
         const commandBegan = performance.now();
         const commandCpu = process.cpuUsage();
@@ -1248,6 +1413,7 @@ measurement: try {
           }
         }
         const began = performance.now();
+        const beforePauseSamples = pauseDurationsMs.length;
         await backend.finalizeExec!({
           status: "completed",
           exitCode: 0,
@@ -1256,6 +1422,7 @@ measurement: try {
         });
         const finalizationEnded = performance.now();
         const usedCpu = process.cpuUsage(commandCpu);
+        const paused = pauseDurationsMs.slice(beforePauseSamples);
         finalizations.push({
           changed: Boolean(content),
           durationMs: finalizationEnded - began,
@@ -1263,6 +1430,8 @@ measurement: try {
           processCpuMs: (usedCpu.user + usedCpu.system) / 1000,
           allocatedBytes: getHeapStatistics().total_allocated_bytes - commandAllocated,
           pauses: containerCommands.filter((command) => command === "pause").length - beforePauses,
+          pausedDurationMs: paused.reduce((sum, duration) => sum + duration, 0),
+          maxPauseDurationMs: Math.max(0, ...paused),
         });
         assert(!fakePaused, "Finalization must resume the guest");
         if (content) {
@@ -1589,23 +1758,12 @@ measurement: try {
         gitOperations,
         workerAllocation:
           workerAllocationBefore && workerAllocationAfter
-            ? {
-                before: workerAllocationBefore,
-                after: workerAllocationAfter,
-                started: workerStarts - workerStartsBefore,
-                exited: workerExits - workerExitsBefore,
-                matchedAllocatedBytes: workerAllocationAfter.reduce((sum, after) => {
-                  const before = workerAllocationBefore.find(
-                    (entry) => entry.threadId === after.threadId,
-                  );
-                  return (
-                    sum +
-                    (before?.bytes != null && after.bytes != null ? after.bytes - before.bytes : 0)
-                  );
-                }, 0),
-                accounting:
-                  "Delta covers only workers sampled at both boundaries; new-worker values are lifetime totals. Exited or unavailable workers are unmeasured.",
-              }
+            ? summarizeWorkerAllocation(
+                workerAllocationBefore,
+                workerAllocationAfter,
+                workerStarts - workerStartsBefore,
+                workerExits - workerExitsBefore,
+              )
             : undefined,
         eventLoopP99Ms: loop.percentile(99) / 1e6,
         eventLoopMaxMs: loop.max / 1e6,
@@ -1992,6 +2150,9 @@ measurement: try {
     break measurement;
   }
   await runOne(0);
+  if (nativeTurns) {
+    await settleCheckpointCleanup();
+  }
   if (fileReads) {
     await delay(5_000);
     await runOne(0);
@@ -2076,6 +2237,10 @@ measurement: try {
     }
   });
   observer.observe({ entryTypes: ["gc"] });
+  const nativeWorkerAllocationBefore =
+    nativeTurns && values.instrument === "allocation" ? await sampleWorkerAllocation() : undefined;
+  const nativeWorkerStartsBefore = workerStarts,
+    nativeWorkerExitsBefore = workerExits;
   const readCgroupCpuUs = () => {
     const usage = /^usage_usec (\d+)$/m.exec(fs.readFileSync("/sys/fs/cgroup/cpu.stat", "utf8"));
     assert(usage, "cgroup v2 CPU accounting must expose usage_usec");
@@ -2085,6 +2250,26 @@ measurement: try {
     nativeTurns && process.platform === "linux" && fs.existsSync("/sys/fs/cgroup/cpu.stat")
       ? readCgroupCpuUs()
       : undefined;
+  const clockTicks =
+    nativeTurns && process.platform === "linux"
+      ? Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }))
+      : 0;
+  if (nativeTurns && process.platform === "linux") {
+    assert(Number.isSafeInteger(clockTicks) && clockTicks > 0, "Invalid Linux clock tick rate");
+  }
+  const readHostCpu = () => {
+    const line = fs.readFileSync("/proc/stat", "utf8").split("\n")[0];
+    assert(line !== undefined && line.startsWith("cpu "), "Missing aggregate Linux CPU counters");
+    const ticks = line.trim().split(/\s+/).slice(1).map(Number);
+    return Object.fromEntries(
+      ["user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"].map((key, index) => {
+        const tick = ticks[index];
+        assert(tick !== undefined && Number.isFinite(tick), `Missing Linux CPU counter: ${key}`);
+        return [key, (1000 * tick) / clockTicks];
+      }),
+    );
+  };
+  const hostCpuBefore = clockTicks ? readHostCpu() : undefined;
   const hostLoad = loadavg(),
     before = process.threadCpuUsage(),
     processBefore = process.cpuUsage(),
@@ -2137,6 +2322,13 @@ measurement: try {
       }),
     );
   }
+  const cleanupSettlementStarted = performance.now();
+  if (nativeTurns) {
+    // Settle the instrumented native removals and deferred kernel cleanup after acceptance.
+    // Include their CPU without adding the tail to individual command latency.
+    await settleCheckpointCleanup();
+  }
+  const cleanupSettlementMs = performance.now() - cleanupSettlementStarted;
   if (fileReads || nativeTurns) {
     // Include the last operation's resumed heartbeat, not just intervals arriving mid-request.
     await nextGuestHeartbeat();
@@ -2148,6 +2340,27 @@ measurement: try {
     processCpu = process.cpuUsage(processBefore);
   const cgroupCpuMs =
     cgroupCpuBefore === undefined ? undefined : (readCgroupCpuUs() - cgroupCpuBefore) / 1000;
+  const hostCpuMs = hostCpuBefore
+    ? Object.fromEntries(
+        Object.entries(readHostCpu()).map(([key, value]) => {
+          const previousCpu = hostCpuBefore[key];
+          assert(previousCpu !== undefined, `Missing initial Linux CPU counter: ${key}`);
+          return [key, value - previousCpu];
+        }),
+      )
+    : undefined;
+  const nativeWorkerAllocationAfter = nativeWorkerAllocationBefore
+    ? await sampleWorkerAllocation()
+    : undefined;
+  const nativeWorkerAllocation =
+    nativeWorkerAllocationBefore && nativeWorkerAllocationAfter
+      ? summarizeWorkerAllocation(
+          nativeWorkerAllocationBefore,
+          nativeWorkerAllocationAfter,
+          workerStarts - nativeWorkerStartsBefore,
+          workerExits - nativeWorkerExitsBefore,
+        )
+      : undefined;
   await waitForDiagnosticEventsDrained();
   stopLeaseDiagnostics();
   stopRpcDiagnostics();
@@ -2185,19 +2398,38 @@ measurement: try {
     harnessSha256,
     turn: turnLoop
       ? {
-          tools: 10,
-          changed: values["all-mutating"] ? 10 : 2,
-          unchanged: values["all-mutating"] ? 0 : 8,
+          tools: reconcile ? 1 : 10,
+          changed: reconcile ? 1 : values["all-mutating"] ? 10 : 2,
+          unchanged: reconcile || values["all-mutating"] ? 0 : 8,
+          ...(reconcile ? { reconcileTarget, reconcileChangedFiles } : {}),
           pauses: containerCommands.filter((command) => command === "pause").length,
           unpauses: containerCommands.filter((command) => command === "unpause").length,
           filesystemType: fs.statfsSync(output).type,
           engine: nativeTurns ? "native Podman" : "synthetic execContainer seam; no injected delay",
           pauseDurationsMs: [...pauseDurationsMs],
           checkpointPhases: [...checkpointPhases],
+          cleanupSettlementMs,
+          uid: process.getuid?.(),
+          effectiveCapabilities:
+            process.platform === "linux"
+              ? /^CapEff:\s*(\S+)/m.exec(fs.readFileSync("/proc/self/status", "utf8"))?.[1]
+              : undefined,
+          settlementObserver: values["settlement-socket"]
+            ? "private privileged socket"
+            : "local process",
+          hostCpuMs,
+          hostCpuAccounting:
+            "Whole Linux VM CPU, including kernel cleanup and unrelated daemon work; cgroup CPU excludes some kernel threads",
           phaseAccounting:
             "withStagedWorkerWorkspaceManifest includes applyStagedWorkerWorkspace; phases overlap and must not be summed",
           percentileDefinition: "sorted sample at floor((count - 1) * percentile)",
           pauseDistributionMs: distribution(pauseDurationsMs),
+          operationPauseDistributionMs: distribution(
+            finalizations.map((sample) => sample.pausedDurationMs),
+          ),
+          operationMaxPauseDistributionMs: distribution(
+            finalizations.map((sample) => sample.maxPauseDurationMs),
+          ),
           commandDistributionMs: distribution(
             finalizations.map((sample) => sample.commandDurationMs),
           ),
@@ -2235,8 +2467,10 @@ measurement: try {
           }
         : undefined,
     allocatedBytesPerRequest: allocatedBytes / requests,
-    allocationAccounting:
-      "main-isolate V8 total allocated bytes, including background work; excludes workers",
+    allocationAccounting: Number.isFinite(allocatedBytes)
+      ? "main-isolate V8 total allocated bytes, including background work; excludes workers"
+      : "V8 total allocation counter unavailable; use separate sampled allocation pass",
+    workerAllocation: nativeWorkerAllocation,
     reusedFixture: reuseFixture,
     revision: values.revision ?? "candidate",
     instrument: values.instrument,
@@ -2282,7 +2516,9 @@ measurement: try {
             scope:
               "cgroup and descendants: Node workers, native helpers, Git, Podman and guest; requires an exclusively owned rig",
             membership: fs.readFileSync("/proc/self/cgroup", "utf8").trim(),
-            cpuMax: fs.readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim(),
+            cpuMax: fs.existsSync("/sys/fs/cgroup/cpu.max")
+              ? fs.readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim()
+              : null,
           },
     mainThreadCpuPercent: (cpu.user + cpu.system) / (elapsedMs * 10),
     cpuUsPerRequest: (cpu.user + cpu.system) / requests,
@@ -2343,7 +2579,10 @@ measurement: try {
   }
   if (turnLoop) {
     fs.writeFileSync(path.join(workspace!, "file-0.txt"), initial);
-    for (const editedFile of [Math.floor(files / 3), Math.floor((2 * files) / 3)]) {
+    const editedFiles = reconcile
+      ? Array.from({ length: reconcileChangedFiles }, (_, index) => index + 1)
+      : [Math.floor(files / 3), Math.floor((2 * files) / 3)];
+    for (const editedFile of editedFiles) {
       fs.writeFileSync(
         path.join(workspace!, `file-${editedFile}.txt`),
         `synthetic ${editedFile}\n`.padEnd(fileBytes, "."),
@@ -2372,6 +2611,9 @@ measurement: try {
   };
   fs.writeFileSync(path.join(output, values.report), JSON.stringify(verified, null, 2));
   console.log(JSON.stringify(verified));
+} catch (error) {
+  console.error("Workspace measurement failed before cleanup:", error);
+  throw error;
 } finally {
   turnProjection?.[Symbol.dispose]();
   if (turnLoop && !nativeTurns) {
@@ -2383,7 +2625,7 @@ measurement: try {
     // Only the named task fixture is stopped, including if an interrupted read left it paused.
     const engine = nativeTurns ? "podman" : "docker";
     spawnSync(engine, ["unpause", guestName], { stdio: "ignore" });
-    execFileSync(engine, ["rm", "--force", guestName], { stdio: "ignore" });
+    execFileSync(engine, ["rm", "--force", guestName], { stdio: ["ignore", "ignore", "inherit"] });
     await guestExited;
     await (await import("../../src/agents/sandbox/registry.js")).removeRegistryEntry(guestName);
   }
