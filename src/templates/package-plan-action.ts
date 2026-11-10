@@ -81,7 +81,6 @@ export type PlannedTemplateBundledDependency = {
   extension?: import("./manifest-contract.js").TemplateAppliedExtension;
   riskWarning?: string;
 };
-export type PlannedTemplateDependency = PlannedTemplatePackage | PlannedTemplateBundledDependency;
 
 export function bundledDependencyFromAction(
   action: TemplateAddPlanAction,
