@@ -1,0 +1,11 @@
+544
+# Exact net growth for #195306 (544 = 213 publication-side + 331 daemon-side): publication-side proofs that a rebuild which cannot reach the
+# installed Gateway publishes while an unrelated operation holds the profile service lifecycle
+# lock, guards that the lock is still taken when the Gateway serves the checkout being rebuilt
+# and when the serving installation moves into it mid-publication, a proof that a served
+# checkout stays excluded from service retarget while its independent publication writes, and
+# daemon-side proofs that real service install/start queue behind that exclusion, including
+# while a rebuild has cleaned the served dist entrypoint and while the served checkout shares
+# its dist-runtime or SDK alias physically with the publishing checkout. No cheaper layer
+# observes the cross-process lock queue: the regression is lock acquisition ordering around
+# real publication and real service mutation.
