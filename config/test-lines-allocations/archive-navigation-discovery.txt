@@ -1,3 +1,3 @@
 # Archive regression: hidden leaf workers require no child reads, and foreign
 # control relationships must not enter the sidebar archive tree.
-48
+49
