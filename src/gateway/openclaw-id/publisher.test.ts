@@ -208,3 +208,60 @@ describe("publishClaw after a re-bind", () => {
     expect(client.publishSnapshot).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("publishClaw on a machine Discovery has moved past", () => {
+  // Discovery refuses our binding 1 and names the one it publishes.
+  async function refusedWith(code: "stale_binding" | "conflict", signer?: "other root") {
+    const claw = await linkedClaw();
+    await claw.authority.recordDiscovery({
+      owner_account_id: "acct-owner",
+      published_binding_seq: 1,
+      published_snapshot_seq: 1,
+    });
+    const ours = claw.authority.current()!.binding!.body;
+    const published = await signStatement(
+      "ServerBinding",
+      {
+        ...ours,
+        binding_seq: code === "conflict" ? 1 : 3,
+        k_srv: formatIrohEndpointKey(randomBytes(32)),
+        k_gw: formatEd25519PublicKey((await generateEd25519Signer()).publicKey),
+      },
+      signer ? await generateEd25519Signer() : claw.root,
+    );
+    const client = {
+      registerClaw: vi.fn(),
+      publishDescriptor: vi.fn(async (): Promise<void> => {
+        throw new DiscoveryRequestError(409, code, "refused", published);
+      }),
+      publishSnapshot: vi.fn(async (): Promise<void> => {}),
+    };
+    return await publishClaw({
+      record: claw.authority.current()!,
+      relayUrl: "https://relay.example.test/",
+      client: client as never,
+      signer: await generateEd25519Signer(),
+    });
+  }
+
+  it.each(["stale_binding", "conflict"] as const)(
+    "reports binding_superseded with the root-verified published keys (%s)",
+    async (code) => {
+      const outcome = await refusedWith(code);
+      expect(outcome).toMatchObject({
+        state: "failed",
+        code: "binding_superseded",
+        retryable: false,
+        superseded: { bindingSeq: 1, publishedBindingSeq: code === "conflict" ? 1 : 3 },
+      });
+    },
+  );
+
+  it("treats a published binding that does not verify under the root as an integrity error", async () => {
+    expect(await refusedWith("stale_binding", "other root")).toMatchObject({
+      state: "failed",
+      code: "discovery_integrity",
+      retryable: false,
+    });
+  });
+});

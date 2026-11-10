@@ -23,6 +23,8 @@ export class DiscoveryRequestError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** The published binding a descriptor refusal carries (untrusted until verified). */
+    readonly binding?: unknown,
   ) {
     super(message);
   }
@@ -80,15 +82,19 @@ export function createDiscoveryClient(params: {
     if (!response.ok) {
       let code = "unavailable";
       let message = `Discovery ${endpoint} failed with HTTP ${response.status}`;
+      let binding: unknown;
       try {
         // SAFETY: every field is optional and read with ?? fallbacks; a non-object body throws into the catch.
-        const parsed = JSON.parse(text) as { error?: { code?: string; message?: string } };
+        const parsed = JSON.parse(text) as {
+          error?: { code?: string; message?: string; binding?: unknown };
+        };
         code = parsed.error?.code ?? code;
         message = parsed.error?.message ?? message;
+        binding = parsed.error?.binding;
       } catch {
         // Non-JSON error bodies keep the generic message.
       }
-      throw new DiscoveryRequestError(response.status, code, message);
+      throw new DiscoveryRequestError(response.status, code, message, binding);
     }
     // SAFETY: T is the response shape Discovery's API documents for this endpoint; callers read it defensively.
     return (text ? JSON.parse(text) : undefined) as T;

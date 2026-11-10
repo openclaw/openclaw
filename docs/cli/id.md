@@ -83,7 +83,13 @@ If the Gateway restarts before Discovery confirmed the new keys, or the code exp
 last ten minutes), `openclaw id status` says the new keys wait for a link code; run
 `openclaw id publish --code <link-code>`.
 
-`--yes` skips the confirmation and needs `--kit-stdin` and `--code`. `--cancel` deletes the keys staged
+`--yes` skips the confirmation and needs `--kit-stdin` and `--code`.
+
+If `openclaw id status` says Discovery lists newer keys for this claw that this computer
+doesn't have, either this computer was restored from an older backup, or someone with your
+recovery kit moved the claw. Either way, run `openclaw id rebind`: it signs above the binding
+Discovery publishes. If you didn't restore a backup, do it now. If that fails because your
+account is also compromised, relink this claw as a new claw from this computer. `--cancel` deletes the keys staged
 by a move you did not finish; running `rebind` again reuses them. If the Gateway stops after
 the move was stored but before it switched keys, it finishes the switch at its next start.
 
