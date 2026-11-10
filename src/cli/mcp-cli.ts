@@ -30,7 +30,6 @@ import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
-import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { loginMcpServer, registerMcpLoginCommand, type McpLoginOptions } from "./mcp-cli-oauth.js";
 import {
   formatMcpProbeIssues,
@@ -38,6 +37,7 @@ import {
   probeMcpServersOrFail,
   resolveMcpProbeIssue,
 } from "./mcp-cli-probe.js";
+import { resolveMcpServeOptions } from "./mcp-cli-serve-options.js";
 import {
   offlineMcpAction,
   setMcpServerOffline,
@@ -564,29 +564,19 @@ export function registerMcpCli(program: Command) {
     )
     .option("-v, --verbose", "Verbose logging to stderr", false)
     .action(async (opts) => {
+      let serveOptions: ReturnType<typeof resolveMcpServeOptions>;
       try {
-        const { gatewayToken, gatewayPassword } = resolveGatewayAuthOptions(opts);
-        const claudeChannelMode = normalizeLowercaseStringOrEmpty(
-          normalizeStringifiedOptionalString(opts.claudeChannelMode) ?? "auto",
-        );
-        if (
-          claudeChannelMode !== "auto" &&
-          claudeChannelMode !== "on" &&
-          claudeChannelMode !== "off"
-        ) {
-          throw new Error('Invalid --claude-channel-mode value. Use "auto", "on", or "off".');
-        }
-        const { serveOpenClawChannelMcp } = await import("../mcp/channel-server.js");
-        await serveOpenClawChannelMcp({
-          gatewayUrl: opts.url as string | undefined,
-          gatewayToken,
-          gatewayPassword,
-          claudeChannelMode,
-          verbose: Boolean(opts.verbose),
-        });
+        serveOptions = resolveMcpServeOptions(opts);
       } catch (err) {
+        fail(formatErrorMessage(err));
+      }
+      try {
+        const { serveOpenClawChannelMcp } = await import("../mcp/channel-server.js");
+        await serveOpenClawChannelMcp(serveOptions);
+      } catch (err) {
+        const reason = formatErrorMessage(err).replace(/\.+$/u, "");
         defaultRuntime.error(
-          terminalText`MCP server failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep --require-rpc")} to inspect Gateway health.`,
+          terminalText`MCP server failed to start: ${reason}. Run ${formatCliCommand("openclaw gateway status --deep --require-rpc")} to inspect Gateway health.`,
         );
         exitCliAfterOutput(defaultRuntime, 1);
       }

@@ -203,6 +203,7 @@ export async function scanActualWorkspaceManifest(
     // Only repair candidates authenticated against a saved root may retain this former input.
     includeLegacyPnpmStore?: boolean;
     unchangedProbe?: boolean;
+    btrfsSnapshot?: boolean;
     // The caller proves content reuse through file identity or immutable template custody.
     reuseFile?: (
       entryPath: string,
@@ -407,6 +408,11 @@ export async function scanActualWorkspaceManifest(
       return "absent";
     }
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
+      if (params.btrfsSnapshot && stats.ino === 2n) {
+        throw Object.assign(new Error("Btrfs snapshot omitted a nested subvolume"), {
+          code: "WORKSPACE_SNAPSHOT_INCOMPLETE",
+        });
+      }
       if (params.preserveDirectories?.has(relative) || includedParents.has(relative)) {
         addEntry({ path: relative, type: "directory" });
         return "included";
@@ -441,6 +447,11 @@ export async function scanActualWorkspaceManifest(
         const absolute = path.join(root, relative);
         const stats = await fs.lstat(absolute, { bigint: true });
         if (stats.isDirectory() && !stats.isSymbolicLink()) {
+          if (params.btrfsSnapshot && stats.ino === 2n) {
+            throw Object.assign(new Error("Btrfs snapshot omitted a nested subvolume"), {
+              code: "WORKSPACE_SNAPSHOT_INCOMPLETE",
+            });
+          }
           directories[index] = relative;
         } else {
           // Unsupported nodes and escaping links still make their directory nonempty;

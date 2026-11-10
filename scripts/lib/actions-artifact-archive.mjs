@@ -843,11 +843,21 @@ export function validateActionsArtifactProducerJob(params) {
     producerJob.status === "completed" &&
     typeof producerJob.conclusion === "string" &&
     producerJob.conclusion.length > 0;
+  // A same-attempt consumer can authenticate an already-uploaded artifact while
+  // its own parent job is still running. This never substitutes job progress for
+  // the exact successful upload step, or admits a retained/other-attempt producer.
+  const activeUpload =
+    params.allowActiveJob === true &&
+    expected.runStatePolicy === "same-run-producer-success" &&
+    expected.runAttempt === expected.consumerRunAttempt &&
+    Boolean(expected.producerStepName) &&
+    producerJob.status === "in_progress" &&
+    producerJob.conclusion === null;
   if (
     producerJob.run_id !== expected.runId ||
     producerJob.run_attempt !== expected.runAttempt ||
     producerJob.head_sha !== expected.workflowSha ||
-    !producerCompleted ||
+    (!producerCompleted && !activeUpload) ||
     (!expected.producerStepName && producerJob.conclusion !== "success")
   ) {
     throw new Error("Actions artifact producer job did not complete successfully.");
