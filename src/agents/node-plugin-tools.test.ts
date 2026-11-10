@@ -36,6 +36,11 @@ import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcri
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import {
+  capCronJobToolsAllowOnCreate,
+  replaceWithEffectiveCronCreatorToolAllowlist,
+} from "./tools/cron-tool-creator-cap.js";
+import type { CronCreatorToolAllowlistEntry } from "./tools/cron-tool.types.js";
+import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
@@ -702,6 +707,31 @@ describe("materializeNodeTools", () => {
       }),
     ).toEqual([]);
   });
+
+  it.each([
+    { registered: false, selection: "remote-demo", rejected: true },
+    { registered: true, selection: "remote-demo", rejected: false },
+    { registered: false, selection: "remote_echo", rejected: false },
+  ])(
+    "preserves node owner trust in cron creator selection: %j",
+    ({ registered, selection, rejected }) => {
+      connectTool(remoteEcho, { registered });
+      const tools = materializeNodeTools({ toolAllowlist: ["group:plugins"] });
+      expect(tools.map((tool) => tool.name)).toEqual(["remote_echo"]);
+      const creator: CronCreatorToolAllowlistEntry[] = [];
+      replaceWithEffectiveCronCreatorToolAllowlist(creator, tools, getPluginToolMeta);
+      const job = { payload: { kind: "agentTurn", message: "work", toolsAllow: [selection] } };
+      const cap = () => capCronJobToolsAllowOnCreate(job, creator);
+      if (rejected) {
+        expect(cap).toThrow('Requested automation tool "remote-demo" cannot be carried');
+        expect(job.payload.toolsAllow).toEqual([selection]);
+      } else {
+        cap();
+        expect(job.payload.toolsAllow).toEqual(["remote_echo"]);
+      }
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "retains node owner trust in the caller snapshot (registered=%s)",
