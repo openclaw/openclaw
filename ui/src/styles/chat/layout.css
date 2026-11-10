@@ -40,12 +40,20 @@ openclaw-pending-session-create {
   margin-block-start: -4px;
 }
 
+.chat-error__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
 /* The long discard label would squeeze the message into a sliver on phones. */
 @media (max-width: 560px) {
-  .chat-error .app-toast__content > .chat-error__discard {
+  .chat-error .app-toast__content > .chat-error__actions:has(> .chat-error__discard) {
     grid-row: auto;
     grid-column: 1 / -1;
     justify-self: start;
+    align-items: flex-start;
     margin-block-start: 6px;
   }
 }
