@@ -25,7 +25,7 @@ import type {
 import { loadAcpBindingRuntime, loadSessionBindingRuntime } from "./handler-runtime.js";
 import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
 import { downloadMatrixMedia } from "./media.js";
-import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
+import { resolveMatrixCommandCheckText, resolveMentions } from "./mentions.js";
 import { isMatrixAudioContent, matrixPreflightAudio } from "./preflight-audio.js";
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
 import { resolveMatrixInboundRouteAsync } from "./route.js";
@@ -234,14 +234,21 @@ export async function resolveMatrixIngressContent(config: {
       });
     }
   }
-  const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId, {
-    provider: "matrix",
-    conversationId: roomId,
-    providerPolicy: accountConfig?.mentionPatterns,
-  });
   const selfDisplayName = content.formatted_body
     ? await getMemberDisplayName(roomId, selfUserId).catch(() => undefined)
     : undefined;
+  // Keep mention stripping on the command-only path so history and agent
+  // prompt text continue to see the original Matrix message.
+  const { mentionRegexes: agentMentionRegexes, commandCheckText } = resolveMatrixCommandCheckText({
+    core,
+    cfg,
+    agentId: _route.agentId,
+    roomId,
+    mentionPatterns: accountConfig?.mentionPatterns,
+    selfUserId,
+    selfDisplayName,
+    text: mentionPrecheckText,
+  });
   const mentionPrecheckTextWithTranscript = preflightAudioTranscript
     ? [mentionPrecheckText, preflightAudioTranscript].filter(Boolean).join("\n").trim()
     : mentionPrecheckText;
@@ -262,14 +269,6 @@ export async function resolveMatrixIngressContent(config: {
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
     cfg,
     surface: "matrix",
-  });
-  // Keep mention stripping on the command-only path so history and agent
-  // prompt text continue to see the original Matrix message.
-  const commandCheckText = stripMatrixMentionPrefix({
-    text: mentionPrecheckText,
-    userId: selfUserId,
-    displayName: selfDisplayName,
-    mentionRegexes: agentMentionRegexes,
   });
   const hasControlCommandInMessage = core.channel.text.hasControlCommand(commandCheckText, cfg);
   const commandAccess = await resolveMatrixMonitorCommandAccess(accessState, {

@@ -1,0 +1,38 @@
+title: Matrix E2EE media hold joins an encrypted attachment and its text sent while the gateway was down for longer than the hold
+scenario:
+  id: matrix-e2ee-media-hold-outage-catch-up
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encrypted-media-upload-download
+  execution:
+    kind: flow
+    channel: matrix
+    providerMode: mock-openai
+    timeoutMs: 240000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Keeps the gateway down while the encrypted attachment and its text are sent.
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        mediaHoldMs: 8000
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-media-hold
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Media Hold Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media-hold.js
+  call: runMatrixQaE2eeMediaHoldOutageCatchUpScenario
+  args:
+    - expr: "scenarioContext"

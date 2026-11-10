@@ -82,6 +82,7 @@ export type MatrixQaConfigOverrides = {
   groupPolicy?: GroupPolicy;
   configuredBotRoles?: MatrixQaActorRole[];
   groupsByKey?: Record<string, MatrixQaGroupConfigOverrides>;
+  mediaHoldMs?: number;
   replyToMode?: ReplyToMode;
   startupVerification?: "if-unverified" | "off";
   streaming?: MatrixQaStreamingMode | MatrixQaStreamingConfig | boolean;
@@ -359,7 +360,7 @@ export function buildMatrixQaConfig(
   const account = restoreOwnedFields(
     currentAccount,
     baselineAccount,
-    "allowBots autoJoin autoJoinAllowlist startupVerification".split(" "),
+    "allowBots autoJoin autoJoinAllowlist mediaHoldMs startupVerification".split(" "),
   );
   for (const field of ["execApprovals", "groups", "threadBindings"]) {
     delete account[field];
@@ -456,6 +457,7 @@ export function buildMatrixQaConfig(
     ...(overrides?.startupVerification !== undefined
       ? { startupVerification: overrides.startupVerification }
       : {}),
+    ...(overrides?.mediaHoldMs !== undefined ? { mediaHoldMs: overrides.mediaHoldMs } : {}),
     streaming,
     ...(Object.keys(threadBindings).length > 0 ? { threadBindings } : {}),
     threadReplies: overrides?.threadReplies ?? "inbound",
