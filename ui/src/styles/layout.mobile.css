@@ -23,7 +23,8 @@
   grid-template-areas:
     "topbar"
     "notice"
-    "content";
+    "content"
+    "save-status";
   /* The nav collapses to an overlay drawer here, so it no longer reserves a
      column. Zero the width the docked terminal reads or it would leave a
      258px gap and waste most of a phone viewport. */
@@ -278,10 +279,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     var(--floating-header-control) / 2 * var(--openclaw-corner-radius-scale)
   );
   grid-template-rows: 0 auto minmax(0, 1fr);
-  grid-template-areas:
-    "topbar"
-    "notice"
-    "content";
 
   & .topbar {
     position: absolute;
@@ -566,6 +563,13 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   main.content--chat {
     gap: 2px;
     padding-bottom: 0;
+  }
+
+  /* Full-bleed route edges belong to the shell, including cold Systems entry
+     before the lazy chat sheets load. New Session keeps its own inset contract. */
+  .shell--mobile-nav .content--chat:not(.content--new-session) {
+    --content-inline-padding: 0px;
+    padding-inline: 0;
   }
 
   /* Custodian owns its page inset and vertical rhythm. Keep the generic mobile

@@ -169,9 +169,9 @@ function aggregateFixture() {
   // Authority is independently covered; these tests exercise seal ordering and bytes.
   vi.spyOn(toolingAuthority, "verifyReleaseToolingIdentity").mockImplementation(vi.fn());
   vi.spyOn(toolingAuthority, "verifyReleaseWorkflowRun").mockReturnValue(run);
-  vi.spyOn(qualificationAuthority, "verifyReleaseQualificationOperator").mockReturnValue({
-    id: 1,
-    login: "fixture-operator",
+  vi.spyOn(qualificationAuthority, "verifyReleaseQualificationOperators").mockReturnValue({
+    operator: { id: 1, login: "fixture-operator" },
+    triggeringOperator: { id: 1, login: "fixture-operator" },
   });
   const originalRead = vi.fn().mockRejectedValue(new Error("original qualification reached"));
   const downloads: string[] = [];

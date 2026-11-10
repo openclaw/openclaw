@@ -47,8 +47,8 @@ import {
   type PersistedTemplateMcpServerRef,
 } from "./mcp-records.js";
 import * as mcpInstall from "./mcp.js";
+import type { PersistedTemplatePackageRef } from "./package-extension-provenance.js";
 import * as packageInstall from "./packages.js";
-import type { PersistedTemplatePackageRef } from "./provenance.js";
 import { readTemplateManifestFile } from "./reader.js";
 import { parseTemplateOpenClawProfile } from "./schema.js";
 import type { TemplateReadResult } from "./types.js";

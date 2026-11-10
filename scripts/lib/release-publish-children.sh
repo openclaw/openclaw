@@ -114,7 +114,7 @@ verify_child_run_sha() {
 
 cleanup_clawhub_children() {
   local run_id run_json failed=0
-  for run_id in "${RELEASE_CLAWHUB_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_RUN_ID:-}}" "${RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID:-}}"; do
+  for run_id in "${RELEASE_CLAWHUB_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_RUN_ID:-}}" "${RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID:-}}" "${CHILD_CLAWHUB_RECOVERY_RUN_ID:-}"; do
     [[ -n "$run_id" ]] || continue
     run_json="$(gh_read api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")" || { failed=1; continue; }
     [[ "$(jq -r '.status' <<< "$run_json")" != completed ]] || continue
@@ -368,6 +368,7 @@ dispatch_workflow_at_ref() {
   case "$workflow" in
     plugin-npm-release.yml) output_key=plugin_npm_run_id; env_key=CHILD_PLUGIN_NPM_RUN_ID ;;
     plugin-clawhub-release.yml) output_key=plugin_clawhub_run_id; env_key=RELEASE_CLAWHUB_RUN_ID ;;
+    plugin-clawhub-recovery.yml) output_key=clawhub_recovery_run_id; env_key=CHILD_CLAWHUB_RECOVERY_RUN_ID ;;
     plugin-clawhub-new.yml) output_key=plugin_clawhub_bootstrap_run_id; env_key=RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID ;;
     openclaw-npm-release.yml) output_key=openclaw_npm_run_id; env_key=CHILD_OPENCLAW_NPM_RUN_ID ;;
   esac
@@ -783,16 +784,30 @@ write_clawhub_runtime_state() {
     --bootstrap-completed "${plugin_clawhub_bootstrap_completed:-false}" > "${output_path}"
 }
 
+# Rendering and canonical readback must use the same frozen notice context.
+run_github_release_notes() {
+  local regular_stable_version=""
+  local -a render_args=(
+    --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
+    --tag "${RELEASE_TAG}" --repository "${GITHUB_REPOSITORY}"
+    "$@"
+  )
+  if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
+    regular_stable_version="$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")"
+    render_args+=(--regular-stable-version "${regular_stable_version}")
+    if [[ -n "${RETIRED_LINE_PUBLICATION_REASON:-}" ]]; then
+      render_args+=(--retired-line-reason "${RETIRED_LINE_PUBLICATION_REASON}")
+    fi
+  fi
+  node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
+    "${render_args[@]}"
+}
+
 render_github_release_notes() {
   local output_file="$1"
   local verification_file="${2:-}"
   local metadata_file="${3:-}"
-  local regular_stable_version=""
   local -a render_args=(
-    node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
-    --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
-    --tag "${RELEASE_TAG}"
-    --repository "${GITHUB_REPOSITORY}"
     --output "${output_file}"
   )
 
@@ -805,11 +820,7 @@ render_github_release_notes() {
   if [[ -n "${metadata_file}" ]]; then
     render_args+=(--metadata-output "${metadata_file}")
   fi
-  if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
-    regular_stable_version="$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")"
-    render_args+=(--regular-stable-version "${regular_stable_version}")
-  fi
-  "${render_args[@]}"
+  run_github_release_notes "${render_args[@]}"
 }
 
 verify_release_tag_target() {
@@ -839,14 +850,12 @@ verify_release_tag_target() {
 canonical_release_body_matches() {
   local body_file="$1"
   local -a verify_args=(
-    --root "$GITHUB_WORKSPACE" --ref "$TARGET_SHA"
-    --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY" --verify-body "$body_file"
+    --verify-body "$body_file"
   )
   if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" && -f "${FULL_RELEASE_VALIDATION_MANIFEST_DIR:-}/full-release-validation-manifest.json" ]] && grep -q '^### Release verification$' "$body_file"; then
     verify_args+=(--validation-manifest "${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json")
   fi
-  node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
-    "${verify_args[@]}"
+  run_github_release_notes "${verify_args[@]}"
 }
 
 assert_initial_release_body() {

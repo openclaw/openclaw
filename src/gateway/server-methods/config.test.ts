@@ -203,6 +203,46 @@ it("does not report plugin defaults discovered after the write snapshot", async 
   );
 });
 
+it.each(["config.set", "config.patch", "config.apply"] as const)(
+  "reports %s saved-but-deferred plugin config with its persisted revision",
+  async (method) => {
+    const application = {
+      status: "deferred",
+      reason: "Plugin advisor still has retained work.",
+      appliesWhen: "After retained plugin work finishes, or after a Gateway restart.",
+    };
+    const config = { plugins: { entries: { advisor: { config: { enabled: true } } } } };
+    const queueFollowUp = vi.fn();
+    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(
+      async ({ respond }: { respond?: RespondFn }) => ({
+        path: "/tmp/openclaw.json",
+        config,
+        hash: "deferred-hash",
+        application: Promise.resolve(application),
+        queueFollowUp,
+        reply: replyWithBillingRouteWarnings(respond, [], undefined),
+      }),
+    );
+    const { harness, operation } = startConfigWrite(method, { raw: config, baseHash: "base-hash" });
+    await operation;
+    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ awaitRuntimeApplication: true }),
+    );
+    expect(harness.respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("saved but deferred"),
+        details: { persistedConfig: { hash: "deferred-hash", config }, application },
+      }),
+    );
+    expectFailure(harness.respond, expect.stringContaining(application.reason));
+    expectFailure(harness.respond, expect.stringContaining(application.appliesWhen));
+    expect(queueFollowUp).toHaveBeenCalledOnce();
+  },
+);
+
 it.each([
   { nextToken: "synthetic-old-token", expectedPaths: [] },
   {

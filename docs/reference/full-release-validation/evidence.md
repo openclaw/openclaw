@@ -57,6 +57,58 @@ approval, content, and readback checks. Known enclosing evidence is budgeted bef
 fanout, but later job/attempt growth can still exceed the unchanged final artifact
 limit and fail sealing; evidence is not truncated to fit.
 
+## Bounded publication recovery
+
+A publisher may consume a nonempty selected plugin subset of an authenticated
+all-publishable admission without changing the original qualification. The
+operation retains the original release, channel, route, Windows operands, and
+sealed artifact identities. It does not create a replacement admission or make
+selected evidence sufficient for a broader publication. Each batch uses a new
+parent authorization and retains current authority checks at the final effect.
+
+Prepared npm consumers authenticate the complete original manifest before
+selecting that batch's entries. Already-published npm packages are excluded from
+publication fanout only after exact registry-byte verification. Before core npm
+publication, the parent verifies the complete original npm roster after the
+plugin child finishes; missing packages or mismatched bytes block core publication.
+
+ClawHub recovery uses the original child's authenticated recovery seal and
+transaction roster, not a replacement prepared manifest. A publication parent
+can name the original ClawHub run and attempt and dispatch the existing recovery
+workflow. Its sealed dispatch payload binds the exact original child, selected
+plugins, current parent, and full validation run. Recovery keeps the existing
+ClawHub environment and credential, verifies current parent authorization before
+every recovery request, and verifies exact public bytes. A selected batch does not
+claim completion of excluded packages. Before core publication, a full-scope
+parent waits for recovery of the complete original roster. Manual recovery without
+parent inputs retains the existing full-roster behavior.
+
+When authenticated job evidence proves that the original publisher never ran,
+the parent can instead restore the original sealed package bytes through the
+existing prepared-artifact consumer. Successful original pack jobs authenticate
+the source even if the enclosing child failed before publication. Original
+source identity remains separate from the new publishing child and its current
+parent authorization; this path does not invent a successful preparation run,
+previous publication attempt, or historical authorization. The complete original
+admission and seals are authenticated before selecting packages. A fresh
+authoritative registry check must report each selected package absent before
+initial publication; pending, failed, unknown, or ambiguous state stops the path
+for original-attempt reconciliation. No package is repacked. The parent keeps
+this child active through authorization and exact public readback, even when
+optional ClawHub waiting or core publication is disabled. Core publication cannot
+start before this original-byte batch is verified. Ordinary releases retain their
+existing authorization placement after core startup; both paths use the same
+transaction authorization owner.
+
+The existing parent prefetch and child preview/load report the first and last
+allowlisted response quota headers using their own workflow token, without an
+extra request. The `fetch-metadata-only` counts separate fixed from per-package
+metadata reads; they exclude `gh` authority/evidence calls, archive redirects, and
+registry traffic. They are not a complete dispatch budget. Select a batch only
+from observed remaining capacity and measured total costs, including parent and
+ClawHub work; static request estimates alone do not justify a retry. Resume after
+the observed reset with fresh parent authorization.
+
 <a id="publication-waivers" />
 
 ## Release-tooling waivers

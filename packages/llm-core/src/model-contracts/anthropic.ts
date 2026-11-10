@@ -8,7 +8,12 @@ type ClaudeModelRef = {
  * `params.claudeCapabilities`. Each listed flag overrides the model-id rules
  * below; rows without the record (or without one flag) keep the id rules.
  */
-type ClaudeListedCapability = "adaptiveThinking" | "disabledThinking" | "xhighEffort" | "maxEffort";
+type ClaudeListedCapability =
+  | "adaptiveThinking"
+  | "disabledThinking"
+  | "xhighEffort"
+  | "maxEffort"
+  | "serverCompaction";
 
 function readListedClaudeCapability(
   ref: ClaudeModelRef,
@@ -305,9 +310,11 @@ export function supportsClaude1MContext(ref: ClaudeModelRef): boolean {
 
 /** Return whether Anthropic documents threshold compaction (`compact_20260112`) for a Claude model. */
 export function supportsClaudeServerCompaction(ref: ClaudeModelRef): boolean {
-  // The documented compaction list currently coincides with these id families;
-  // listed thinking capabilities say nothing about compaction.
-  return isReleasedAdaptiveClaudeGeneration(ref);
+  // /v1/models lists context_management.compact_20260112 per model; unlisted
+  // rows fall back to the released families that document it.
+  return (
+    readListedClaudeCapability(ref, "serverCompaction") ?? isReleasedAdaptiveClaudeGeneration(ref)
+  );
 }
 
 /** Return whether a Claude model supports Anthropic's native fast mode. */

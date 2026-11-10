@@ -171,15 +171,17 @@ export function projectChatTranscript(
   );
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
   const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
-  const transcriptChain = projectTranscriptChain(chatItems, {
+  const transcriptChainOptions = {
     sessionKey: props.sessionKey,
     messages: props.messages,
     activeRunId: props.runActive || props.runWorking ? props.runId : null,
+    activeRunIds: activeSession?.hasActiveRun ? activeSession.activeRunIds : undefined,
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
     bubbleMode: props.chatBubbleMode === true,
     session: props.transcriptMetadata ?? activeSession,
-  });
+  };
+  const transcriptChain = projectTranscriptChain(chatItems, transcriptChainOptions);
   const { collapsedItems, transcriptItems, continuations } = transcriptChain;
   const replyNavigationId = props.replyMessageAccess?.navigationId;
   if (replyNavigationId) {
@@ -657,10 +659,8 @@ export function projectChatTranscript(
           // the gallery cache owns membership, not mounted disclosure identity.
           buildCachedChatItems({ ...chatItemsInput, searchOpen: false, searchQuery: "" }),
           {
-            sessionKey: props.sessionKey,
-            runWorking: Boolean(props.runWorking),
+            ...transcriptChainOptions,
             searchActive: false,
-            bubbleMode: props.chatBubbleMode === true,
             session: activeSession,
           },
         )
