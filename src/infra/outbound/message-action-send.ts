@@ -21,7 +21,7 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { assertMessagePresentationTablesHaveCaptions } from "../../interactive/payload-presentation-tables.js";
 import {
-  hasLegacyInteractiveRepl  yBlocks,
+    hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyPayloadContent,
   normalizeLegacyInteractiveReply,
