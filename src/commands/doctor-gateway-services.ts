@@ -58,6 +58,7 @@ import {
 import {
   assertGatewayServiceInstallationRepairAllowed,
   canRepairRunningGatewayDefinition,
+  GatewayServiceInstallationOwnershipError,
   installDoctorGatewayService,
   isExecStartRepairIssue,
   noteOperatorOwnedSystemdDropIn,
@@ -450,7 +451,13 @@ export async function maybeRepairGatewayServiceConfig(
     } catch (error) {
       // A launcher override locks the drift in place: the "another owner" is the
       // operator's own drop-in, so report its guidance instead of the refusal.
-      if (platform === "linux" && hasGatewayServiceLauncherOverride(command)) {
+      // Only an ownership refusal selects the drop-in guidance; inspection
+      // failures and definition changes keep their own error.
+      if (
+        error instanceof GatewayServiceInstallationOwnershipError &&
+        platform === "linux" &&
+        hasGatewayServiceLauncherOverride(command)
+      ) {
         noteOperatorOwnedSystemdDropIn(command);
         return cfg;
       }
