@@ -198,10 +198,14 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         sessionKey: initialState.sessionKey,
       }),
     );
+    const splitColdBoot =
+      !initialCachedSession &&
+      !document.documentElement.hasAttribute("data-openclaw-warm-frame") &&
+      bootComposerElement() &&
+      splitChatConstruction;
     if (runtime.ownsRouteComposer && !initialCachedSession) {
       finishBootFrame();
     }
-    const splitColdBoot = !initialCachedSession && !!bootComposerElement() && splitChatConstruction;
     // Split localized cached panes too, after their catalogs are ready. Only
     // document boot has a retained composer; route handoffs stay immediate.
     if (
@@ -398,8 +402,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       const [constructed, setConstructed] = createSignal(false);
       onSettled(() => {
         frame();
-        pendingLayout = yieldChatTask();
-        void pendingLayout.then(() => {
+        pendingLayout = yieldChatTask().then(() => {
           pendingLayout = undefined;
           if (!disposed) {
             setConstructed(true);

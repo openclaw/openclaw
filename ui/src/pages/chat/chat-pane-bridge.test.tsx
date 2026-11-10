@@ -226,7 +226,14 @@ it("opens provider findings through the mounted pane's first rendered frame", as
   await waitForSolid(() => expect(dialog()?.textContent).toContain(review.explanation));
 });
 
-it.each(["ready", "holding", "fallback", "unavailable"] as const)(
+it.each([
+  "ready",
+  "holding",
+  "fallback",
+  "unavailable",
+  "unavailable-holding",
+  "unavailable-fallback",
+] as const)(
   "admits the first pane from a pending snapshot, bounded at 100ms (%s)",
   async (outcome) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -275,6 +282,14 @@ it.each(["ready", "holding", "fallback", "unavailable"] as const)(
       vi.useRealTimers();
     });
     const prepared = prewarmChatSnapshot(key);
+    const warmFrame = outcome.endsWith("holding")
+      ? "holding"
+      : outcome.endsWith("fallback")
+        ? "fallback"
+        : undefined;
+    if (warmFrame) {
+      document.documentElement.setAttribute("data-openclaw-warm-frame", warmFrame);
+    }
     const view = fixture.render({
       active: true,
       ownsRouteComposer: true,
@@ -298,10 +313,7 @@ it.each(["ready", "holding", "fallback", "unavailable"] as const)(
     expect(view.pane.querySelector("textarea")).toBe(bootComposer);
     expect(bootComposer.value).toBe("Keep the pending draft");
     inactive.container.remove();
-    if (outcome !== "unavailable") {
-      if (outcome !== "ready") {
-        document.documentElement.setAttribute("data-openclaw-warm-frame", outcome);
-      }
+    if (!outcome.startsWith("unavailable")) {
       read.resolve({
         projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
         savedAt: 1,
@@ -344,12 +356,16 @@ it.each(["ready", "holding", "fallback", "unavailable"] as const)(
     } else {
       await vi.advanceTimersByTimeAsync(1);
       flush();
-      expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
-      expect(view.pane.querySelector("textarea")).toBe(bootComposer);
-      expect(yieldTask).toHaveBeenCalledOnce();
-      yielding.resolve();
-      await yielding.promise;
-      flush();
+      if (warmFrame) {
+        expect(yieldTask).not.toHaveBeenCalled();
+      } else {
+        expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
+        expect(view.pane.querySelector("textarea")).toBe(bootComposer);
+        expect(yieldTask).toHaveBeenCalledOnce();
+        yielding.resolve();
+        await yielding.promise;
+        flush();
+      }
       expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
       expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
       const composer = view.pane.querySelector<HTMLTextAreaElement>(composerSelector);

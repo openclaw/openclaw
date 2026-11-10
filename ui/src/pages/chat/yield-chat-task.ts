@@ -1,5 +1,8 @@
-// Firefox implements scheduler.yield, but these extra turns delay transcript readiness.
-export const splitChatConstruction = !navigator.userAgent.includes("Firefox/");
+// Capture before a pane clears the warm-frame marker. Warm documents retain
+// their existing scheduling, including later navigation; Firefox gains no readiness.
+export const splitChatConstruction =
+  !document.documentElement.hasAttribute("data-openclaw-warm-frame") &&
+  !navigator.userAgent.includes("Firefox/");
 
 /** Continue preparation in a task without a timer clamp or a frame wait. */
 export function yieldChatTask(): Promise<void> {
