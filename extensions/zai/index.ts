@@ -42,7 +42,7 @@ const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
 function resolveGlm5ForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
-  return resolveFamilyForwardCompatModel({
+  const model = resolveFamilyForwardCompatModel({
     providerId: PROVIDER_ID,
     ctx,
     cases: [
@@ -69,6 +69,9 @@ function resolveGlm5ForwardCompatModel(ctx: ProviderResolveDynamicModelContext) 
     preserveExisting: true,
     synthesize: true,
   });
+  // Retained catalog metadata must use the connection selected during setup.
+  const baseUrl = ctx.providerConfig?.baseUrl;
+  return model && baseUrl && model.baseUrl !== baseUrl ? { ...model, baseUrl } : model;
 }
 
 function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
