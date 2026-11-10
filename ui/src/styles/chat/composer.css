@@ -2122,7 +2122,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__model-menu {
   box-shadow: none;
   min-height: 0;
-  width: min(340px, calc(100vw - 24px));
+  width: min(440px, calc(100vw - 24px));
   max-height: min(400px, var(--auto-size-available-height, calc(100vh - 96px)));
 }
 
@@ -2594,7 +2594,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   contain-intrinsic-block-size: auto 0px;
   justify-content: flex-start;
   /* Grid-item min-width:auto would size the provider group's track to the
-     row's full content width (long name + meta), overflowing the 340px menu. */
+     row's full content width (long name + meta), overflowing the menu. */
   min-width: 0;
 }
 
@@ -2689,7 +2689,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   align-items: center;
   gap: 0;
   /* Flex min-width:auto would let a long model name + badges push the row
-     wider than the 340px menu and hand the popover a horizontal scrollbar. */
+     wider than the menu and hand the popover a horizontal scrollbar. */
   min-width: 0;
   color: var(--text);
   font-size: calc(13px * var(--control-ui-text-scale));
