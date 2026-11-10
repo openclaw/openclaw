@@ -428,7 +428,8 @@ directories survive sandbox deletions. Repository credentials, history, and
 trusted hook code remain on the OpenClaw Gateway host instead of being copied
 into an untrusted sandbox. A repository created inside a mirrored sandbox loses
 its `.git` metadata before the next command; use `remote` mode for Git workflows
-that must persist inside the sandbox.
+that must persist inside the sandbox. Remote-mode seeding also omits `.git` at
+every depth, so initialize or clone repositories inside that sandbox.
 
 Mirror synchronization never copies entries it cannot represent, such as
 symlinks, FIFOs, or Unix sockets, into either workspace. Existing host entries

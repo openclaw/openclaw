@@ -100,7 +100,7 @@ async function reconcileMirrorDirectory(params: {
 export async function replaceDirectoryContents(params: {
   sourceDir: string;
   targetDir: string;
-  /** Root names to exclude; .git also stays excluded at every depth. */
+  /** Root names to exclude; .git stays excluded at every depth when listed. */
   excludeDirs?: readonly string[];
 }): Promise<void> {
   await reconcileMirrorDirectory({ ...params, replace: true });
@@ -109,7 +109,7 @@ export async function replaceDirectoryContents(params: {
 export async function stageDirectoryContents(params: {
   sourceDir: string;
   targetDir: string;
-  /** Root names to exclude; .git also stays excluded at every depth. */
+  /** Root names to exclude; .git stays excluded at every depth when listed. */
   excludeDirs?: readonly string[];
 }): Promise<void> {
   await reconcileMirrorDirectory({ ...params, replace: false });

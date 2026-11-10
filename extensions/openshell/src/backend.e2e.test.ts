@@ -419,6 +419,7 @@ it
         await fs.mkdir(protectedPath, { recursive: true });
         await fs.writeFile(path.join(protectedPath, "host-only.txt"), "private\n", "utf8");
       }
+      await fs.mkdir(path.join(mirrorWorkspaceDir, "nested-repo/.git"), { recursive: true });
       await writeFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
       const hostLinkTarget = path.join(rootDir, "host-link-target.txt");
       await fs.writeFile(hostLinkTarget, "host-only-link-target\n");
