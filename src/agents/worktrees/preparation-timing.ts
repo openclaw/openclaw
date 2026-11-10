@@ -36,6 +36,7 @@ type PreparationPhase =
   | "warmPoolApply"
   | "templateRelease"
   | "provision"
+  | "provisionEstimate"
   | "provisionInspect"
   | "provisionCopy"
   | "provisionCopyWait"
