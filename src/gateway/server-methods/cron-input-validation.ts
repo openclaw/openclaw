@@ -531,6 +531,43 @@ export async function captureCronCreatorSession(
   }
 }
 
+/** Keep the recorded primary account and record accounts for the job's current fallback chain. */
+async function refreshRecordedFallbackAccounts(
+  nextJob: CronStoredJob,
+  binding: CronInferenceBinding,
+  cfg: OpenClawConfig,
+  agentId: string,
+  caller: InferenceCaller,
+) {
+  if (nextJob.payload.kind !== "agentTurn") {
+    return undefined;
+  }
+  const executionKey = resolveCronSessionTargetSessionKey(nextJob.sessionTarget);
+  const personal = createPersonalAccountAuthorizer(caller);
+  return {
+    inferenceBinding: await withRecordedFallbackAccounts(binding, {
+      cfg,
+      agentId,
+      model: nextJob.payload.model,
+      fallbacks: nextJob.payload.fallbacks,
+      isGmailHook: nextJob.payload.externalContentSource === "gmail",
+      runtimeSessionEntry: await loadCronRuntimeSessionEntry({
+        cfg,
+        job: nextJob,
+        agentId,
+        executionEntry: executionKey
+          ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))
+              ?.entry
+          : undefined,
+      }),
+      recordedAccounts: binding.fallbackAccounts,
+      authorizeProfile: personal.authorizeProfile,
+    }),
+    assertInferenceSelectionCurrent: personal.assertCurrent,
+    disposeInferenceAuthorization: () => {},
+  };
+}
+
 /** Only an explicitly selected account changes an existing job’s inference ownership. */
 export async function captureCronUpdatedInferenceBinding(
   nextJob: CronStoredJob,
@@ -544,33 +581,6 @@ export async function captureCronUpdatedInferenceBinding(
   const model = patch.payload && "model" in patch.payload ? patch.payload.model : undefined;
   const agentId = nextJob.agentId ?? resolveDefaultAgentId(cfg);
   const fallbacks = nextJob.payload.fallbacks;
-  if (!model && patch.payload && "fallbacks" in patch.payload && nextJob.inferenceBinding) {
-    // A fallback edit keeps the primary account and records accounts for the new chain.
-    const executionKey = resolveCronSessionTargetSessionKey(nextJob.sessionTarget);
-    const personal = createPersonalAccountAuthorizer(caller);
-    return {
-      inferenceBinding: await withRecordedFallbackAccounts(nextJob.inferenceBinding, {
-        cfg,
-        agentId,
-        model: nextJob.payload.model,
-        fallbacks,
-        isGmailHook: nextJob.payload.externalContentSource === "gmail",
-        runtimeSessionEntry: await loadCronRuntimeSessionEntry({
-          cfg,
-          job: nextJob,
-          agentId,
-          executionEntry: executionKey
-            ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))
-                ?.entry
-            : undefined,
-        }),
-        recordedAccounts: nextJob.inferenceBinding.fallbackAccounts,
-        authorizeProfile: personal.authorizeProfile,
-      }),
-      assertInferenceSelectionCurrent: personal.assertCurrent,
-      disposeInferenceAuthorization: () => {},
-    };
-  }
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
     : null;
@@ -598,6 +608,19 @@ export async function captureCronUpdatedInferenceBinding(
         assertInferenceSelectionCurrent: () => authority.assertCurrent(),
         disposeInferenceAuthorization: () => authority.dispose(),
       };
+    }
+    // No explicit primary account in this edit: keep the recorded primary and refresh fallback
+    // accounts whenever the chain may have changed, including a plain --model change.
+    const chainEdited =
+      patch.payload !== undefined && ("fallbacks" in patch.payload || "model" in patch.payload);
+    if (chainEdited && nextJob.inferenceBinding) {
+      return await refreshRecordedFallbackAccounts(
+        nextJob,
+        nextJob.inferenceBinding,
+        cfg,
+        agentId,
+        caller,
+      );
     }
     return undefined;
   }

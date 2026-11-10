@@ -4,7 +4,7 @@ import {
   type AuthProfileAuthorization,
 } from "../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
-import { isStoredCredentialCompatibleWithAuthProvider } from "../agents/auth-profiles/order.js";
+import { resolveAuthProfileOrderWithMetadata } from "../agents/auth-profiles/order.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import {
@@ -16,11 +16,15 @@ import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
+import { resolveConfiguredModelFallbacks } from "../agents/model-selection-resolve.js";
+import {
+  buildModelAliasIndex,
+  resolveModelRefFromString,
+} from "../agents/model-selection-shared.js";
 import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
@@ -316,17 +320,6 @@ type CronFallbackChainParams = {
 /** A fallback candidate to record: its model ref and any account the owner named with `@profile`. */
 export type CronFallbackCandidate = { provider: string; model: string; profileId?: string };
 
-// The chain builder drops `@profile`; recover the owner's explicit choice from the raw entries.
-function explicitFallbackProfile(rawEntries: string[], provider: string, model: string) {
-  for (const raw of rawEntries) {
-    const split = splitTrailingAuthProfile(raw);
-    if (split.profile && split.model === `${provider}/${model}`) {
-      return split.profile;
-    }
-  }
-  return undefined;
-}
-
 /** The first fallback model of each provider other than the primary's, in run order. */
 export async function resolveCronFallbackProviderModels(
   params: CronFallbackChainParams,
@@ -351,36 +344,63 @@ export async function resolveCronFallbackProviderModels(
   if (!primary.ok) {
     return [];
   }
-  const { resolveCronPreflightCandidates } =
+  const { resolveCronFallbacksOverride, resolveCronPreflightCandidates } =
     await import("./isolated-agent/run-fallback-policy.js");
-  // The same chain a run builds: payload fallbacks first, then subagent/agent/default policy.
-  const chain = resolveCronPreflightCandidates({
+  const policy = {
     cfg: primary.cfgWithAgentDefaults,
     job: {
       payload: {
-        kind: "agentTurn",
+        kind: "agentTurn" as const,
         message: "",
         ...(params.model ? { model: params.model } : {}),
         ...(params.fallbacks ? { fallbacks: params.fallbacks } : {}),
       },
     },
     agentId,
-    provider: primary.provider,
-    model: primary.model,
     useSubagentFallbacks: primary.useSubagentFallbacks,
     inheritDefaultFallbacksForAgentStringModel: primary.inheritDefaultFallbacksForAgentStringModel,
+  };
+  // The same chain a run builds: payload fallbacks first, then subagent/agent/default policy.
+  const chain = resolveCronPreflightCandidates({
+    ...policy,
+    provider: primary.provider,
+    model: primary.model,
   });
-  const rawEntries = [
-    ...(params.fallbacks ?? []),
-    ...resolveAgentModelFallbackValues(resolveAgentConfig(cfg, agentId)?.model),
-    ...resolveAgentModelFallbackValues(cfg.agents?.defaults?.model),
-  ];
+  // The chain builder resolves aliases but drops `@profile`. Read explicit accounts only from
+  // the effective list that produced the chain, resolved through the same alias owner.
+  const effective =
+    resolveCronFallbacksOverride({
+      ...policy,
+      selectedModel: { provider: primary.provider, model: primary.model },
+    }) ?? resolveConfiguredModelFallbacks({ cfg: policy.cfg, agentId });
+  const aliasIndex = buildModelAliasIndex({
+    cfg: policy.cfg,
+    agentId,
+    defaultProvider: primary.provider,
+  });
+  const explicitProfiles = new Map<string, string>();
+  for (const raw of effective) {
+    const { profile } = splitTrailingAuthProfile(raw);
+    const resolved = profile
+      ? resolveModelRefFromString({
+          cfg: policy.cfg,
+          agentId,
+          raw,
+          defaultProvider: primary.provider,
+          aliasIndex,
+        })
+      : null;
+    const key = resolved && `${resolved.ref.provider}/${resolved.ref.model}`;
+    if (key && profile && !explicitProfiles.has(key)) {
+      explicitProfiles.set(key, profile);
+    }
+  }
   const seen = new Set([params.primaryProvider]);
   const models: CronFallbackCandidate[] = [];
   for (const candidate of chain) {
     if (!seen.has(candidate.provider)) {
       seen.add(candidate.provider);
-      const profileId = explicitFallbackProfile(rawEntries, candidate.provider, candidate.model);
+      const profileId = explicitProfiles.get(`${candidate.provider}/${candidate.model}`);
       models.push({
         provider: candidate.provider,
         model: `${candidate.provider}/${candidate.model}`,
@@ -391,7 +411,7 @@ export async function resolveCronFallbackProviderModels(
   return models;
 }
 
-/** Shared (non-personal) stored accounts whose credential can serve `provider`. */
+/** Shared (non-personal) stored accounts that can currently serve `provider`. */
 export async function listEligibleSharedCronAccounts(
   cfg: OpenClawConfig,
   agentId: string,
@@ -402,13 +422,16 @@ export async function listEligibleSharedCronAccounts(
     allowKeychainPrompt: false,
     config: owner.config,
   });
-  return Object.entries(store.profiles)
-    .filter(
-      ([profileId, credential]) =>
-        !isUserModelAuthProfileId(profileId) &&
-        isStoredCredentialCompatibleWithAuthProvider({ cfg: owner.config, provider, credential }),
-    )
-    .map(([profileId]) => profileId)
+  // The run's own eligibility rules: expired or unusable credentials don't count, while a
+  // temporary cooldown doesn't make an account ineligible (the order lists it last).
+  return resolveAuthProfileOrderWithMetadata({
+    cfg: owner.config,
+    store,
+    provider,
+    readinessMode: "read-only",
+    includePendingOAuthRefresh: true,
+  })
+    .profileIds.filter((profileId) => !isUserModelAuthProfileId(profileId))
     .toSorted();
 }
 

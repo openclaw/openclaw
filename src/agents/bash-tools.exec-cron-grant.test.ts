@@ -3,9 +3,15 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withDoctorConfigMaintenance } from "../commands/doctor-config-flow.test-support.js";
+import {
+  inspectCronJobsForDoctor,
+  repairCronInferenceBindingsForDoctor,
+} from "../commands/doctor/cron/store-repair.js";
 import { bindCronJobAdmittedRun, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import type { CronInferenceBinding } from "../cron/inference-binding.js";
 import { prepareCronRunAdmission } from "../cron/run-admission.js";
 import { TEST_SCHEDULED_EXECUTION } from "../cron/scheduled-occurrence.test-support.js";
 import { markServiceCronJobActive } from "../cron/service/run-receipts.js";
@@ -599,3 +605,139 @@ it("skips the JSON allowlist digest when a cron allow-always resolves", async ()
   expect(commitExecAuthorizationMock).toHaveBeenCalledOnce();
   expect(commitExecAuthorizationMock.mock.calls[0]?.[0].allowAlwaysDecision).toBeUndefined();
 });
+
+// Doctor adding fallback accounts to an already-bound job migrates its standing-grant references.
+// These cases run the real Doctor repair transaction, then the production exec owner.
+const recordedPrimary: CronInferenceBinding = {
+  version: 1,
+  provider: "openai",
+  profileId: "openai:primary",
+  authorizationId: "a".repeat(64),
+  authRequirement: "api-key",
+  source: "user",
+};
+
+async function prepareMigratedCronRun(
+  kind: "valid" | "revoked before Doctor" | "revoked after Doctor" | "pre-Doctor occurrence",
+) {
+  const database = openOpenClawStateDatabase(databaseOptions());
+  const bound = makeCronJob({
+    agentId: "main",
+    name: "Nightly backup",
+    schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "run the backup" },
+  });
+  upsertCronJobRow(database.db, CRON_STORE_KEY, { ...bound, inferenceBinding: recordedPrimary }, 0);
+  const [before] = loadedCronStoreFromRows(loadCronRows(database.db, CRON_STORE_KEY)).store.jobs;
+  const beforeRevision = resolveCronJobConfigRevision(before!);
+  await mintStandingGrant(beforeRevision, null);
+  if (kind === "revoked before Doctor") {
+    const [grant] = await listCronStandingGrants();
+    await revokeCronStandingGrant({ grantId: grant!.grantId, revokedBy: "operator" });
+  }
+  closeOpenClawStateDatabaseForTest();
+
+  await withDoctorConfigMaintenance(async () => {
+    const inventory = await inspectCronJobsForDoctor({ env: process.env });
+    const stored = inventory.jobs.find((job) => job.id === "job-1");
+    expect(stored?.definition?.inferenceBinding).toEqual(recordedPrimary);
+    await repairCronInferenceBindingsForDoctor(
+      { env: process.env },
+      { assertCurrent() {}, assertOwnedInTransaction() {} },
+      inventory,
+      [
+        {
+          job: stored!,
+          binding: {
+            ...recordedPrimary,
+            fallbackAccounts: [
+              {
+                provider: "backup",
+                profileId: "backup:main",
+                authorizationId: "b".repeat(64),
+                authRequirement: "api-key",
+                source: "auto",
+              },
+            ],
+          },
+        },
+      ],
+    );
+  });
+
+  const reopened = openOpenClawStateDatabase(databaseOptions());
+  const [migrated] = loadedCronStoreFromRows(loadCronRows(reopened.db, CRON_STORE_KEY)).store.jobs;
+  expect(migrated?.inferenceBinding?.fallbackAccounts).toHaveLength(1);
+  const migratedRevision = resolveCronJobConfigRevision(migrated!);
+  expect(migratedRevision).not.toBe(beforeRevision);
+  if (kind === "revoked after Doctor") {
+    const [grant] = await listCronStandingGrants();
+    await revokeCronStandingGrant({ grantId: grant!.grantId, revokedBy: "operator" });
+  }
+  const receipt = claimCronRunReceiptForTest(CRON_STORE_KEY, migrated!, Date.now());
+  const marker = markServiceCronJobActive(
+    createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
+      storePath: CRON_STORE_KEY,
+      cronEnabled: true,
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      enqueueSystemEvent: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    }),
+    migrated!,
+    receipt,
+  );
+  runOwner = prepareCronRunAdmission({
+    scheduledExecution: TEST_SCHEDULED_EXECUTION,
+    cfg: {},
+    agentId: "main",
+    runId: "cron-run-1",
+    jobId: migrated!.id,
+    sessionKey: "agent:main:cron:job-1",
+    deliveryAttemptFence: null,
+  });
+  controller = new AbortController();
+  bindCronJobAdmittedRun(
+    marker,
+    await runOwner.preparedRunAdmission.admit("embedded"),
+    controller.signal,
+  );
+  unregisterCronSource = registerCronRunExecSource("cron-run-1", {
+    agentId: "main",
+    jobId: "job-1",
+    // An occurrence admitted before Doctor still carries the old definition revision.
+    jobConfigRevision: kind === "pre-Doctor occurrence" ? beforeRevision : migratedRevision,
+    jobName: "Nightly backup",
+    standingGrantAuthority: runOwner.standingGrantAuthority,
+  });
+}
+
+it("runs a migrated standing grant through native exec after Doctor adds fallback accounts", async () => {
+  await prepareMigratedCronRun("valid");
+  const result = await runCron();
+  expectApproved(result);
+  expect(callGatewayToolMock).not.toHaveBeenCalled();
+  await expect(runNativeCron(result)).resolves.toMatchObject({ status: "completed", exitCode: 0 });
+  expect(readNativeEffects()).toBe("cron-native-launch");
+  expect(await readGrantUseCounts()).toEqual([1]);
+});
+
+it.each(["revoked before Doctor", "revoked after Doctor", "pre-Doctor occurrence"] as const)(
+  "never initiates native exec through a migrated grant when it is %s",
+  async (kind) => {
+    await prepareMigratedCronRun(kind);
+    approvalDecisionMock.mockResolvedValue("deny");
+    const result = await runCron();
+    // The migrated grant can't authorize this occurrence, so exec falls back to asking for
+    // approval (denied here) instead of launching.
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "exec.approval.request",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(result.revalidateBeforeExecution).toBeUndefined();
+    await expectNoNativeEffects(0);
+  },
+);
