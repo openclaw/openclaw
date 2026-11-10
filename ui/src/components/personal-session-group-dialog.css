@@ -65,7 +65,7 @@
 
 .personal-section-dialog__aside,
 .personal-section-dialog__note {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .personal-section-dialog__aside {

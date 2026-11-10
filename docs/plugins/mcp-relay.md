@@ -110,6 +110,11 @@ single-user Gateways, operators with administrator access can create owner
 grants. On Gateways with verified profiles, each grant belongs to the person
 who approved it, including grants approved by an administrator.
 
+OpenClaw ID members use their own person grants even when the Gateway uses
+token authentication and has no local roles configured. Their membership role
+limits app operations and the embedded Control UI. Approvals made through a
+connected app also retain that person's original sign-in authority.
+
 ## Use several Gateways
 
 One ChatGPT or Codex connection can hold several Gateways, such as a personal
