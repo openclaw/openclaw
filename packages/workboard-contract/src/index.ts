@@ -344,16 +344,13 @@ function isStatus(value: unknown): value is WorkboardStatus {
   return WORKBOARD_STATUSES.includes(value as WorkboardStatus);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** Validates Cards board columns at the write boundary; throws a user-facing message. */
 export function parseWorkboardCardsBoardColumns(value: unknown): WorkboardCardsBoardColumns {
-  if (!isRecord(value)) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("board columns must be an object with a visible status list.");
   }
-  const { visible, labels, emptyColumnMode } = value;
+  // SAFETY: The checks above exclude null, arrays and primitives; fields are read as unknown.
+  const { visible, labels, emptyColumnMode } = value as Record<string, unknown>;
   if (
     !Array.isArray(visible) ||
     visible.length === 0 ||
@@ -366,7 +363,7 @@ export function parseWorkboardCardsBoardColumns(value: unknown): WorkboardCardsB
   }
   const parsedLabels: Partial<Record<WorkboardStatus, string>> = {};
   if (labels !== undefined) {
-    if (!isRecord(labels)) {
+    if (typeof labels !== "object" || labels === null || Array.isArray(labels)) {
       throw new Error("board columns.labels must map statuses to labels.");
     }
     for (const [status, label] of Object.entries(labels)) {
