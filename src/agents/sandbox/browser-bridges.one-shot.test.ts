@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mockStopBrowserBridgeServer = vi.hoisted(() => vi.fn(async () => {}));
+// mock-isolation: These tests exercise bridge ownership and teardown failures without activating the browser plugin facade.
 vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
   stopBrowserBridgeServer: mockStopBrowserBridgeServer,
 }));

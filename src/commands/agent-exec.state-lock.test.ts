@@ -12,7 +12,11 @@ import {
   trackOneShotBrowserBridge,
   type CachedBrowserBridge,
 } from "../agents/sandbox/browser-bridges.js";
-import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/io.js";
 import {
   deleteSessionEntryLifecycle,
   replaceSessionEntry,
