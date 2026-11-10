@@ -160,7 +160,7 @@ describe("GitHub publication index update", () => {
     "reuses commits and isolates cached-base fetches (%s)",
     async (mode) => {
       const shallow = mode === "shallow";
-      const contents = mode === "contents" || mode === "trees";
+      const hydrateContents = mode === "contents" || mode === "trees";
       await f.git("config", "uploadpack.allowFilter", "true");
       const clone = await makeDirectory("partial");
       const url = pathToFileURL(f.cwd).href;
@@ -174,7 +174,7 @@ describe("GitHub publication index update", () => {
         url,
         ".",
       ]);
-      if (mode !== "unregistered" && !contents) {
+      if (mode !== "unregistered" && !hydrateContents) {
         await git(clone, ["config", `remote.${url}.promisor`, "true"]);
       }
       if (mode !== "full") {
@@ -244,7 +244,7 @@ describe("GitHub publication index update", () => {
       expect(fetches).toBe(0);
       expect(await git(clone, ["rev-list", "--objects", "--missing=print", local])).toBe(missing);
 
-      if (contents) {
+      if (hydrateContents) {
         await git(clone, ["config", "fetch.unpackLimit", "1"]);
         const packDirectory = path.join(clone, ".git/objects/pack");
         const previousPacks = new Set(await fs.readdir(packDirectory));
