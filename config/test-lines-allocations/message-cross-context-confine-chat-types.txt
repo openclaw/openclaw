@@ -1,2 +1,2 @@
-# Opt-in message cross-context confinement by chat type and thread-aware same-conversation checks.
-431
+# Opt-in message cross-context confinement by chat type and thread-aware same-conversation checks, including header-bound /tools/invoke calls.
+493
