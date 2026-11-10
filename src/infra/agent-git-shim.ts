@@ -144,19 +144,19 @@ revision_roots() {
       -*) continue ;;
       *) [ "$verb" != restore ] || continue ;;
     esac
-    # Bare rev-parse names only print IDs; expressions may need missing objects.
-    if [ "$verb" = rev-parse ]; then
-      case $arg in *:*|*^*|*~*|*..*) ;; *) continue ;; esac
-    fi
-    # Paths and revision suffixes are consumed by Git after their root is present.
-    arg=\${arg%%:*}
-    case $arg in
-      *...*) left=\${arg%%...*}; right=\${arg#*...} ;;
+    traverse=
+    case \${arg%%:*} in
+      *...*) left=\${arg%%...*}; right=\${arg#*...}; traverse=1 ;;
       *..*) left=\${arg%%..*}; right=\${arg#*..} ;;
       *) left=$arg; right= ;;
     esac
     for revision in "$left" "$right"; do
       revision=\${revision#^}
+      # Plain endpoints print IDs; three-dot ranges traverse both endpoints.
+      if [ "$verb" = rev-parse ]; then
+        case $revision in *:*|*^*|*~*) ;; *) [ "$traverse" = 1 ] || continue ;; esac
+      fi
+      revision=\${revision%%:*}
       revision=\${revision%%[~^]*}
       case $revision in ''|*[[:space:]]*) continue ;; esac
       revisions="$revisions$revision

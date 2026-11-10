@@ -92,6 +92,8 @@ it.skipIf(process.platform === "win32")(
       ];
       const cases: [string, string, ...string[]][] = [
         ...pythonCommands,
+        ["rev-parse", `${base}...${missing}`],
+        ["rev-parse", `${"0".repeat(40)}..${missing}^{tree}`],
         ["show", "--cc", `${missing}:file.txt`],
         ["rev-list", "--header", missing, "--max-count=1"],
         ["show", "-U", missing],
@@ -160,6 +162,10 @@ PY`,
         expect.soft(await fs.readFile(packet, "utf8"), args.join(" ")).toMatch(/fetch> have /);
         if (["show", "diff", "blame", "format-patch"].includes(args[0])) {
           expect(result.stdout).toContain("remote content");
+        } else if (args[1] === `${base}...${missing}`) {
+          expect(result.stdout.trim()).toBe(`${missing}\n${base}\n^${base}`);
+        } else if (args[1] === `${"0".repeat(40)}..${missing}^{tree}`) {
+          expect(result.stdout.trim()).toBe(`${tree}\n^${"0".repeat(40)}`);
         } else if (args[0] === "rev-parse") {
           expect(result.stdout.trim()).toBe(args.includes(`${missing}^{tree}`) ? tree : blob);
         } else if (args[0] === "cat-file" && args.includes(`${missing}:file.txt`)) {
@@ -188,6 +194,9 @@ PY`,
       expect(unusedDefault.stdout.trim()).toBe(base);
       for (const args of [
         ["rev-parse", missing],
+        ["rev-parse", `${"0".repeat(40)}..HEAD`],
+        ["rev-parse", `${"0".repeat(40)}..HEAD^{tree}`],
+        ["rev-parse", `^${"0".repeat(40)}`],
         ["rev-parse", "--git-path", `${missing}:cache`],
         ["rev-parse", "--sq-quote", `${missing}:file.txt`],
         ["diff", "--no-index", missing, missing],
