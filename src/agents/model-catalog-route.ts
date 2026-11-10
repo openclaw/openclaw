@@ -124,6 +124,12 @@ function applyLogicalOverrides(
     return entry;
   }
   const thinkingLevelMap = mergeConfiguredThinkingLevelMap(entry, overrides);
+  // An authored thinking map owns the row's effort metadata: drop catalog
+  // provenance so a runtime capability refresh cannot replace it (#160758).
+  if (overrides.thinkingLevelMap !== undefined) {
+    const { catalogReasoningEfforts: _catalogReasoningEfforts, ...authored } = entry;
+    return { ...authored, ...overrides, ...(thinkingLevelMap ? { thinkingLevelMap } : {}) };
+  }
   return { ...entry, ...overrides, ...(thinkingLevelMap ? { thinkingLevelMap } : {}) };
 }
 
@@ -202,6 +208,7 @@ export function projectModelCatalogEntryForRoute(params: {
         : {}),
       ...(donor?.reasoning !== undefined ? { reasoning: donor.reasoning } : {}),
       ...(donor?.thinkingLevelMap ? { thinkingLevelMap: donor.thinkingLevelMap } : {}),
+      ...(donor?.catalogReasoningEfforts ? { catalogReasoningEfforts: true } : {}),
       ...(donor?.thinkingPolicyProvider
         ? { thinkingPolicyProvider: donor.thinkingPolicyProvider }
         : {}),

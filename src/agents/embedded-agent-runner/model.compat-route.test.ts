@@ -397,4 +397,170 @@ describe("model route compatibility", () => {
       }
     });
   });
+
+  it("refreshes a catalog-derived row through the provider resolver before offering new efforts", async () => {
+    const providerId = "openrouter";
+    const id = "acme/effort-model";
+    const route = { api: "openai-completions" as const, baseUrl: "https://openrouter.ai/api/v1" };
+    const catalogRow = {
+      ...makeProviderModelFixture({ provider: providerId, id, ...route }),
+      reasoning: true,
+      contextWindow: 1_000_000,
+      // A discovered canonical row prepared before the capability cache
+      // refreshed: stale ladder plus catalog provenance (#160758).
+      catalogReasoningEfforts: true,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+      },
+    };
+    const refreshedRow = {
+      ...catalogRow,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["xhigh", "high", "medium", "low"],
+      },
+    };
+    const config = providerConfig(route, [], providerId);
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    const { preparedModelRuntime } = createResolutionOptions(
+      config,
+      { route, catalogModel: catalogRow, metadataSnapshot },
+      providerId,
+    );
+    const resolved = await resolveModelAsync(providerId, id, undefined, config, {
+      preparedModelRuntime,
+      skipAgentDiscovery: true,
+      authProfileMode: "api_key",
+      runtimeHooks: {
+        ...resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
+        // An unconfigured discovered row is not "runtime preferred" by the provider.
+        shouldPreferProviderRuntimeResolvedModel: () => false,
+        runProviderDynamicModel: () => refreshedRow,
+      },
+    });
+    expect(resolved.error).toBeUndefined();
+    // The executable row follows the refreshed capabilities, so the level the
+    // session offers is the level the request can carry.
+    expect(extractModelCompat(resolved.model)?.supportedReasoningEfforts).toEqual([
+      "xhigh",
+      "high",
+      "medium",
+      "low",
+    ]);
+    expect(clampThinkingLevel(resolved.model!, "xhigh")).toBe("xhigh");
+
+    const requests: Array<{ reasoning?: { effort?: string; enabled?: boolean } }> = [];
+    const host = getAiTransportHost();
+    configureAiTransportHost({
+      ...host,
+      buildModelFetch: () => async (input, init) => {
+        const payload = (await new Request(input, init).json()) as {
+          reasoning?: { effort?: string; enabled?: boolean };
+        };
+        requests.push({ reasoning: payload.reasoning });
+        const event = {
+          id: "synthetic-reply",
+          choices: [{ index: 0, delta: { content: "OK" }, finish_reason: "stop" }],
+        };
+        return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+    try {
+      const stream = await createOpenAICompletionsTransportStreamFn()(
+        resolved.model!,
+        { messages: [{ role: "user", content: "Synthetic test", timestamp: 1 }] },
+        { apiKey: "synthetic-key", reasoning: "xhigh", transport: "sse" },
+      );
+      const result = await stream.result();
+      expect(result.errorMessage).toBeUndefined();
+      expect(requests).toEqual([{ reasoning: { effort: "xhigh" } }]);
+    } finally {
+      configureAiTransportHost(host);
+    }
+  });
+
+  it("keeps the prepared catalog-derived row when the provider resolver declines after a failed capability load", async () => {
+    const providerId = "openrouter";
+    const id = "acme/effort-model";
+    const route = { api: "openai-completions" as const, baseUrl: "https://openrouter.ai/api/v1" };
+    const catalogRow = {
+      ...makeProviderModelFixture({ provider: providerId, id, ...route }),
+      reasoning: true,
+      input: ["text", "image"] as Array<"text" | "image">,
+      contextWindow: 1_000_000,
+      // A discovered canonical row prepared while the capability cache was warm;
+      // after a restart the /models fetch fails, so the provider hook declines
+      // to rebuild a row from missing capabilities (#160758).
+      catalogReasoningEfforts: true,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+      },
+    };
+    const config = providerConfig(route, [], providerId);
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    const { preparedModelRuntime } = createResolutionOptions(
+      config,
+      { route, catalogModel: catalogRow, metadataSnapshot },
+      providerId,
+    );
+    const resolved = await resolveModelAsync(providerId, id, undefined, config, {
+      preparedModelRuntime,
+      skipAgentDiscovery: true,
+      authProfileMode: "api_key",
+      runtimeHooks: {
+        ...resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
+        shouldPreferProviderRuntimeResolvedModel: () => false,
+        // The real openrouter hook returns undefined when capabilities failed to
+        // load and a prepared registry row exists (extensions/openrouter).
+        runProviderDynamicModel: () => undefined,
+      },
+    });
+    expect(resolved.error).toBeUndefined();
+    // Normal host resolution retains the prepared metadata instead of dropping
+    // the model or substituting synthetic defaults.
+    expect(resolved.model?.reasoning).toBe(true);
+    expect(resolved.model?.contextWindow).toBe(1_000_000);
+    expect(extractModelCompat(resolved.model)?.supportedReasoningEfforts).toEqual([
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(clampThinkingLevel(resolved.model!, "high")).toBe("high");
+
+    const requests: Array<{ reasoning?: { effort?: string; enabled?: boolean } }> = [];
+    const host = getAiTransportHost();
+    configureAiTransportHost({
+      ...host,
+      buildModelFetch: () => async (input, init) => {
+        const payload = (await new Request(input, init).json()) as {
+          reasoning?: { effort?: string; enabled?: boolean };
+        };
+        requests.push({ reasoning: payload.reasoning });
+        const event = {
+          id: "synthetic-reply",
+          choices: [{ index: 0, delta: { content: "OK" }, finish_reason: "stop" }],
+        };
+        return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+    try {
+      const stream = await createOpenAICompletionsTransportStreamFn()(
+        resolved.model!,
+        { messages: [{ role: "user", content: "Synthetic test", timestamp: 1 }] },
+        { apiKey: "synthetic-key", reasoning: "high", transport: "sse" },
+      );
+      const result = await stream.result();
+      expect(result.errorMessage).toBeUndefined();
+      // The selected reasoning effort still reaches the provider request.
+      expect(requests).toEqual([{ reasoning: { effort: "high" } }]);
+    } finally {
+      configureAiTransportHost(host);
+    }
+  });
 });

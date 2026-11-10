@@ -72,6 +72,80 @@ describe("models-config merge", () => {
     }
   });
 
+  it("drops catalog effort provenance when config authors effort metadata", () => {
+    const discovered = model({
+      id: "acme/effort-model",
+      catalogReasoningEfforts: true,
+      thinkingLevelMap: { off: null },
+      compat: { supportedReasoningEfforts: ["xhigh", "high", "medium", "low"] },
+    });
+    const catalog = { baseUrl: configUrl, api: "openai-responses", models: [discovered] };
+
+    // An authored thinking map owns the row's effort metadata, so the catalog
+    // provenance marker must not survive the merge (#160758).
+    const authored = merge.mergeProviderModels(
+      catalog,
+      {
+        baseUrl: configUrl,
+        api: "openai-responses",
+        models: [
+          model({ id: "acme/effort-model", thinkingLevelMap: { off: "none", high: "high" } }),
+        ],
+      },
+      { providerId: "custom" },
+    );
+    expect(authored.models[0]?.thinkingLevelMap).toEqual({ off: "none", high: "high" });
+    expect(authored.models[0]?.catalogReasoningEfforts).toBeUndefined();
+
+    // Authored effort tiers are declarations too.
+    const declaredEfforts = merge.mergeProviderModels(
+      catalog,
+      {
+        baseUrl: configUrl,
+        api: "openai-responses",
+        models: [
+          model({
+            id: "acme/effort-model",
+            compat: { supportedReasoningEfforts: ["high", "low"] },
+          }),
+        ],
+      },
+      { providerId: "custom" },
+    );
+    expect(declaredEfforts.models[0]?.catalogReasoningEfforts).toBeUndefined();
+
+    // A mapping-only declaration is an explicit scalar-effort declaration too:
+    // resolveCatalogOwnedModelCompat enables scalar support for it.
+    const mapped = merge.mergeProviderModels(
+      catalog,
+      {
+        baseUrl: configUrl,
+        api: "openai-responses",
+        models: [
+          model({
+            id: "acme/effort-model",
+            compat: { reasoningEffortMap: { high: "medium" } },
+          }),
+        ],
+      },
+      { providerId: "custom" },
+    );
+    expect(mapped.models[0]?.compat?.reasoningEffortMap).toEqual({ high: "medium" });
+    expect(mapped.models[0]?.catalogReasoningEfforts).toBeUndefined();
+
+    // A configured row that declares no effort metadata keeps catalog provenance.
+    const renamed = merge.mergeProviderModels(
+      catalog,
+      {
+        baseUrl: configUrl,
+        api: "openai-responses",
+        models: [model({ id: "acme/effort-model", name: "Renamed" })],
+      },
+      { providerId: "custom" },
+    );
+    expect(renamed.models[0]?.catalogReasoningEfforts).toBe(true);
+  });
+
   it("normalizes providers, retaining valid secrets and dropping invalid stale catalogs", () => {
     const merged = mergeSecrets(merge.mergeProviders({ explicit: { openai: provider() } }), {
       invalid: provider({ baseUrl: undefined }),

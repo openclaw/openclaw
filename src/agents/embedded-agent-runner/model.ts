@@ -29,6 +29,7 @@ import {
   resolveExplicitModelWithRegistry,
   resolveModelWithPreparedRegistry,
   resolveRuntimePreferredSuppressedModel,
+  isCatalogDerivedRuntimeRow,
   shouldCompareProviderRuntimeResolvedModel,
 } from "./model.registry-resolution.js";
 import {
@@ -290,7 +291,9 @@ export async function resolveModelAsync(
       });
     };
     const providerRuntimeMetadataShouldWin =
-      shouldCompareProviderRuntimeResolvedModel(registryParams);
+      shouldCompareProviderRuntimeResolvedModel(registryParams) ||
+      // Catalog-derived rows refresh through the provider resolver (#160758).
+      (explicitModel?.kind === "resolved" && isCatalogDerivedRuntimeRow(explicitModel.model));
     let model =
       explicitModel?.kind === "resolved" && !providerRuntimeMetadataShouldWin
         ? explicitModel.model

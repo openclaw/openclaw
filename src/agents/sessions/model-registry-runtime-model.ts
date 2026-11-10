@@ -43,5 +43,6 @@ export function createRegistryRuntimeModel(
     params: model.params,
     headers: undefined,
     compat: model.compat,
+    ...(model.catalogReasoningEfforts ? { catalogReasoningEfforts: true } : {}),
   } as Model; // SAFETY: registration validates required fields; persisted rows use `catalog`.
 }

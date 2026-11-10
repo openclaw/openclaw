@@ -125,3 +125,27 @@ it("selects logical overrides from a legacy fallback", () => {
     });
   }
 });
+
+it("clears catalog-derived effort provenance when overrides author a thinking map", () => {
+  const cfg = providerConfig("openai", {
+    baseUrl: platformRoute.baseUrl,
+    models: [model("gpt-5.5", "GPT-5.5", { thinkingLevelMap: { off: "none", high: "high" } })],
+  });
+  const overrides = createConfiguredModelCatalogOverridesResolver({ cfg })(platformEntry);
+  // The physical donor matches the selected route and carries catalog provenance.
+  const catalogDonor: ModelCatalogEntry = { ...chatGPTEntry, catalogReasoningEfforts: true };
+
+  const { entry: projected } = project({
+    catalog: [catalogDonor],
+    ...(overrides ? { overrides } : {}),
+  });
+
+  // The authored map stays authoritative; the catalog provenance marker is
+  // cleared so a runtime capability refresh cannot replace it (#160758).
+  expect(projected.thinkingLevelMap).toEqual({ off: "none", high: "high" });
+  expect(projected.catalogReasoningEfforts).toBeUndefined();
+
+  // Without authored effort metadata the marker survives projection.
+  const { entry: markerOnly } = project({ entry: catalogDonor, catalog: [catalogDonor] });
+  expect(markerOnly.catalogReasoningEfforts).toBe(true);
+});

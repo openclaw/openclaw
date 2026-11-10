@@ -360,6 +360,35 @@ describe("openrouter provider hooks", () => {
     });
   });
 
+  it("keeps the prepared registry row when capabilities failed to load", async () => {
+    loadedCapabilities.mockReset();
+    loadedCapabilities.mockReturnValue(undefined);
+    const preparedRow = {
+      id: "acme/effort-model",
+      reasoning: true,
+      input: ["text", "image"],
+      compat: { supportedReasoningEfforts: ["high", "medium", "low"] },
+    };
+    const modelId = "acme/effort-model";
+
+    // A registry row exists, so a rebuilt row from missing capabilities would
+    // only lose prepared facts (#160758): decline and let the host keep it.
+    const withPreparedRow = provider.resolveDynamicModel?.({
+      provider: "openrouter",
+      modelId,
+      modelRegistry: { find: vi.fn(() => preparedRow) },
+    } as never);
+    expect(withPreparedRow).toBeUndefined();
+
+    // An unknown model still resolves dynamically so a missing-model run works.
+    const withoutPreparedRow = provider.resolveDynamicModel?.({
+      provider: "openrouter",
+      modelId,
+      modelRegistry: { find: vi.fn(() => null) },
+    } as never);
+    expect(withoutPreparedRow).toMatchObject({ id: modelId, api: "openai-completions" });
+  });
+
   it.each([
     "typesafe/jev-1.13",
     "typesafe/jev-1.14",

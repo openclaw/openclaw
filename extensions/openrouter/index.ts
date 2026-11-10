@@ -233,12 +233,7 @@ function isOpenRouterCatalogRoute(route: {
 function withOpenRouterCatalogThinking(
   ctx: ProviderDefaultThinkingPolicyContext,
 ): ProviderDefaultThinkingPolicyContext {
-  if (
-    ctx.thinkingLevelMap ||
-    ctx.compat?.supportsReasoningEffort !== undefined ||
-    ctx.compat?.supportedReasoningEfforts !== undefined ||
-    !isOpenRouterCatalogRoute(ctx)
-  ) {
+  if (!isOpenRouterCatalogRoute(ctx)) {
     return ctx;
   }
   // Thinking profiles run on synchronous session reads, so they only consume
@@ -247,6 +242,31 @@ function withOpenRouterCatalogThinking(
     normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
   );
   if (!capabilities?.compat && !capabilities?.thinkingLevelMap) {
+    return ctx;
+  }
+  if (ctx.catalogReasoningEfforts) {
+    // The row's effort metadata was copied from this catalog at preparation
+    // time; the loaded capabilities are the same catalog's current generation,
+    // so replace the derived fields while keeping operator-authored compat
+    // facts. Declared rows never carry the marker (#160758).
+    const {
+      supportedReasoningEfforts: _rowEfforts,
+      supportsReasoningEffort: _rowSupportsEffort,
+      ...declaredCompat
+    } = ctx.compat ?? {};
+    return {
+      ...ctx,
+      compat: { ...capabilities.compat, ...declaredCompat },
+      ...(capabilities.thinkingLevelMap
+        ? { thinkingLevelMap: capabilities.thinkingLevelMap }
+        : { thinkingLevelMap: undefined }),
+    };
+  }
+  if (
+    ctx.thinkingLevelMap ||
+    ctx.compat?.supportsReasoningEffort !== undefined ||
+    ctx.compat?.supportedReasoningEfforts !== undefined
+  ) {
     return ctx;
   }
   return {
@@ -426,10 +446,26 @@ export default defineSingleProviderPluginEntry({
           return { provider: buildOpenrouterProvider() };
         },
       },
-      resolveDynamicModel: (ctx) =>
-        isOpenRouterDecisionModel(normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId)
-          ? undefined
-          : buildDynamicOpenRouterModel(ctx),
+      resolveDynamicModel: (ctx) => {
+        const apiModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
+        if (isOpenRouterDecisionModel(apiModelId)) {
+          return undefined;
+        }
+        // Without loaded capabilities (cold cache plus a failed /models fetch), a rebuilt
+        // row could only carry synthetic defaults: reasoning false, text-only input, zero
+        // prices. When the registry already prepared a row for this model, decline so the
+        // host keeps that usable metadata instead of the fallback (#160758).
+        if (
+          !getLoadedOpenRouterModelCapabilities(apiModelId) &&
+          (ctx.modelRegistry.find(ctx.provider, ctx.modelId) ??
+            (apiModelId !== ctx.modelId
+              ? ctx.modelRegistry.find(ctx.provider, apiModelId)
+              : undefined))
+        ) {
+          return undefined;
+        }
+        return buildDynamicOpenRouterModel(ctx);
+      },
       // Resolve the catalog model even when a configured row already exists.
       preferRuntimeResolvedModel: (ctx) => {
         const configuredProvider = findNormalizedProviderValue(
