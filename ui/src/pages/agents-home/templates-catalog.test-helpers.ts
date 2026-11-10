@@ -8,21 +8,13 @@ import { TemplatesCatalogDialog } from "./templates-catalog-dialog.tsx";
 
 export function createDetail(options: Parameters<typeof createPage>[0], version?: string) {
   const fixture = createPage(options);
-  void fixture.context.router.navigate(
-    "templates",
-    fixture.context,
-    {},
-    {
-      pathname: pathForTemplateCatalogEntry(workflowOperator.packageName, ""),
-      search: version ? new URLSearchParams({ version }).toString() : "",
-      hash: "",
-    },
-  );
-  const [location, setLocation] = createSignal({
+  const initialLocation = {
     pathname: pathForTemplateCatalogEntry(workflowOperator.packageName, ""),
     search: version ? new URLSearchParams({ version }).toString() : "",
     hash: "",
-  });
+  };
+  void fixture.context.router.navigate("templates", fixture.context, {}, initialLocation);
+  const [location, setLocation] = createSignal(initialLocation);
   const view = mountSolid(
     () =>
       createComponent(TemplatesPage, {
