@@ -122,3 +122,19 @@ it("resets saved columns with null and leaves untouched columns out of the upser
     }),
   );
 });
+
+it("updates a row's shown state when its status is checked, unchecked and checked again", async () => {
+  const page = planningPage({ visible: ["todo", "done"] });
+  const form = await openBoardEditor(page);
+  const review = row(form, "review");
+  const checkbox = review.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  const moveUp = review.querySelector<HTMLButtonElement>('[aria-label="Move Review up"]')!;
+  const hidden = () => review.classList.contains("workboard-columns-editor__row--hidden");
+  expect([hidden(), moveUp.disabled]).toEqual([true, true]);
+  for (const visible of [true, false, true]) {
+    input(checkbox, visible);
+    await afterWorkboardUpdate(() =>
+      expect([hidden(), moveUp.disabled]).toEqual([!visible, !visible]),
+    );
+  }
+});

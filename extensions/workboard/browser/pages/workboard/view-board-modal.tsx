@@ -600,7 +600,12 @@ function CardsColumnsEditor(props: {
       <p class="workboard-columns-editor__help">{t("workboard.boardColumns.help")}</p>
       <ol class="workboard-columns-editor__rows">
         <For each={[...columns().rows]} keyed={(row) => row.status}>
-          {(row, index) => {
+          {(item, index) => {
+            // Checkbox and label edits mutate the row in place; revision re-reads it.
+            const row = () => {
+              void props.revision;
+              return item();
+            };
             const status = () => formatStatusLabel(row().status);
             const labelValue = liveInputValue(() => row().label);
             return (
