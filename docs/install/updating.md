@@ -1175,6 +1175,25 @@ Paths carried over solely from the old definition still pass the existing safety
 filters. If the definition cannot be preserved, reconciliation requires manual repair.
 Deployment-owned definitions retain their existing installation owner.
 
+When an operator-owned service override prevents rebinding, the update targets
+only the service installation. The invoking shell CLI remains unchanged; shared
+config and plugins may advance beyond the version that CLI supports. The updater
+warns about this in progress output and text/JSON dry-run notes. Use the CLI from
+the service installation for diagnostics, or align the invoking installation with
+the Gateway version before using it against the shared state.
+
+An `ExecStart` drop-in cannot be repaired by rewriting the base systemd unit.
+Inspect the service with `openclaw gateway status --deep` and
+`systemctl --user cat openclaw-gateway.service` (omit `--user` for a system service;
+use the reported unit name for a profile). Update or remove only the launcher
+override you intend to change, preserving unrelated settings, then run
+`systemctl --user daemon-reload` with the same scope. Reinstall from the intended,
+version-aligned CLI if needed, and verify the effective launcher and Gateway
+health. Status and Doctor now explain this manual step instead of recommending
+an ineffective automatic repair. The warning requires the installed updater or
+CLI to contain this fix; installing a candidate cannot change an older updater's
+initial root selection. No state migration or service-routing change is introduced.
+
 An owned managed **Bun** Gateway at a different package root uses the existing
 service-root update route: only the Gateway installation advances, and the
 invoking CLI installation stays unchanged. The updater validates the service's

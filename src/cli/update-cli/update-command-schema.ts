@@ -28,6 +28,7 @@ import {
 } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { formatCliCommand } from "../command-format.js";
+import { formatGatewayServiceRootRedirect } from "../daemon-cli/shared.js";
 import { printResult } from "./progress.js";
 import {
   assertReadableGitMetadata,
@@ -167,9 +168,7 @@ export async function previewUpdateCommand(params: {
       );
     }
     if (target.managedServiceRootRedirect) {
-      notes.push(
-        `Package update targets managed service root ${target.managedServiceRootRedirect.root} instead of invoking root ${target.managedServiceRootRedirect.previousRoot}.`,
-      );
+      notes.push(formatGatewayServiceRootRedirect(target.managedServiceRootRedirect));
     }
     if (target.explicitTag && !canResolveRegistryVersionForPackageTarget(target.tag)) {
       notes.push("Non-registry package specs skip npm version lookup and downgrade previews.");
