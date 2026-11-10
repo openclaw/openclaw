@@ -389,7 +389,9 @@ describe("update recovery reporting", () => {
         serviceRunning: true,
         runningVersion: "2026.8.99",
         booted: true,
-        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+        // Release-line reads map a legacy "state-migration-started" reason to data at
+        // risk, which correctly keeps the Gateway stopped; use a non-migration reason.
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       },
       { env },
     );
