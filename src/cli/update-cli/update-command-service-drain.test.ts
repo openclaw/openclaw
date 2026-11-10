@@ -422,7 +422,10 @@ it("keeps the handoff transport open while late writes settle within the drain b
       return call(request);
     }
     return new Promise((resolve, reject) => {
-      const deadline = setTimeout(() => reject(new Error("transport deadline")), request.timeoutMs);
+      const deadline = setTimeout(
+        () => reject(new Error("transport deadline")),
+        request.timeoutMs ?? undefined,
+      );
       setTimeout(() => {
         clearTimeout(deadline);
         resolve(call(request));
