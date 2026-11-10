@@ -66,11 +66,10 @@ it.each([
     await advance(duration + cooldown - 1, refresh, 1);
     await advance(1, refresh, 2);
     await vi.advanceTimersByTimeAsync(duration + cooldown + 1);
+    vi.setSystemTime(Date.now() - 3_600_000);
     coordinator.schedule();
     await advance(collection - 1, refresh, 2);
     await advance(1, refresh, 3);
-    coordinator.dispose();
-    await vi.advanceTimersByTimeAsync(duration);
   },
 );
 
@@ -81,9 +80,10 @@ it("holds pending and in-flight invalidation while inactive and catches up once"
   await advance(10_000, refresh, 0);
   coordinator.setActive(true);
   await advance(0, refresh, 1);
-  coordinator.schedule();
+  coordinator.scheduleRetry(1_000);
   coordinator.setActive(false);
   await advance(20_000, refresh, 1);
+  vi.setSystemTime(Date.now() - 3_600_000);
   coordinator.setActive(true);
   await advance(0, refresh, 2);
   await advance(20_000, refresh, 2);
