@@ -204,19 +204,32 @@ export const TemplatePluginGrantsByIdSchema = Type.Record(
   PluginOperatorGrantsSchema,
 );
 
-export const TemplatePluginReviewSchema = closedObject({
+const TemplatePluginReviewProperties = {
   actionId: NonEmptyString,
   pluginId: NonEmptyString,
-  ref: NonEmptyString,
-  version: NonEmptyString,
   ownerAction: stringLiteralUnion(["install", "reuse"]),
-  integrity: TemplateArtifactIntegrity,
   declaredCapabilities: PluginDeclaredSurfaceSchema,
   capabilityGrants: PluginOperatorGrantsSchema,
   capabilityGrantsByPluginId: TemplatePluginGrantsByIdSchema,
   reviewToken: NonEmptyString,
   riskWarning: Type.Optional(NonEmptyString),
-});
+};
+
+export const TemplatePluginReviewSchema = Type.Union([
+  closedObject({
+    ...TemplatePluginReviewProperties,
+    source: Type.Literal("clawhub"),
+    ref: NonEmptyString,
+    version: NonEmptyString,
+    integrity: TemplateArtifactIntegrity,
+  }),
+  closedObject({
+    ...TemplatePluginReviewProperties,
+    source: Type.Literal("bundled"),
+    path: NonEmptyString,
+    digest: TemplateBundledDigest,
+  }),
+]);
 
 export const TemplatePluginAcknowledgementSchema = closedObject({
   actionId: NonEmptyString,

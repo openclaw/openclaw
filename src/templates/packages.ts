@@ -17,6 +17,11 @@ import {
   type ClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
 import { readTemplatePackageRefsForAdd } from "./add-state-write.js";
+import {
+  BundledTemplatePluginInstallError,
+  installBundledTemplatePlugin,
+  rollbackBundledTemplatePlugins,
+} from "./bundled-plugin.js";
 import { installBundledTemplateSkill } from "./bundled-skill.js";
 import type { InstallTemplatePackagesOptions } from "./package-install-options.js";
 import { bundledDependencyFromAction, packageFromAction } from "./package-plan-action.js";
@@ -95,7 +100,7 @@ export async function rollbackStatelessTemplatePackages(
     "assertCurrent" | "prepareEffect" | "env" | "path" | "runtime"
   > = {},
 ): Promise<string[]> {
-  const errors: string[] = [];
+  const errors = await rollbackBundledTemplatePlugins(packages, options);
   const runtime = options.runtime ?? defaultRuntime;
   for (const pkg of packages.toReversed()) {
     if (pkg.source !== "clawhub" || pkg.kind !== "plugin" || pkg.origin !== "template-introduced") {
@@ -196,8 +201,18 @@ async function installTemplatePackagesUnlocked(
     try {
       if (action.details?.source === "bundled") {
         const dependency = bundledDependencyFromAction(action);
-        if (dependency.kind !== "skill") {
-          throw new Error("Bundled plugin installation is unavailable.");
+        if (dependency.kind === "plugin") {
+          try {
+            installedPackages.push(
+              await installBundledTemplatePlugin({ plan, dependency, options }),
+            );
+          } catch (error) {
+            if (error instanceof BundledTemplatePluginInstallError && error.receipt) {
+              installedPackages.push(error.receipt);
+            }
+            throw error;
+          }
+          continue;
         }
         await installBundledTemplateSkill({
           rootDir: plan.template.packageRoot,
@@ -534,7 +549,10 @@ async function installTemplatePackagesUnlocked(
       }
       const message = coerceErrorMessage(error);
       throw new TemplatePackageInstallError(
-        error instanceof TemplatePackageInstallError ? error.code : "package_install_failed",
+        error instanceof TemplatePackageInstallError ||
+          error instanceof BundledTemplatePluginInstallError
+          ? error.code
+          : "package_install_failed",
         message,
         installedPackages,
         { cause: error },
