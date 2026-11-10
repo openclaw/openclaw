@@ -5,6 +5,7 @@ Tests for model_usage helpers.
 
 import argparse
 import io
+import json
 from datetime import date, timedelta
 from unittest import TestCase, main
 from unittest.mock import patch
@@ -15,12 +16,36 @@ from model_usage import (
     filter_by_days,
     latest_day_cost,
     load_payload,
+    main as model_usage_main,
     pick_current_model,
     positive_int,
 )
 
 
 class TestModelUsage(TestCase):
+    def test_live_cli_preserves_requested_and_default_reporting_windows(self):
+        for provider in ("codex", "claude"):
+            for days in (None, 60):
+                with self.subTest(provider=provider, days=days):
+                    payload = [{"provider": provider, "daily": [{
+                        "date": date.today().isoformat(),
+                        "modelBreakdowns": [{"modelName": "fixture-model", "cost": 1.0}],
+                    }]}]
+                    argv = ["model_usage.py", "--provider", provider,
+                            "--mode", "all", "--format", "json"]
+                    expected = ["codexbar", "cost", "--format", "json",
+                                "--provider", provider]
+                    if days is not None:
+                        argv += ["--days", str(days)]
+                        expected += ["--days", str(days)]
+                    with patch("sys.argv", argv), patch("sys.stdout", io.StringIO()) as stdout:
+                        with patch("model_usage.subprocess.check_output",
+                                   return_value=json.dumps(payload)) as fetch:
+                            self.assertEqual(model_usage_main(), 0)
+                    fetch.assert_called_once_with(expected, text=True)
+                    self.assertEqual(json.loads(stdout.getvalue())["models"],
+                                     [{"model": "fixture-model", "totalCostUSD": 1.0}])
+
     def test_load_payload_rejects_mismatched_provider_object(self):
         with patch("sys.stdin", io.StringIO('{"provider":"claude","daily":[]}')):
             with self.assertRaisesRegex(

@@ -31,8 +31,10 @@ def eprint(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:
+def run_codexbar_cost(provider: str, days: Optional[int] = None) -> List[Dict[str, Any]]:
     cmd = ["codexbar", "cost", "--format", "json", "--provider", provider]
+    if days is not None:
+        cmd.extend(["--days", str(days)])
     try:
         output = subprocess.check_output(cmd, text=True)
     except FileNotFoundError:
@@ -48,7 +50,9 @@ def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:
     return payload
 
 
-def load_payload(input_path: Optional[str], provider: str) -> Dict[str, Any]:
+def load_payload(
+    input_path: Optional[str], provider: str, days: Optional[int] = None
+) -> Dict[str, Any]:
     if input_path:
         if input_path == "-":
             raw = sys.stdin.read()
@@ -57,7 +61,7 @@ def load_payload(input_path: Optional[str], provider: str) -> Dict[str, Any]:
                 raw = handle.read()
         data = json.loads(raw.removeprefix("\ufeff"))
     else:
-        data = run_codexbar_cost(provider)
+        data = run_codexbar_cost(provider, days)
 
     if isinstance(data, dict):
         if data.get("provider", provider) != provider:
@@ -282,7 +286,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        payload = load_payload(args.input, args.provider)
+        payload = load_payload(args.input, args.provider, args.days)
     except Exception as exc:
         eprint(str(exc))
         return 1
