@@ -32,6 +32,43 @@ async function project(skills: unknown[] = [{ path: "bundles/checked" }]) {
 }
 
 describe("bundled Template project sources", () => {
+  it.each([undefined, "Companion identity"])(
+    "inspects dual-format native plugins using their native identity (companion name: %s)",
+    async (companionName) => {
+      const root = await project([]);
+      const plugin = join(root, "plugins", "dual");
+      await mkdir(join(plugin, ".codex-plugin"), { recursive: true });
+      await writeFile(
+        join(root, "CLAW.md"),
+        `---\n${JSON.stringify({ schemaVersion: 1, agent: { id: "checked" }, plugins: [{ path: "plugins/dual" }] })}\n---\nInspect native plugin metadata.\n`,
+      );
+      await writeFile(
+        join(plugin, "package.json"),
+        JSON.stringify({
+          name: "native-dual",
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.js"] },
+        }),
+      );
+      await writeFile(
+        join(plugin, "openclaw.plugin.json"),
+        JSON.stringify({ id: "native-dual", name: "Native dual plugin", configSchema: {} }),
+      );
+      await writeFile(
+        join(plugin, "index.js"),
+        "throw new Error('Metadata inspection must not execute plugin code');\n",
+      );
+      await writeFile(
+        join(plugin, ".codex-plugin", "plugin.json"),
+        JSON.stringify({ name: companionName }),
+      );
+      const result = await validateTemplateProject(root);
+      assert(result.ok, JSON.stringify(result.diagnostics));
+      expect(result.template.snapshot?.bundledSources).toMatchObject([
+        { kind: "plugin", path: "plugins/dual", name: "Native dual plugin" },
+      ]);
+    },
+  );
   it.each(["checked", "other"])(
     "plans bundled and referenced skills with explicit destination conflicts (%s)",
     async (ref) => {

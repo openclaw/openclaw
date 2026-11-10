@@ -1,5 +1,9 @@
+import { join } from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { detectBundleManifestFormat, loadBundleManifest } from "../plugins/bundle-manifest.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
+import { resolvePackageExtensionEntries } from "../plugins/package-manifest.js";
+import { readPluginCacheJsonFile } from "../plugins/plugin-cache-files.js";
 import {
   materializeTemplateDependencyDirectory,
   type TemplateDirectorySnapshot,
@@ -15,7 +19,13 @@ export async function inspectTemplateBundledPlugin(
 }
 
 export function inspectTemplateBundledPluginDirectory(directory: string) {
-  const format = detectBundleManifestFormat(directory);
+  const packageJson = readPluginCacheJsonFile(join(directory, "package.json"));
+  // Match native installation: supported package entries outrank companion manifests.
+  const nativePackage =
+    packageJson.ok &&
+    isRecord(packageJson.value) &&
+    resolvePackageExtensionEntries(packageJson.value).status === "ok";
+  const format = nativePackage ? null : detectBundleManifestFormat(directory);
   const loaded = format
     ? loadBundleManifest({
         rootDir: directory,
