@@ -22,6 +22,11 @@ export const DISCOVERY_ENDPOINTS = {
   getRegistration: { method: "GET", path: "/v1/claws/{claw_id}/registration", auth: "gateway" },
   listClaws: { method: "GET", path: "/v1/claws", auth: "user" },
   publishDescriptor: { method: "PUT", path: "/v1/claws/{claw_id}/descriptor", auth: "gateway" },
+  getPublishedDescriptor: {
+    method: "POST",
+    path: "/v1/claws/{claw_id}/published-descriptor",
+    auth: "gateway",
+  },
   getNodeDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/node/descriptor", auth: "node" },
   sendNodeMail: { method: "POST", path: "/v1/claws/{claw_id}/mailbox/node", auth: "node" },
   getDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/descriptor", auth: "user" },

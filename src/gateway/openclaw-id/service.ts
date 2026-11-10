@@ -30,9 +30,10 @@ import { createOwnerExpiryTimer } from "./owner-expiry.js";
 import { armLocalExpiry, createPeopleExpiry, ownerLifecycleEvents } from "./owner-lifecycle.js";
 import { createPublicationRetry } from "./publication-retry.js";
 import type { PublishOutcome } from "./publisher.js";
+import { createRebindPublication } from "./rebind-publication.js";
 import { signOutTunnelPeer } from "./remote-signout.js";
 import { createServiceGatewayKey } from "./service-gateway-key.js";
-import type { ServiceRebind } from "./service-rebind.js";
+import type { RebindAction, RebindInput, ServiceRebind } from "./service-rebind.js";
 import { appliedConfigKey, resolveSettings, sameSettings } from "./service-settings.js";
 import { createTokenBindingPublisher } from "./service-token-bindings.js";
 import { createTunnelPrincipalPublisher } from "./service-tunnel-principals.js";
@@ -119,8 +120,7 @@ export function createOpenClawIdService(params: {
   // K_srv selected by linking or seen in a binding. Keep it when uncertain storage
   // withdraws authority, so a child restart cannot create another endpoint identity.
   let lastBoundEndpointKey: string | undefined;
-  // The binding_seq whose rebind notice this process mailed; overlapping publications send one.
-  let rebindNoticeSeq = 0;
+  const rebindPublication = createRebindPublication();
   let rebindSteps: ServiceRebind | undefined;
   let loadEffects: (() => Promise<OpenClawIdEffects>) | undefined;
   let effectsPromise: Promise<OpenClawIdEffects> | undefined;
@@ -364,14 +364,12 @@ export function createOpenClawIdService(params: {
         relayUrl: config.relayUrl,
         client,
         signer,
-        ...(enrollmentCode ? { enrollmentCode } : {}),
+        enrollmentCode: rebindPublication.code(enrollmentCode),
       }));
     lastPublish = outcome;
     if (outcome.state === "published") {
       const bindingSeq = record.binding?.body.binding_seq ?? 0;
-      // The first publication of a re-bind's binding tells every owner device, once.
-      if (bindingSeq > Math.max(1, record.discovery.published_binding_seq, rebindNoticeSeq)) {
-        rebindNoticeSeq = bindingSeq;
+      if (rebindPublication.published(bindingSeq, record.discovery.published_binding_seq)) {
         const event = { type: "notify_owners", event: "rebind", ref: `${bindingSeq}` } as const;
         void notifyOwners([event]).catch((error: unknown) => params.log.warn(String(error)));
       }
@@ -784,16 +782,17 @@ export function createOpenClawIdService(params: {
      * "Move to new keys" (`openclaw id rebind`): prepare, commit or cancel a re-bind on this
      * machine. See service-rebind.ts.
      */
-    async rebind(action: "prepare" | "commit" | "cancel", channel?: Channel, binding?: unknown) {
+    async rebind(action: RebindAction, channel?: Channel, input: RebindInput = {}) {
       const { createServiceRebind } = await import("./service-rebind.js");
       const restart = () => stopRuntime().then(reconcile);
       rebindSteps ??= createServiceRebind({
         ...params,
         getAuthority,
         gatewayKey,
+        holdCode: rebindPublication.hold,
         restartRemoteAccess: () => (queue = queue.then(restart, restart)),
       });
-      return await rebindSteps.run(action, channel, binding);
+      return await rebindSteps.run(action, channel, input);
     },
 
     /** Retries publication, for example with an enrollment code obtained after linking. */

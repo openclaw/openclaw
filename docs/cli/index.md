@@ -432,7 +432,7 @@ openclaw [--dev] [--profile <name>] <command>
     merge <sourceProfileId> --into <targetProfileId>
   id
     status
-    rebind [--kit-stdin] [--yes] [--cancel]
+    rebind [--code <code>] [--kit-stdin] [--binding-seq <n>] [--yes] [--cancel]
     publish [--code <code>]
   node
     run

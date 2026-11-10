@@ -7,7 +7,13 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { DISCOVERY_SIGNATURE_HEADER } from "../../packages/openclaw-id-protocol/src/index.js";
+import {
+  DISCOVERY_SIGNATURE_HEADER,
+  formatEd25519PublicKey,
+  formatIrohEndpointKey,
+  randomBytes,
+  signStatement,
+} from "../../packages/openclaw-id-protocol/src/index.js";
 import { signRebind, type RebindPreparation } from "../cli/id-cli-rebind.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { readStoredClaw, writeStoredClaw } from "./openclaw-id/claw-store.js";
@@ -38,6 +44,8 @@ type Recorded = {
 const recorded: Recorded[] = [];
 let discovery: http.Server;
 let discoveryUrl: string;
+// What Discovery publishes for the claw (served for the owner's code).
+let published: unknown;
 
 beforeAll(async () => {
   discovery = http.createServer((req, res) => {
@@ -53,6 +61,11 @@ beforeAll(async () => {
         )?.[1],
         body: text ? JSON.parse(text) : undefined,
       });
+      if (req.url?.endsWith("/published-descriptor")) {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ descriptor: published }));
+        return;
+      }
       if (req.url?.includes("/mailbox") && req.method === "GET") {
         // An empty long poll, answered after a while.
         setTimeout(() => res.end(JSON.stringify({ messages: [], cursor: "c0" })), 500);
@@ -84,6 +97,27 @@ async function storeClawWithLostKeys() {
   });
   await writeStoredClaw((await store.read())!);
   fs.rmSync(keyDir(), { recursive: true, force: true });
+  // Discovery holds binding 4: this machine was restored from a backup older than two re-binds.
+  const record = (await store.read())!;
+  const binding = await signStatement(
+    "ServerBinding",
+    {
+      ...record.binding!.body,
+      k_srv: formatIrohEndpointKey(randomBytes(32)),
+      k_gw: formatEd25519PublicKey(randomBytes(32)),
+      binding_seq: 4,
+    },
+    claw.root,
+  );
+  published = {
+    v: 1,
+    claw_id: claw.clawId,
+    transport: "iroh",
+    relay_url: "http://127.0.0.1:9/",
+    root_pub: record.authority!.anchor.root_pub,
+    binding,
+    published_at: Math.floor(Date.now() / 1000),
+  };
   return { claw, kit: claw.kit };
 }
 
@@ -133,8 +167,14 @@ describe.skipIf(!hasBinding)("OpenClaw ID re-bind", () => {
       expect((await call("openclawId.status")).status).toMatchObject({ state: "keys_refused" });
       const prep = (await call("openclawId.authority", {
         action: "rebind_prepare",
+        code: "LINK-CODE",
       })) as RebindPreparation;
       expect(prep).toMatchObject({ binding_seq: 2, current: { binding_seq: 1 } });
+      // Discovery's binding is read with the owner's code, signed by the staged K_gw.
+      expect(recorded.find((r) => r.url.endsWith("/published-descriptor"))).toMatchObject({
+        keyid: prep.k_gw,
+        body: { code: "LINK-CODE" },
+      });
       // Preparing again reuses the staged keys.
       expect(await call("openclawId.authority", { action: "rebind_prepare" })).toMatchObject({
         k_srv: prep.k_srv,
@@ -142,15 +182,21 @@ describe.skipIf(!hasBinding)("OpenClaw ID re-bind", () => {
       });
       const signed = await signRebind(prep, kit);
       if (!signed.ok) {
-        throw new Error("kit refused");
+        throw new Error(`kit refused: ${signed.code}`);
       }
+      // Above the verified binding Discovery publishes, not just this machine's.
+      expect(signed.binding.body.binding_seq).toBe(5);
       recorded.length = 0;
       // A cancel racing the commit runs after it and cannot take the keys it bound.
       const [committed, cancelled] = await Promise.all([
-        call("openclawId.authority", { action: "rebind_commit", binding: signed.binding }),
+        call("openclawId.authority", {
+          action: "rebind_commit",
+          binding: signed.binding,
+          code: "LINK-CODE",
+        }),
         call("openclawId.authority", { action: "rebind_cancel" }),
       ]);
-      expect(committed).toMatchObject({ ok: true, bindingSeq: 2 });
+      expect(committed).toMatchObject({ ok: true, bindingSeq: 5 });
       expect(cancelled).toMatchObject({ ok: true });
 
       // Remote access is back on the new keys, both promoted from the staged files.
@@ -171,15 +217,16 @@ describe.skipIf(!hasBinding)("OpenClaw ID re-bind", () => {
           keyid: prep.k_gw,
           body: {
             descriptor: {
-              binding: { body: { binding_seq: 2, k_srv: prep.k_srv, k_gw: prep.k_gw } },
+              binding: { body: { binding_seq: 5, k_srv: prep.k_srv, k_gw: prep.k_gw } },
             },
-            snapshot: { signer: prep.k_gw, body: { binding_seq: 2 } },
+            snapshot: { signer: prep.k_gw, body: { binding_seq: 5 } },
+            code: "LINK-CODE",
           },
         });
       // Owners hear about it once Discovery has the new keys.
       await expect
         .poll(() => recorded.find((r) => r.body?.payload?.event === "rebind"), { timeout: 10_000 })
-        .toMatchObject({ keyid: prep.k_gw, body: { to: "owners", payload: { ref: "2" } } });
+        .toMatchObject({ keyid: prep.k_gw, body: { to: "owners", payload: { ref: "5" } } });
       // Publishing again does not mail it again.
       await call("openclawId.authority", { action: "publish" });
       expect(recorded.filter((r) => r.body?.payload?.event === "rebind")).toHaveLength(1);
@@ -187,7 +234,7 @@ describe.skipIf(!hasBinding)("OpenClaw ID re-bind", () => {
       // Owner devices and members are untouched.
       const stored = await readStoredClaw();
       expect(stored?.authority?.seq).toBe(claw.authority.current()?.authority?.seq);
-      expect(stored?.discovery.published_binding_seq).toBe(2);
+      expect(stored?.discovery.published_binding_seq).toBe(5);
     });
   }, 60_000);
 
@@ -195,7 +242,7 @@ describe.skipIf(!hasBinding)("OpenClaw ID re-bind", () => {
     const { kit } = await storeClawWithLostKeys();
     let prep!: RebindPreparation;
     await withOpenClawIdGateway(async (call) => {
-      prep = await call("openclawId.authority", { action: "rebind_prepare" });
+      prep = await call("openclawId.authority", { action: "rebind_prepare", code: "LINK-CODE" });
     });
     // The commit is stored, then the Gateway stops before it switched keys.
     const signed = await signRebind(prep, kit);

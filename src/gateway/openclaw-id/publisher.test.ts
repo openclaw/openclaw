@@ -147,17 +147,18 @@ describe("publishClaw after a re-bind", () => {
       publishDescriptor: vi.fn(async (): Promise<void> => {}),
       publishSnapshot: vi.fn(async (): Promise<void> => {}),
     };
-    const publish = async () =>
+    const publish = async (enrollmentCode: string | null = "LINK-CODE") =>
       await publishClaw({
         record: claw.authority.current()!,
         relayUrl: "https://relay.example.test/",
         client: client as never,
         signer: kGw,
+        ...(enrollmentCode ? { enrollmentCode } : {}),
       });
     return { claw, client, publish, keys };
   }
 
-  it("publishes the new binding and its snapshot in one write", async () => {
+  it("publishes the new binding, its snapshot and the owner's code in one write", async () => {
     const { client, publish, keys } = await rebound();
     expect(await publish()).toMatchObject({ state: "published" });
     expect(client.publishSnapshot).not.toHaveBeenCalled();
@@ -165,11 +166,28 @@ describe("publishClaw after a re-bind", () => {
       expect.objectContaining({
         binding: expect.objectContaining({ body: expect.objectContaining({ binding_seq: 2 }) }),
       }),
-      expect.objectContaining({
-        signer: keys.kGw,
-        body: expect.objectContaining({ binding_seq: 2 }),
-      }),
+      {
+        code: "LINK-CODE",
+        snapshot: expect.objectContaining({
+          signer: keys.kGw,
+          body: expect.objectContaining({ binding_seq: 2 }),
+        }),
+      },
     );
+  });
+
+  it("asks for a link code when it has none, or Discovery refused the one it had", async () => {
+    const { client, publish } = await rebound();
+    expect(await publish(null)).toMatchObject({ state: "failed", code: "needs_link_code" });
+    expect(client.publishDescriptor).not.toHaveBeenCalled();
+    client.publishDescriptor.mockRejectedValueOnce(
+      new DiscoveryRequestError(410, "code_invalid", "expired"),
+    );
+    expect(await publish()).toMatchObject({
+      state: "failed",
+      code: "needs_link_code",
+      retryable: false,
+    });
   });
 
   it("sends no separate snapshot when that write fails", async () => {

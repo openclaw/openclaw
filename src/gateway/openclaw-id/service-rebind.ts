@@ -22,7 +22,7 @@ import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import type { AuthorityRefusal } from "./authority-result.js";
 import type { OpenClawIdAuthority } from "./authority.js";
 import { createDiscoveryClient } from "./discovery-client.js";
-import { gatewayKeyPath, stageGatewayKey } from "./gateway-key.js";
+import { gatewayKeyPath, loadStagedGatewaySigner, stageGatewayKey } from "./gateway-key.js";
 import type { RebindPreparation } from "./rebind-operations.js";
 import { reconcileRegistration } from "./registration-recovery.js";
 import type { createServiceGatewayKey } from "./service-gateway-key.js";
@@ -39,6 +39,13 @@ async function stageKeys(stateDir: string) {
   return { kGw: stageGatewayKey(stateDir), kSrv: await stageEndpointKey(stateDir) };
 }
 
+/** A re-bind step, and what commit (the signed binding) and prepare/commit (the code) take. */
+export type RebindAction = "prepare" | "commit" | "cancel";
+export type RebindInput = { binding?: unknown; code?: string };
+
+/** Discovery's published descriptor for the claw (untrusted), or why it could not be read. */
+export type PublishedLookup = { descriptor: unknown } | { error: string; detail: string };
+
 type Deps = {
   getStateDir: () => string;
   getConfig: () => GatewayOpenClawIdConfig | undefined;
@@ -46,6 +53,8 @@ type Deps = {
   gatewayKey: ReturnType<typeof createServiceGatewayKey>;
   /** Restarts remote access, so the tunnel child and K_gw follow the stored binding. */
   restartRemoteAccess: () => Promise<void>;
+  /** Keeps the owner account's code in memory for publishing the committed re-bind. */
+  holdCode: (code: string | undefined) => void;
   log: { info: (message: string) => void };
 };
 
@@ -82,10 +91,30 @@ export function createServiceRebind(deps: Deps) {
     return owner;
   };
 
-  // Stages the next keys and returns the binding R must sign. Local only.
+  // Discovery's published descriptor, read with the owner's code and the staged K_gw (the
+  // current one may be lost). Untrusted: the CLI verifies it with the root from the kit.
+  const published = async (clawId: string, code: string | undefined): Promise<PublishedLookup> => {
+    const discoveryUrl = deps.getConfig()?.discoveryUrl;
+    if (!code || !discoveryUrl) {
+      return { error: "no_code", detail: "no link code was given" };
+    }
+    try {
+      const signer = await loadStagedGatewaySigner(deps.getStateDir());
+      const client = createDiscoveryClient({ baseUrl: discoveryUrl, signer });
+      return { descriptor: (await client.getPublishedDescriptor(clawId, code)).descriptor };
+    } catch (error) {
+      // SAFETY: code is optional and falls back to "unavailable" when absent.
+      const failure = (error as { code?: string }).code ?? "unavailable";
+      return { error: failure, detail: error instanceof Error ? error.message : String(error) };
+    }
+  };
+
+  // Stages the next keys and returns the binding R must sign, with Discovery's published
+  // descriptor when the owner's code reads it. Local only.
   const prepare = async (
     channel: Channel | undefined,
-  ): Promise<RebindPreparation | AuthorityRefusal> => {
+    code: string | undefined,
+  ): Promise<(RebindPreparation & { published: PublishedLookup }) | AuthorityRefusal> => {
     const owner = await linkedOwner(channel);
     if ("ok" in owner) {
       return owner;
@@ -94,13 +123,15 @@ export function createServiceRebind(deps: Deps) {
     if (unsettled) {
       return unsettled;
     }
-    return await owner.prepareRebind(await stageKeys(deps.getStateDir()));
+    const prep = await owner.prepareRebind(await stageKeys(deps.getStateDir()));
+    return "ok" in prep ? prep : { ...prep, published: await published(prep.claw_id, code) };
   };
 
   // Stores the R-signed binding for the staged keys, then moves remote access to them.
   const commit = async (
     channel: Channel | undefined,
     binding: unknown,
+    code: string | undefined,
   ): Promise<{ ok: true; bindingSeq: number } | AuthorityRefusal> => {
     const owner = await linkedOwner(channel);
     if ("ok" in owner) {
@@ -115,6 +146,7 @@ export function createServiceRebind(deps: Deps) {
       return result;
     }
     deps.log.info(`openclaw-id: moved to new keys (binding ${result.bindingSeq})`);
+    deps.holdCode(code);
     // Durable before the restart: if publishing does not finish now, it runs at the next start.
     await owner.recordDiscovery({ publish_pending: true });
     await deps.restartRemoteAccess();
@@ -143,14 +175,14 @@ export function createServiceRebind(deps: Deps) {
   let lane: Promise<unknown> = Promise.resolve();
   return {
     /** Runs one re-bind step after the previous one finished. */
-    run(action: "prepare" | "commit" | "cancel", channel: Channel | undefined, binding?: unknown) {
+    run(action: RebindAction, channel: Channel | undefined, input: RebindInput) {
       const step = (): Promise<
         RebindPreparation | AuthorityRefusal | { ok: true; bindingSeq?: number }
       > =>
         action === "prepare"
-          ? prepare(channel)
+          ? prepare(channel, input.code)
           : action === "commit"
-            ? commit(channel, binding)
+            ? commit(channel, input.binding, input.code)
             : cancel(channel);
       const result = lane.then(step, step);
       lane = result.catch(() => {});
