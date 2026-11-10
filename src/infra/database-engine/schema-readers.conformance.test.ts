@@ -3,6 +3,7 @@ import { listAuditEvents } from "../../audit/audit-event-store.js";
 import { writeRepairJournal } from "../../commands/doctor-session-incognito-key-repair-state.js";
 import { repairReservedIncognitoSessionKeys } from "../../commands/doctor-session-incognito-key-repair.js";
 import { sessionSqlFixture } from "../../commands/doctor-session-sqlite.sql.test-support.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -11,7 +12,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { readTemplatePackageRefsForAdd } from "../../templates/add-state-write.js";
 import { readAllTemplateCronRefsInDatabase } from "../../templates/cron-records.js";
-import { readTemplatePackageRefsInDatabase } from "../../templates/provenance-read.kernel.js";
+import { readTemplateInventory } from "../../templates/inventory-read.js";
 import { installDatabaseProcessRole, withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
@@ -102,27 +103,26 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         integrity: `sha256:${"a".repeat(64)}`,
         status: "pending",
       } as const;
-      withEngineStoreAdmission(() =>
-        runOpenClawStateWriteTransaction(({ db }) => {
-          for (const agentId of ["zeta", "alpha"]) {
-            const status = agentId === "alpha" ? "pending" : "complete";
-            sessionSqlFixture(db)`INSERT INTO template_package_refs
+      const seed = (agentIds: string[]) =>
+        withEngineStoreAdmission(() =>
+          runOpenClawStateWriteTransaction(({ db }) => {
+            for (const agentId of agentIds) {
+              const status = agentId === "alpha" ? "pending" : "complete";
+              sessionSqlFixture(db)`INSERT INTO template_package_refs
             (agent_id, package_kind, package_source, package_ref, package_version,
              package_integrity, schema_version, template_name, package_status,
              relationship, origin, independent_owner, installed_at_ms, updated_at_ms)
             VALUES (${agentId}, 'plugin', 'clawhub', ${filters.ref}, '2.0.1', ${filters.integrity},
               'openclaw.templatePackageRef.v1', 'package-fixture', ${status},
               'referenced', 'template-introduced', 0, 100, 100)`.run();
-          }
-          expect(readTemplatePackageRefsInDatabase(db).map((row) => row.agentId)).toEqual([
-            "alpha",
-            "zeta",
-          ]);
-        }),
-      );
+            }
+          }),
+        );
+      seed(["zeta", "alpha"]);
       // The real rollback owner query must retain other agents' matching package claims.
       const read = (query: Parameters<typeof readTemplatePackageRefsForAdd>[0]) =>
         withEngineStoreAdmission(() => ({ pending: readTemplatePackageRefsForAdd(query) })).pending;
+      expect((await read({})).map((row) => row.agentId)).toEqual(["alpha", "zeta"]);
       expect(await read(filters)).toEqual([
         expect.objectContaining({
           agentId: "alpha",
@@ -150,6 +150,17 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           integrity: filters.integrity,
         }),
       ).toHaveLength(2);
+      await withOpenClawStateDatabaseReadSnapshot(async () => {
+        expect((await readTemplateInventory()).packages).toHaveLength(2);
+        seed(["beta"]);
+        // An owner committed after inspection must still prevent destructive rollback.
+        expect((await read({ ref: filters.ref })).map((row) => row.agentId)).toEqual([
+          "alpha",
+          "beta",
+          "zeta",
+        ]);
+        expect((await readTemplateInventory()).packages).toHaveLength(2);
+      });
     });
 
     it("resumes Doctor's journal and rewrites scalar and JSON shared-state keys", async () => {

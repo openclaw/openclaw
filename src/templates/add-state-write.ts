@@ -4,7 +4,8 @@ import {
   type WorkspaceSetupState,
 } from "../agents/workspace-state-store.js";
 import { readTemplateInventory } from "./inventory-read.js";
-import { readTemplatePackageRefs } from "./provenance.js";
+import type { PersistedTemplatePackageRef } from "./package-extension-provenance.js";
+import type { TemplatePackageRefQuery } from "./provenance-read.worker.js";
 import {
   executeTemplateMutationStateCommand as execute,
   type TemplateMutationStateOptions,
@@ -13,15 +14,20 @@ import {
 export type TemplateAddStateOptions = TemplateMutationStateOptions;
 
 export async function readTemplatePackageRefsForAdd(
-  options: NonNullable<Parameters<typeof readTemplatePackageRefs>[0]> &
-    TemplateAddStateOptions = {},
-): Promise<ReturnType<typeof readTemplatePackageRefs>> {
-  if (options.stateMode !== "worker") {
-    options.assertCurrent?.();
-    return readTemplatePackageRefs(options);
+  options: TemplatePackageRefQuery & TemplateAddStateOptions = {},
+): Promise<PersistedTemplatePackageRef[]> {
+  if (options.database) {
+    throw new Error(
+      "Template rollback ownership reads cannot use caller-owned database handles; select path/env instead.",
+    );
   }
   options.assertCurrent?.();
-  const { packages: refs } = await readTemplateInventory(options);
+  // Rollback must see newly committed owners, not an inherited inspection snapshot.
+  // The shared-state worker owns SQL; caller admission still guards the awaited result.
+  const { packages: refs } = await readTemplateInventory(options, {
+    current: true,
+    context: options.leaseSet?.context,
+  });
   options.assertCurrent?.();
   return refs.filter(
     (ref) =>
