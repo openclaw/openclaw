@@ -17,6 +17,13 @@ survives; a lost source produces a visible failure instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
+If the interrupted turn left a managed workspace pending, its recovery input waits
+for the workspace owner to finish preparation before starting the turn. Setup
+failures still produce the ordinary actionable error; pending setup alone does
+not discard the resume input. Setup scripts require the recovered caller's current
+administrator authority. The restart marker remains durable until the resumed
+turn is admitted, so another restart during preparation can recover it again.
+
 During graceful shutdown, interrupted embedded runs have a short abort-settle
 budget (normally two seconds) to deliver their terminal partial reply before their
 writers close. Already accepted transcript writes still drain. A provider that
@@ -67,6 +74,12 @@ up and retires the legacy recovery fields when the session is terminal or archiv
 preserving its status, archive, current writer identities, and delivery notice
 without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
+
+After a clean shutdown, the Gateway waits for final cleanup and flushes file logs
+and output pipes. On macOS and Linux, any remaining referenced handles get a
+one-second final drain before the process logs remaining handle types and re-raises
+`SIGTERM`. Failed or retained
+cleanup keeps its existing deadline and exit-status handling.
 
 ## Unexpected exits
 
@@ -173,7 +186,7 @@ admission owns its recovery pass, including delayed preparation and automatic
 preparation retries. An unavailable database records `resume deferred: agent
 database unavailable` with its agent ID; it does not suppress another agent's
 recovery. Recovery runs after database preparation ends, under the session's
-current authority, before that agent accepts fresh inputs. Another agent becoming
+current authority, before the same session accepts fresh inputs. Another agent becoming
 available does not revoke an already admitted session's authority.
 
 The boot owner retains each agent's pending crash intervals in the existing shared
@@ -193,16 +206,23 @@ recovery without consuming its markers or discarding its crash intervals. Recove
 consumes each eligible persisted run identity once; retrying a retained interval
 cannot resume that same run again.
 
-The initial recovery pass keeps the existing external-input fence until its
-retained inputs own their ordinary queue slots. A store prepared later keeps its
-own input readiness pending until its retained inputs are admitted. This also
-applies when several logical agents share the same physical store. Database
+Startup opens external input after recovery discovery installs each session's
+admission wait. Recovery admission continues in the background: a fresh turn for
+a recovering session waits until its resume input and retained FIFO inputs own
+their ordinary queue slots. Other sessions in the same agent can proceed.
+Stores prepared later install these waits before publishing database admission.
+This also applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow
 startup's temporary database access or wait for model executions to finish.
 Crash recovery waits for preparation to settle without an interactive request
 deadline. Slow preparation does not disqualify interrupted work; failed preparation
 still prevents unmarked adoption and reports the normal admission diagnostics.
 This requires the updated Gateway, with no marker or schema migration.
+
+Gateway readiness does not wait for recovered turns to enter their queues.
+Catalog and read-only methods such as `models.list`, `mentions.list`, and
+`sessions.github.options` use their own data owners' readiness. Startup retries
+in the Control UI back off from 500 milliseconds to eight seconds.
 
 <a id="graceful-restarts-drain-first" />
 
@@ -235,6 +255,15 @@ also join those resources before reusing the runtime.
 Plugin-origin finalizers retain shared-state admission through this drain so
 worktree run leases and subagent settle records can persist before SDK retirement.
 Final cleanup failures are reported as shutdown failures, not startup failures.
+The failure summary names the fatal cleanup error, including nested resource-owner
+causes; earlier grace warnings are listed separately as `warnings`. An admissions
+grace warning includes a bounded pending snapshot: effect count and the first
+pending effect's phase, source phase, operation phase, interruption and settling
+status. The same facts appear in the pending close span. Session and run identifiers
+and session content are omitted; `none` means the observed owner has no such phase,
+and `null` means its boolean status is unavailable. A zero effect count does not
+mean the full admissions join has settled: it also waits for source, subagent, and
+terminal-persistence cleanup.
 
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.

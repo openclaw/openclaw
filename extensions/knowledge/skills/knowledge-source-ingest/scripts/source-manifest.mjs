@@ -82,7 +82,7 @@ const inputStream = (filename) => {
 };
 // Yields JSONL lines split on \n only; readline would also split on U+2028 inside JSON strings.
 async function* lines(filename) {
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let pending = "";
   for await (const chunk of inputStream(filename)) {
     const parts = (pending + decoder.decode(chunk, { stream: true })).split("\n");
