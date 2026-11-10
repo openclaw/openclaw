@@ -457,11 +457,14 @@ export function createAgentMemory(
 
   function read() {
     const configState = context.runtimeConfig.state;
-    const configuredDreaming = resolveConfiguredDreaming(currentConfigObject(configState));
+    const configObject = currentConfigObject(configState);
+    const configuredDreaming = resolveConfiguredDreaming(configObject);
     // The status RPC can complete after config switches the engine Off. Keep the
     // cached payload for a future refresh, but never present it as current runtime state.
     const dreamingStatus = configuredDreaming.engineOff ? null : dreaming.dreamingStatus;
-    const dreamingOn = dreamingStatus?.enabled ?? configuredDreaming.enabled;
+    // Defaults apply to an accepted config, not an unavailable or stale snapshot.
+    const dreamingOn =
+      dreamingStatus?.enabled ?? (configObject !== null && configuredDreaming.enabled);
     const loading =
       (dreaming.resourceReads.dreamingStatus?.pending ?? false) || dreaming.dreamingModeSaving;
     const canUpdateConfig = canCallDreamingMethod(dreaming, "config.patch", "operator.admin");
