@@ -60,6 +60,8 @@ type ToolStartRecord = {
   args: unknown;
   hideFromChannelProgress?: boolean;
   parentToolCallId?: string;
+  activity?: AgentItemEventData;
+  visibleChildStarted?: boolean;
   hasRepliedRef?: { value: boolean };
 };
 
@@ -129,12 +131,38 @@ export function buildCommandItemTitle(toolName: string, meta?: string): string {
 
 export function emitTrackedItemEvent(
   ctx: ToolHandlerContext,
-  itemData: AgentItemEventData,
+  originalItemData: AgentItemEventData,
   emitLiveUpdate = true,
 ): void {
+  let itemData = originalItemData;
   if (itemData.phase === "start") {
     ctx.state.itemActiveIds.add(itemData.itemId);
     ctx.state.itemStartedCount += 1;
+  }
+  const start = toolStartData.get(buildToolStartKey(ctx.params.runId, itemData.toolCallId ?? ""));
+  if (start) {
+    if (start.visibleChildStarted && itemData.status === "running") {
+      itemData = { ...itemData, hideFromChannelProgress: true };
+    }
+    start.activity = itemData;
+    const parent = start.parentToolCallId
+      ? toolStartData.get(buildToolStartKey(ctx.params.runId, start.parentToolCallId))
+      : undefined;
+    if (
+      itemData.phase === "start" &&
+      !itemData.hideFromChannelProgress &&
+      !itemData.suppressChannelProgress &&
+      parent?.activity &&
+      !parent.visibleChildStarted
+    ) {
+      // The activity owner retracts wrappers before publishing their visible child.
+      // Keep this separate from explicit hiding so wrapper failures still surface.
+      parent.visibleChildStarted = true;
+      emitToolActivityEvent(ctx, {
+        stream: "item",
+        data: { ...parent.activity, phase: "update", hideFromChannelProgress: true },
+      });
+    }
   }
   // Reply liveness and channel delivery still consume every original callback.
   if (itemData.phase !== "update" || emitLiveUpdate) {
@@ -168,7 +196,7 @@ export function emitToolActivityEvent(ctx: ToolHandlerContext, event: ActivityWi
   emitAgentEventCallbackBestEffort(ctx, { stream: event.stream, data: event.data });
 }
 
-export function finalizeToolActivity(ctx: ToolHandlerContext): void {
+export function resolveCompletedToolActivityWrappers(ctx: ToolHandlerContext) {
   const runId = ctx.params.runId;
   const active = [...iterateRunToolStarts(runId)].map(([key, start]) => ({
     runId: ctx.params.runId,
@@ -183,7 +211,7 @@ export function finalizeToolActivity(ctx: ToolHandlerContext): void {
     ctx.state.itemStartedCount !== ctx.state.itemCompletedCount + active.length ||
     ctx.state.toolMetas.length !== ctx.state.itemCompletedCount
   ) {
-    return;
+    return [];
   }
   const calls = [
     ...ctx.state.toolMetas.map((meta) => ({
@@ -194,7 +222,11 @@ export function finalizeToolActivity(ctx: ToolHandlerContext): void {
     })),
     ...active,
   ];
-  for (const call of resolveCompletedActivityWrappers(calls)) {
+  return resolveCompletedActivityWrappers(calls);
+}
+
+export function finalizeToolActivity(ctx: ToolHandlerContext): void {
+  for (const call of resolveCompletedToolActivityWrappers(ctx)) {
     if (call.activity && !call.activity.hideFromChannelProgress) {
       emitToolActivityEvent(ctx, {
         stream: "item",
