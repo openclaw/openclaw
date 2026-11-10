@@ -709,7 +709,19 @@ function authenticatedParentRecoveryFixture(mode: "full" | "selected" | "omitted
     }
     return fetchImpl(input, init);
   };
-  return { ...f, qualification, recoveryWrites };
+  const evidenceClient = {
+    ...qualification.client,
+    verifyRetainedPublicationArtifacts() {
+      throw new Error("Unexpected retained publication verification");
+    },
+    downloadArtifactArchive() {
+      throw new Error("Unexpected publication artifact download");
+    },
+    getRunArtifacts() {
+      throw new Error("Unexpected publication artifact listing");
+    },
+  };
+  return { ...f, qualification, recoveryWrites, evidenceClient };
 }
 
 function retryFixture({
@@ -1158,7 +1170,7 @@ describe("ClawHub parent-requested recovery", () => {
       const f = authenticatedParentRecoveryFixture(mode);
       const evidence = await recoverClawHubFromParent({
         ...f.options,
-        evidenceClient: f.qualification.client,
+        evidenceClient: f.evidenceClient,
       });
       expect(
         evidence.packages
@@ -1184,7 +1196,7 @@ describe("ClawHub parent-requested recovery", () => {
     await expect(
       recoverClawHubFromParent({
         ...f.options,
-        evidenceClient: f.qualification.client,
+        evidenceClient: f.evidenceClient,
       }),
     ).rejects.toThrow("outside the original admitted name/version roster");
     expect(f.qualification.admission.calls).toContain(`repos/${repository}/actions/artifacts/70`);
@@ -1226,7 +1238,7 @@ describe("ClawHub parent-requested recovery", () => {
 
   it("does not let an approved request or public bytes replace original FRV authority", async () => {
     const f = parentRecoveryFixture();
-    const loadManifest = vi.fn(async () => {
+    const loadManifest = vi.fn(() => {
       throw new Error("Original FRV provenance unavailable");
     });
     await expect(

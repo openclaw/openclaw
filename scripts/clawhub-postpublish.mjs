@@ -1059,7 +1059,7 @@ export async function recoverClawHubFromParent({
       const client = evidenceClient ?? createReleaseEvidenceClient(REPOSITORY);
       const runId = inputs.full_release_validation_run_id;
       const runAttempt = Number(inputs.full_release_validation_run_attempt);
-      const { manifest } = await client.loadManifest(runId, runAttempt);
+      const { manifest } = client.loadManifest(runId, runAttempt);
       authenticated = await authenticateFullReleaseValidationEvidence(
         {
           run: client.getRunAttempt(runId, runAttempt),
