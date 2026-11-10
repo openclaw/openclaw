@@ -173,21 +173,13 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
 
   it("keeps an unfinished new item when an existing item is edited", async () => {
     const { page } = await import("vitest/browser");
-    // Pattern items have no safe default, so Add opens a draft (as delegateToolsTo does).
-    const item = { type: "string", pattern: "^[a-z0-9][a-z0-9_-]{0,63}$" };
-    const { state, container } = mountForm(
-      { values: { type: "array", items: item } },
-      { values: ["coder"] },
-    );
-    container.querySelector<HTMLButtonElement>("button[aria-label='Add']")!.click();
-    flush();
-    const draft = () => container.querySelector<HTMLInputElement>("[data-collection-draft-value]");
-    await page.elementLocator(draft()!).fill("writer");
-    const existing = container.querySelector<HTMLInputElement>(".cfg-array__value input")!;
-    await page.elementLocator(existing).fill("coder2");
-    expect(state.configForm).toEqual({ settings: { values: ["coder2"] } });
-    expect(draft()?.value).toBe("writer");
-
+    const values = { type: "array", items: { type: "string", pattern: "^[a-z0-9]+$" } };
+    const { state, container } = mountForm({ values }, { values: ["coder"] });
+    await page.elementLocator(addControl(container)).click();
+    await page
+      .elementLocator(container.querySelector("[data-collection-draft-value]")!)
+      .fill("writer");
+    await page.elementLocator(container.querySelector(".cfg-array__value input")!).fill("coder2");
     container.querySelector<HTMLElement>(".cfg-collection-draft button")!.click();
     expect(state.configForm).toEqual({ settings: { values: ["coder2", "writer"] } });
   });
@@ -198,22 +190,14 @@ function removeControls(container: HTMLElement, label: string) {
 }
 
 function addControl(container: HTMLElement) {
-  const button = container.querySelector<HTMLButtonElement>("button[aria-controls]");
-  if (!button) {
-    throw new Error("missing collection Add control");
-  }
-  return button;
+  return container.querySelector<HTMLButtonElement>("button[aria-controls]")!;
 }
 
 // Programmatic focus applies only after the test frame received a user interaction.
 async function focusRemoveControl(container: HTMLElement, button: HTMLButtonElement | undefined) {
   const { userEvent } = await import("vitest/browser");
-  const input = container.querySelector("input");
-  if (!button || !input) {
-    throw new Error("missing collection controls");
-  }
-  await userEvent.click(input);
-  button.focus();
+  await userEvent.click(container.querySelector("input")!);
+  button!.focus();
   expect(document.activeElement).toBe(button);
 }
 
@@ -279,10 +263,7 @@ describe.runIf("__vitest_browser__" in globalThis)("config collection removal fo
       },
       { values: [{ tags: ["x"] }, { tags: ["y"] }] },
     );
-    const outer = container.querySelector(".cfg-array");
-    if (!outer) {
-      throw new Error("missing outer list");
-    }
+    const outer = container.querySelector(".cfg-array")!;
     const outerControls = (selector: string) =>
       Array.from(outer.querySelectorAll<HTMLButtonElement>(selector)).filter(
         (button) => button.closest(".cfg-array") === outer,

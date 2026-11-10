@@ -1,3 +1,0 @@
-# Settings list regression proving an unfinished add draft survives an edit of an existing item,
-# the array twin of the map retention fixed in PR #182063. Exact net growth for this change.
-21

@@ -200,7 +200,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
     batch: 5,
     enabled: () => props.params.progressive === true,
   });
-  const { draftSource, editEntry } = createCollectionDraftSource(
+  const draftSource = createCollectionDraftSource(
     () => props.params.sourceIdentity ?? props.params.value,
   );
   const patchChild: MapParams["onPatch"] = (path, value) => {
@@ -214,7 +214,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
         "copy-set",
       );
       if (next.ok) {
-        return editEntry(next.value, dispatch);
+        return draftSource.editEntry(next.value, dispatch);
       }
     }
     return dispatch();
@@ -293,7 +293,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
         </div>
         <ConfigCollectionDraft
           {...content().draftProps}
-          sourceIdentity={draftSource()}
+          sourceIdentity={draftSource.draftSource()}
           id={content().draftId}
           ref={(handle) => (draft = handle)}
           onCommit={({ key, value }) =>
