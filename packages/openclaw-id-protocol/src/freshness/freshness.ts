@@ -9,6 +9,11 @@
 // Gateway has signed a newer one. A replaced server key is retired by that binding_seq alone;
 // no list of revoked keys exists. Withheld or stale freshness is refused under the "enforce"
 // policy and only reported under "report"; positive evidence of a stale binding always refuses.
+//
+// Snapshots are ordered only among those signed by the same K_gw. After a re-bind to a new K_gw
+// the order restarts with the first snapshot verified under the new binding: the retired key
+// may have signed an inflated seq or a future issued_at. The binding_seq high-water carries over.
+import type { Ed25519PublicKey } from "../keys.js";
 import type { ProtocolVersions, ServerBindingBody } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
 import { verifyMembershipSnapshot } from "../statements/verify.js";
@@ -35,11 +40,13 @@ export function isOlderSnapshot(a: SnapshotOrder, b: SnapshotOrder): boolean {
 export type FreshnessState = {
   claw_id: string;
   /**
-   * Independent high-water facts from verified snapshots: newest (seq, issued_at) and
-   * highest binding_seq. This unsigned marker only refuses replays/retired bindings;
-   * it never supplies membership or protocols for authorization.
+   * Independent high-water facts from verified snapshots: newest (seq, issued_at) among
+   * those signed by `k_gw`, and the highest binding_seq of any. This unsigned marker only
+   * refuses replays/retired bindings; it never supplies membership or protocols for
+   * authorization. A marker without `k_gw` (stored before per-key order) counts as the
+   * current K_gw's.
    */
-  snapshot: { seq: number; issued_at: number; binding_seq: number } | null;
+  snapshot: { seq: number; issued_at: number; binding_seq: number; k_gw?: Ed25519PublicKey } | null;
 };
 
 /** Untrusted evidence as served by Discovery (null: not served, or the call failed). */
@@ -103,6 +110,7 @@ export async function assessFreshness(
           seq: storable.seq,
           issued_at: storable.issued_at,
           binding_seq: storable.binding_seq,
+          k_gw: binding.k_gw,
         }
       : null,
   });
@@ -180,7 +188,7 @@ function freshnessGap(
   if (snapshot.issued_at < now - SNAPSHOT_MAX_AGE_SECONDS) {
     return "snapshot_stale";
   }
-  if (seen && isOlderSnapshot(snapshot, seen)) {
+  if (seen && (seen.k_gw ?? binding.k_gw) === binding.k_gw && isOlderSnapshot(snapshot, seen)) {
     return "snapshot_replayed";
   }
   if (snapshot.binding_seq < binding.binding_seq) {
@@ -202,13 +210,23 @@ export function mergeFreshnessState(
   if (!next) {
     return { claw_id: candidate.claw_id, snapshot: before };
   }
-  const newest = isOlderSnapshot(before, next) ? next : before;
+  // Order is kept per K_gw; a new K_gw's snapshot restarts it, but only for a newer binding.
+  const sameKey = (before.k_gw ?? next.k_gw) === next.k_gw;
+  const newest = sameKey
+    ? isOlderSnapshot(before, next)
+      ? next
+      : before
+    : next.binding_seq > before.binding_seq
+      ? next
+      : before;
+  const k_gw = sameKey ? (next.k_gw ?? before.k_gw) : newest.k_gw;
   return {
     claw_id: candidate.claw_id,
     snapshot: {
       seq: newest.seq,
       issued_at: newest.issued_at,
       binding_seq: Math.max(before.binding_seq, next.binding_seq),
+      ...(k_gw ? { k_gw } : {}),
     },
   };
 }
