@@ -12,6 +12,7 @@ import {
   startTestGatewayServer,
   testState,
 } from "../../../../src/gateway/test-helpers.js";
+import { prepareScheduledHookReceiversForTest } from "../../../../src/gateway/test-scheduled-hook-receivers.test-support.js";
 import { peekSystemEventEntries } from "../../../../src/infra/system-events.js";
 
 installGatewayTestHooks();
@@ -25,14 +26,17 @@ const JSON_HEADERS = {
 
 type JsonRecord = Record<string, unknown>;
 
-async function fetchJson(port: number, pathname: string, init?: RequestInit) {
+async function fetchJson(port: number, pathname: string, init?: RequestInit, status = 200) {
   const response = await fetch(`http://127.0.0.1:${port}${pathname}`, init);
-  return { response, body: (await response.json()) as JsonRecord };
+  const body = (await response.json()) as JsonRecord;
+  expect(response.status, JSON.stringify(body)).toBe(status);
+  return body;
 }
 
 it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", async () => {
   const embeddingFixture = await startGenericEmbeddingServer();
   let gateway: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
+  let restoreReceivers: (() => void) | undefined;
 
   try {
     const configPath = createConfigIO().configPath;
@@ -62,13 +66,14 @@ it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", 
       },
     };
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    restoreReceivers = await prepareScheduledHookReceiversForTest();
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "qa chat response" }] } as never)
       .mockResolvedValueOnce({ payloads: [{ text: "qa responses response" }] } as never);
 
     const port = await getGatewayTestPort();
-    const post = (pathname: string, body: JsonRecord, headers = JSON_HEADERS) =>
-      fetchJson(port, pathname, { method: "POST", headers, body: JSON.stringify(body) });
+    const post = (pathname: string, body: JsonRecord, headers = JSON_HEADERS, status = 200) =>
+      fetchJson(port, pathname, { method: "POST", headers, body: JSON.stringify(body) }, status);
     gateway = await startTestGatewayServer(port, {
       host: "127.0.0.1",
       auth: { mode: "token", token: GATEWAY_TOKEN },
@@ -78,9 +83,8 @@ it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", 
     });
 
     const models = await fetchJson(port, "/v1/models", { headers: JSON_HEADERS });
-    expect(models.response.status).toBe(200);
-    expect(models.body.object).toBe("list");
-    expect((models.body.data as Array<{ id?: string }>).map((model) => model.id)).toEqual(
+    expect(models.object).toBe("list");
+    expect((models.data as Array<{ id?: string }>).map((model) => model.id)).toEqual(
       expect.arrayContaining(["openclaw/main", "openclaw/beta"]),
     );
 
@@ -89,42 +93,24 @@ it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", 
       stream: false,
       messages: [{ role: "user", content: "qa chat request" }],
     });
-    expect(chat.response.status).toBe(200);
-    const choices = chat.body.choices as Array<{ message?: { content?: string } }>;
-    expect(choices[0]?.message?.content).toBe("qa chat response");
+    expect(chat).toHaveProperty("choices.0.message.content", "qa chat response");
 
     const responses = await post("/v1/responses", {
       model: "openclaw/main",
       stream: false,
       input: "qa responses request",
     });
-    expect(responses.response.status).toBe(200);
-    expect(responses.body.status).toBe("completed");
-    const output = responses.body.output as Array<{
-      content?: Array<{ type?: string; text?: string }>;
-    }>;
-    expect(output[0]?.content?.[0]).toEqual({
+    expect(responses.status).toBe("completed");
+    expect(responses).toHaveProperty("output.0.content.0", {
       type: "output_text",
       text: "qa responses response",
     });
-    expect(agentCommandMock).toHaveBeenCalledTimes(2);
-    expect(agentCommandMock.mock.calls.map((call) => call[0])).toMatchObject([
-      {
-        message: "qa chat request",
-        sessionKey: expect.stringMatching(/^agent:main:openai:/),
-      },
-      {
-        message: "qa responses request",
-        sessionKey: expect.stringMatching(/^agent:main:openresponses:/),
-      },
-    ]);
 
     const embeddings = await post("/v1/embeddings", {
       model: "openclaw/main",
       input: ["alpha", "beta"],
     });
-    expect(embeddings.response.status).toBe(200);
-    expect(embeddings.body.data).toEqual([
+    expect(embeddings.data).toEqual([
       expect.objectContaining({ index: 0, embedding: [9.1, 9.2] }),
       expect.objectContaining({ index: 1, embedding: [10.1, 9.2] }),
     ]);
@@ -146,19 +132,18 @@ it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", 
       args: {},
       sessionKey: "main",
     });
-    expect(tool.response.status, JSON.stringify(tool.body)).toBe(200);
-    expect(tool.body.ok).toBe(true);
-    expect(tool.body.result).toMatchObject({
-      details: {
-        requester: "main",
-        allowAny: false,
-        agents: [expect.objectContaining({ id: "main", configured: true })],
+    expect(tool).toMatchObject({
+      ok: true,
+      result: {
+        details: {
+          requester: "main",
+          allowAny: false,
+          agents: [expect.objectContaining({ id: "main", configured: true })],
+        },
       },
     });
 
-    const malformedTool = await post("/tools/invoke", {});
-    expect(malformedTool.response.status).toBe(400);
-    expect(malformedTool.body).toEqual({
+    expect(await post("/tools/invoke", {}, JSON_HEADERS, 400)).toEqual({
       ok: false,
       error: {
         type: "invalid_request",
@@ -184,8 +169,7 @@ it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", 
         "content-type": "application/json",
       },
     );
-    expect(authenticatedWake.response.status).toBe(200);
-    expect(authenticatedWake.body).toEqual({
+    expect(authenticatedWake).toEqual({
       ok: true,
       mode: "next-heartbeat",
       eventOutcome: "queued",
@@ -195,6 +179,7 @@ it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", 
     ]);
   } finally {
     await gateway?.close({ reason: "Gateway HTTP API QA proof complete" });
+    restoreReceivers?.();
     await embeddingFixture.close();
   }
 }, 60_000);

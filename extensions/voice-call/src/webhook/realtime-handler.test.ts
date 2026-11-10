@@ -1,6 +1,4 @@
 import { once } from "node:events";
-import http from "node:http";
-import { Duplex } from "node:stream";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -8,10 +6,11 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { normalizeVoiceCallConfig, type VoiceCallRealtimeConfig } from "../config.js";
-import { CallManager } from "../manager.js";
+import type { VoiceCallRealtimeConfig } from "../config.js";
+import type { CallManager } from "../manager.js";
 import type { CallRecord, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import {
   connectWs as openWebSocket,
@@ -23,15 +22,16 @@ import { makeBridge, makeCall as makeCallRecord } from "./realtime-call-control.
 import { RealtimeCallHandler } from "./realtime-handler.js";
 import {
   createRealtimeConfig,
+  makeRequest,
   makeRealtimeProvider,
   updateCallMetadata,
   sendCarrierStart,
 } from "./realtime-handler.lifecycle.test-helpers.js";
 import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
-import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 
 const realtimeVoiceHarnessTestHooks = vi.hoisted(() => ({
   onCreate: undefined as ((harness: RealtimeVoiceSessionHarness) => void) | undefined,
+  sessions: new Map<string, RealtimeVoiceSessionHarness>(),
 }));
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
@@ -42,6 +42,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
       params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],
     ) => {
       const harness = actual.createRealtimeVoiceSessionHarness(params);
+      realtimeVoiceHarnessTestHooks.sessions.set(params.talk.sessionId, harness);
       realtimeVoiceHarnessTestHooks.onCreate?.(harness);
       return harness;
     },
@@ -51,6 +52,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   realtimeVoiceHarnessTestHooks.onCreate = undefined;
+  realtimeVoiceHarnessTestHooks.sessions.clear();
   vi.useRealTimers();
   for (const close of cleanup.splice(0).toReversed()) {
     await close();
@@ -73,14 +75,6 @@ async function startUpgradeWsServer(params: Parameters<typeof openUpgradeServer>
   const server = await openUpgradeServer(params);
   cleanup.push(server.close);
   return server;
-}
-
-function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage {
-  const req = new http.IncomingMessage(null as never);
-  req.url = url;
-  req.method = "POST";
-  req.headers = host ? { host } : {};
-  return req;
 }
 
 const PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES = {
@@ -140,7 +134,7 @@ function makeCallHarness(
       providerConfig?: Record<string, unknown>;
       realtimeProvider?: RealtimeVoiceProviderPlugin;
       resolveInstructions?: (call: CallRecord) => string;
-      streamDisconnectLifecycle?: StreamDisconnectLifecycle;
+      streamDisconnectLifecycle?: StreamDisconnectGrace;
     };
   } = {},
 ) {
@@ -164,6 +158,8 @@ function makeCallHarness(
       : makeBridge(bridge);
   });
   const config = { ...createRealtimeConfig(), ...options.config };
+  const streamDisconnectLifecycle =
+    options.deps?.streamDisconnectLifecycle ?? new StreamDisconnectGrace(() => {});
   const provider = {
     ...makeRealtimeProvider(createBridge),
     ...options.deps?.realtimeProvider,
@@ -186,9 +182,15 @@ function makeCallHarness(
       instructions: options.deps?.resolveInstructions?.(record) ?? config.instructions,
     }),
     "/voice/webhook",
-    options.deps?.streamDisconnectLifecycle ?? { connect() {}, disconnect() {}, retire() {} },
+    streamDisconnectLifecycle,
   );
-  onTestFinished(() => handler.close());
+  onTestFinished(async () => {
+    try {
+      await handler.close();
+    } finally {
+      streamDisconnectLifecycle.close();
+    }
+  });
   async function start(streamId = "MZ-test", providerCallId = call.providerCallId) {
     const count = callbacks.length;
     const ws = await connectWs((await startRealtimeServer(handler)).url);
@@ -260,15 +262,11 @@ function sendMedia(ws: WebSocket, audio: Buffer) {
 }
 
 function parseWebSocketMessage(data: RawData): Record<string, unknown> {
-  const bytes = Buffer.isBuffer(data)
-    ? data
-    : Array.isArray(data)
-      ? Buffer.concat(data)
-      : Buffer.from(data);
-  return JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+  return JSON.parse(rawDataToString(data, "utf8")) as Record<string, unknown>;
 }
 
 async function bargeInHarness(params: {
+  initialGreeting?: string;
   bridgeHandlesInputAudioBargeIn?: boolean;
   handlesProviderBargeIn?: boolean;
   interruptResponseOnInputAudio?: boolean;
@@ -287,7 +285,9 @@ async function bargeInHarness(params: {
           }),
     },
     {
-      call: makeCallRecord(params.providerCallId),
+      call: makeCallRecord(params.providerCallId, {
+        metadata: { initialMessage: params.initialGreeting },
+      }),
       deps: {
         providerConfig: {
           apiKey: "test-key",
@@ -309,7 +309,10 @@ async function bargeInHarness(params: {
 }
 
 function recentTalkEvents(call: CallRecord): RecentTalkEvent[] {
-  return (call.metadata?.recentTalkEvents as RecentTalkEvent[] | undefined) ?? [];
+  return expectDefined(
+    realtimeVoiceHarnessTestHooks.sessions.get(`voice-call:${call.callId}:realtime`),
+    "voice-call realtime session harness",
+  ).talk.recentEvents.slice(-12);
 }
 
 function talkEvents(call: CallRecord, type: string) {
@@ -408,11 +411,11 @@ describe("RealtimeCallHandler path routing", () => {
 
   it("normalizes Twilio outbound realtime directions", async () => {
     const triggerGreeting = vi.fn();
+    const call = makeCallRecord("CA-outbound", { direction: "outbound" });
+    call.metadata = { brief: { language: "cs" } };
     const { callbacks, handler, processEvent, createBridge } = makeCallHarness(
       { triggerGreeting },
-      {
-        call: makeCallRecord("CA-outbound", { direction: "outbound" }),
-      },
+      { call },
     );
     const server = await startRealtimeServer(
       handler,
@@ -424,7 +427,7 @@ describe("RealtimeCallHandler path routing", () => {
     );
     const ws = await connectWs(server.url);
     sendCarrierStart(ws, "MZ-outbound", "CA-outbound");
-    await waitFor(() => expect(createBridge).toHaveBeenCalled());
+    await waitFor(() => expect(createBridge.mock.calls[0]?.[0].language).toBe("cs"));
     expect(createBridge.mock.calls[0]?.[0].audioFormat).toEqual({
       encoding: "g711_ulaw",
       sampleRateHz: 8000,
@@ -679,6 +682,105 @@ describe("RealtimeCallHandler path routing", () => {
     await delay(60);
     expect(markAcknowledged).toBe(false);
   });
+
+  it.each(["local", "provider"])(
+    "ignores playback echo while preserving %s barge-in",
+    async (source) => {
+      const { callbacks, processEvent, outboundMessages, sendAudio, ws } = await bargeInHarness({
+        providerCallId: "CA-echo-transcript",
+        handlesProviderBargeIn: source === "provider",
+      });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const startedAt = Date.now();
+      const words = "Hello, how can I help you today?";
+      callbacks.onTranscript?.("assistant", words, true);
+      callbacks.onAudio(Buffer.alloc(160, 0x80));
+      await expectFrame(outboundMessages, "media");
+      sendMedia(ws, Buffer.alloc(160, 0xfe));
+      await waitForCalls(sendAudio);
+      callbacks.onTranscript?.("user", words, false);
+      callbacks.onTranscript?.("user", words, true);
+      expect(transcripts(processEvent)).toEqual([]);
+
+      callbacks.onEvent?.({ direction: "server", type: "response.done" });
+      vi.setSystemTime(startedAt + 100);
+      callbacks.onTranscript?.("user", words, true);
+      expect(transcripts(processEvent)).toEqual([]);
+      vi.setSystemTime(startedAt + 421);
+      callbacks.onTranscript?.("user", "A real question after playback", true);
+      expect(transcripts(processEvent)).toEqual(["A real question after playback"]);
+
+      callbacks.onAudio(Buffer.alloc(160, 0x80));
+      if (source === "provider") {
+        callbacks.onClearAudio("barge-in");
+      } else {
+        sendMedia(ws, Buffer.alloc(160, 0x00));
+        sendMedia(ws, Buffer.alloc(160, 0x00));
+        await waitForCalls(sendAudio, 3);
+      }
+      callbacks.onTranscript?.("user", "Please stop", true);
+      expect(transcripts(processEvent)).toEqual(["A real question after playback", "Please stop"]);
+      callbacks.onAudio(Buffer.alloc(160, 0x80));
+      callbacks.onTranscript?.("user", words, true);
+      expect(transcripts(processEvent)).toEqual(["A real question after playback", "Please stop"]);
+    },
+  );
+
+  it.each(["local", "provider"])(
+    "plays the entire opening greeting before allowing %s barge-in on later turns",
+    async (source) => {
+      const { callbacks, call, outboundMessages, handleBargeIn, sendAudio, ws } =
+        await bargeInHarness({
+          providerCallId: "CA-opening-greeting",
+          initialGreeting: "Hello, how can I help?",
+          handlesProviderBargeIn: source === "provider",
+        });
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const syncCarrier = async () => {
+        const pong = once(ws, "pong");
+        ws.ping();
+        await pong;
+      };
+      const interrupt = async () => {
+        for (let i = 0; i < 4; i++) {
+          sendMedia(ws, Buffer.alloc(160, 0x00));
+        }
+        await syncCarrier();
+        if (source === "provider") {
+          callbacks.onClearAudio("barge-in");
+          await syncCarrier();
+        }
+      };
+      const greeting = Buffer.alloc(160 * 20, 0x80);
+      callbacks.onAudio(greeting);
+      await interrupt();
+      expect(outboundMessages.filter((frame) => frame.event === "clear")).toEqual([]);
+      expect(handleBargeIn).not.toHaveBeenCalled();
+      expect(sendAudio).not.toHaveBeenCalled();
+      expect(talkEvents(call, "turn.cancelled")).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(401);
+      await interrupt();
+      expect(outboundMessages.filter((frame) => frame.event === "clear")).toEqual([]);
+      callbacks.onAudio(greeting);
+      callbacks.onResponseDone?.({ status: "completed" });
+      await vi.advanceTimersByTimeAsync(250);
+      await interrupt();
+      expect(outboundMessages.filter((frame) => frame.event === "clear")).toEqual([]);
+      await vi.advanceTimersByTimeAsync(151);
+      await syncCarrier();
+      const media = outboundMessages.filter((frame) => frame.event === "media");
+      expect(media).toHaveLength(40);
+      expect(media.map((frame) => (frame.media as { payload: string }).payload)).toEqual(
+        Array.from({ length: 40 }, () => Buffer.alloc(160, 0x80).toString("base64")),
+      );
+      callbacks.onAudio(Buffer.alloc(160 * 20, 0x80));
+      await interrupt();
+      expect(outboundMessages.filter((frame) => frame.event === "clear")).toHaveLength(1);
+      expect(handleBargeIn).toHaveBeenCalledTimes(source === "local" ? 1 : 0);
+      expect(talkEvents(call, "turn.cancelled")).toHaveLength(1);
+    },
+  );
 
   it("lets a session bridge override provider-level barge-in capabilities", async () => {
     const { callbacks, call, handleBargeIn, outboundMessages, sendAudio, ws } =
@@ -1293,7 +1395,20 @@ describe("RealtimeCallHandler path routing", () => {
     ]);
   });
 
-  it("waits for partial transcript fragments to settle before consulting", async () => {
+  it.each([
+    {
+      name: "ASCII",
+      first: "Send a Discord",
+      second: "message.",
+      text: "Send a Discord message.",
+    },
+    {
+      name: "Unicode overlap",
+      first: "Meet in İstanbul",
+      second: "İstanbul tomorrow",
+      text: "Meet in İstanbul tomorrow",
+    },
+  ])("settles $name fragments before consulting", async ({ first, second, text }) => {
     const { submitToolResult, consult, callbacks } = await openConsult(
       async () => ({ text: "I sent it." }),
       undefined,
@@ -1301,21 +1416,21 @@ describe("RealtimeCallHandler path routing", () => {
     );
 
     vi.useFakeTimers();
-    callbacks?.onTranscript?.("user", "Send a Discord", false);
+    callbacks?.onTranscript?.("user", first, false);
     requestConsult(callbacks, "consult-call", "message");
     await vi.advanceTimersByTimeAsync(50);
-    callbacks?.onTranscript?.("user", "message.", false);
+    callbacks?.onTranscript?.("user", second, false);
     await vi.advanceTimersByTimeAsync(350);
 
     await waitFor(() => expect(consult).toHaveBeenCalledTimes(1), { timeout: 2_000 });
     const [args, callId, context] = expectDefined(consult.mock.calls.at(0), "consult");
     expect(args).toMatchObject({
-      question: "Send a Discord message.",
+      question: text,
       context: "Realtime provider supplied a shorter consult question: message",
     });
     expect(callId).toBe("call-1");
     expect(context).toEqual({
-      partialUserTranscript: "Send a Discord message.",
+      partialUserTranscript: text,
       abortSignal: expect.any(AbortSignal),
     });
     await expectToolResult(submitToolResult, "consult-call", { text: "I sent it." }, true);
@@ -1397,83 +1512,3 @@ describe("RealtimeCallHandler path routing", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
-function rejectedUpgradeHarness() {
-  const config = normalizeVoiceCallConfig({ realtime: { enabled: true } });
-  const resolveRegistration = vi.fn((): never => {
-    throw new Error("Rejected upgrades must not acquire a provider");
-  });
-  const handler = new RealtimeCallHandler(
-    config.realtime,
-    new CallManager(config),
-    resolveRegistration,
-    "/voice/webhook",
-    { connect() {}, disconnect() {}, retire() {} },
-  );
-  let flush = () => {};
-  let response = "";
-  const socket = new Duplex({
-    read() {},
-    write(chunk: Buffer, _encoding, callback) {
-      response += chunk.toString();
-      flush = callback;
-    },
-  });
-  return {
-    handler,
-    resolveRegistration,
-    socket,
-    flush: () => flush(),
-    response: () => response,
-    reject: () =>
-      handler.handleWebSocketUpgrade(
-        makeRequest("/voice/stream/realtime/invalid-token"),
-        socket,
-        Buffer.alloc(0),
-      ),
-  };
-}
-
-describe("realtime upgrade rejection", () => {
-  it.each([
-    [401, "Unauthorized"],
-    [503, "Service Unavailable"],
-  ] as const)(
-    "flushes HTTP %s before closing without acquiring a provider",
-    async (status, reason) => {
-      const { handler, resolveRegistration, socket, response, flush, reject } =
-        rejectedUpgradeHarness();
-      const shutdown = createDeferred<void>();
-      const closing = status === 503 ? handler.close(shutdown.promise) : undefined;
-      const closed = once(socket, "close");
-      try {
-        reject();
-        expect(response()).toBe(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
-        expect(socket.destroyed).toBe(false);
-        expect(resolveRegistration).not.toHaveBeenCalled();
-        flush();
-        await closed;
-        expect(socket.destroyed).toBe(true);
-      } finally {
-        flush();
-        socket.destroy();
-        shutdown.resolve();
-        await closing;
-        await handler.close();
-      }
-    },
-  );
-
-  it("owns raw socket errors while rejection bytes are buffered", async () => {
-    const { handler, socket, flush, reject } = rejectedUpgradeHarness();
-    try {
-      reject();
-      expect(() => socket.emit("error", new Error("synthetic raw socket failure"))).not.toThrow();
-      expect(socket.destroyed).toBe(true);
-    } finally {
-      flush();
-      socket.destroy();
-      await handler.close();
-    }
-  });
-});

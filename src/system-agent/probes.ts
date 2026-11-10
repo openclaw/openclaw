@@ -19,14 +19,13 @@ const LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS = 16 * 1024;
 export async function probeLocalCommand(
   command: string,
   args: string[] = ["--version"],
-  opts: { outputLimit?: number; timeoutMs?: number } = {},
+  opts: { timeoutMs?: number } = {},
 ): Promise<LocalCommandProbe> {
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1_500);
-  const outputLimit = opts.outputLimit ?? LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS;
   try {
     const result = await runCommandWithTimeout([command, ...args], {
       killProcessTree: true,
-      maxOutputBytes: outputLimit,
+      maxOutputBytes: LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS,
       timeoutMs,
     });
     if (result.termination === "timeout") {
@@ -60,13 +59,11 @@ export async function probeLocalCommand(
 
 export async function probeGatewayUrl(
   url: string,
-  opts: { timeoutMs?: number } = {},
 ): Promise<{ reachable: boolean; url: string; error?: string }> {
   const httpUrl = url.replace(/^ws:/, "http:").replace(/^wss:/, "https:");
   const healthUrl = new URL("/healthz", httpUrl).toString();
-  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 900);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(), 900);
   let response: Response | undefined;
   try {
     response = await fetch(healthUrl, {

@@ -19,7 +19,6 @@ export const updateSentinel = (reason: string, ts?: number, stats: object = {}) 
   ...(ts === undefined ? {} : { ts }),
   stats: { reason, ...stats },
 });
-
 export const campaignSchedule = (
   overrides: Partial<Campaign>,
   options: Pick<Schedule, "channel" | "target"> = { channel: "stable" },
@@ -35,33 +34,27 @@ export const campaignSchedule = (
     ...overrides,
   },
 });
-
 export const automaticSchedule = (campaign: Partial<Campaign>) => ({
   ...AUTO_UPDATE_SCHEDULE,
   campaign: { ...AUTO_UPDATE_SCHEDULE.campaign, ...campaign },
 });
-
 const overlays = new Set<ReturnType<typeof createApplicationOverlays>>();
 const replies = new Set<() => void>();
 const operations = new Set<Promise<unknown>>();
-
 export function pendingReply<T>(fallback: T) {
   const reply = createDeferred<T>();
   replies.add(() => reply.resolve(fallback));
   return reply;
 }
-
 export function settleAtCleanup<T>(operation: Promise<T>) {
   operations.add(operation);
   return operation;
 }
-
 function createTestOverlays(...args: Parameters<typeof createApplicationOverlays>) {
   const instance = createApplicationOverlays(...args);
   overlays.add(instance);
   return instance;
 }
-
 export async function disposeTestOverlays() {
   replies.forEach((resolve) => resolve());
   replies.clear();
@@ -90,33 +83,33 @@ export function updateFixture(harness: ReturnType<typeof createGatewayHarness>, 
     },
   };
 }
-
 export const automaticTest = (request: RequestFn) =>
   updateFixture(createAutomaticUpdateHarness(request));
 export const runTest = (request: RequestFn, hooks?: Hooks) =>
   updateFixture(updateRunHarness(request), hooks);
 export function gatewayTest(request: RequestFn, hello?: ApplicationGatewaySnapshot["hello"]) {
   const harness = createGatewayHarness(client(request));
-  if (hello !== undefined) {
-    harness.update({ hello });
-  }
+  harness.update(hello === undefined ? {} : { hello });
   return updateFixture(harness);
 }
-
-export function updateStatusRequest(respond: (refreshCheckout: boolean) => unknown) {
-  return vi.fn<RequestFn>((method, params) =>
-    method === "update.status"
-      ? Promise.resolve(respond(Boolean((params as { refreshCheckout?: boolean }).refreshCheckout)))
-      : Promise.resolve({}),
+export const updateStatusRequest = (respond: (refreshCheckout: boolean) => unknown) =>
+  methodRequest("update.status", (_method, params) =>
+    respond(Boolean((params as { refreshCheckout?: boolean }).refreshCheckout)),
   );
-}
-
-export function updateHello(
+export const requestCalls = (request: ReturnType<typeof vi.fn<RequestFn>>, method: string) =>
+  request.mock.calls.filter(([name]) => name === method);
+export const methodRequest = (
+  method: string,
+  respond: (...args: Parameters<RequestFn>) => unknown,
+) =>
+  vi.fn<RequestFn>((name, ...args) =>
+    Promise.resolve(name === method ? respond(name, ...args) : {}),
+  );
+export const updateHello = (
   schedule?: ApplicationUpdateOverlaySnapshot["updateSchedule"],
   scope = "operator.admin",
-): ApplicationGatewaySnapshot["hello"] {
-  return {
+): ApplicationGatewaySnapshot["hello"] =>
+  ({
     auth: { role: "operator", scopes: [scope] },
     ...(schedule === undefined ? {} : { snapshot: { updateSchedule: schedule } }),
-  } as ApplicationGatewaySnapshot["hello"];
-}
+  }) as ApplicationGatewaySnapshot["hello"];

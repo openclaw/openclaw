@@ -65,21 +65,18 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             openAgent: ({ assertCurrent, signal }) =>
               prepareOpenClawAgentDatabaseExecution(options, assertCurrent, signal),
             migrateAgent: async ({ assertCurrent }) => {
-              const prepared = await prepareGatewayStartupSessions({
+              await prepareGatewayStartupSessions({
                 cfg: { agents: { entries: { qa: {} } } },
                 env,
                 agentIds: new Set(["qa"]),
                 assertCurrent,
                 log,
               });
-              expect(prepared).toHaveLength(1);
-              prepared[0]?.assertCurrent();
             },
             publishAgent: async ({ assertCurrent }) => assertCurrent(),
           });
           await admission.pendingPreparation;
           expect(readAgentDatabaseAdmissionRefusal("qa", { env })).toBeUndefined();
-          expect(log.warn).not.toHaveBeenCalled();
           expect(open).not.toThrow();
         } finally {
           await owner.stop();

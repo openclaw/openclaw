@@ -22,6 +22,7 @@ import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import { auditGatewayServiceConfig as inspectGatewayServiceConfig } from "./service-audit.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 import {
   execSystemctlUserMock,
@@ -30,7 +31,12 @@ import {
 import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 
 const native = vi.hoisted(() => ({ task: vi.fn() }));
-vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.task }));
+// mock-isolation: Definition facts come from the synthetic scheduler, not host task mutations.
+vi.mock("./schtasks-exec.js", () => ({
+  execSchtasks: native.task,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    native.task(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
   runExec: vi.fn(async (_command: string, args: string[], options: { input: Uint8Array }) =>
@@ -66,6 +72,11 @@ const staleServiceEnvironment = {
 const drift = (kind: string, key: string, fields = {}) =>
   expect.objectContaining({ kind, key, ...fields });
 const programArguments = ["/usr/bin/node", "/opt/openclaw/index.js", "gateway"];
+const plistValue = (xml: string, key: string, tag: string, value: string | number | undefined) =>
+  xml.replace(
+    new RegExp(`<key>${key}</key>\\s*<${tag}>[^<]*</${tag}>`, "u"),
+    value === undefined ? "" : `<key>${key}</key><${tag}>${value}</${tag}>`,
+  );
 function launchdFixture() {
   const home = dirs.make("definition-facts-launchd-");
   const env = { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") };
@@ -118,26 +129,28 @@ async function systemdFixture(
   };
 }
 
-it("audits missing KillMode separately from effective manager policy", async () => {
-  const fixture = await systemdFixture((unit) => unit.replace("KillMode=mixed\n", ""));
-  execSystemctlUserMock.mockResolvedValue({
-    code: 0,
-    stderr: "",
-    termination: "exit",
-    stdout:
-      "LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=330s\n",
-  });
+it.each([
+  ["KillMode", "mixed"],
+  ["Delegate", "yes"],
+  ["DelegateSubgroup", "gateway"],
+])("audits missing %s separately from effective manager policy", async (key, expected) => {
+  const fixture = await systemdFixture((unit) => unit.replace(`${key}=${expected}\n`, ""));
+  execSystemctlUserMock.mockResolvedValue(
+    nativeExit(
+      "LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=330s\nDelegate=yes\nDelegateSubgroup=gateway\n",
+    ),
+  );
   const result = await auditGatewayServiceConfig(fixture);
   expect(result.ok).toBe(true);
   expect(result.issues).toEqual([]);
   expect(result.definitionDrift).toEqual([
     {
       kind: "outdated",
-      key: "Service.KillMode",
+      key: `Service.${key}`,
       current: null,
-      expected: "mixed",
+      expected,
       sourcePath: fixture.sourcePath,
-      message: expect.stringContaining("Service.KillMode"),
+      message: expect.stringContaining(`Service.${key}`),
     },
   ]);
   expect(await fs.readFile(fixture.sourcePath, "utf8")).toBe(fixture.content);
@@ -193,6 +206,73 @@ it.each(["other-source", "unreadable-drop-in"])(
   },
 );
 
+it.each(["base", "drop-in"])("recognizes standard systemd directives in %s", async (location) => {
+  const custom = [
+    "[Unit]",
+    "OnFailure=recovery.service",
+    "StartLimitBurst=10",
+    "StartLimitIntervalSec=120",
+    "[Service]",
+    "CPUWeight=1000",
+    "Delegate=no",
+    "DelegateSubgroup=operator-leaf",
+    "KillMode=control-group",
+    "ManagedOOMPreference=avoid",
+    "TimeoutStartSec=60",
+    "ExecStartPre=/usr/bin/true",
+    "RestartSteps=5",
+    "RestartMaxDelaySec=60",
+    "ProtectSystem=strict",
+    "MemoryMax=1G",
+    "[Install]",
+    "Alias=custom.service",
+    "Also=helper.service",
+  ].join("\n");
+  const fixture = await systemdFixture(
+    (unit) => (location === "base" ? `${unit}\n${custom}\n` : unit),
+    location === "drop-in" ? `${custom}\n` : undefined,
+  );
+  const result = await auditGatewayServiceConfig(fixture);
+  const sourcePath =
+    location === "base" ? fixture.sourcePath : `${fixture.sourcePath}.d/operator.conf`;
+  expect(result.definitionDrift).toContainEqual(
+    expect.objectContaining({
+      kind: "unknown-edit",
+      key: "Service.CPUWeight",
+      sourcePath,
+      message: expect.stringContaining("not changed"),
+    }),
+  );
+  expect(JSON.stringify(result.definitionDrift)).not.toContain("unrecognized");
+  expect(result.definitionDrift).toContainEqual(
+    drift(location === "base" ? "preserved" : "unknown-edit", "Service.Delegate"),
+  );
+
+  await fs.appendFile(sourcePath, "\n[Service]\nRestartStpes=5\nOnFailure=wrong-section.service\n");
+  const unknown = (await auditGatewayServiceConfig(fixture)).definitionDrift?.filter((fact) =>
+    fact.message.includes("unrecognized"),
+  );
+  expect(unknown?.map((fact) => fact.key)).toEqual(["Service.RestartStpes", "Service.OnFailure"]);
+});
+
+it.each(["base", "drop-in"])("preserves ignored systemd metadata in %s", async (location) => {
+  const metadata =
+    "[Unit]\nX-Fleet=managed\n[X-Fleet]\nOwner=operations\nRestartSec=20\nKillMode=process\n";
+  const fixture = await systemdFixture(
+    (unit) => (location === "base" ? `${unit}\n${metadata}` : unit),
+    location === "drop-in" ? metadata : undefined,
+  );
+  const result = await auditGatewayServiceConfig(fixture);
+  expect(result.issues).toEqual([]);
+  expect(result.definitionDrift).toHaveLength(4);
+  for (const fact of result.definitionDrift ?? []) {
+    expect(fact).toMatchObject({
+      kind: "unknown-edit",
+      message: expect.stringContaining("not changed"),
+    });
+  }
+});
+
 it.each([
   { seconds: undefined, kind: "outdated" },
   { seconds: 20, kind: "outdated" },
@@ -221,7 +301,7 @@ it.each([
       ],
       environment: { PATH: "/usr/bin:/bin", ...(stale ? staleServiceEnvironment : {}) },
     };
-    const original = buildLaunchAgentPlist({
+    let original = buildLaunchAgentPlist({
       ...plist,
       ...command,
       programArguments: wrapped
@@ -234,23 +314,18 @@ it.each([
         : command.programArguments,
       ...(customized === "WorkingDirectory" ? { workingDirectory: "/operator/workspace" } : {}),
       comment: customized === "Comment" ? "Operator service" : "OpenClaw Gateway",
-    })
-      .replace(
-        /<key>ExitTimeOut<\/key>\s*<integer>\d+<\/integer>/u,
-        seconds === undefined ? "" : `<key>ExitTimeOut</key><integer>${seconds}</integer>`,
-      )
-      .replace(
-        /<key>ThrottleInterval<\/key>\s*<integer>10<\/integer>/u,
-        `<key>ThrottleInterval</key><integer>${throttle ?? 10}</integer>`,
-      )
-      .replace(
-        "<string>Interactive</string>",
-        `<string>${customized === "ProcessType" ? "Background" : "Interactive"}</string>`,
-      )
-      .replace(
+    });
+    original = plistValue(original, "ExitTimeOut", "integer", seconds);
+    original = plistValue(original, "ThrottleInterval", "integer", throttle ?? 10);
+    if (customized === "ProcessType") {
+      original = plistValue(original, "ProcessType", "string", "Background");
+    }
+    if (customized === "UnknownKey") {
+      original = original.replace(
         "<key>Label</key>",
-        `${customized === "UnknownKey" ? "<key>LowPriorityIO</key><true/>" : ""}<key>Label</key>`,
+        "<key>LowPriorityIO</key><true/><key>Label</key>",
       );
+    }
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, original);
     const result = await auditGatewayServiceConfig({
@@ -422,6 +497,94 @@ it("accepts retained heap aliases, custom environment and owned environment rege
   });
   expect(result.definitionDrift).toBeUndefined();
 });
+
+it("allows the installer to replace a macOS Node runtime and retire the legacy CA bundle", async () => {
+  const { env, sourcePath, plist } = launchdFixture();
+  const environment = {
+    PATH: "/old/node/bin:/usr/bin:/bin",
+    OPERATOR_SETTING: "operator-secret",
+  };
+  const replacementEnvironment = { ...environment, PATH: "/new/node/bin:/usr/bin:/bin" };
+  const command = {
+    programArguments: ["/old/node/bin/node", "/opt/openclaw/index.js", "gateway"],
+    environment: { ...environment, NODE_EXTRA_CA_CERTS: "/etc/ssl/cert.pem" },
+    sourcePath,
+  };
+  const content = buildLaunchAgentPlist({ ...plist, ...command });
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(sourcePath, content);
+  const result = await auditGatewayServiceConfig({
+    env,
+    command,
+    platform: "darwin",
+    expectedServicePath: replacementEnvironment.PATH,
+    expectedCommand: {
+      programArguments: ["/new/node/bin/node", "/opt/openclaw/index.js", "gateway"],
+      environment: { ...replacementEnvironment, NODE_USE_SYSTEM_CA: "1" },
+    },
+  });
+  expect(result.definitionDrift).toEqual([drift("outdated", "Environment.NODE_EXTRA_CA_CERTS")]);
+  expect(result.definitionDriftError).toBeUndefined();
+  expect(await fs.readFile(sourcePath, "utf8")).toBe(content);
+});
+
+it.each([
+  [
+    "discarded operator directory",
+    "/old/bin:/operator/bin:/usr/bin:/bin",
+    "/new/bin:/usr/bin:/bin",
+  ],
+  [
+    "reordered operator directories",
+    "/old/bin:/operator/bin:/usr/bin:/bin",
+    "/new/bin:/usr/bin:/operator/bin:/bin",
+  ],
+  ["unrelated leading directory", "/operator/bin:/old/bin:/usr/bin:/bin", "/new/bin:/usr/bin:/bin"],
+  [
+    "replacement missing the selected runtime directory",
+    "/old/bin:/usr/bin:/bin",
+    "/other/bin:/usr/bin:/bin",
+  ],
+  ["opaque launcher", "/old/bin:/usr/bin:/bin", "/new/bin:/usr/bin:/bin", "/old/bin/launcher"],
+])(
+  "refuses a macOS runtime refresh with %s",
+  (_name, currentPath, nextPath, executable?: string) => {
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      {
+        programArguments: [executable ?? "/old/bin/node", "/opt/openclaw/index.js", "gateway"],
+        environment: { PATH: currentPath },
+      },
+      {
+        programArguments: ["/new/bin/node", "/opt/openclaw/index.js", "gateway"],
+        environment: { PATH: nextPath },
+      },
+      "darwin",
+      findings,
+    );
+    expect(findings).toContainEqual(drift("unknown-edit", "Environment.PATH"));
+  },
+);
+
+it.each([
+  { platform: "darwin", value: "/operator-private/ca.pem", replacement: undefined },
+  { platform: "darwin", value: "/etc/ssl/cert.pem", replacement: "/operator-private/ca.pem" },
+  { platform: "linux", value: "/etc/ssl/cert.pem", replacement: undefined },
+  { platform: "win32", value: "/etc/ssl/cert.pem", replacement: undefined },
+] as const)(
+  "refuses other CA changes ($platform, $value -> $replacement)",
+  ({ platform, value, replacement }) => {
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      { programArguments, environment: { NODE_EXTRA_CA_CERTS: value } },
+      { programArguments, environment: { NODE_EXTRA_CA_CERTS: replacement } },
+      platform,
+      findings,
+    );
+    expect(findings).toEqual([drift("unknown-edit", "Environment.NODE_EXTRA_CA_CERTS")]);
+    expect(JSON.stringify(findings)).not.toContain("operator-private");
+  },
+);
 
 it("bounds environment diffs and redacts nonnumeric timeout values", () => {
   const command = {

@@ -19,7 +19,7 @@ type StatusCommandReportDataParams = Parameters<typeof buildStatusCommandReportL
 
 const STATUS_TEST_STATE_DIR = path.join(os.tmpdir(), `openclaw-status-test-${process.pid}-absent`);
 
-export const baseStatusCfg = {
+const baseStatusCfg = {
   update: { channel: "stable" },
   gateway: { bind: "loopback" },
 } as const;
@@ -37,14 +37,6 @@ const baseStatusUpdate = {
   },
   registry: { latestVersion: "2026.4.10" },
 } as never;
-
-export const baseStatusExpectedUpdateChannelInfo = {
-  channel: "stable",
-  source: "config",
-  label: "stable (config)",
-} as const;
-
-export const baseStatusExpectedUpdateChannelLabel = baseStatusExpectedUpdateChannelInfo.label;
 
 export const baseStatusGatewaySnapshot = {
   gatewayMode: "remote",
@@ -140,7 +132,17 @@ const baseStatusObservations = {
     selectionRequired: false,
     bootstrapPendingCount: 1,
     totalSessions: 2,
-    agents: [{ id: "main", lastActiveAgeMs: 60_000 }] as AgentLocalStatus[],
+    agents: [
+      {
+        id: "main",
+        workspaceDir: null,
+        bootstrapPending: false,
+        sessionsCount: 2,
+        sessionsPath: "/tmp/main/sessions.json",
+        lastUpdatedAt: null,
+        lastActiveAgeMs: 60_000,
+      },
+    ] satisfies AgentLocalStatus[],
   },
   memory: {
     agentId: "main",

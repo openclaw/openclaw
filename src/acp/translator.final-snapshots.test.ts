@@ -1,12 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { expectOversizedPromptRejected } from "./translator.bridge-test-helpers.js";
 import {
   createChatEvent,
   createPendingPromptHarness,
   DEFAULT_SESSION_KEY,
 } from "./translator.prompt-harness.test-support.js";
-
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
 
 describe("acp final chat snapshots", () => {
   it.each(["Hello", "A rewritten snapshot that is longer"])(
@@ -29,9 +27,13 @@ describe("acp final chat snapshots", () => {
       }
       await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
       expect(
-        sessionUpdate.mock.calls.flatMap(([{ update }]) =>
-          update.sessionUpdate === "agent_message_chunk" ? [update.content.text] : [],
-        ),
+        sessionUpdate.mock.calls.flatMap(([{ update }]) => {
+          if (update.sessionUpdate !== "agent_message_chunk") {
+            return [];
+          }
+          expect(update.content.type).toBe("text");
+          return update.content.type === "text" ? [update.content.text] : [];
+        }),
       ).toEqual(["Hello wide", " world"]);
     },
   );

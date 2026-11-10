@@ -55,29 +55,16 @@ export function publishAgentSchemaMetadata(
   }
 }
 
-type AgentSchemaMetaWithAppVersion = ExistingAgentSchemaMeta & { appVersion: string | null };
-
 /** Read ownership metadata without loading runtime schema or migration owners. */
-export function readExistingAgentSchemaMeta(
-  db: EngineConnection,
-  options: { includeAppVersion: true },
-): AgentSchemaMetaWithAppVersion | null;
-export function readExistingAgentSchemaMeta(db: EngineConnection): ExistingAgentSchemaMeta | null;
-export function readExistingAgentSchemaMeta(
-  db: EngineConnection,
-  options?: { includeAppVersion: true },
-): ExistingAgentSchemaMeta | AgentSchemaMetaWithAppVersion | null {
+export function readExistingAgentSchemaMeta(db: EngineConnection): ExistingAgentSchemaMeta | null {
   const schema = getAdmittedSqliteSchemaFacts(db);
   const historical =
-    !options?.includeAppVersion &&
-    schema &&
-    getSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId));
+    schema && getSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId));
   if (historical) {
     return historical;
   }
   const admitted =
-    !options?.includeAppVersion &&
-    (!schema || getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId)
+    !schema || getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId
       ? getSqliteDatabaseAdmission(db, agentSchemaMetadataKey)
       : undefined;
   if (admitted) {
@@ -93,11 +80,7 @@ export function readExistingAgentSchemaMeta(
   let row;
   try {
     row = db
-      .prepare(
-        options?.includeAppVersion
-          ? "SELECT role, schema_version, agent_id, app_version FROM schema_meta WHERE meta_key = 'primary'"
-          : "SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'",
-      )
+      .prepare("SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'")
       .get();
   } catch (error) {
     throw classifySqliteTableReadError(
@@ -125,8 +108,5 @@ export function readExistingAgentSchemaMeta(
   } else if (schemaStillCurrent) {
     publishSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId), metadata);
   }
-  // App version can change without DDL; write admission must read it from the current row.
-  return options?.includeAppVersion
-    ? { ...metadata, appVersion: typeof row.app_version === "string" ? row.app_version : null }
-    : metadata;
+  return metadata;
 }

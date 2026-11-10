@@ -5,12 +5,7 @@ import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
-import {
-  hasPathAncestor,
-  manifestNodes,
-  sameEntry,
-  type WorkspaceNode,
-} from "./workspace-manifest-comparison.js";
+import { hasPathAncestor, sameEntry, type WorkspaceNode } from "./workspace-manifest-comparison.js";
 import type {
   WorkspaceManifestValueInputs,
   WorkspaceManifestValueOutputs,
@@ -19,7 +14,6 @@ import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   isDerivedWorkspacePath,
   isRuntimeOwnedWorkspacePath,
-  buildCacheInputPaths,
 } from "./workspace-path-exclusions.js";
 import {
   directoryContainsOnlyWorkspaceEntries,
@@ -80,23 +74,14 @@ async function localWorkspaceDescendantPaths(
 export async function preflightWorkspaceApplyImpl(
   params: Omit<WorkspaceManifestValueInputs["workspace.reconcile.preflight"], "hashes">,
 ): Promise<WorkspaceManifestValueOutputs["workspace.reconcile.preflight"]["value"]> {
-  const excludeBuildCaches =
-    params.base.buildCacheInputs !== undefined || params.current.buildCacheInputs !== undefined;
+  const excludeBuildCaches = params.buildCacheInputs !== undefined;
   const staged = createStagedInputPathMatcher(await openFsSafeRoot(params.root));
-  const retained = buildCacheInputPaths([
-    ...(params.base.buildCacheInputs ?? []),
-    ...(params.current.buildCacheInputs ?? []),
-  ]);
+  const retained = new Set(params.buildCacheInputs);
   const isRetainedInput = async (entryPath: string) =>
     retained.has(entryPath) || (await staged(entryPath));
-  const baseNodes = manifestNodes(params.base);
-  const currentNodes = manifestNodes(params.current);
-  const manifestPaths = [...new Set([...baseNodes.keys(), ...currentNodes.keys()])];
-  const changed = new Set(
-    manifestPaths.filter(
-      (entryPath) => !sameEntry(baseNodes.get(entryPath), currentNodes.get(entryPath)),
-    ),
-  );
+  const baseNodes = new Map(params.baseNodes);
+  const currentNodes = new Map(params.currentNodes);
+  const changed = new Set(params.changedPaths);
   const structurallyReplacedDirectories = new Set(
     [...changed].filter(
       (entryPath) =>

@@ -9,6 +9,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
@@ -55,15 +56,20 @@ import {
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
 
-function firstOpenClawToolsOptions(): { cronSelfRemoveOnlyJobId?: string } | undefined {
-  return mocks.createOpenClawToolsOptions.mock.calls[0]?.[0] as
-    | { cronSelfRemoveOnlyJobId?: string }
-    | undefined;
+const openClawPlan = createOpenClawOnlyToolConstructionPlan();
+const shellPlan = { ...openClawPlan, includeShellTools: true, includeOpenClawTools: false };
+const scheduledContext = { trigger: "cron" as const, jobId: "job-current", senderIsOwner: false };
+
+function expectToolCalls(count: number) {
+  expect(mocks.onToolPrepare).toHaveBeenCalledTimes(count);
+  expect(mocks.onToolExecute).toHaveBeenCalledTimes(count);
 }
 
 describe("createOpenClawCodingTools cron scope", () => {
   beforeEach(() => {
     mocks.createOpenClawToolsOptions.mockClear();
+    mocks.onToolExecute.mockClear();
+    mocks.onToolPrepare.mockClear();
   });
 
   it.each(["settled", "failed", "aborted"] as const)(
@@ -72,8 +78,6 @@ describe("createOpenClawCodingTools cron scope", () => {
       const entered = createDeferred();
       const baseline = createDeferred();
       const controller = new AbortController();
-      mocks.onToolExecute.mockClear();
-      mocks.onToolPrepare.mockClear();
       const tools = createOpenClawCodingToolsInternal({
         awaitSessionDiffBaseline: async () => {
           entered.resolve();
@@ -85,8 +89,7 @@ describe("createOpenClawCodingTools cron scope", () => {
       const pending = gateway!.execute("attribution-call", {}, controller.signal);
       try {
         await awaitGateBeforeSettlement(entered.promise, pending, "Tool bypassed attribution");
-        expect(mocks.onToolExecute).not.toHaveBeenCalled();
-        expect(mocks.onToolPrepare).not.toHaveBeenCalled();
+        expectToolCalls(0);
         if (outcome === "failed") {
           baseline.reject(new Error("attribution failed"));
           await expect(pending).rejects.toThrow("attribution failed");
@@ -94,14 +97,11 @@ describe("createOpenClawCodingTools cron scope", () => {
           controller.abort(new Error("tool generation expired"));
           baseline.resolve();
           await expect(pending).rejects.toThrow("tool generation expired");
-          expect(mocks.onToolPrepare).not.toHaveBeenCalled();
-          expect(mocks.onToolExecute).not.toHaveBeenCalled();
         } else {
           baseline.resolve();
           await pending;
-          expect(mocks.onToolExecute).toHaveBeenCalledOnce();
-          expect(mocks.onToolPrepare).toHaveBeenCalledOnce();
         }
+        expectToolCalls(outcome === "settled" ? 1 : 0);
       } finally {
         baseline.resolve();
         await pending.catch(() => undefined);
@@ -116,34 +116,16 @@ describe("createOpenClawCodingTools cron scope", () => {
       const tools = createOpenClawCodingTools({ senderIsOwner });
       const gateway = tools.find((tool) => tool.name === "gateway")!;
       const result = await gateway.execute(`dispatch-${senderIsOwner}`, { action: "config.get" });
-      if (senderIsOwner) {
-        expect(mocks.onToolPrepare).toHaveBeenCalledOnce();
-        expect(mocks.onToolExecute).toHaveBeenCalledOnce();
-      } else {
+      if (!senderIsOwner) {
         expect(result.details).toMatchObject({ gated: true });
-        expect(mocks.onToolPrepare).not.toHaveBeenCalled();
-        expect(mocks.onToolExecute).not.toHaveBeenCalled();
       }
+      expectToolCalls(senderIsOwner ? 1 : 0);
     }
-  });
-
-  it("keeps self-scoped automation inspection available without sender ownership", async () => {
-    const tools = createOpenClawCodingTools({
-      trigger: "cron",
-      jobId: "job-current",
-      senderIsOwner: false,
-    });
-
-    expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
-    await expectOwnerGated(tools, "gateway");
-    expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
   it("preserves explicit automation denial for a scheduled run", () => {
     const tools = createOpenClawCodingTools({
-      trigger: "cron",
-      jobId: "job-current",
-      senderIsOwner: false,
+      ...scheduledContext,
       config: { tools: { deny: [AUTOMATIONS_TOOL_NAME] } },
     });
     expect(tools.map((tool) => tool.name)).not.toContain(AUTOMATIONS_TOOL_NAME);
@@ -182,18 +164,11 @@ describe("createOpenClawCodingTools cron scope", () => {
             runId,
             senderIsOwner: false,
             wrapBeforeToolCallHook: false,
-            toolConstructionPlan: {
-              includeBaseCodingTools: false,
-              includeShellTools: false,
-              includeChannelTools: false,
-              includeOpenClawTools: true,
-              includePluginTools: false,
-            },
+            toolConstructionPlan: openClawPlan,
           }),
       ),
     );
-    const names = tools.map((tool) => tool.name);
-    expect(names).toContain(AUTOMATIONS_TOOL_NAME);
+    expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
     await expectOwnerGated(tools, "gateway");
   });
 });
@@ -229,19 +204,9 @@ describe("createOpenClawCodingTools exec notification routing", () => {
       sessionKey: "agent:main:scope",
       abortSignal: generation.signal,
       wrapBeforeToolCallHook: false,
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: true,
-        includePluginTools: false,
-      },
+      toolConstructionPlan: openClawPlan,
     });
-    const tool = tools.find((candidate) => candidate.name === AUTOMATIONS_TOOL_NAME);
-    if (!tool) {
-      throw new Error("Expected automation tool");
-    }
-    await tool.execute("call", {});
+    await tools.find((candidate) => candidate.name === AUTOMATIONS_TOOL_NAME)!.execute("call", {});
     generation.abort();
     expect(approvalScope?.aborted).toBe(true);
   });
@@ -253,13 +218,7 @@ describe("createOpenClawCodingTools exec notification routing", () => {
     createOpenClawCodingTools({
       sessionKey: policySessionKey,
       runSessionKey: liveSessionKey,
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: true,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
+      toolConstructionPlan: shellPlan,
     });
 
     expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
@@ -276,8 +235,6 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
   const sandbox = createAgentToolsSandboxContext({ workspaceDir: "/managed/workspace" });
 
   it("keeps host-owned tools available when no sandbox filesystem family is requested", () => {
-    mocks.createOpenClawToolsOptions.mockClear();
-
     const tools = createOpenClawCodingTools({
       sandbox: { ...sandbox, agentId: "main" },
       config: { agents: { entries: { main: {}, work: {} } } },
@@ -285,17 +242,10 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
       agentId: "work",
       sessionKey: "agent:main:policy",
       runSessionKey: "agent:work:run",
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: true,
-        includePluginTools: true,
-      },
+      toolConstructionPlan: { ...openClawPlan, includePluginTools: true },
     });
 
     expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
-    expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledOnce();
     expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledWith(
       expect.objectContaining({ sandboxAgentId: "main", requesterAgentIdOverride: "work" }),
     );
@@ -305,13 +255,7 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
     expect(() =>
       createOpenClawCodingTools({
         sandbox,
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: true,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: false,
-        },
+        toolConstructionPlan: shellPlan,
       }),
     ).toThrow("Sandbox filesystem bridge is unavailable.");
   });

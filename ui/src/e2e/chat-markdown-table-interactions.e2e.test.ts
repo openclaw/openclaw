@@ -1,6 +1,15 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import {
+  controlUiSessionUrl,
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { resolveRenderedColors } from "../test-helpers/rendered-colors.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   auditMarkdownTable,
   expectReadableAuditTable,
@@ -8,7 +17,10 @@ import {
   readResponsiveTableGeometry,
 } from "./chat-markdown-table-layout.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  createControlUiE2eContextOptions,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Markdown table interactions",
@@ -21,12 +33,7 @@ const wideTable = `| Service | Owner | Region | Status | Version | Deploy | Inci
 | Gateway | Platform | eu-west-1 | Healthy | 2026.8.18 | Complete | 0 | [Long operational note that keeps this column wide](https://example.com/table-reference) |`;
 
 function tableMessage(id: string, text: string, timestamp = Date.now()) {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp,
-    __openclaw: { id, seq: 1 },
-  };
+  return chatMessage("assistant", text, { timestamp, __openclaw: { id, seq: 1 } });
 }
 function expectFocused(locator: Locator) {
   return expect
@@ -49,6 +56,10 @@ function readTableGeometry(element: Element) {
   const column = thread.querySelector<HTMLElement>(".chat-thread-inner")!;
   const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
   return {
+    publishedColumn: getComputedStyle(thread)
+      .getPropertyValue("--chat-transcript-column-width")
+      .trim(),
+    measuredColumn: column.clientWidth,
     contained: bounds.left >= pane.left && bounds.right <= pane.right,
     currentColumn:
       getComputedStyle(thread).getPropertyValue("--chat-transcript-column-width").trim() ===
@@ -61,6 +72,167 @@ function readTableGeometry(element: Element) {
 }
 
 suite.define(() => {
+  it.each(["plain", "attributed"] as const)(
+    "keeps %s leading tables clear of the assistant avatar",
+    async (kind) => {
+      const context = await tableContext(1600, 1000);
+      const page = await context.newPage();
+      await installMockGateway(page, {
+        sessions: [{ key: "agent:main:main", kind: "group" }],
+        historyMessages:
+          kind === "plain"
+            ? [tableMessage("leading-table", wideTable)]
+            : [
+                ...["Bob", "Alice"].map((name) =>
+                  chatMessage("user", "Show the table.", {
+                    __openclaw: { id: name, senderName: name },
+                  }),
+                ),
+                chatMessage("assistant", wideTable, {
+                  __openclaw: {
+                    id: "leading-table",
+                    seq: 3,
+                    runId: "table-run",
+                    replyToId: "Alice",
+                  },
+                }),
+              ],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const table = page.locator('[data-entry-id="leading-table"] .markdown-table');
+      const avatar = page.locator(".chat-group.assistant > :is(.chat-avatar, .chat-avatar-slot)");
+      await table.waitFor();
+      await avatar.waitFor();
+      expect(await page.locator(".chat-group.assistant .chat-reply-attribution").isVisible()).toBe(
+        kind === "attributed",
+      );
+      await waitForLayoutSettled(page, ".chat-thread, .markdown-table, .chat-avatar");
+      const tableBounds = (await table.boundingBox())!;
+      const avatarBounds = (await avatar.boundingBox())!;
+      const overlaps =
+        tableBounds.x < avatarBounds.x + avatarBounds.width &&
+        tableBounds.x + tableBounds.width > avatarBounds.x &&
+        tableBounds.y < avatarBounds.y + avatarBounds.height &&
+        tableBounds.y + tableBounds.height > avatarBounds.y;
+      expect(overlaps).toBe(false);
+      const textBounds = (await table.locator("..").boundingBox())!;
+      expect(tableBounds.width).toBeGreaterThan(textBounds.width);
+    },
+  );
+
+  it.each([
+    { theme: "claw", accent: "#ffffff" },
+    { theme: "absolutely", accent: "#12395c" },
+  ])(
+    "keeps links readable without muting a legible accent in $theme chat bubbles",
+    async ({ theme, accent }) => {
+      const context = await suite.newBrowserContext({
+        colorScheme: "light",
+        viewport: { width: 1280, height: 900 },
+      });
+      const page = await context.newPage();
+      const prefs = { theme, themeMode: "light", accent };
+      const config = { ui: { prefs } };
+      const markdown =
+        "[`API guide`](https://example.com/inline) and `src/ready.ts:2`\n\n" +
+        "Sessions: agent:main:untitled and agent:main:link-target.\n\n" +
+        "| Documentation |\n| --- |\n| [Guide](https://example.com/table) |";
+      try {
+        await page.addInitScript(
+          ({ key, storedPrefs }) => localStorage.setItem(key, JSON.stringify(storedPrefs)),
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), storedPrefs: prefs },
+        );
+        await installMockGateway(page, {
+          historyMessages: ["user", "assistant"].map((role) => chatMessage(role, markdown)),
+          sessions: [
+            { key: "agent:main:main", label: "Main" },
+            { key: "agent:main:link-target", label: "Linked task", displayName: "Linked task" },
+          ],
+          methodResponses: {
+            "config.get": { config, raw: JSON.stringify(config), valid: true, hash: "link-ink" },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const links = page.locator(".chat-text a");
+        await expect.poll(() => links.count()).toBe(10);
+        await expect.poll(() => page.locator(".markdown-session-link--titled").count()).toBe(2);
+        for (const button of await page
+          .getByRole("button", { name: "Show more", exact: true })
+          .all()) {
+          await button.click();
+        }
+        const accents: { contrast: number; distance: number }[] = [];
+        for (const target of await links.all()) {
+          for (const hovered of [false, true]) {
+            if (hovered) {
+              await target.hover();
+            } else {
+              await page.mouse.move(1, 1);
+            }
+            const paint = await target.evaluate((link) => {
+              const element = link.querySelector("code") ?? link;
+              const probe = document.createElement("span");
+              probe.hidden = true;
+              element.append(probe);
+              probe.style.color = "var(--accent)";
+              const colors: Record<string, string> = {
+                ink: getComputedStyle(element).color,
+                accent: getComputedStyle(probe).color,
+              };
+              probe.style.color = "var(--bg-content, var(--bg))";
+              const bubble = getComputedStyle(element.closest(".chat-bubble")!);
+              colors.host =
+                bubble.getPropertyValue("--chat-bubble-background").trim() ||
+                getComputedStyle(probe).color;
+              colors.fill = getComputedStyle(element).backgroundColor;
+              probe.remove();
+              return colors;
+            });
+            const colors = await page.evaluate(resolveRenderedColors, paint);
+            const channels = ["red", "green", "blue"] as const;
+            const background = channels.map(
+              (channel) =>
+                colors.fill![channel] * colors.fill!.alpha +
+                colors.host![channel] * (1 - colors.fill!.alpha),
+            );
+            const luminance = (rgb: number[]) =>
+              rgb
+                .map((channel) => channel / 255)
+                .map((value) =>
+                  value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
+                )
+                .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
+            const fill = luminance(background);
+            const contrast = (color: typeof colors.ink) => {
+              const ink = luminance(channels.map((channel) => color![channel]));
+              return (Math.max(ink, fill) + 0.05) / (Math.min(ink, fill) + 0.05);
+            };
+            expect(
+              contrast(colors.ink),
+              `hover=${hovered}, ink=${paint.ink}`,
+            ).toBeGreaterThanOrEqual(4.5);
+            if (!hovered) {
+              accents.push({
+                contrast: contrast(colors.accent),
+                distance: Math.max(
+                  ...channels.map((channel) =>
+                    Math.abs(colors.ink![channel] - colors.accent![channel]),
+                  ),
+                ),
+              });
+            }
+          }
+        }
+        if (accent !== "#ffffff") {
+          expect(Math.min(...accents.map((value) => value.contrast))).toBeGreaterThanOrEqual(4.5);
+          expect(Math.max(...accents.map((value) => value.distance))).toBeLessThanOrEqual(1);
+        }
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
   it("sizes desktop tables to content while preserving mobile layout and expanded headers", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 1000 } });
     await context.grantPermissions(["clipboard-read", "clipboard-write"], {
@@ -102,6 +274,10 @@ ${auditMarkdownTable}`,
     await shell.waitFor({ state: "visible" });
     for (const width of [1920, 1440, 1280, 760, 390, 932]) {
       await page.setViewportSize({ width, height: width === 932 ? 430 : 1000 });
+      await waitForLayoutSettled(
+        page,
+        '.chat-thread, [data-entry-id="wrapping-table"] .markdown-table',
+      );
       await page.locator(".chat-thread").evaluate((element) => {
         element.scrollTop = 0;
       });
@@ -131,10 +307,65 @@ ${auditMarkdownTable}`,
         return geometry.contained && geometry.overflow <= 1;
       })
       .toBe(true);
-    await page.getByRole("button", { name: "Close Files" }).click();
-    await expand.click();
     const dialog = page.locator(".markdown-table-dialog");
-    await dialog.waitFor({ state: "visible" });
+    const expansion = await expand.evaluateHandle((trigger) => {
+      const state = {
+        clicked: false,
+        trigger,
+        pane: trigger.closest<HTMLElement>("openclaw-chat-pane"),
+        workspace: document.querySelector<HTMLElement>('[data-panel-slot="workspace"]'),
+      };
+      trigger.addEventListener(
+        "click",
+        () => {
+          state.clicked = true;
+        },
+        { once: true, capture: true },
+      );
+      return state;
+    });
+    try {
+      await page.getByRole("button", { name: "Close Files" }).click();
+      await waitForLayoutSettled(
+        page,
+        '.chat-thread, [data-entry-id="wrapping-table"] .markdown-table',
+      );
+      await expand.click();
+      await dialog.waitFor({ state: "visible" });
+    } catch (error) {
+      await withTimeout(
+        expansion.evaluate((state) => {
+          const content = document.querySelector(".markdown-table-dialog");
+          const modal = document.querySelector(".markdown-table-modal");
+          return {
+            expandClickObserved: state.clicked,
+            originalExpandConnected: state.trigger.isConnected,
+            originalExpandFocused: state.trigger === document.activeElement,
+            originalExpandStillSelected:
+              state.trigger ===
+              document.querySelector('[data-entry-id="wrapping-table"] .markdown-table__expand'),
+            retainedPaneConnected: state.pane?.isConnected ?? false,
+            retainedPaneHidden: state.pane?.getAttribute("aria-hidden") === "true",
+            retainedPaneInert: state.pane?.inert ?? null,
+            retainedPaneVisible: state.pane?.checkVisibility({ visibilityProperty: true }) ?? false,
+            workspaceConnected: state.workspace?.isConnected ?? false,
+            workspaceHidden: state.workspace ? Boolean(state.workspace.hidden) : null,
+            workspaceVisible:
+              state.workspace?.checkVisibility({ visibilityProperty: true }) ?? false,
+            tableDialogCount: document.querySelectorAll(".markdown-table-dialog").length,
+            tableDialogVisible: content?.checkVisibility({ visibilityProperty: true }) ?? false,
+            tableModalPresent: Boolean(modal),
+            nativeDialogOpen: modal?.querySelector("dialog")?.open ?? null,
+          };
+        }),
+        1_000,
+      )
+        .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+        .catch(() => undefined);
+      throw error;
+    } finally {
+      await expansion.dispose().catch(() => undefined);
+    }
     await dialog.evaluate((element) => {
       element.scrollTop = 400;
     });
@@ -151,6 +382,23 @@ ${auditMarkdownTable}`,
     expect(sticky.scrolled).toBeGreaterThan(100);
     expect(sticky).toMatchObject({ pinned: true, painted: true });
     expect(sticky.background).not.toBe("rgba(0, 0, 0, 0)");
+    const close = dialog.getByRole("button", { name: "Close expanded table" });
+    await expect
+      .poll(() =>
+        close.evaluate((button) => {
+          const bounds = button.getBoundingClientRect();
+          return [4, 20, 36].every((x) =>
+            [4, 20, 36].every((y) =>
+              button.contains(document.elementFromPoint(bounds.x + x, bounds.y + y)),
+            ),
+          );
+        }),
+      )
+      .toBe(true);
+    await close.click({ position: { x: 4, y: 20 } });
+    await expectFocused(expand);
+    await expand.click();
+    await dialog.waitFor({ state: "visible" });
     await page.keyboard.press("Escape");
     await expectFocused(expand);
   });
@@ -196,17 +444,22 @@ ${overflowTable}`,
           ),
       )
       .toBe("82%");
-    const contained = async () =>
-      (
-        await Promise.all((await tables.all()).map((table) => table.evaluate(readTableGeometry)))
-      ).every((geometry) => geometry.contained && geometry.currentColumn);
+    const expectContained = () =>
+      expect
+        .poll(async () =>
+          Promise.all((await tables.all()).map((table) => table.evaluate(readTableGeometry))),
+        )
+        .toMatchObject([
+          { contained: true, currentColumn: true },
+          { contained: true, currentColumn: true },
+        ]);
     for (const width of [1440, 1920, 1280]) {
       await page.setViewportSize({ width, height: 1000 });
       for (const direction of ["ltr", "rtl"]) {
         await page.evaluate((value) => {
           document.documentElement.dir = value;
         }, direction);
-        await expect.poll(contained).toBe(true);
+        await expectContained();
         const sizing = await overflow.evaluate(readTableGeometry);
         // The 18px gutter plus 12px inset is independent of native scrollbar width.
         expect(sizing.leadingGap).toBeGreaterThanOrEqual(29);
@@ -226,10 +479,10 @@ ${overflowTable}`,
       document.documentElement.dir = "ltr";
     });
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await expect.poll(contained).toBe(true);
+    await expectContained();
     await openChatSidePanelType(page, "Files");
     await page.locator('.side-panel__panel[data-panel-slot="workspace"]').waitFor();
-    await expect.poll(contained).toBe(true);
+    await expectContained();
     expect(
       await shell
         .locator(".markdown-table__viewport")
@@ -587,9 +840,7 @@ ${overflowTable}`,
 | \`src/ready.ts:2\` | ${targetKey} |`;
       const context = await suite.newBrowserContext({
         colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
+        ...createControlUiE2eContextOptions(),
       });
       const page = await context.newPage();
       page.setDefaultTimeout(15_000);

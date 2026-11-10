@@ -14,13 +14,12 @@ import type { PluginModelCatalogCredentialCandidate } from "./plugin-model-catal
 export async function removePersistedPluginModelCatalogCredentials(params: {
   candidates: readonly PluginModelCatalogCredentialCandidate[];
   credentials: ReadonlySet<string>;
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   if (params.candidates.length === 0 || params.credentials.size === 0) {
     return;
   }
   const credentials = [...params.credentials];
-  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+  const env = cloneEnvWithPlatformSemantics(process.env);
   const capturedCandidates = params.candidates.map(({ agentId, databasePath }) => ({
     agentId,
     databasePath: resolvePathViaExistingAncestorSync(databasePath),

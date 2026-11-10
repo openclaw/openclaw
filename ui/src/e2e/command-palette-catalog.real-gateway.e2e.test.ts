@@ -2,7 +2,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import type { Page } from "playwright";
+import type { Page, Response } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
@@ -12,6 +12,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
@@ -149,16 +150,17 @@ suite.define(() => {
     const frames: unknown[] = [];
     const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
     const replies = new Map<string, Record<string, unknown>>();
+    let catalogPublicationPending = false;
     const stages: unknown[] = [];
-    const assets: Array<Promise<{ path: string; sha256: string }>> = [];
+    const assets: Array<{ path: string; sha256: string }> = [];
     const acquisitions = () => providerTraffic.filter((entry) => entry.path === "/api/tags").length;
-    const publish = async () => {
+    const publish = async (agentId = "main") => {
       acquisitionDiagnostics.trigger("publication");
       acquisitionDiagnostics.request("readback", "readback", "models.list", true);
       try {
         const result = requireRecord(
           await readback.request("models.list", {
-            agentId: "main",
+            agentId,
             view: "configured",
             refresh: true,
           }),
@@ -178,28 +180,35 @@ suite.define(() => {
     }
     const url = new URL("/settings/model-providers", browserUrl);
     url.hash = new URL(browserUrl).hash;
+    const collectAsset = async (response: Response) => {
+      const asset = new URL(response.url());
+      if (asset.origin === url.origin && /\/assets\/.*\.(?:js|css)$/u.test(asset.pathname)) {
+        const body = await response.body();
+        assets.push({
+          path: asset.pathname,
+          sha256: createHash("sha256").update(body).digest("hex"),
+        });
+      }
+    };
     try {
-      // Settle startup acquisition before measuring page-owned requests.
-      expect((await publish()).providerOutcomes).toContainEqual({
-        provider: "ollama",
-        status: "ready",
-      });
+      // The provider counter spans both owners; settle each before measuring page-owned requests.
+      for (const agentId of ["main", "reviewer"]) {
+        expect((await publish(agentId)).providerOutcomes).toContainEqual({
+          provider: "ollama",
+          status: "ready",
+        });
+      }
       await suite.withPage(
         { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           acquisitionDiagnostics.observe(page);
-          page.on("response", (response) => {
-            const asset = new URL(response.url());
-            if (asset.origin === url.origin && /\/assets\/.*\.(?:js|css)$/u.test(asset.pathname)) {
-              assets.push(
-                response.body().then((body) => ({
-                  path: asset.pathname,
-                  sha256: createHash("sha256").update(body).digest("hex"),
-                })),
-              );
-            }
-          });
+          page.on("response", collectAsset);
           page.on("websocket", (socket) => {
+            // Reload can abandon an old socket's request without a reply.
+            // Idle assertions track the current connection's request lifetime.
+            requests.length = 0;
+            replies.clear();
+            catalogPublicationPending = false;
             socket.on("framesent", ({ payload }) => {
               const frame = requireRecord(JSON.parse(payload.toString()));
               if (
@@ -207,12 +216,24 @@ suite.define(() => {
                 frame.method === "models.list" &&
                 typeof frame.id === "string"
               ) {
+                catalogPublicationPending = false;
                 requests.push({ id: frame.id, params: requireRecord(frame.params) });
                 frames.push({ direction: "sent", frame });
               }
             });
             socket.on("framereceived", ({ payload }) => {
               const frame = requireRecord(JSON.parse(payload.toString()));
+              if (
+                frame.type === "event" &&
+                typeof frame.event === "string" &&
+                modelCatalogEventInvalidation(
+                  { event: frame.event, payload: frame.payload },
+                  { agentId: "main" },
+                )
+              ) {
+                // Publication reloads are coalesced before their request starts.
+                catalogPublicationPending = true;
+              }
               if (
                 frame.type === "res" &&
                 typeof frame.id === "string" &&
@@ -265,6 +286,7 @@ suite.define(() => {
             return requireRecord(replies.get(request.id)?.payload);
           };
           const catalogIdle = async () =>
+            !catalogPublicationPending &&
             (await refreshButton.isEnabled()) &&
             (await catalogProgress.count()) === 0 &&
             requests.every(({ id }) => replies.has(id));
@@ -292,10 +314,15 @@ suite.define(() => {
             }
             await trigger.click();
             await primary.getByRole("listbox").waitFor({ state: "visible" });
-            expect(requests).toHaveLength(requestsBeforeOpen);
+            // A queued publication may overlap opening, but cannot acquire a provider.
+            for (const { params } of requests.slice(requestsBeforeOpen)) {
+              expect(params).toEqual({ view: "configured", agentId: "main" });
+            }
             expect(acquisitions()).toBe(acquisitionsBeforeOpen);
           };
+          const requestsBeforeFirstOpen = requests.length;
           await open();
+          expect(requests).toHaveLength(requestsBeforeFirstOpen);
           await primary
             .locator('[role="option"][data-value="ollama/refresh-fixture:latest"]')
             .waitFor({ state: "visible" });
@@ -355,6 +382,9 @@ suite.define(() => {
 
           // A new page starts its own request lifetime and keeps the published rows on failure.
           acquisitionDiagnostics.trigger("reconnect");
+          // Chromium releases the old document's response bodies on navigation.
+          await page.removeAllListeners("response", { behavior: "wait" });
+          page.on("response", collectAsset);
           await page.reload();
           await waitForControlUiGatewayReady(page);
           await trigger.waitFor({ state: "visible" });
@@ -364,8 +394,12 @@ suite.define(() => {
           const failed = await catalogRefresh(() =>
             settings.getByRole("button", { name: "Refresh", exact: true }).click(),
           );
+          const providerStatus = settings.locator(
+            '[data-provider-id="ollama"] .model-providers__head',
+          );
+          await expect.poll(() => providerStatus.textContent()).toContain("Models unavailable");
           const retry = settings
-            .locator(".model-providers__catalog-progress")
+            .locator('.model-providers__catalog-progress[role="alert"]')
             .getByRole("button", { name: "Retry", exact: true });
           await retry.waitFor({ state: "visible" });
           expect(await settings.textContent()).not.toContain("Open Models to try again.");
@@ -381,7 +415,7 @@ suite.define(() => {
           });
           expect(await pickerValue(primary)).toBe("fixture/anchor");
           stages.push({ stage: "failed-refresh", acquisitions: acquisitions() });
-          await retry.scrollIntoViewIfNeeded();
+          await providerStatus.scrollIntoViewIfNeeded();
           await capture("settings-refresh-failed.png");
 
           providerMode = "ready";
@@ -389,6 +423,7 @@ suite.define(() => {
           acquisitionDiagnostics.trigger("retry");
           await catalogRefresh(() => retry.click());
           await retry.waitFor({ state: "hidden" });
+          await expect.poll(() => providerStatus.textContent()).not.toContain("Models unavailable");
           await open();
           await primary
             .locator('[role="option"][data-value="ollama/recovered-fixture:latest"]')
@@ -397,6 +432,9 @@ suite.define(() => {
           expect(await pickerValue(primary)).toBe("fixture/anchor");
           stages.push({ stage: "retry", acquisitions: acquisitions() });
           await capture("settings-retry.png");
+        },
+        async ({ page }) => {
+          await page.removeAllListeners("response", { behavior: "wait" });
         },
       );
     } catch (error) {
@@ -415,7 +453,7 @@ suite.define(() => {
             frames,
             stages,
             providerTraffic,
-            assets: await Promise.all(assets),
+            assets,
           },
           null,
           2,
@@ -424,7 +462,7 @@ suite.define(() => {
     }
   }, 120_000);
 
-  it("shows acquisition failures in Automations while keeping model search quiet and usable", async () => {
+  it("shows acquisition failures in automation editors while keeping model search quiet and usable", async () => {
     const outcomes: unknown[] = [];
     const refresh = async () => {
       const payload = requireRecord(
@@ -443,7 +481,7 @@ suite.define(() => {
     if (typeof browserUrl !== "string") {
       throw new Error("Dashboard did not return a browser handoff");
     }
-    const warning = "Some models could not be refreshed. Open Models to try again.";
+    const warning = "Couldn’t refresh some models. Open Models to try again.";
     try {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         await page.goto(browserUrl);
@@ -468,6 +506,12 @@ suite.define(() => {
           expect.objectContaining({ provider: "ollama", id: "refresh-fixture:latest" }),
         );
         expect(JSON.stringify(failed)).not.toContain("private upstream error body");
+        await automations.locator('[data-test-id="cron-new-task"]').click();
+        await automations.getByText(warning, { exact: true }).waitFor({ state: "visible" });
+        await automations.locator('[data-test-id="cron-back"]').click();
+        await automations.locator('[data-test-id="cron-new-task"]').waitFor({ state: "visible" });
+        expect(await automations.getByText(warning, { exact: true }).count()).toBe(0);
+        await automations.locator('[data-test-id="cron-new-task"]').click();
         await automations.getByText(warning, { exact: true }).waitFor({ state: "visible" });
         await page.keyboard.press("ControlOrMeta+K");
         await page.locator(".cmd-palette__input").fill("refresh-fixture");
@@ -503,7 +547,7 @@ suite.define(() => {
           JSON.stringify({
             providerTraffic,
             outcomes,
-            automationsWarning: true,
+            automationEditorWarning: true,
             paletteWarning: false,
             retainedModelCount: 1,
             successfulEmptyClearedModelAndWarnings: true,
@@ -666,7 +710,7 @@ suite.define(() => {
           await expect.poll(() => rejectedCatalogReplies).toBeGreaterThan(0);
           const status = page
             .locator(".cmd-palette [role=status]")
-            .filter({ hasText: "Model search unavailable" });
+            .filter({ hasText: "Couldn’t search models" });
           await status.waitFor({ state: "visible" });
           expect(await published.count()).toBe(1);
           if (captureEnabled) {

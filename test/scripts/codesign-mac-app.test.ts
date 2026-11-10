@@ -114,17 +114,6 @@ async function runElevationMetadataFixture(mac: MacScriptFixture, env: NodeJS.Pr
 }
 
 describe("codesign-mac-app temp file hygiene", () => {
-  it.concurrent("does not generate unused entitlement plist files", ({ mac, expect }) =>
-    mac.lifetime.run(async () => {
-      const script = readFileSync(scriptPath, "utf8");
-
-      expect(script).toContain('ENT_TMP_APP="$ENT_TMP_DIR/app.plist"');
-      expect(script).not.toContain("ENT_TMP_BASE");
-      expect(script).not.toContain("ENT_TMP_RUNTIME");
-      expect(script).not.toContain("base.plist");
-      expect(script).not.toContain("runtime.plist");
-    }));
-
   it.concurrent("does not allocate entitlement temp files for help output", ({ mac, expect }) =>
     mac.lifetime.run(async () => {
       const tempRoot = mac.createTempDir("openclaw-codesign-help-");
@@ -237,24 +226,6 @@ describe("codesign-mac-app temp file hygiene", () => {
         expect(result.stderr).toContain(diagnostic);
       }),
   );
-
-  it.concurrent("defines a closed Foundation elevation-host signing profile", ({ mac, expect }) =>
-    mac.lifetime.run(async () => {
-      const script = readFileSync(scriptPath, "utf8");
-      const elevationProfile = script.slice(
-        script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]'),
-        script.indexOf("else", script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]')),
-      );
-
-      expect(readFileSync("scripts/lib/mac-signing-identity.sh", "utf8")).toContain(
-        'ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"',
-      );
-      expect(script).toContain('ELEVATION_TEAM_ID="FWJYW4S8P8"');
-      expect(elevationProfile).toContain("<dict/>");
-      expect(elevationProfile).not.toContain("com.apple.security.automation.apple-events");
-      expect(script).toContain("verify_elevation_signature");
-      expect(script).toContain('assert_no_apple_events_entitlement "$APP_BUNDLE"');
-    }));
 
   it.concurrent.for(["file", "symlink"])(
     "rejects an elevation-host CUA driver %s before signing",
@@ -464,11 +435,16 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
         const fixture = await signingFixture(mac, "inventory-jit");
         const modules = "lib/node_modules/openclaw/node_modules";
         const sdkRuntime = `node_modules/@anthropic-ai/claude-agent-sdk-darwin-${sdkArch}/claude`;
+        const codexVendor = sdkArch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+        const codexHost = `node_modules/@openai/codex-darwin-${sdkArch}/vendor/${codexVendor}/bin/codex-code-mode-host`;
         const expected = new Map<string, "plugins" | "jit" | "plain">();
         for (const [relative, fileType, policy] of [
           ["bin/bun", 2, "plugins"],
           [`lib/node_modules/openclaw/${sdkRuntime}`, 2, "jit"],
           [`${modules}/nested/${sdkRuntime}`, 2, "jit"],
+          [`lib/node_modules/openclaw/${codexHost}`, 2, "jit"],
+          [`${modules}/nested/${codexHost}`, 2, "jit"],
+          [`${modules}/other/bin/codex-code-mode-host`, 2, "plain"],
           [
             `${modules}/@lydell/node-pty-darwin-${sdkArch}/prebuilds/darwin-${sdkArch}/spawn-helper`,
             2,
@@ -498,6 +474,10 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
         expect(signs.at(-1)?.args.at(-1)).toBe(fixture.app);
         expect(signs.at(-1)?.entitlements).not.toContain("disable-library-validation");
         expect(signs.at(-1)?.entitlements).not.toContain("allow-jit");
+        if (elevation) {
+          expect(signs.at(-1)?.entitlements).toContain("<dict/>");
+          expect(signs.at(-1)?.entitlements).not.toContain("automation.apple-events");
+        }
         for (const [filename, policy] of expected) {
           const signed = expectDefined(
             signs.find(({ args }) => args.at(-1) === filename),

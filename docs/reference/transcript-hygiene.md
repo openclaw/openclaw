@@ -80,6 +80,12 @@ Direct Anthropic Messages append-only replay also keeps failed and recovered
 assistant frames separate, along with consecutive user turns. Strict routes
 retain their role-merging behavior.
 
+User-row merging happens at submission, after the current input is resolved.
+Runtime-context carriers and operator updates remain separate from user input,
+preserving their authority and cache boundaries. Bedrock Converse still merges
+all adjacent user rows to satisfy its alternation requirement, including `/btw`
+requests. History limits count adjacent input rows as one turn on merging routes.
+
 ## Global rule: runtime context is not user transcript
 
 Runtime/system context can be added to the model prompt for a turn, but it is
@@ -134,6 +140,11 @@ image stays omitted on every replay. Successful outcomes (verified as-is, or the
 downscaled replacement) are cached in process by content digest and limits,
 bounded to 16 MiB, so later turns reuse them instead of decoding the same bytes
 again.
+Image-free content from immutable transcript publications reuses its cleanup
+result for the same replay policy. New or mutable content is still inspected;
+image-bearing content always goes through the image sanitizer, so unavailable
+backends and failed checks remain retryable. These weakly keyed results expire
+with their source content and do not change stored transcript bytes.
 This also helps
 control image-driven token pressure for vision-capable models: lower max
 dimensions reduce token usage, higher dimensions preserve detail.
@@ -145,13 +156,14 @@ Implementation:
 - `sanitizeContentBlocksImages` in `src/agents/tool-images.ts`
 - Max image side is configurable via `agents.defaults.imageMaxDimensionPx`
   (default: `1200`)
-- Unsigned blank text blocks are removed while this pass walks replay content.
+- Unsigned blank user and assistant text blocks are removed during replay.
   Blank assistant text with a provider replay signature is retained byte-for-byte,
   including whitespace-only messages, so later reasoning keeps its
   original request prefix and item order.
   Assistant turns that become empty are dropped unless they own opaque
-  provider replay state; user and tool-result turns that become empty receive
-  a non-empty omitted-content placeholder.
+  provider replay state; user turns that become empty receive a non-empty
+  omitted-content placeholder. Tool-result text, including blank blocks, is
+  preserved for each provider's transport to encode consistently across turns.
 
 ---
 
@@ -320,7 +332,7 @@ inter-session user turns that only have provenance metadata.
 
 **Anthropic / Minimax (Anthropic-compatible)**
 
-- Prefix-binding Claude models, such as Fable 5.1, persist runtime-context carriers
+- Prefix-binding Claude models persist runtime-context carriers
   as hidden custom messages immediately after their user turn and replay them in
   place. Inline inbound metadata on older user turns is also retained. This
   model-scoped append-only policy includes Bedrock, Vertex, and Foundry routes.
@@ -329,8 +341,12 @@ inter-session user turns that only have provenance metadata.
   authority their protocol supports; Anthropic-family and external plugin adapters
   retain the labeled user representation, while OpenAI-compatible adapters use
   system or developer authority.
-  Carriers are excluded from chat history and compaction summarization. Other
-  Claude models and Anthropic-compatible models keep transient carriers, avoiding
+  Every Claude model binds the prefix except a closed list of older generations
+  (Claude 3, Claude 4.x, Opus 5, Sonnet 5, Fable 5, Mythos 5, Mythos Preview), so
+  newly released Claude models, such as Fable 5.2, are prefix-binding without an
+  OpenClaw update.
+  Carriers are excluded from chat history and compaction summarization. Those
+  older Claude models and Anthropic-compatible models keep transient carriers, avoiding
   repeated cache-read charges and context use for old carriers when nothing binds
   the prefix.
 - Tool result pairing repair and synthetic tool results.

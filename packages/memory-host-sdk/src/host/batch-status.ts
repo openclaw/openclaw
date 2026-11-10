@@ -56,33 +56,6 @@ export async function throwIfBatchTerminalFailure(params: {
   throw new Error(`${params.provider} batch ${params.status.id ?? "<unknown>"} ${state}${suffix}`);
 }
 
-/** Resolve the completed batch files, optionally waiting according to caller policy. */
-export async function resolveCompletedBatchResult(params: {
-  provider: string;
-  status: EmbeddingBatchStatus;
-  wait: boolean;
-  waitForBatch: () => Promise<BatchCompletionResult>;
-}): Promise<BatchCompletionResult> {
-  const batchId = params.status.id ?? "<unknown>";
-  if (!params.wait && params.status.status !== "completed") {
-    throw new Error(
-      `${params.provider} batch ${batchId} submitted; enable remote.batch.wait to await completion`,
-    );
-  }
-  const completed =
-    params.status.status === "completed"
-      ? resolveBatchCompletionFromStatus({
-          provider: params.provider,
-          batchId,
-          status: params.status,
-        })
-      : await params.waitForBatch();
-  if (!completed.outputFileId) {
-    throw new Error(`${params.provider} batch ${batchId} completed without output file`);
-  }
-  return completed;
-}
-
 /**
  * Share compatible status transitions while callers retain the canonical
  * deadline and transport owners; only a supplied backoff policy retries reads.

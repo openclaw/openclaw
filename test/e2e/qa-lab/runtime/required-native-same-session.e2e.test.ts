@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { json } from "node:stream/consumers";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
@@ -32,6 +31,12 @@ import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../../helpers/qa-gateway-test-lifetime.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
+import {
+  createNativeProvider,
+  listenNativeProvider,
+  nativeModel,
+  writeNativeCompletion,
+} from "./native-provider-proof-fixture.js";
 import {
   closeWireServer,
   connectWireClient,
@@ -149,9 +154,9 @@ it.skipIf(process.platform === "win32")(
           name: "workspace-proof",
           description: "Synthetic node-hosted workspace skill",
         });
-        const provider = (nativeServer = createServer((request, response) => {
-          void (async () => {
-            const body = (await json(request)) as {
+        const provider = (nativeServer = createNativeProvider(
+          async (request, response, rawBody) => {
+            const body = JSON.parse(rawBody) as {
               messages: Array<{ role: string; content: string }>;
             };
             const marker = body.messages
@@ -167,50 +172,25 @@ it.skipIf(process.platform === "win32")(
             expect(JSON.stringify(body.messages)).not.toContain("worktree-sources");
             requests.push(marker!);
             onNativeRequest?.(marker!);
-            response.writeHead(200, { "content-type": "text/event-stream" });
-            for (const [delta, finish_reason] of [
-              [{ role: "assistant", content: marker }, null],
-              [{}, "stop"],
-            ]) {
-              const chunk = {
-                id: marker,
-                object: "chat.completion.chunk",
-                created: 1,
-                model: modelId,
-                choices: [{ index: 0, delta, finish_reason }],
-              };
-              response.write(`data: ${JSON.stringify(chunk)}\n\n`);
-            }
-            response.end("data: [DONE]\n\n");
-          })().catch((error: unknown) => {
+            writeNativeCompletion(response, marker!, modelId!, marker!);
+          },
+          (error, response) => {
             providerErrors.push(error);
             observationFailure.reject(error);
             response.destroy();
-          });
-        }));
-        await new Promise<void>((resolve, reject) => {
-          provider.once("error", reject);
-          provider.listen(0, "127.0.0.1", resolve);
-        });
-        const address = provider.address();
-        if (!address || typeof address === "string") {
-          throw new Error("missing native provider address");
-        }
+          },
+        ));
+        const baseUrl = await listenNativeProvider(provider);
         const nativeProvider: ModelProviderConfig = {
           api: "openai-completions",
-          baseUrl: "http://127.0.0.1:" + address.port + "/v1",
+          baseUrl,
           apiKey: "synthetic-required-native-key",
           models: [
-            {
-              id: modelId!,
-              name: modelId!,
-              contextWindow: 32768,
+            nativeModel(modelId!, {
               maxTokens: 128,
               reasoning: true,
               thinkingLevelMap: { medium: "medium" },
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
+            }),
           ],
         };
         const gateway = await startPairedNodeWorkerGateway({
@@ -306,7 +286,6 @@ it.skipIf(process.platform === "win32")(
           operator,
           root,
           capacity: 1,
-          capacityWaitMs: 0,
           nodeConfig: {
             ...nodeConfig.config,
             models: { providers: { [providerId!]: nativeProvider } },
@@ -427,11 +406,21 @@ it.skipIf(process.platform === "win32")(
                 return;
               }
               // Ordinary node workspaces bind physical sessionId, not sessionKey.
-              if (input.sessionId !== readSettlement(gateway, key).placement?.session_id) {
+              const state = readSettlement(gateway, key);
+              if (input.sessionId !== state.placement?.session_id) {
+                return;
+              }
+              const launch = host.frames
+                .filter((item) => item.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND)
+                .map((item) => parseNodeWorkerLaunchInput(item.paramsJSON))
+                .findLast(
+                  (item) => item.descriptor.assignment.runId === state.placement?.turn_claim_run_id,
+                );
+              // Input refresh also quiesces; these barriers own completed-turn settlement.
+              if (!launch) {
                 return;
               }
               observedPhases[phase] = true;
-              const state = readSettlement(gateway, key);
               const acquiring = phase === "acquire";
               if (acquiring) {
                 aClaim = state.placement?.turn_claim_id ?? undefined;
@@ -445,10 +434,6 @@ it.skipIf(process.platform === "win32")(
               });
               if (acquiring) {
                 expectCursorAdvance(state.placement!);
-                const launch = host.frames
-                  .filter((item) => item.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND)
-                  .map((item) => parseNodeWorkerLaunchInput(item.paramsJSON))
-                  .findLast((item) => item.descriptor.assignment.runId === aRun)!;
                 expect(launch.descriptor.assignment.inference).toBe("runtime-local");
                 expect(await host.supervisor.status(launch.launchId)).toMatchObject({
                   state: "completed",
@@ -476,13 +461,32 @@ it.skipIf(process.platform === "win32")(
             const aWait = wait(markers.A);
             await checkpoint(atQuiesce.promise);
             expect(await aWait).toMatchObject({ status: "ok" });
-            const current = await describe(key);
-            expect(current.placement).toMatchObject({
-              state: "active",
-              workspaceResultReconciling: true,
+            const settlement = readSettlement(gateway, key);
+            const placed = settlement.placement!;
+            // The display is advisory; the matching durable worker claim and result
+            // prove reconciliation is in progress while quiescence is held.
+            expect(settlement).toMatchObject({
+              placement: {
+                state: "active",
+                execution_mode: "worker-turn",
+                turn_claim_owner: "worker",
+                turn_claim_owner_epoch: placed.active_owner_epoch,
+                turn_claim_id: aClaim,
+                turn_claim_run_id: aRun,
+              },
+              pending: {
+                session_id: placed.session_id,
+                environment_id: placed.environment_id,
+                owner_epoch: placed.active_owner_epoch,
+                placement_generation: placed.turn_claim_generation,
+                claim_id: aClaim,
+                run_id: aRun,
+                staged_result_ref: null,
+                workspace_accepted_at_ms: null,
+              },
             });
+            const current = await describe(key);
             expect((await history(key)).messages.map(wireMessageText)).toContain(markers.A);
-            const placed = readSettlement(gateway, key).placement!;
             if (retained) {
               expect(placed).toMatchObject({
                 session_id: retained.session_id,

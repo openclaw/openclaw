@@ -3,6 +3,9 @@ import { expect, onTestFinished } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import { FakeSocket, flush, sendHello, wireExtension } from "./relay-bridge.test-support.js";
 
+const CONTEXT_CREATED = "Runtime.executionContextCreated";
+type Params = Record<string, unknown>;
+
 export function runtimeContext(id: number) {
   return {
     id,
@@ -17,7 +20,7 @@ export const autoAttachParams = { autoAttach: true, waitForDebuggerOnStart: true
 
 export function createRelayClient(
   bridge: ExtensionRelayBridge,
-  rootParams: Record<string, unknown> = { autoAttach: true },
+  rootParams: Params = { autoAttach: true },
   wait: <T>(read: () => T) => Promise<T> = async (read) => {
     await flush();
     return read();
@@ -28,7 +31,7 @@ export function createRelayClient(
   let nextId = 0;
   const byId = (id: number) => socket.frames().find((entry) => entry.id === id);
   const frames = (method: string) => socket.frames().filter((frame) => frame.method === method);
-  function send(method: string, sessionId?: string, params?: Record<string, unknown>) {
+  function send(method: string, sessionId?: string, params?: Params) {
     const id = ++nextId;
     handlers.onMessage(JSON.stringify({ id, method, sessionId, params }));
     return id;
@@ -39,7 +42,7 @@ export function createRelayClient(
       expect(reply, method).toBeDefined();
       return reply!;
     });
-  const request = async (method: string, sessionId?: string, params?: Record<string, unknown>) =>
+  const request = async (method: string, sessionId?: string, params?: Params) =>
     await response(send(method, sessionId, params), method);
   const attached = (parent?: string) =>
     frames("Target.attachedToTarget")
@@ -53,25 +56,8 @@ export function createRelayClient(
     return id;
   }
   const latestChild = (parent?: string) => readSession(attached(parent).at(-1));
-  async function session(method: string, parent?: string, params?: Record<string, unknown>) {
-    return readSession((await request(method, parent, params)).result);
-  }
-  async function attach() {
-    const result = await request("Target.setAutoAttach", undefined, rootParams);
-    expect(result.error).toBeUndefined();
-    return latestChild();
-  }
-  async function autoAttach(parent: string) {
-    expect((await request("Target.setAutoAttach", parent, autoAttachParams)).error).toBeUndefined();
-  }
-  function child(targetId: string, parent?: string) {
-    const announcement = frames("Target.attachedToTarget").findLast(
-      (frame) =>
-        (parent === undefined || frame.sessionId === parent) &&
-        asOptionalRecord(asOptionalRecord(frame.params)?.targetInfo)?.targetId === targetId,
-    );
-    return readSession(announcement?.params);
-  }
+  const session = async (method: string, parent?: string, params?: Params) =>
+    readSession((await request(method, parent, params)).result);
   return {
     socket,
     handlers,
@@ -82,9 +68,23 @@ export function createRelayClient(
     response,
     request,
     attached,
-    attach,
-    autoAttach,
-    child,
+    async attach() {
+      expect((await request("Target.setAutoAttach", undefined, rootParams)).error).toBeUndefined();
+      return latestChild();
+    },
+    async autoAttach(parent: string) {
+      expect(
+        (await request("Target.setAutoAttach", parent, autoAttachParams)).error,
+      ).toBeUndefined();
+    },
+    child(targetId: string, parent?: string) {
+      const announcement = frames("Target.attachedToTarget").findLast(
+        (frame) =>
+          (parent === undefined || frame.sessionId === parent) &&
+          asOptionalRecord(asOptionalRecord(frame.params)?.targetInfo)?.targetId === targetId,
+      );
+      return readSession(announcement?.params);
+    },
     session,
     alias: () =>
       session("Target.attachToTarget", undefined, { targetId: "target-1", flatten: true }),
@@ -119,7 +119,7 @@ export function createRuntimeFixture() {
         if (!enabled.has(key)) {
           enabled.add(key);
           event(
-            "Runtime.executionContextCreated",
+            CONTEXT_CREATED,
             { context: runtimeContext(key === "root" ? 1 + contextOffset : 2) },
             msg.sessionId,
           );
@@ -141,15 +141,13 @@ export function createRuntimeFixture() {
     );
   }
   sendHello(extension.handlers);
-  function commands(method: string) {
-    return extension.socket.frames().filter((frame) => frame.method === method);
-  }
   return {
     bridge,
     extension,
     event,
     client: () => createRelayClient(bridge),
-    commands,
+    commands: (method: string) =>
+      extension.socket.frames().filter((frame) => frame.method === method),
     revokeAccess: () => {
       accessAllowed = false;
     },
@@ -168,10 +166,7 @@ export function createRuntimeFixture() {
 export function createdRuntimeContexts(socket: FakeSocket, sessionId: string) {
   return socket
     .frames()
-    .filter(
-      (frame) =>
-        frame.sessionId === sessionId && frame.method === "Runtime.executionContextCreated",
-    );
+    .filter((frame) => frame.sessionId === sessionId && frame.method === CONTEXT_CREATED);
 }
 
 export function expectContextBeforeResult(
@@ -181,12 +176,13 @@ export function expectContextBeforeResult(
   contexts = [runtimeContext(1)],
 ) {
   const frames = socket.frames();
+  const created = createdRuntimeContexts(socket, sessionId);
   const resultIndex = frames.findIndex((frame) => frame.id === id);
   expect(resultIndex).toBeGreaterThanOrEqual(0);
-  expect(createdRuntimeContexts(socket, sessionId).map((frame) => frame.params)).toEqual(
+  expect(created.map((frame) => frame.params)).toEqual(
     contexts.map((value) => ({ context: value })),
   );
-  for (const frame of createdRuntimeContexts(socket, sessionId)) {
+  for (const frame of created) {
     expect(frames.indexOf(frame)).toBeLessThan(resultIndex);
   }
 }

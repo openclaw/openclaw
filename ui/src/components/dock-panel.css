@@ -58,13 +58,18 @@
 .rail-header__title {
   overflow: hidden;
   color: var(--text);
-  font-size: var(--rail-header-title-size, 12px);
+  font-size: var(--rail-header-title-size, var(--control-ui-text-sm));
   font-weight: var(--rail-header-title-weight, 600);
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rail-header__action {
+.rail-header__action.oc-icon-button {
+  --icon-button-glyph: var(--rail-header-action-glyph-size, 16px);
+  --icon-button-stroke: 1.6px;
+  --icon-button-color: var(--rail-header-action-color, var(--muted));
+}
+.rail-header__action:not(.oc-icon-button) {
   display: inline-flex;
   width: var(--rail-header-action-size, 28px);
   min-width: var(--rail-header-action-size, 28px);
@@ -74,37 +79,37 @@
   justify-content: center;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   box-shadow: none;
   color: var(--rail-header-action-color, var(--muted));
   font: inherit;
   opacity: 1;
 }
-.rail-header__action:hover,
-.rail-header__action:focus-visible {
+.rail-header__action:not(.oc-icon-button):hover,
+.rail-header__action:not(.oc-icon-button):focus-visible {
   border: 0;
   background: transparent;
   box-shadow: none;
   color: var(--rail-header-action-hover-color, var(--text));
 }
-.rail-header__action:focus-visible {
+.rail-header__action:not(.oc-icon-button):focus-visible {
   outline: 2px solid var(--ring, var(--accent));
   outline-offset: -3px;
 }
-.rail-header__action.is-active,
-.rail-header__action[aria-pressed="true"] {
+.rail-header__action:not(.oc-icon-button).is-active,
+.rail-header__action:not(.oc-icon-button)[aria-pressed="true"] {
   background: transparent;
   color: var(--rail-header-action-active-color, var(--accent));
 }
-.rail-header__action:disabled,
-.rail-header__action[aria-disabled="true"] {
+.rail-header__action:not(.oc-icon-button):disabled,
+.rail-header__action:not(.oc-icon-button)[aria-disabled="true"] {
   opacity: var(--rail-header-action-disabled-opacity, 0.4);
 }
 [data-new-tab-action]:not(:disabled):not([disabled]):not([aria-disabled="true"]) {
   cursor: pointer;
 }
-.rail-header__action svg {
+.rail-header__action:not(.oc-icon-button) svg {
   width: var(--rail-header-action-glyph-size, 16px);
   height: var(--rail-header-action-glyph-size, 16px);
   fill: none;

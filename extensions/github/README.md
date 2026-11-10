@@ -15,7 +15,7 @@ OpenClaw. This official plugin is included with OpenClaw and enabled by default.
 
 ## Get started
 
-Click a public GitHub issue, pull request, or commit link in chat. The reader opens
+Hover or focus a public GitHub issue, pull request, or commit link in chat to preview it. Click the link to read it beside chat. The reader opens
 beside the conversation. Use **Open on GitHub** for the full page.
 
 Manage the plugin from **Plugins → GitHub**. If you use a plugin allowlist, include

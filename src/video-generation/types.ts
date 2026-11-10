@@ -1,6 +1,4 @@
 import type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Video asset returned by a provider after generation or transformation. */
 export type GeneratedVideoAsset = {
@@ -51,41 +49,6 @@ export type VideoGenerationSourceAsset = {
   metadata?: Record<string, unknown>;
 };
 
-/** Context passed when checking whether a video provider is configured. */
-export type VideoGenerationProviderConfiguredContext = {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-};
-
-/** Context passed when resolving model-specific video generation capabilities. */
-export type VideoGenerationModelCapabilitiesContext = Pick<
-  VideoGenerationRequest,
-  "provider" | "model" | "cfg" | "agentDir" | "authStore" | "timeoutMs"
->;
-
-/** Normalized request object passed to a selected video generation provider. */
-export type VideoGenerationRequest = {
-  provider: string;
-  model: string;
-  prompt: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  timeoutMs?: number;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: VideoGenerationResolution;
-  durationSeconds?: number;
-  audio?: boolean;
-  watermark?: boolean;
-  inputImages?: VideoGenerationSourceAsset[];
-  inputVideos?: VideoGenerationSourceAsset[];
-  /** Reference audio assets (e.g. background music) forwarded to the provider. */
-  inputAudios?: VideoGenerationSourceAsset[];
-  /** Arbitrary provider-specific parameters forwarded as-is (e.g. seed, draft, camerafixed). */
-  providerOptions?: Record<string, unknown>;
-};
-
 /** Provider video generation response returned to the runtime. */
 export type VideoGenerationResult = {
   videos: GeneratedVideoAsset[];
@@ -95,13 +58,6 @@ export type VideoGenerationResult = {
 
 /** Supported high-level video generation operation modes. */
 export type VideoGenerationMode = "generate" | "imageToVideo" | "videoToVideo";
-
-/**
- * Primitive type tag for a declared `providerOptions` key. Keep narrow —
- * plugins that need richer shapes should leave them out of the typed contract
- * and interpret the forwarded opaque value inside their own provider code.
- */
-type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
 
 /** Capability limits and supported options for one video generation mode. */
 export type VideoGenerationModeCapabilities = {
@@ -131,7 +87,12 @@ export type VideoGenerationModeCapabilities = {
    * candidate provider at runtime so mis-typed or provider-specific options
    * never silently reach the wrong provider.
    */
-  providerOptions?: Readonly<Record<string, VideoGenerationProviderOptionType>>;
+  /**
+   * Primitive type tag for a declared `providerOptions` key. Keep narrow —
+   * plugins that need richer shapes should leave them out of the typed contract
+   * and interpret the forwarded opaque value inside their own provider code.
+   */
+  providerOptions?: Readonly<Record<string, "number" | "boolean" | "string">>;
 };
 
 /** Capability block for transform modes that may be independently enabled. */
@@ -150,29 +111,6 @@ export type VideoGenerationProviderCapabilities = VideoGenerationModeCapabilitie
 export type VideoGenerationCatalogModelEntry = {
   capabilities?: VideoGenerationProviderCapabilities;
   modes?: readonly VideoGenerationMode[];
-};
-
-/** Video generation provider contract implemented by provider plugins. */
-export type VideoGenerationProvider = {
-  id: string;
-  aliases?: string[];
-  label?: string;
-  defaultModel?: string;
-  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
-  defaultTimeoutMs?: number;
-  models?: string[];
-  capabilities: VideoGenerationProviderCapabilities;
-  catalogByModel?: Readonly<Record<string, VideoGenerationCatalogModelEntry>>;
-  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
-  isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
-  isConfiguredAsync?: (ctx: VideoGenerationProviderConfiguredContext) => Promise<boolean>;
-  resolveModelCapabilities?: (
-    ctx: VideoGenerationModelCapabilitiesContext,
-  ) =>
-    | VideoGenerationProviderCapabilities
-    | undefined
-    | Promise<VideoGenerationProviderCapabilities | undefined>;
-  generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
 };
 
 export type VideoGenerationIgnoredOverride = {

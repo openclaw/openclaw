@@ -263,6 +263,22 @@ export async function sendMediaNextcloudTalk(
   };
   const options = { signal: ctx.signal, beforeRequest: assertCurrent };
   assertCurrent();
+  if (ctx.silent) {
+    const data = await client.json("/ocs/v2.php/cloud/capabilities?format=json", {}, options);
+    assertCurrent();
+    const spreed =
+      isRecord(data) && isRecord(data.capabilities) ? data.capabilities.spreed : undefined;
+    // Talk gates silent file metadata on media-caption, not silent-send.
+    if (
+      !isRecord(spreed) ||
+      !Array.isArray(spreed.features) ||
+      !spreed.features.includes("media-caption")
+    ) {
+      throw new Error(
+        "Nextcloud Talk silent attachments require the server's media-caption capability. Upgrade Talk before retrying.",
+      );
+    }
+  }
   const maxBytes =
     resolveChannelMediaMaxBytes({
       cfg: ctx.cfg,
@@ -277,6 +293,10 @@ export async function sendMediaNextcloudTalk(
     optimizeImages: false,
   });
   assertCurrent();
+  // Talk only keeps native voice metadata for these server-supported audio MIME types.
+  const asVoice =
+    ctx.audioAsVoice === true &&
+    (media.contentType === "audio/mpeg" || media.contentType === "audio/wav");
   const uid = await client.user(options);
   const uploadId = randomUUID();
   const prefix = `openclaw-${uploadId}-`;
@@ -389,6 +409,8 @@ export async function sendMediaNextcloudTalk(
       referenceId,
       talkMetaData: JSON.stringify({
         caption,
+        ...(asVoice ? { messageType: "voice-message" } : {}),
+        ...(ctx.silent ? { silent: true } : {}),
         ...(ctx.replyToId ? { replyTo: Number(ctx.replyToId) } : {}),
       }),
     });
@@ -466,7 +488,7 @@ export async function sendMediaNextcloudTalk(
       roomToken,
       receipt: createMessageReceiptFromOutboundResults({
         results: [{ channel: "nextcloud-talk", conversationId: roomToken, messageId }],
-        kind: "media",
+        kind: asVoice && message.messageType === "voice-message" ? "voice" : "media",
         ...(replyToId ? { replyToId } : {}),
       }),
     };

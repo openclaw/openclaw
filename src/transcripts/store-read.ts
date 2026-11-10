@@ -20,6 +20,7 @@ import {
   jsonOrderedTextArray,
   jsonRemoveKey,
 } from "../infra/database-engine/json-values.js";
+import { engineStringPosition } from "../infra/database-engine/scalar.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
@@ -90,9 +91,8 @@ function transcriptPageLimit(limit = TRANSCRIPTS_PAGE_DEFAULT, max = TRANSCRIPTS
 export function assertTranscriptByteLimit(
   text: string,
   maxBytes = TRANSCRIPTS_RESULT_MAX_BYTES,
-  exporting = false,
 ): void {
-  assertTranscriptByteCount(Buffer.byteLength(text, "utf8"), maxBytes, exporting);
+  assertTranscriptByteCount(Buffer.byteLength(text, "utf8"), maxBytes);
 }
 
 export function assertTranscriptByteCount(
@@ -354,9 +354,13 @@ function readTranscriptPage<Entry>(
   if (options.query) {
     const search = options.query;
     query = query.where((eb) => {
-      const matches = (field: Expression<unknown>): Expression<SqlBool> =>
+      const matches = (field: Expression<string | null>): Expression<SqlBool> =>
         eb(
-          eb.fn<number>("instr", [eb.fn("lower", [field]), eb.fn("lower", [eb.val(search)])]),
+          engineStringPosition(
+            database,
+            eb.fn<string | null>("lower", [field]),
+            eb.fn<string>("lower", [eb.val(search)]),
+          ),
           ">",
           0,
         );
@@ -401,8 +405,8 @@ function readTranscriptPage<Entry>(
   const keys = query
     .select(["session_id", "started_at"])
     .orderBy("started_at_ms", (order) => order.desc().nullsLast())
-    .orderBy("session_id", (order) => order.asc().nullsFirst())
-    .orderBy("started_at", (order) => order.asc().nullsFirst())
+    .orderBy("session_id", "asc")
+    .orderBy("started_at", "asc")
     .limit(limit + 1);
   // Select identities before projecting notes and participants, so the scan
   // evaluates expensive payloads only for this page and its lookahead.
@@ -421,8 +425,8 @@ function readTranscriptPage<Entry>(
         ),
     )
       .orderBy("meeting_transcript_sessions.started_at_ms", (order) => order.desc().nullsLast())
-      .orderBy("meeting_transcript_sessions.session_id", (order) => order.asc().nullsFirst())
-      .orderBy("meeting_transcript_sessions.started_at", (order) => order.asc().nullsFirst()),
+      .orderBy("meeting_transcript_sessions.session_id", "asc")
+      .orderBy("meeting_transcript_sessions.started_at", "asc"),
   );
   const entries: Entry[] = [];
   let bytes = 0;
@@ -557,10 +561,11 @@ function readTranscriptUtterancePage(
     const search = options.query;
     query = query.where((eb) =>
       eb(
-        eb.fn<number>("instr", [
-          eb.fn("lower", [eb.ref("text")]),
-          eb.fn("lower", [eb.val(search)]),
-        ]),
+        engineStringPosition(
+          database,
+          eb.fn<string>("lower", [eb.ref("text")]),
+          eb.fn<string>("lower", [eb.val(search)]),
+        ),
         ">",
         0,
       ),

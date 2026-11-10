@@ -13,43 +13,99 @@ import {
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import * as settlementOwner from "./session-run-settlement.js";
 import { sessionCompactHandlers } from "./sessions-compact.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+async function prepareTranscript(state: OpenClawTestState, sessionId: string) {
+  const cfg = { agents: { entries: { main: {} } } };
+  await state.writeConfig(cfg);
+  const scope = {
+    agentId: "main",
+    sessionKey: `agent:main:dashboard:${sessionId}`,
+    sessionId,
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+  };
+  await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+  for (const content of ["First question", "Second question", "Third question"]) {
+    await appendTranscriptMessage(scope, {
+      cwd: state.workspaceDir,
+      message: { role: "user", content, timestamp: 1 },
+    });
+  }
+  return {
+    scope,
+    context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+    target: captureSessionTarget({
+      storeScope: scope.storePath,
+      sessionKey: scope.sessionKey,
+      incarnation: sessionId,
+      agentId: scope.agentId,
+    }),
+  };
+}
+
+function mutate(
+  action: "compact" | "rewind",
+  key: string,
+  context: GatewayRequestContext,
+  admitted = false,
+) {
+  const respond = vi.fn();
+  const method = `sessions.${action}`;
+  const options: GatewayRequestHandlerOptions = {
+    req: { type: "req", id: action, method },
+    params:
+      action === "compact"
+        ? { key, maxLines: 2 }
+        : { sessionKey: key, entryId: "unused-while-busy" },
+    client: null,
+    isWebchatConnect: () => false,
+    respond,
+    context,
+  };
+  const pending = (action === "compact" ? sessionCompactHandlers : sessionRewindHandlers)[method]!(
+    admitted ? bindInProcessRequestMutationAuthority(options, undefined, undefined) : options,
+  );
+  return { respond, pending };
+}
+
+function observeSettlement(fakeTime = false) {
+  const entered = createDeferredCore();
+  const settle = settlementOwner.waitForTerminalSessionRunSettlement;
+  let settled: boolean | undefined;
+  vi.spyOn(settlementOwner, "waitForTerminalSessionRunSettlement").mockImplementation((params) => {
+    if (fakeTime) {
+      vi.useFakeTimers();
+    }
+    const result = settle(params).then((value) => {
+      settled = value;
+      return value;
+    });
+    entered.resolve();
+    return result;
+  });
+  return { entered: entered.promise, result: () => settled };
+}
+
 it.each(["committed", "failed"] as const)(
   "waits for a %s reply owner to finish its transcript write before compacting",
-  async (outcome) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = { agents: { entries: { main: {} } } };
-      await state.writeConfig(cfg);
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:dashboard:terminal-compact",
-        sessionId: "terminal-compact",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      };
-      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-      for (const content of ["First question", "Second question", "Third question"]) {
-        await appendTranscriptMessage(scope, {
-          cwd: state.workspaceDir,
-          message: { role: "user", content, timestamp: 1 },
-        });
-      }
+  (outcome) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { scope, context, target } = await prepareTranscript(state, "terminal-compact");
       const operation = createReplyOperation({
         ...scope,
-        target: captureSessionTarget({
-          storeScope: scope.storePath,
-          sessionKey: scope.sessionKey,
-          incarnation: scope.sessionId,
-          agentId: scope.agentId,
-        }),
+        target,
         resetTriggered: false,
       });
       if (outcome === "failed") {
@@ -57,33 +113,11 @@ it.each(["committed", "failed"] as const)(
       } else {
         operation.freezeAbort();
       }
-      const waiting = createDeferredCore();
-      const settle = settlementOwner.waitForTerminalSessionRunSettlement;
-      vi.spyOn(settlementOwner, "waitForTerminalSessionRunSettlement").mockImplementation(
-        (params) => {
-          const settled = settle(params);
-          waiting.resolve();
-          return settled;
-        },
-      );
-      const respond = vi.fn();
-      const compact = sessionCompactHandlers["sessions.compact"]!(
-        bindInProcessRequestMutationAuthority(
-          {
-            req: { type: "req", id: "compact", method: "sessions.compact" },
-            params: { key: scope.sessionKey, maxLines: 2 },
-            client: null,
-            isWebchatConnect: () => false,
-            respond,
-            context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-          },
-          undefined,
-          undefined,
-        ),
-      );
+      const waiting = observeSettlement();
+      const { respond, pending: compact } = mutate("compact", scope.sessionKey, context, true);
       try {
         await awaitGateBeforeSettlement(
-          waiting.promise,
+          waiting.entered,
           Promise.resolve(compact),
           "Compaction returned before joining the terminal reply owner",
         );
@@ -99,50 +133,27 @@ it.each(["committed", "failed"] as const)(
           expect.objectContaining({ compacted: true, kept: 2 }),
           undefined,
         );
-        expect(await loadTranscriptEvents(scope)).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              message: expect.objectContaining({ content: "Final answer" }),
-            }),
-          ]),
+        expect(await loadTranscriptEvents(scope)).toContainEqual(
+          expect.objectContaining({
+            message: expect.objectContaining({ content: "Final answer" }),
+          }),
         );
       } finally {
         operation.complete();
         await compact;
       }
-    });
-  },
+    }),
 );
 
 it.each(["compact", "rewind"] as const)(
   "refuses %s immediately when a newer live admission coexists with an older terminal writer",
-  async (action) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = { agents: { entries: { main: {} } } };
-      await state.writeConfig(cfg);
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:dashboard:live-settlement",
-        sessionId: "live-settlement",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      };
-      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-      for (const content of ["First question", "Second question", "Third question"]) {
-        await appendTranscriptMessage(scope, {
-          cwd: state.workspaceDir,
-          message: { role: "user", content, timestamp: 1 },
-        });
-      }
-      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  (action) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { scope, context, target } = await prepareTranscript(state, "live-settlement");
       const terminal = registerChatAbortController({
         runId: "older-terminal",
         ...scope,
-        target: captureSessionTarget({
-          storeScope: scope.storePath,
-          sessionKey: scope.sessionKey,
-          incarnation: scope.sessionId,
-          agentId: scope.agentId,
-        }),
+        target,
         timeoutMs: 60_000,
         projectSessionActive: false,
       });
@@ -155,43 +166,16 @@ it.each(["compact", "rewind"] as const)(
         identities: [scope.sessionKey, scope.sessionId],
         assertAllowed: () => {},
       });
-      const entered = createDeferredCore();
-      const settle = settlementOwner.waitForTerminalSessionRunSettlement;
-      let settled: boolean | undefined;
-      vi.spyOn(settlementOwner, "waitForTerminalSessionRunSettlement").mockImplementation(
-        (params) => {
-          vi.useFakeTimers();
-          const result = settle(params).then((value) => {
-            settled = value;
-            return value;
-          });
-          entered.resolve();
-          return result;
-        },
-      );
-      const respond = vi.fn();
-      const method = `sessions.${action}`;
-      const mutation = (action === "compact" ? sessionCompactHandlers : sessionRewindHandlers)[
-        method
-      ]!({
-        req: { type: "req", id: action, method },
-        params:
-          action === "compact"
-            ? { key: scope.sessionKey, maxLines: 2 }
-            : { sessionKey: scope.sessionKey, entryId: "unused-while-busy" },
-        client: null,
-        isWebchatConnect: () => false,
-        respond,
-        context,
-      });
+      const settlement = observeSettlement(true);
+      const { respond, pending: mutation } = mutate(action, scope.sessionKey, context);
       try {
         await awaitGateBeforeSettlement(
-          entered.promise,
+          settlement.entered,
           Promise.resolve(mutation),
           "Mutation skipped settlement",
         );
         await vi.advanceTimersByTimeAsync(0);
-        expect(settled).toBe(false);
+        expect(settlement.result()).toBe(false);
         vi.useRealTimers();
         await mutation;
         expect(respond).toHaveBeenCalledWith(
@@ -214,6 +198,5 @@ it.each(["compact", "rewind"] as const)(
         vi.useRealTimers();
         await mutation;
       }
-    });
-  },
+    }),
 );

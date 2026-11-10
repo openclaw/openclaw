@@ -1,5 +1,6 @@
 import { onSettled } from "solid-js";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
@@ -13,6 +14,8 @@ import {
 } from "./browser-panel-presentation.ts";
 import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 import browserStyles from "./browser-panel.css?inline";
+
+registerEnglishCatalog(registerBrowserEnglish);
 
 type Host = SolidBridgeElement<BrowserPanelInputs, BrowserPanelMethods>;
 
@@ -59,6 +62,8 @@ export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPan
       authToken: { default: null, attribute: false },
       embedded: { default: false, type: Boolean, reflect: true },
       tabsInHeader: { default: false, type: Boolean },
+      mobilePresentation: { default: false, type: Boolean },
+      fetchFavicon: { default: undefined, attribute: false },
       presented: { default: false, type: Boolean },
       refreshOnPresentation: { default: true, type: Boolean },
       sessionKey: { default: "", attribute: false },
@@ -119,6 +124,8 @@ function browserPanelContent(owner: BrowserPanelPresentation) {
           }
           embedded={panel().inputs.embedded}
           tabsInHeader={panel().inputs.tabsInHeader}
+          mobilePresentation={panel().inputs.mobilePresentation}
+          fetchFavicon={panel().inputs.fetchFavicon}
         />
       ) : null}
     </>

@@ -8,7 +8,7 @@ import {
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, danger } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
@@ -57,6 +57,9 @@ import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js"
 import { isTelegramControlLaneText } from "./sequential-key.js";
 import { prepareTelegramAuthorizedIngress } from "./telegram-ingress-preparation.js";
 
+// The child file logger never reaches stdout, where container operators look.
+const mediaLog = createSubsystemLogger("telegram/media");
+
 export function createTelegramInboundPipeline({
   params: handlerParams,
   message: messageRuntime,
@@ -66,7 +69,7 @@ export function createTelegramInboundPipeline({
   message: TelegramMessagePipeline;
   authorization: TelegramHandlerAuthorization;
 }): TelegramInboundPipeline {
-  const { accountId, bot, opts, runtime, shouldSkipUpdate, mediaMaxBytes, logger } = handlerParams;
+  const { accountId, bot, opts, runtime, shouldSkipUpdate, mediaMaxBytes } = handlerParams;
   const {
     resolveMediaRuntime,
     recordMessageResolvedMedia,
@@ -355,12 +358,12 @@ export function createTelegramInboundPipeline({
             if (!isChannelPost && mediaDisposition !== "silent-ingest") {
               await sendMediaWarning(mediaInput, `⚠️ File too large. Maximum size is ${limit}.`);
             }
-            logger.warn(
-              { chatId, error: String(mediaErr) },
-              isChannelPost ? "channel post media exceeds size limit" : "media exceeds size limit",
+            mediaLog.warn(
+              `${isChannelPost ? "channel post media exceeds size limit" : "media exceeds size limit"}: ${String(mediaErr)}`,
+              { chatId },
             );
           } else {
-            logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
+            mediaLog.warn(`media fetch failed: ${String(mediaErr)}`, { chatId });
             if (replayingSpooledUpdate && isDurablyRetryableInboundMediaError(mediaErr)) {
               return { kind: "retry", error: mediaErr };
             }

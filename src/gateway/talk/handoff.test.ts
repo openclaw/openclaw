@@ -49,25 +49,23 @@ describe("talk handoff store", () => {
 
   it("revokes a handoff and records its final close event", () => {
     const handoff = createTalkHandoff({ sessionKey: "session:main" });
+    const record = getTalkHandoff(handoff.id);
 
-    expect(getTalkHandoff(handoff.id)).toMatchObject({
+    expect(record).toMatchObject({
       roomId: handoff.roomId,
       sessionKey: "session:main",
     });
-    const revoked = revokeTalkHandoff(handoff.id);
-    expect(revoked).toMatchObject({
-      revoked: true,
-      roomId: handoff.roomId,
-    });
-    expect(Array.isArray(revoked.events)).toBe(true);
-    expect(revoked.events[0]).toMatchObject({
+    revokeTalkHandoff(handoff.id);
+    expect(record?.room.talk.recentEvents).toHaveLength(2);
+    expect(record?.room.talk.recentEvents[1]).toMatchObject({
       type: "session.closed",
       sessionId: handoff.roomId,
       final: true,
+      payload: { reason: "revoked" },
     });
-    expect(revoked.events[0]?.payload).toMatchObject({ reason: "revoked" });
     expect(getTalkHandoff(handoff.id)).toBeUndefined();
-    expect(revokeTalkHandoff(handoff.id)).toEqual({ revoked: false, events: [] });
+    revokeTalkHandoff(handoff.id);
+    expect(record?.room.talk.recentEvents).toHaveLength(2);
   });
 
   it("isolates simultaneous handoffs for different sessions on the same host", () => {

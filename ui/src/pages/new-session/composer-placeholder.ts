@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal } from "solid-js";
+import { createEffect, createMemo, createStore } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
 
@@ -22,7 +22,7 @@ export function createComposerPlaceholder(
   const reducedMotion =
     !globalThis.requestAnimationFrame ||
     (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
-  const [frame, setFrame] = createSignal({ target: "", text: "" });
+  const [frame, setFrame] = createStore({ target: "", text: "" });
   let entered = false;
   // Restart the browser animation only when its text changes; typing cancels pending frames.
   createEffect(
@@ -47,7 +47,10 @@ export function createComposerPlaceholder(
         entered = nextLength === text.length;
         if (length !== nextLength) {
           length = nextLength;
-          setFrame({ target: text, text: text.slice(0, length) });
+          setFrame((draft) => {
+            draft.target = text;
+            draft.text = text.slice(0, length);
+          });
         }
         if (!entered) {
           pending = requestAnimationFrame(step);
@@ -62,7 +65,7 @@ export function createComposerPlaceholder(
       ? ""
       : entered || hasMessage() || reducedMotion
         ? target()
-        : frame().target === target()
-          ? frame().text
+        : frame.target === target()
+          ? frame.text
           : "";
 }

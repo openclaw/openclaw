@@ -18,20 +18,9 @@ const frame = { threadId: "thread-1", turnId: "turn-1", callId, namespace: null 
 function toolFixture(
   result: ReturnType<typeof textToolResult> | Error,
   hookOptions: Parameters<typeof installOpenClawOwnedToolHooks>[0] = {},
-  {
-    name = "exec",
-    providedContext = hookContext,
-    wrapped = false,
-    middleware: middlewareHandler,
-  }: {
-    name?: string;
-    providedContext?: Parameters<typeof createCodexDynamicToolBridge>[0]["hookContext"];
-    wrapped?: boolean;
-    middleware?: Parameters<typeof installCodexToolResultMiddleware>[0];
-  } = {},
+  { name = "exec", providedContext = hookContext, wrapped = false } = {},
 ) {
   const hooks = installOpenClawOwnedToolHooks(hookOptions);
-  const middleware = middlewareHandler && installCodexToolResultMiddleware(middlewareHandler);
   const execute = vi.fn(async () => {
     if (result instanceof Error) {
       throw result;
@@ -64,7 +53,7 @@ function toolFixture(
         expect.objectContaining({ ...providedContext, toolCallId: callId }),
       ),
     );
-  return { hooks, execute, bridge, invoke, middleware, expectAfter };
+  return { hooks, execute, bridge, invoke, expectAfter };
 }
 function expectExecuteCall(execute: unknown, params: Record<string, unknown>) {
   expect(execute).toHaveBeenNthCalledWith(1, callId, params, expect.any(AbortSignal), undefined);
@@ -81,20 +70,18 @@ it("wraps dynamic tools with hooks and runs result middleware before the after h
     sessionId: "session-1",
     sessionKey: "agent:agent-1:session-1",
   };
-  const { hooks, execute, invoke, middleware, expectAfter } = toolFixture(
+  const { hooks, execute, invoke, expectAfter } = toolFixture(
     textToolResult("raw output", { stage: "execute" }),
     { adjustedParams: { mode: "safe" } },
-    {
-      providedContext: agentContext,
-      middleware: (event) => {
-        expect(event).toMatchObject({ toolName: "exec", toolCallId: callId });
-        expect(event.args).toEqual(mergedParams);
-        expect(event.result.content).toEqual([{ type: "text", text: "raw output" }]);
-        expect(event.result.details).toEqual({ stage: "execute" });
-        return textToolResult("compacted output", { stage: "middleware" });
-      },
-    },
+    { providedContext: agentContext },
   );
+  const middleware = installCodexToolResultMiddleware((event) => {
+    expect(event).toMatchObject({ toolName: "exec", toolCallId: callId });
+    expect(event.args).toEqual(mergedParams);
+    expect(event.result.content).toEqual([{ type: "text", text: "raw output" }]);
+    expect(event.result.details).toEqual({ stage: "execute" });
+    return textToolResult("compacted output", { stage: "middleware" });
+  });
   await invoke({ command: "status" }, "compacted output");
   expect(hooks.beforeToolCall).toHaveBeenNthCalledWith(
     1,
@@ -107,7 +94,7 @@ it("wraps dynamic tools with hooks and runs result middleware before the after h
     expect.objectContaining({ ...agentContext, toolCallId: callId }),
   );
   expectExecuteCall(execute, mergedParams);
-  expect(middleware?.middleware).toHaveBeenCalledTimes(1);
+  expect(middleware.middleware).toHaveBeenCalledTimes(1);
   await expectAfter({
     toolName: "exec",
     params: mergedParams,

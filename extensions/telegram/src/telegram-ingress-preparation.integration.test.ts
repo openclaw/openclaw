@@ -11,7 +11,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import * as keyedAsyncQueue from "openclaw/plugin-sdk/keyed-async-queue";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
-import type { PluginHookBeforeChannelIngressContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginHookBeforeChannelAttachmentLoadContext } from "openclaw/plugin-sdk/plugin-entry";
 import { registerVirtualTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { createHookRunner, createPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -35,6 +35,7 @@ import { resolveTelegramPrimaryMedia } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
+import { update, groupUpdate, albumUpdates } from "./telegram-ingress-preparation.test-support.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
 import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
 
@@ -131,50 +132,6 @@ vi.mock("./bot/delivery.resolve-media.js", () => ({
   },
 }));
 
-const update = () => ({
-  update_id: 42,
-  message: {
-    message_id: 21,
-    date: 1_790_000_000,
-    from: { id: 111111, is_bot: false, first_name: "Synthetic" },
-    chat: { id: 111111, type: "private", first_name: "Synthetic" },
-    voice: { file_id: "synthetic-file", file_unique_id: "synthetic-unique", duration: 1 },
-  },
-});
-
-const groupUpdate = () => {
-  const original = update();
-  return {
-    ...original,
-    message: {
-      ...original.message,
-      chat: { id: -222, type: "supergroup" as const, title: "Synthetic group", is_forum: false },
-    },
-  };
-};
-
-function albumUpdates(secondCaption: string) {
-  const original = groupUpdate();
-  return ["ordinary first", secondCaption].map((caption, index) => ({
-    update_id: original.update_id + index,
-    message: {
-      message_id: original.message.message_id + index,
-      date: original.message.date,
-      from: original.message.from,
-      chat: original.message.chat,
-      media_group_id: "synthetic-album",
-      photo: [
-        { file_id: `photo-${index}`, file_unique_id: `unique-${index}`, width: 1, height: 1 },
-      ],
-      caption,
-      caption_entities:
-        caption === "/reset@synthetic_bot"
-          ? [{ type: "bot_command" as const, offset: 0, length: caption.length }]
-          : [],
-    },
-  }));
-}
-
 async function withFixture(
   fn: (fixture: {
     queue: ReturnType<typeof openTelegramIngressQueue>;
@@ -213,15 +170,19 @@ async function withFixture(
         id: pluginId,
         name: "Synthetic ingress preparer",
         register(api) {
-          api.on("before_channel_ingress", (event, context) => hooks.prepare(event, context), {
-            timeoutMs: 600_000,
-          });
+          api.on(
+            "before_channel_attachment_load",
+            (event, context) => hooks.prepare(event, context),
+            {
+              timeoutMs: 600_000,
+            },
+          );
         },
       });
       expect(builder.registry.typedHooks).toHaveLength(1);
       expect(builder.registry.typedHooks[0]).toMatchObject({
         pluginId,
-        hookName: "before_channel_ingress",
+        hookName: "before_channel_attachment_load",
       });
       // Only runner lookup is injected. Registration, handler scoping and
       // fail-closed error propagation use their production implementations.
@@ -848,7 +809,7 @@ ordinary second`);
     const terminal = createDeferred();
     let stopHeartbeat: (() => void) | undefined;
     hooks.prepare.mockImplementation(async (_event, rawContext) => {
-      const context = rawContext as PluginHookBeforeChannelIngressContext;
+      const context = rawContext as PluginHookBeforeChannelAttachmentLoadContext;
       const timer = setInterval(context.heartbeat, context.heartbeatIntervalMs);
       stopHeartbeat = () => clearInterval(timer);
       started.resolve();
@@ -890,7 +851,7 @@ ordinary second`);
   it("preserves retry facts when native stop cancels preparation, then resumes once without backoff", async () => {
     const started = createDeferred();
     hooks.prepare.mockImplementation((_event, rawContext) => {
-      const context = rawContext as PluginHookBeforeChannelIngressContext;
+      const context = rawContext as PluginHookBeforeChannelAttachmentLoadContext;
       started.resolve();
       return new Promise((_resolve, reject) => {
         context.abortSignal.addEventListener(

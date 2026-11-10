@@ -14,7 +14,7 @@ import {
 } from "semver";
 import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath, tryParseJson } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
@@ -25,6 +25,7 @@ import {
   isExactSemverVersion,
   parseRegistryNpmSpec,
   resolveNpmJsonEntries,
+  type NpmSpecResolution,
 } from "./npm-registry-spec.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -46,37 +47,7 @@ export function formatNpmCommandFailureOutput(result: SpawnResult): string {
   return `termination ${result.termination} (no output from npm)`;
 }
 
-export type NpmSpecResolution = {
-  name?: string;
-  version?: string;
-  resolvedSpec?: string;
-  integrity?: string;
-  shasum?: string;
-  resolvedAt?: string;
-  packageOpenClaw?: Record<string, unknown>;
-};
-
 type InstallSourceResult<T> = ({ ok: true } & T) | { ok: false; error: string };
-
-type NpmResolutionFields = {
-  resolvedName?: string;
-  resolvedVersion?: string;
-  resolvedSpec?: string;
-  integrity?: string;
-  shasum?: string;
-  resolvedAt?: string;
-};
-
-export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmResolutionFields {
-  return {
-    resolvedName: resolution?.name,
-    resolvedVersion: resolution?.version,
-    resolvedSpec: resolution?.resolvedSpec,
-    integrity: resolution?.integrity,
-    shasum: resolution?.shasum,
-    resolvedAt: resolution?.resolvedAt,
-  };
-}
 
 /** Creates a script-free npm environment for metadata and pack commands. */
 function createNpmMetadataEnv(
@@ -283,32 +254,6 @@ function parseResolvedSpecFromId(id: string): string | undefined {
   return `${name}@${version}`;
 }
 
-function normalizeNpmPackEntry(
-  entry: unknown,
-): { filename?: string; metadata: NpmSpecResolution } | null {
-  const rec = asNullableObjectRecord(entry);
-  if (!rec) {
-    return null;
-  }
-  const name = normalizeOptionalString(rec.name);
-  const version = normalizeOptionalString(rec.version);
-  const id = normalizeOptionalString(rec.id);
-  const resolvedSpec =
-    (name && version ? `${name}@${version}` : undefined) ??
-    (id ? parseResolvedSpecFromId(id) : undefined);
-
-  return {
-    filename: normalizeOptionalString(rec.filename),
-    metadata: {
-      name,
-      version,
-      resolvedSpec,
-      integrity: normalizeOptionalString(rec.integrity),
-      shasum: normalizeOptionalString(rec.shasum),
-    },
-  };
-}
-
 function parseNpmPackJsonOutput(
   raw: string,
 ): { filename?: string; metadata: NpmSpecResolution } | null {
@@ -324,20 +269,30 @@ function parseNpmPackJsonOutput(
   }
 
   for (const candidate of candidates) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(candidate);
-    } catch {
-      continue;
-    }
-
-    const entries = resolveNpmJsonEntries(parsed);
+    const entries = resolveNpmJsonEntries(tryParseJson(candidate));
     let fallback: { filename?: string; metadata: NpmSpecResolution } | null = null;
     for (let i = entries.length - 1; i >= 0; i -= 1) {
-      const normalized = normalizeNpmPackEntry(entries[i]);
-      if (!normalized) {
+      const rec = asNullableObjectRecord(entries[i]);
+      if (!rec) {
         continue;
       }
+      const name = normalizeOptionalString(rec.name);
+      const version = normalizeOptionalString(rec.version);
+      const id = normalizeOptionalString(rec.id);
+      const resolvedSpec =
+        (name && version ? `${name}@${version}` : undefined) ??
+        (id ? parseResolvedSpecFromId(id) : undefined);
+
+      const normalized = {
+        filename: normalizeOptionalString(rec.filename),
+        metadata: {
+          name,
+          version,
+          resolvedSpec,
+          integrity: normalizeOptionalString(rec.integrity),
+          shasum: normalizeOptionalString(rec.shasum),
+        },
+      };
       if (!fallback) {
         fallback = normalized;
       }

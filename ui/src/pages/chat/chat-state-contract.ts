@@ -45,9 +45,12 @@ export type ChatState = StreamCausalBoundaryState & {
   uploadConfig?: ApplicationConfigCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
+  /** Gateway admission can pause while the transport still owns in-flight results. */
+  gatewayWorkPaused?: boolean;
   chatSubmissions?: ApplicationChatSubmissions;
   reconcileApprovalTerminals?: ApplicationOverlays["reconcileApprovalTerminals"];
   hasPendingInitialTurn?: (sessionKey: string) => boolean;
+  isRouteSessionPending?: () => boolean;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
   /** Config changes retire preview tickets even when session permissions stay inherited. */
@@ -90,6 +93,8 @@ export type ChatState = StreamCausalBoundaryState & {
   lastError: string | null;
   chatError?: string | null;
   chatRunError?: ChatRunError | null;
+  /** Run whose failure the operator dismissed; reloads must not resurrect it. */
+  chatDismissedRunErrorId?: string | null;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   chatReplyTarget?: ChatReplyTarget | null;
   agentsError?: string | null;

@@ -58,7 +58,7 @@ function resolveBundledCandidatePluginIds(
       ...(params.manifestRecords ? { manifestRecords: params.manifestRecords } : {}),
     };
   }
-  const resolvedConfig = resolveBundledWebProviderResolutionConfig(params).config;
+  const resolution = resolveBundledWebProviderResolutionConfig(params);
   const candidates = resolveManifestDeclaredWebProviderCandidates({
     contract: params.contract,
     configKey: params.contract === "webSearchProviders" ? "webSearch" : "webFetch",
@@ -67,11 +67,11 @@ function resolveBundledCandidatePluginIds(
     env: params.env,
     onlyPluginIds: params.onlyPluginIds,
     origin: params.mode === "setup" ? "bundled" : undefined,
-    manifestRecords: params.manifestRecords,
+    manifestRecords: params.manifestRecords ?? (params.config && resolution.manifestRecords),
   });
   return {
     pluginIds: filterAllowlistedBundledPluginIds(
-      resolvedConfig,
+      resolution.config,
       candidates.pluginIds ?? [],
       params.env,
     ),

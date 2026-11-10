@@ -70,17 +70,13 @@ function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs
   pruneMapToMaxSize(telegramForumFlagByChatId, TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS);
 }
 
-export function getCachedTelegramForumFlag(
-  chatId: string | number,
-  nowMs?: number,
-): boolean | undefined {
+export function getCachedTelegramForumFlag(chatId: string | number): boolean | undefined {
   const cacheKey = String(chatId);
   const cached = telegramForumFlagByChatId.get(cacheKey);
   if (!cached) {
     return undefined;
   }
-  const effectiveNow = nowMs ?? Date.now();
-  if (cached.expiresAtMs <= effectiveNow) {
+  if (cached.expiresAtMs <= Date.now()) {
     return undefined;
   }
   return cached.isForum;

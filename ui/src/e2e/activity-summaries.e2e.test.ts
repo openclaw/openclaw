@@ -1,8 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   waitForControlUiRoute,
@@ -16,8 +13,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it("collects only while Live activity is visible and releases its roster on navigation", async () => {
@@ -80,18 +75,8 @@ suite.define(() => {
   });
 
   it("updates one visible tool summary from running to completed output", async () => {
-    const videoDir = path.join(suite.artifactDir, "video");
-    const viewport = { height: 900, width: 1280 };
-    if (captureUiProof) {
-      await mkdir(videoDir, { recursive: true });
-    }
     await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport,
-        recordVideo: captureUiProof ? { dir: videoDir, size: viewport } : undefined,
-      },
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           sessionKey: "agent:main:main",
@@ -132,15 +117,6 @@ suite.define(() => {
         await entry.locator("summary").click();
         await showText(entry, output);
         await showText(entry, "Run: run-diagnostics");
-
-        if (captureUiProof) {
-          await writeFile(
-            path.join(suite.artifactDir, "completed-tool-summary.png"),
-            await takeControlUiViewportScreenshot(page, entry, [
-              entry.getByText(output, { exact: true }),
-            ]),
-          );
-        }
       },
     );
   });

@@ -1,5 +1,6 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
+import type { SessionCompactionPreparation } from "./session-history-read.types.js";
 import type { SessionTranscriptHydrationWorkerRequest } from "./session-transcript-hydration.types.js";
 import type { SessionEntryWorkerInput } from "./session-transcript-worker-read.types.js";
 import {
@@ -77,9 +78,9 @@ export async function readSessionTranscriptHydrationRequest(
       resolvedScope: request.resolvedScope,
     });
   }
-  const { readSessionTranscriptBoundedActiveContextCore } =
+  const { readSessionTranscriptBoundedActiveContextCore, readSessionTranscriptCompactionPlan } =
     await import("./session-accessor.sqlite-active-context.js");
-  const { streamSessionTranscriptHydration } =
+  const { readSessionCompactionPreparation, streamSessionTranscriptHydration } =
     await import("./session-transcript-hydration.worker.js");
   if (request.limits) {
     const selection = request.transcript;
@@ -99,17 +100,23 @@ export async function readSessionTranscriptHydrationRequest(
       { kind: "bounded" }
     >["transcript"];
     let residentRows: Array<{ rawSeq: number; serializedBytes: number }> | undefined;
-    const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, {
+    let compaction: SessionCompactionPreparation | undefined;
+    let sequences: number[] = [];
+    const options: Parameters<typeof readSessionTranscriptBoundedActiveContextCore>[1] = {
       ...request.limits,
       readOnly: true,
       resolvedScope: request.resolvedScope,
       onRead: (projection, rows, messagePresence) => {
+        sequences = rows.map((row) => row.rawSeq);
         if (!projection.hasUnindexedPrefix) {
           residentRows = rows;
         }
         const { database, resolved } = projection;
         if (request.expectedIdentity) {
           assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
+        }
+        if (request.compaction) {
+          compaction = readSessionCompactionPreparation(database, request);
         }
         if (selection) {
           transcript = readSessionTranscriptAnchorFactsInDatabase(
@@ -123,13 +130,26 @@ export async function readSessionTranscriptHydrationRequest(
           );
         }
       },
-    });
-    return {
-      kind: "bounded" as const,
-      snapshot,
+    };
+    const facts = () => ({
       residentRows,
       ...(selection ? { transcript } : {}),
-    };
+      ...(compaction ? { compaction } : {}),
+    });
+    if ("compaction" in request.limits && request.limits.compaction) {
+      if (!channel) {
+        throw new Error("Compaction transcript hydration requires its host channel");
+      }
+      return streamSessionTranscriptHydration(request, channel, control, (database) => {
+        const snapshot = readSessionTranscriptCompactionPlan(request.target, {
+          ...options,
+          transaction: database,
+        });
+        return { snapshot, sequences, ...facts() };
+      });
+    }
+    const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, options);
+    return { kind: "bounded" as const, snapshot, ...facts() };
   }
   if (!channel) {
     throw new Error("Full transcript hydration requires its host channel");

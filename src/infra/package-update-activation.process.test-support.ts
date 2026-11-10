@@ -3,28 +3,27 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor.js";
+import type {
+  captureUpdateCommandExecutorAuthority,
+  UpdateCommandExecutor,
+} from "../cli/update-cli/update-command-executor.js";
 import { encodePackageActivationLauncher } from "./package-update-activation-journal.js";
 import type { PackageActivationRecord } from "./package-update-activation-journal.js";
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 
 const [cut, root, encodedAuthority, encodedRecord] = process.argv.slice(2);
-if (!cut || !root || !encodedAuthority) {
-  throw new Error(
-    "Package activation crash fixture requires its cut, root and original authority.",
-  );
-}
+assert(cut && root && encodedAuthority, "Crash fixture requires cut, root and original authority");
 const authority: ReturnType<typeof captureUpdateCommandExecutorAuthority> =
   JSON.parse(encodedAuthority);
 const later = cut.startsWith("transition-");
 const expectedRecord: PackageActivationRecord | undefined = encodedRecord
   ? JSON.parse(encodedRecord)
   : undefined;
-if (later && !expectedRecord) {
-  throw new Error("A later journal cut requires the parent's exact expected record.");
-}
 let updated = false;
-const interrupt = () => {
+const interrupt = (when = true) => {
+  if (!when) {
+    return;
+  }
   fs.writeSync(1, `${JSON.stringify({ cut, pid: process.pid })}\n`);
   process.kill(process.pid, "SIGKILL");
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
@@ -36,9 +35,7 @@ const isPrivateJournal = (file: string) =>
 const open = fs.openSync.bind(fs);
 fs.openSync = (file, flags, mode) => {
   const fd = open(file, flags, mode);
-  if (cut === "created" && flags === "wx" && isPrivateJournal(String(file))) {
-    interrupt();
-  }
+  interrupt(cut === "created" && flags === "wx" && isPrivateJournal(String(file)));
   return fd;
 };
 const isSelectedJournal = (file: string) =>
@@ -51,31 +48,25 @@ const isSelectedJournal = (file: string) =>
 const prepare: DatabaseSync["prepare"] = Reflect.get(DatabaseSync.prototype, "prepare");
 DatabaseSync.prototype.prepare = function (sql) {
   const statement = prepare.call(this, sql);
-  if (
+  const initialCut =
     isPrivateJournal(this.location() ?? "") &&
     ((cut === "schema" && /^create table "package_activation"/iu.test(sql)) ||
-      (cut === "inserted" && /^insert into "package_activation"/iu.test(sql)))
-  ) {
+      (cut === "inserted" && /^insert into "package_activation"/iu.test(sql)));
+  const transitionCut =
+    isSelectedJournal(this.location() ?? "") && /^update "package_activation" set /iu.test(sql);
+  if (initialCut || transitionCut) {
     const originalRun: typeof statement.run = Reflect.get(statement, "run");
     statement.run = new Proxy(originalRun, {
       apply(run, receiver: unknown, args: unknown[]) {
         const result: unknown = Reflect.apply(run, receiver, args);
-        interrupt();
-        return result;
-      },
-    });
-  }
-  if (isSelectedJournal(this.location() ?? "") && /^update "package_activation" set /iu.test(sql)) {
-    const originalRun: typeof statement.run = Reflect.get(statement, "run");
-    statement.run = new Proxy(originalRun, {
-      apply(run, receiver: unknown, args: unknown[]) {
-        const result: unknown = Reflect.apply(run, receiver, args);
+        if (initialCut) {
+          interrupt();
+          return result;
+        }
         assert(result !== null && typeof result === "object" && "changes" in result);
         assert(result.changes === 1 || result.changes === 1n, "Expected exactly one updated slot");
         updated = true;
-        if (cut.endsWith("after-update")) {
-          interrupt();
-        }
+        interrupt(cut.endsWith("after-update"));
         return result;
       },
     });
@@ -86,72 +77,58 @@ DatabaseSync.prototype.prepare = function (sql) {
 const exec: DatabaseSync["exec"] = Reflect.get(DatabaseSync.prototype, "exec");
 DatabaseSync.prototype.exec = function (sql) {
   const selectedCommit = updated && isSelectedJournal(this.location() ?? "") && sql === "COMMIT";
-  if (selectedCommit && cut.endsWith("before-commit")) {
-    interrupt();
-  }
+  interrupt(selectedCommit && cut.endsWith("before-commit"));
   exec.call(this, sql);
-  if (selectedCommit && cut.endsWith("after-commit")) {
-    interrupt();
-  }
+  interrupt(selectedCommit && cut.endsWith("after-commit"));
 };
 const rename = fs.renameSync.bind(fs);
 fs.renameSync = (from, to) => {
   const publish =
     String(from).includes(`${path.sep}.activation-control-`) && String(to).endsWith(".control");
-  if (publish && cut === "before-publication") {
-    interrupt();
-  }
+  interrupt(publish && cut === "before-publication");
   rename(from, to);
-  if (publish && cut === "after-publication") {
-    interrupt();
-  }
+  interrupt(publish && cut === "after-publication");
 };
 
 const { withUpdateCommandExecutor } = await import("../cli/update-cli/update-command-executor.js");
-if (cut.startsWith("transition-")) {
+function withOriginalExecutor(operation: (executor: UpdateCommandExecutor) => Promise<void>) {
+  return withUpdateCommandExecutor(randomUUID(), operation, { existingAuthority: authority });
+}
+if (later) {
   assert(expectedRecord);
   const { openPackageActivationJournal, resolvePackageActivationAnchor } =
     await import("./package-update-activation-journal.js");
-  await withUpdateCommandExecutor(
-    randomUUID(),
-    async (executor) => {
-      const fence = await executor.enter(authority.installKey);
-      const journal = openPackageActivationJournal(
-        resolvePackageActivationAnchor(authority.installKey),
-      );
-      journal.transition(expectedRecord, "publishing", { kind: "displace" }, fence.assertCurrent);
-    },
-    { existingAuthority: authority },
-  );
+  await withOriginalExecutor(async (executor) => {
+    const fence = await executor.enter(authority.installKey);
+    const journal = openPackageActivationJournal(
+      resolvePackageActivationAnchor(authority.installKey),
+    );
+    journal.transition(expectedRecord, "publishing", { kind: "displace" }, fence.assertCurrent);
+  });
   throw new Error(`Package activation crash cut was not reached: ${cut}`);
 }
 const { preparePackageActivationJournal } = await import("./package-update-activation-prepare.js");
 const { createPackageSwapFixture } = await import("./package-update-swap.test-support.js");
 const { createPackageIntegrityReader } = await import("./package-update-integrity.js");
 const fixture = await createPackageSwapFixture(root);
-const liveRoot = fixture.packageRoot;
-const launcher = fixture.launcher;
-await withUpdateCommandExecutor(
-  randomUUID(),
-  async (executor) => {
-    const fence = await executor.enter(liveRoot);
-    await preparePackageActivationJournal({
-      options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-      liveRoot,
-      stageRoot: fixture.params.stage.packageRoot,
-      launcherRoot: fixture.params.stage.layout.binDir,
-      binDir: path.dirname(launcher),
-      previous: await createPackageIntegrityReader().tree(liveRoot),
-      launchers: [
-        {
-          name: "openclaw",
-          previous: encodePackageActivationLauncher(
-            await createPackageIntegrityReader().launcher(launcher),
-          ),
-        },
-      ],
-    });
-  },
-  { existingAuthority: authority },
-);
+const { packageRoot: liveRoot, launcher } = fixture;
+await withOriginalExecutor(async (executor) => {
+  const fence = await executor.enter(liveRoot);
+  await preparePackageActivationJournal({
+    options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+    liveRoot,
+    stageRoot: fixture.params.stage.packageRoot,
+    launcherRoot: fixture.params.stage.layout.binDir,
+    binDir: path.dirname(launcher),
+    previous: await createPackageIntegrityReader().tree(liveRoot),
+    launchers: [
+      {
+        name: "openclaw",
+        previous: encodePackageActivationLauncher(
+          await createPackageIntegrityReader().launcher(launcher),
+        ),
+      },
+    ],
+  });
+});
 throw new Error(`Package activation crash cut was not reached: ${cut}`);

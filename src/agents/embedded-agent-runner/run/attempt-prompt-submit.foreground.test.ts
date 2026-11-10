@@ -1,6 +1,10 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
+import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "../../../config/sessions/session-actor-storage-acquisition.js";
 import type { Context } from "../../../llm/types.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -13,6 +17,7 @@ import {
   streamMocks,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -28,6 +33,132 @@ import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 registerAgentSessionLoopTestLifecycle();
 
 afterEach(() => clearEmbeddedSessionPromptStates([sessionId]));
+
+it("keeps the request prefix when bounded reload omits an existing compaction", async () => {
+  const env = { OPENCLAW_STATE_DIR: "/synthetic/prompt-prefix-bounded-reload" };
+  const scope = {
+    agentId: "main",
+    env,
+    sessionId,
+    sessionKey: `agent:main:dashboard:incognito-${sessionId}`,
+    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+  };
+  const authority = { assertCurrent() {}, authorize() {} };
+  const binding = await acquireSessionActorStorage(scope, {
+    authority,
+    lifetime: { assertCurrent() {}, assertReadable() {} },
+    create: true,
+  });
+  if (!binding) {
+    throw new Error("Missing incognito fixture actor");
+  }
+  try {
+    await binding.actor.storage.mutate(
+      {
+        type: "session.entry.create",
+        input: {
+          entry: { sessionId, lifecycleRevision: "initial", updatedAt: 1 },
+          cwd: "/synthetic",
+        },
+      },
+      authority,
+    );
+    const source = await SessionManager.openAsync(scope);
+    const retained = await source.appendMessageAsync(makeUserMessage("Earlier turn", 1));
+    await source.appendCompactionAsync("Summary. ".repeat(550), retained!, 10_000);
+    const input = createBaseInput();
+    const pinnedPrompt = "## Skills\nOriginal skills\n## Documentation\nOriginal docs";
+    const refreshedPrompt = "## Skills\nUpdated skills\n## Documentation\nUpdated docs";
+    const original = prepareSessionSystemPrompt({
+      state: input.sessionPromptState,
+      routeKey: "fixture",
+      systemPrompt: pinnedPrompt,
+      entries: source.getBranch(),
+    });
+    original.commit();
+    await persistSessionSystemPrompt(input.sessionPromptState, (kind, data) =>
+      source.appendCustomEntryAsync(kind, data),
+    );
+    const sessionManager = await SessionManager.openBoundedAsync(scope, {
+      maxBytes: 8_192,
+      maxEvents: 100,
+    });
+    expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(true);
+    const { session } = await createTestSession({
+      sessionManager,
+      systemPrompt: refreshedPrompt,
+      customTools: [
+        {
+          ...createStubTool("read"),
+          execute: async () => ({
+            content: [{ type: "text", text: "x".repeat(5_000) }],
+            details: {},
+          }),
+        },
+      ],
+    });
+    const prepareSystemPromptUpdate = () =>
+      prepareSessionSystemPrompt({
+        state: input.sessionPromptState,
+        routeKey: "fixture",
+        systemPrompt: refreshedPrompt,
+        entries: sessionManager.getBranch(),
+        historyBoundaryCount: sessionManager.getBoundaryCount(),
+      });
+    installAttemptPermissionPrompt({
+      activeSession: session,
+      attempt: { model: { api: "openai-responses" } },
+      runAbortSignal: new AbortController().signal,
+      setActiveSessionSystemPrompt: (prompt) => {
+        session.setBaseSystemPrompt(prompt);
+        return prompt;
+      },
+      prepareSystemPromptUpdate,
+    });
+    let reloaded = false;
+    session.agent.subscribe(async (event) => {
+      if (event.type !== "turn_end" || reloaded) {
+        return;
+      }
+      reloaded = true;
+      await sessionManager.reloadPersistedTranscriptAsync();
+      expect(sessionManager.getBoundaryCount()).toBe(1);
+      expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+    });
+    const requests: string[] = [];
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      requests.push(context.systemPrompt ?? "");
+      const useTool = requests.length === 1;
+      return createAssistantResultStream(
+        createAssistant(
+          model,
+          useTool
+            ? [{ type: "toolCall", id: "read-fixture", name: "read", arguments: {} }]
+            : "Done.",
+          useTool ? "toolUse" : "stop",
+        ),
+      );
+    });
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession: session,
+      prependContext: undefined,
+      appendContext: undefined,
+      toolResultMaxChars: 20_000,
+      toolResultAggregateMaxChars: 20_000,
+      persistToolResultProjections: () =>
+        persistSessionSystemPrompt(input.sessionPromptState, (kind, data) =>
+          sessionManager.appendCustomEntryAsync(kind, data),
+        ),
+      promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+    });
+    expect(reloaded).toBe(true);
+    expect(requests).toEqual([pinnedPrompt, pinnedPrompt]);
+  } finally {
+    await binding.actor.release();
+    memorySessionActorOwners.closeDatabase(binding);
+  }
+});
 
 it.each(["tool", "steer", "steer-backlog", "cancelled", "initial-backlog", "agent-end"] as const)(
   "refreshes permissions only for admitted %s continuation input",

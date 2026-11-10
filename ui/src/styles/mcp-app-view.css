@@ -37,7 +37,6 @@ mcp-app-view[display-mode="fullscreen"] {
   padding-top: 40px;
   margin: 0;
   border: 0;
-  box-sizing: border-box;
 }
 mcp-app-view .exit-fullscreen {
   position: absolute;
@@ -51,7 +50,7 @@ mcp-app-view .inactive {
   padding: 14px;
   background: var(--bg-accent);
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   justify-content: space-between;
 }
 mcp-app-view .inactive button {
@@ -60,5 +59,5 @@ mcp-app-view .inactive button {
 mcp-app-view .error {
   padding: 14px;
   color: var(--danger);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }

@@ -4,6 +4,10 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { beforeEach, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { debugProxyHandlers } from "../gateway/server-methods/debug-proxy.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -196,23 +200,15 @@ it.each(["online", "offline"])(
           upstream(req.headers);
           res.end("upstream response");
         });
-        await new Promise<void>((resolve) => {
-          origin.listen(0, "127.0.0.1", resolve);
-        });
-        const address = origin.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Fixture origin address unavailable");
-        }
+        const originUrl = await listenLoopback(origin);
         try {
-          await runChild(childEnv, `http://127.0.0.1:${address.port}/upstream`);
+          await runChild(childEnv, `${originUrl}/upstream`);
           expect(upstream).toHaveBeenCalledOnce();
           expect(upstream.mock.calls[0]?.[0]).not.toHaveProperty("authorization");
           expect(upstream.mock.calls[0]?.[0]).not.toHaveProperty("proxy-authorization");
           expect(JSON.stringify(upstream.mock.calls)).not.toContain(token);
         } finally {
-          await new Promise<void>((resolve) => {
-            origin.close(() => resolve());
-          });
+          await closeHttpServer(origin);
         }
         const sessions = await store.listSessions();
         expect(sessions).toEqual(

@@ -1,7 +1,7 @@
 import { isIosBrowserPlatform } from "../lib/browser-platform.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
 import type {
   WebPushCapabilityAction,
   WebPushCapabilityPatch,
@@ -10,11 +10,13 @@ import type {
   WebPushSubscriptionState,
 } from "./web-push.runtime.ts";
 
-export type WebPushSnapshot = {
+export type WebPushSnapshot = WebPushAccess & {
   supported: boolean;
   permission: NotificationPermission | "install-required" | "unsupported";
   subscription: WebPushSubscriptionState;
   loading: boolean;
+  read?: Promise<unknown>;
+  command?: Promise<void>;
   error?: string | null;
   preferences?: WebPushPreferencesResult | null;
 };
@@ -34,15 +36,19 @@ export function createWebPushCapability(
     "serviceWorker" in nav &&
     "PushManager" in globalThis &&
     "Notification" in globalThis;
+  let owner: WebPushCapabilityRuntime | undefined;
   const snapshot: WebPushSnapshot = {
     supported,
+    ...readWebPushAccess(gateway.snapshot),
     permission: installed
       ? supported
         ? Notification.permission
         : "unsupported"
       : "install-required",
     subscription: "unknown",
-    loading: false,
+    get loading() {
+      return owner?.pending ?? false;
+    },
   };
   let render: (() => void) | undefined;
 
@@ -50,26 +56,35 @@ export function createWebPushCapability(
     Object.assign(snapshot, patch);
     render?.();
   };
-  const runtime: Promise<WebPushCapabilityRuntime | null> | null = snapshot.supported
-    ? import("./web-push.runtime.ts")
-        .then(({ createWebPushCapabilityRuntime }) =>
-          createWebPushCapabilityRuntime({
+  const stopGateway = gateway.subscribe((next) => {
+    const access = readWebPushAccess(next);
+    if (
+      access.canManage !== snapshot.canManage ||
+      access.canReadPreferences !== snapshot.canReadPreferences
+    ) {
+      publish(access);
+    }
+  });
+  const initialization = supported
+    ? import("./web-push.runtime.ts").then(
+        ({ createWebPushCapabilityRuntime }) =>
+          (owner = createWebPushCapabilityRuntime({
             gateway,
             publish,
             connectionBootstrap: options.connectionBootstrap,
-          }),
-        )
-        .catch((error: unknown) => {
-          publish({
-            supported: false,
-            permission: "unsupported",
-            subscription: "unknown",
-            preferences: null,
-            error: formatUiError(error),
-          });
-          return null;
-        })
-    : null;
+          })),
+      )
+    : undefined;
+  const runtime = initialization?.catch(() => {
+    publish({
+      supported: false,
+      permission: "unsupported",
+      subscription: "unknown",
+      preferences: null,
+      read: initialization,
+    });
+    return null;
+  });
   return {
     snapshot,
     subscribe(listener: () => void) {
@@ -79,9 +94,10 @@ export function createWebPushCapability(
       };
     },
     run: (action: WebPushCapabilityAction) =>
-      runtime ? runtime.then((owner) => owner?.run(action)) : Promise.resolve(),
+      runtime ? runtime.then((runtimeOwner) => runtimeOwner?.run(action)) : Promise.resolve(),
     dispose(this: void) {
-      void runtime?.then((owner) => owner?.dispose());
+      stopGateway();
+      void runtime?.then((runtimeOwner) => runtimeOwner?.dispose());
       render = undefined;
     },
   };

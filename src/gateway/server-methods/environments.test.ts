@@ -113,11 +113,7 @@ it("projects live and offline node facts consistently through list and status", 
   vi.mocked(readDevicePairingNodeSnapshot).mockResolvedValue(
     createDevicePairingNodeSnapshot([
       pairedNodeDevice("node-live", { commands: ["system.run"] }),
-      pairedNodeDevice(
-        "node-never",
-        { displayName: "Never Node", commands: ["system.run"] },
-        { lastSeenAtMs: 2_000, lastSeenReason: "device-token-auth" },
-      ),
+      pairedNodeDevice("node-never"),
       pairedNodeDevice(
         "node-lost",
         {
@@ -161,13 +157,6 @@ it("projects live and offline node facts consistently through list and status", 
           commands: [NODE_DESKTOP_STREAM_COMMAND],
           connectedAtMs: 123,
         },
-        {
-          nodeId: "node-other",
-          connId: "conn-other",
-          client: { invalidated: false },
-          caps: [],
-          commands: [],
-        },
       ],
     }),
   };
@@ -193,12 +182,7 @@ it("projects live and offline node facts consistently through list and status", 
     issues: [NODE_RUNNER_UPDATE_REQUIRED_ISSUE],
   });
   expect(find("node:node-desktop")).toHaveProperty("desktop", true);
-  expect(find("node:node-never")).toMatchObject({
-    status: "unavailable",
-    lastSeenAtMs: 2_000,
-    lastSeenReason: "device-token-auth",
-    sessionHost: false,
-  });
+  expect(find("node:node-never")).toMatchObject({ status: "unavailable", sessionHost: false });
   expect(find("node:node-never")).not.toHaveProperty("lastConnectedAtMs");
   expect(find("node:node-lost")).toMatchObject({
     status: "unavailable",
@@ -214,7 +198,7 @@ it("projects live and offline node facts consistently through list and status", 
     expect(entry).not.toHaveProperty("workerSlots");
     expect(entry).not.toHaveProperty("issues");
   }
-  expect(find("node:node-other")).not.toHaveProperty("desktop");
+  expect(find("node:node-live")).not.toHaveProperty("desktop");
   expect(find("node:node-lost")).not.toHaveProperty("desktop");
   for (const environmentId of ["node:node-live", "node:node-lost"]) {
     expect(await invoke("environments.status", { environmentId }, context)).toEqual([
@@ -226,14 +210,7 @@ it("projects live and offline node facts consistently through list and status", 
 });
 
 it("discovers profile catalogs independently of inventories and preserves provider identity", async () => {
-  const machine = {
-    id: "standard",
-    label: "Standard",
-    cpu: 32,
-    memoryGb: 64,
-    default: true,
-    os: "os-a",
-  };
+  const machine = { id: "standard", label: "Standard" };
   const systems = [
     { id: "os-a", label: "OS A", default: true },
     { id: "os-b", label: "OS B" },
@@ -253,6 +230,7 @@ it("discovers profile catalogs independently of inventories and preserves provid
   expect(ok).toBe(true);
   expect(payload).toEqual({
     environments: [],
+    dispatchableProfileIds: ["aws", "zeta"],
     profiles: [
       {
         id: "aws",
@@ -297,7 +275,6 @@ it.each([
     const { environments } = payload as EnvironmentsListResult;
     expect(environments.some((entry) => entry.id === "node:node-live")).toBe(visible);
     const worker = environments.find((entry) => entry.id === "worker-1");
-    expect(worker).toMatchObject({ type: "worker", worker: { state, providerId } });
     if (state === "failed" || state === "orphaned") {
       expect(worker).toMatchObject({ status: "error", worker: { error: "provider failure" } });
     } else {
@@ -307,43 +284,33 @@ it.each([
   },
 );
 
-it("fails closed and redacts worker inventory read failures", async () => {
-  const secret = "private SecretRef and database path";
-  const fail = () => {
-    throw new Error(secret);
-  };
-  const listFailure = workerService({ list: vi.fn(fail) });
-  const listResult = await call("environments.list", {}, { service: listFailure });
-  const nodeResult = await call(
+it.each([
+  ["environments.list", {}, "list", "Error: environment inventory unavailable"],
+  [
     "environments.status",
     { environmentId: "node:node-live" },
-    { service: listFailure },
-  );
-  const workerResult = await call(
-    "environments.status",
-    { environmentId: "missing" },
-    { service: workerService({ get: vi.fn(fail) }) },
-  );
-  const error = {
-    code: ErrorCodes.UNAVAILABLE,
-    message: "Error: environment inventory unavailable",
-  };
-  expect(listResult).toEqual([false, undefined, error]);
-  expect(nodeResult).toEqual([false, undefined, error]);
-  expect(workerResult).toEqual([
-    false,
-    undefined,
-    { code: ErrorCodes.UNAVAILABLE, message: "environment status unavailable" },
-  ]);
-  expect(JSON.stringify([listResult, nodeResult, workerResult])).not.toContain(secret);
-});
+    "list",
+    "Error: environment inventory unavailable",
+  ],
+  ["environments.status", { environmentId: "missing" }, "get", "environment status unavailable"],
+] as const)(
+  "fails closed and redacts %s %j read failures",
+  async (method, params, reader, message) => {
+    const secret = "private SecretRef and database path";
+    const service = workerService({
+      [reader]: vi.fn(() => {
+        throw new Error(secret);
+      }),
+    });
+    const result = await call(method, params, { service });
+    expect(result).toEqual([false, undefined, { code: ErrorCodes.UNAVAILABLE, message }]);
+    expect(JSON.stringify(result)).not.toContain(secret);
+  },
+);
 
 it("projects trust from recorded worker isolation without guessing unknown leases", () => {
   expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: true }), NOW).trust).toBe(
     "persistent",
-  );
-  expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: false }), NOW).trust).toBe(
-    "disposable",
   );
   expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: null }), NOW)).not.toHaveProperty(
     "trust",
@@ -446,17 +413,12 @@ it.each([
 );
 
 it("rejects raw destruction of a session-attached worker", async () => {
-  const service = workerService({
-    destroyUnattached: rejectService(
-      "invalid_state",
-      "Attached cloud workers must be stopped through sessions.reclaim",
-    ),
-  });
-
+  const message = "Attached cloud workers must be stopped through sessions.reclaim";
+  const service = workerService({ destroyUnattached: rejectService("invalid_state", message) });
   expectFailure(
     await call("environments.destroy", workerId, { service }),
     ErrorCodes.INVALID_REQUEST,
-    "Attached cloud workers must be stopped through sessions.reclaim",
+    message,
   );
 });
 

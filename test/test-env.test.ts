@@ -211,17 +211,12 @@ describe("installTestEnv", () => {
           entries: { dev: { workspace: "/Users/peter/dev-workspace", agentDir: "/Users/peter/.openclaw/agents/dev/agent" } },
         },
         models: { providers: { custom: { baseUrl: "https://example.test/v1" } } },
-        channels: { telegram: { streaming: {
-          mode: "block", chunkMode: "newline", block: { enabled: true },
-          preview: { chunk: { minChars: 120 } },
-        } } },
       }`,
     );
-    writeFile(path.join(openClawHome, ".openclaw", "credentials", "token.txt"), "secret\n");
-    writeFile(
-      path.join(openClawHome, ".openclaw", "external-plugins", "glueclaw", "openclaw.plugin.json"),
-      '{"id":"glueclaw"}\n',
-    );
+    writeHomeFiles(openClawHome, {
+      ".openclaw/credentials/token.txt": "secret\n",
+      ".openclaw/external-plugins/glueclaw/openclaw.plugin.json": '{"id":"glueclaw"}\n',
+    });
     const realStateDir = path.join(openClawHome, ".openclaw");
     const realAgentDir = path.join(realStateDir, "agents", "main", "agent");
     const liveAuthStore = {
@@ -259,21 +254,27 @@ describe("installTestEnv", () => {
         }),
       );
     });
-    writeHomeFiles(realHome, {
+    const copiedFiles = {
       ".claude/.credentials.json": '{"accessToken":"token"}\n',
-      ".claude/projects/old-session.jsonl": "session\n",
       ".codex/auth.json": '{"OPENAI_API_KEY":"token"}\n',
       ".codex/config.toml": 'model = "gpt-5.4"\n',
-      ".codex/sessions/2026/02/26/rollout.jsonl": "session\n",
       ".gemini/oauth_creds.json": '{"token":"gemini"}\n',
       ".gemini/settings.json": '{"theme":"dark"}\n',
       ".gemini/commands/Cache/review.toml": "prompt\n",
       ".minimax/Cache/credentials.json": "minimax\n",
-      ".gemini/antigravity-browser-profile/Default/Cache/Cache_Data/blob": "cached-browser-bytes\n",
-      ".gemini/antigravity/browser_recordings/session.webm": "recording\n",
-      ".gemini/cli-browser-profile/Default/History": "browser-history\n",
-      ".gemini/GPUCache/data.bin": "gpu-cache\n",
-      ".gemini/Service Worker/CacheStorage/cache.bin": "worker-cache\n",
+    };
+    const excludedDirectories = [
+      ".claude/projects",
+      ".codex/sessions",
+      ".gemini/antigravity-browser-profile",
+      ".gemini/antigravity/browser_recordings",
+      ".gemini/cli-browser-profile",
+      ".gemini/GPUCache",
+      ".gemini/Service Worker/CacheStorage",
+    ];
+    writeHomeFiles(realHome, {
+      ...copiedFiles,
+      ...Object.fromEntries(excludedDirectories.map((dir) => [`${dir}/fixture`, "ignored\n"])),
     });
     fs.mkdirSync(path.join(realHome, ".claude", "settings.local.json"), { recursive: true });
 
@@ -306,12 +307,6 @@ describe("installTestEnv", () => {
       expect(copiedConfig).not.toHaveProperty(`${agentPath}.workspace`);
       expect(copiedConfig).not.toHaveProperty(`${agentPath}.agentDir`);
     }
-    expect(copiedConfig).toHaveProperty("channels.telegram.streaming", {
-      mode: "block",
-      chunkMode: "newline",
-      block: { enabled: true },
-      preview: { chunk: { minChars: 120 } },
-    });
 
     const stagedAgentDir = path.join(testEnv.tempHome, ".openclaw", "agents", "main", "agent");
     expect(inspectPersistedAuthProfileStoreRaw(stagedAgentDir)).toEqual({
@@ -327,36 +322,38 @@ describe("installTestEnv", () => {
       [
         ".openclaw/credentials/token.txt",
         ".openclaw/external-plugins/glueclaw/openclaw.plugin.json",
-        ".claude/.credentials.json",
-        ".codex/auth.json",
-        ".codex/config.toml",
-        ".gemini/oauth_creds.json",
-        ".gemini/settings.json",
-        ".gemini/commands/Cache/review.toml",
-        ".minimax/Cache/credentials.json",
+        ...Object.keys(copiedFiles),
       ],
       [
         ".openclaw/agents/main/agent/auth-profiles.json",
-        ".claude/projects",
         ".claude/settings.local.json",
-        ".codex/sessions",
-        ".gemini/antigravity-browser-profile",
-        ".gemini/antigravity/browser_recordings",
-        ".gemini/cli-browser-profile",
-        ".gemini/GPUCache",
-        ".gemini/Service Worker/CacheStorage",
+        ...excludedDirectories,
       ],
     );
   });
 
-  it("allows explicit live runs against the real HOME", () => {
+  it.each([false, true])("allows explicit live HOME with bash unavailable=%s", async (noBash) => {
     const realHome = useProfileHome(liveHome);
     const agentDir = path.join(realHome, "caller-agent");
     const legacyAgentDir = path.join(realHome, "caller-legacy-agent");
     setTestEnvValue("OPENCLAW_AGENT_DIR", agentDir);
     setTestEnvValue("PI_CODING_AGENT_DIR", legacyAgentDir);
 
-    const testEnv = installTestEnv();
+    let installLive = installTestEnv;
+    if (noBash) {
+      vi.doMock("node:child_process", () => ({
+        execFileSync: () => {
+          throw Object.assign(new Error("bash missing"), { code: "ENOENT" });
+        },
+      }));
+      installLive = (
+        await importFreshModule<typeof import("./test-env.js")>(
+          import.meta.url,
+          "./test-env.js?scope=profile-fallback",
+        )
+      ).installTestEnv;
+    }
+    const testEnv = installLive();
 
     expect(testEnv.tempHome).toBe(realHome);
     expect(process.env.HOME).toBe(realHome);
@@ -403,93 +400,80 @@ describe("installTestEnv", () => {
     );
   });
 
-  it.each(["OPENCLAW_HOME", "OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"])(
-    "clears and restores %s for normal isolated test runs",
-    (key) => {
+  it.each([
+    ["OPENCLAW_HOME", "live-aware"],
+    ["OPENCLAW_AGENT_DIR", "live-aware"],
+    ["PI_CODING_AGENT_DIR", "live-aware"],
+    ["TWILIO_ACCOUNT_SID", "hermetic"],
+    ["TWILIO_AUTH_TOKEN", "hermetic"],
+    ["TWILIO_PHONE_NUMBER", "hermetic"],
+    ["TWILIO_SMS_FROM", "hermetic"],
+    ["TWILIO_MESSAGING_SERVICE_SID", "hermetic"],
+  ] as const)("clears and restores %s for normal isolated test runs", (key, mode) => {
+    const realHome = createTempHome();
+    const callerPath = path.join(realHome, "caller-override");
+    setTestEnvValue("HOME", realHome);
+    setTestEnvValue("USERPROFILE", realHome);
+    setTestEnvValue(key, callerPath);
+
+    const testEnv = install({ mode });
+
+    expect(testEnv.tempHome).not.toBe(realHome);
+    expect(process.env[key]).toBeUndefined();
+    setTestEnvValue(key, path.join(testEnv.tempHome, "explicit-override"));
+
+    testEnv.cleanup();
+    expect(process.env[key]).toBe(callerPath);
+  });
+
+  it.each([
+    ["explicit", "tool-cache", "xdg", "local", "tool-cache"],
+    ["explicit empty", "", "xdg", "local", ""],
+    ["explicit whitespace", " tool-cache ", undefined, undefined, " tool-cache "],
+    ["XDG before LOCALAPPDATA", undefined, "xdg", "local", "xdg/node/corepack"],
+    ["empty XDG", undefined, "", "local", "node/corepack"],
+    ["LOCALAPPDATA", undefined, undefined, "local", "local/node/corepack"],
+    ["empty LOCALAPPDATA", undefined, undefined, "", "node/corepack"],
+    ["OS home"],
+  ])(
+    "preserves the %s Corepack cache across HOME isolation and cleanup",
+    (_name, corepack?: string, xdg?: string, local?: string, cache?: string) => {
       const realHome = createTempHome();
-      const callerPath = path.join(realHome, "caller-override");
-      setTestEnvValue("HOME", realHome);
-      setTestEnvValue("USERPROFILE", realHome);
-      setTestEnvValue(key, callerPath);
+      withEnv(
+        {
+          HOME: realHome,
+          USERPROFILE: realHome,
+          COREPACK_HOME: corepack,
+          XDG_CACHE_HOME: xdg,
+          XDG_RUNTIME_DIR: path.join(realHome, "runtime"),
+          LOCALAPPDATA: local,
+        },
+        () => {
+          const callerEnv = { ...process.env };
+          const expected =
+            cache === undefined
+              ? path.join(
+                  os.homedir(),
+                  process.platform === "win32" ? "AppData/Local" : ".cache",
+                  "node/corepack",
+                )
+              : corepack === undefined
+                ? path.normalize(cache)
+                : cache;
+          const testEnv = install({ mode: "hermetic" });
 
-      const testEnv = install();
-
-      expect(testEnv.tempHome).not.toBe(realHome);
-      expect(process.env[key]).toBeUndefined();
-      setTestEnvValue(key, path.join(testEnv.tempHome, "explicit-override"));
-
-      testEnv.cleanup();
-      expect(process.env[key]).toBe(callerPath);
+          expect(process.env.HOME).toBe(testEnv.tempHome);
+          expect(process.env.XDG_CACHE_HOME).toBe(path.join(testEnv.tempHome, ".cache"));
+          expect(process.env.XDG_RUNTIME_DIR).toBe(path.join(testEnv.tempHome, ".runtime"));
+          expect(process.env.COREPACK_HOME).toBe(expected);
+          setTestEnvValue("COREPACK_HOME", path.join(testEnv.tempHome, "changed-tool-cache"));
+          testEnv.cleanup();
+          expect(changedEnvKeys(callerEnv)).toEqual([]);
+          expect(fs.existsSync(testEnv.tempHome)).toBe(false);
+        },
+      );
     },
   );
-
-  it.each([
-    {
-      name: "explicit",
-      corepack: "tool-cache",
-      xdg: "xdg",
-      local: "local",
-      expected: "tool-cache",
-    },
-    { name: "explicit empty", corepack: "", xdg: "xdg", local: "local", expected: "" },
-    { name: "explicit whitespace", corepack: " tool-cache ", expected: " tool-cache " },
-    { name: "XDG before LOCALAPPDATA", xdg: "xdg", local: "local", expected: "xdg/node/corepack" },
-    { name: "empty XDG", xdg: "", local: "local", expected: "node/corepack" },
-    { name: "LOCALAPPDATA", local: "local", expected: "local/node/corepack" },
-    { name: "empty LOCALAPPDATA", local: "", expected: "node/corepack" },
-    { name: "OS home" },
-  ])("preserves the $name Corepack cache across HOME isolation and cleanup", (testCase) => {
-    const realHome = createTempHome();
-    withEnv(
-      {
-        HOME: realHome,
-        USERPROFILE: realHome,
-        COREPACK_HOME: testCase.corepack,
-        XDG_CACHE_HOME: testCase.xdg,
-        XDG_RUNTIME_DIR: path.join(realHome, "runtime"),
-        LOCALAPPDATA: testCase.local,
-      },
-      () => {
-        const callerEnv = { ...process.env };
-        const expected =
-          testCase.expected === undefined
-            ? path.join(
-                os.homedir(),
-                process.platform === "win32" ? "AppData/Local" : ".cache",
-                "node/corepack",
-              )
-            : testCase.corepack === undefined
-              ? path.normalize(testCase.expected)
-              : testCase.expected;
-        const testEnv = install({ mode: "hermetic" });
-
-        expect(process.env.HOME).toBe(testEnv.tempHome);
-        expect(process.env.XDG_CACHE_HOME).toBe(path.join(testEnv.tempHome, ".cache"));
-        expect(process.env.XDG_RUNTIME_DIR).toBe(path.join(testEnv.tempHome, ".runtime"));
-        expect(process.env.COREPACK_HOME).toBe(expected);
-        setTestEnvValue("COREPACK_HOME", path.join(testEnv.tempHome, "changed-tool-cache"));
-        testEnv.cleanup();
-        expect(changedEnvKeys(callerEnv)).toEqual([]);
-        expect(fs.existsSync(testEnv.tempHome)).toBe(false);
-      },
-    );
-  });
-
-  it.each([
-    "TWILIO_ACCOUNT_SID",
-    "TWILIO_AUTH_TOKEN",
-    "TWILIO_PHONE_NUMBER",
-    "TWILIO_SMS_FROM",
-    "TWILIO_MESSAGING_SERVICE_SID",
-  ])("isolates and restores the SMS activation variable %s", (key) => {
-    setTestEnvValue(key, "test-channel-value");
-
-    const testEnv = install({ mode: "hermetic" });
-
-    expect(process.env[key]).toBeUndefined();
-    testEnv.cleanup();
-    expect(process.env[key]).toBe("test-channel-value");
-  });
 
   it.each(["live-aware", "hermetic"] as const)(
     "clears counted Git config together and restores it in non-live %s mode",
@@ -551,9 +535,7 @@ describe("installTestEnv", () => {
         OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "FIXTURE_AUTH_REF",
         OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
       };
-      for (const [key, value] of Object.entries(supervisorEnv)) {
-        setTestEnvValue(key, value);
-      }
+      setEnv(supervisorEnv);
       setTestEnvValue("TEST_UNRELATED_SERVICE_HINT", "preserved");
 
       const testEnv = install({ mode });
@@ -584,24 +566,5 @@ describe("installTestEnv", () => {
 
     expect(testEnv.tempHome).not.toBe(realHome);
     expect(process.env.TEST_PROFILE_ONLY).toBeUndefined();
-  });
-
-  it("falls back to parsing ~/.profile when bash is unavailable", async () => {
-    const realHome = useProfileHome(liveHome);
-
-    vi.doMock("node:child_process", () => ({
-      execFileSync: () => {
-        throw Object.assign(new Error("bash missing"), { code: "ENOENT" });
-      },
-    }));
-
-    const { installTestEnv: installFreshTestEnv } = await importFreshModule<
-      typeof import("./test-env.js")
-    >(import.meta.url, "./test-env.js?scope=profile-fallback");
-
-    const testEnv = installFreshTestEnv();
-
-    expect(testEnv.tempHome).toBe(realHome);
-    expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
   });
 });

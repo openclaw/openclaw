@@ -4,9 +4,12 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
 import { listAgentEntries, listAgentIds } from "../agent-scope-config.js";
-import { resolveAgentConfig, resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { resolveSubagentAllowedTargetIds } from "../subagents/spawn/subagent-target-policy.js";
+import {
+  resolveSubagentAllowedTargetIds,
+  resolveSubagentSpawnTargetConfig,
+} from "../subagents/spawn/subagent-target-policy.js";
 import { describeAgentsListTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
@@ -67,9 +70,7 @@ export function createAgentsListTool(opts?: {
         agentId: opts?.requesterAgentIdOverride,
       }).sessionAgentId;
 
-      const allowAgents =
-        resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
-        cfg?.agents?.defaults?.subagents?.allowAgents;
+      const { allowAgents } = resolveSubagentSpawnTargetConfig(cfg, requesterAgentId);
 
       const configuredAgents = listAgentEntries(cfg);
       const configuredIds = listAgentIds(cfg);

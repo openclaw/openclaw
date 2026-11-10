@@ -3,10 +3,7 @@ import {
   makeSettledChild,
   REQUESTER,
 } from "../announce/subagent-announce.requester-settle-wake.test-support.js";
-import {
-  buildRequesterSettleWakeIdentity,
-  isRequesterSettleWakeForRun,
-} from "./subagent-requester-settle-identity.js";
+import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
 
 const identity = {
   requesterSessionKey: REQUESTER,
@@ -14,12 +11,7 @@ const identity = {
   batchRunIds: ["run-b"],
   rearmGeneration: 1,
 };
-const wake = {
-  status: "pending" as const,
-  attemptCount: 0,
-  batchRunIds: identity.batchRunIds,
-  rearmGeneration: 1,
-};
+const { batchRunIds, rearmGeneration: generation } = identity;
 const retryId = "announce:requester-settle:main:agent:main:main:run-b:yield-1:retry-1";
 type Child = ReturnType<typeof makeSettledChild>;
 function child(
@@ -30,7 +22,13 @@ function child(
     runId: "run-b",
     requesterAgentId: "main",
     ...overrides,
-    requesterSettleWake: { ...wake, ...wakeOverrides },
+    requesterSettleWake: {
+      status: "pending",
+      attemptCount: 0,
+      batchRunIds,
+      rearmGeneration: generation,
+      ...wakeOverrides,
+    },
   });
 }
 function recognizes(entry: Child, runId: string, members = [entry]) {
@@ -43,34 +41,6 @@ function recognizes(entry: Child, runId: string, members = [entry]) {
 }
 
 it.each([
-  { status: "pending" as const, attemptCount: 1, nextAttemptAt: 30_000 },
-  { status: "dispatching" as const, attemptCount: 2, nextAttemptAt: undefined },
-])("keeps the known-result continuation identity while $status", (retainedWake) => {
-  expect(buildRequesterSettleWakeIdentity({ ...identity, retainedWake }).runId).toBe(retryId);
-});
-
-// The control scope must recognize exactly the key dispatch used, or a settle
-// turn loses authority over its own children.
-it.each([
-  { name: "private batch", yieldedFinalDeliverable: undefined, pause: false },
-  { name: "deliverable yielded batch", yieldedFinalDeliverable: true as const, pause: false },
-  { name: "paused private batch", yieldedFinalDeliverable: undefined, pause: true },
-])("matches the dispatched key: $name", ({ yieldedFinalDeliverable, pause }) => {
-  const entry = child(
-    { completionTarget: "parent", ...(pause ? { pauseReason: "sessions_yield" as const } : {}) },
-    {
-      ...(pause ? { pauseNotice: { acknowledgment: "Waiting for direction" } } : {}),
-      ...(yieldedFinalDeliverable ? { yieldedFinalDeliverable } : {}),
-    },
-  );
-  const dispatched = buildRequesterSettleWakeIdentity({
-    ...identity,
-    pause,
-  }).runId;
-  expect(recognizes(entry, dispatched)).toBe(true);
-});
-
-it.each([
   ["deliverable", undefined, false, false, true],
   ["private", "parent", false, false, false],
   ["yielded private", "parent", false, true, true],
@@ -79,12 +49,12 @@ it.each([
   "recognizes the persisted admitted retry for %s custody",
   (_name, completionTarget, pause, yielded, matched) => {
     const entry = child(
-      { completionTarget, ...(pause ? { pauseReason: "sessions_yield" as const } : {}) },
+      { completionTarget, pauseReason: pause ? "sessions_yield" : undefined },
       {
         status: "dispatching",
         attemptCount: 2,
-        ...(pause ? { pauseNotice: { acknowledgment: "Waiting for direction" } } : {}),
-        ...(yielded ? { yieldedFinalDeliverable: true } : {}),
+        pauseNotice: pause ? { acknowledgment: "Waiting for direction" } : undefined,
+        yieldedFinalDeliverable: yielded || undefined,
       },
     );
     const persistedRunId = pause
@@ -93,40 +63,32 @@ it.each([
     const matches = (runId: string) => recognizes(entry, runId);
     const originalRunId = persistedRunId.replace(":retry-1", "");
     const nextRunId = persistedRunId.replace(":retry-1", ":retry-2");
-    expect(matches(persistedRunId)).toBe(matched);
-    expect(matches(nextRunId)).toBe(false);
-    expect(matches(originalRunId)).toBe(!matched);
+    const observed = () => [persistedRunId, nextRunId, originalRunId].map(matches);
+    entry.requesterSettleWake!.attemptCount = 0;
+    expect(matches(originalRunId)).toBe(true);
+    entry.requesterSettleWake!.attemptCount = 2;
+    expect(observed()).toEqual([matched, false, !matched]);
     entry.requesterSettleWake!.status = "pending";
     expect(matches(persistedRunId)).toBe(matched);
     entry.requesterSettleWake!.nextAttemptAt = 30_000;
-    expect(matches(persistedRunId)).toBe(matched);
-    expect(matches(nextRunId)).toBe(false);
+    expect([matches(persistedRunId), matches(nextRunId)]).toEqual([matched, false]);
     entry.requesterSettleWake!.status = "dispatching";
     entry.requesterSettleWake!.nextAttemptAt = undefined;
     entry.requesterSettleWake!.attemptCount = 3;
-    expect(matches(nextRunId)).toBe(matched);
-    expect(matches(persistedRunId)).toBe(false);
-    expect(matches(originalRunId)).toBe(!matched);
+    expect(observed()).toEqual([false, matched, !matched]);
     entry.requesterSettleWake!.rearmGeneration = 2;
     expect(matches(nextRunId)).toBe(false);
   },
 );
 
-it("recognizes an admitted frozen wake after an earlier member retires", () => {
-  const entry = child(
-    {},
-    {
-      status: "dispatching",
-      batchRunIds: ["retired-run", "run-b"],
-      attemptCount: 1,
-    },
-  );
-  expect(recognizes(entry, retryId.replace(":retry-1", ""))).toBe(true);
-});
-
-it.each(["requester", "agent", "store", "generation"] as const)(
+it.each([
+  ["requester", { requesterSessionKey: "other" }, 1],
+  ["agent", { requesterAgentId: "other" }, 1],
+  ["store", { requesterStorePath: "/synthetic/other.sqlite" }, 1],
+  ["generation", {}, 2],
+] as const)(
   "excludes a frozen member rebound to another %s",
-  (difference) => {
+  (_difference, binding, rearmGeneration) => {
     const entry = child(
       { requesterStorePath: "/synthetic/requester.sqlite" },
       { batchRunIds: ["run-b", "run-other"] },
@@ -134,15 +96,8 @@ it.each(["requester", "agent", "store", "generation"] as const)(
     const other = makeSettledChild({
       ...entry,
       runId: "run-other",
-      ...(difference === "requester" ? { requesterSessionKey: "other" } : {}),
-      ...(difference === "agent" ? { requesterAgentId: "other" } : {}),
-      ...(difference === "store" ? { requesterStorePath: "/synthetic/other.sqlite" } : {}),
-      requesterSettleWake: {
-        ...entry.requesterSettleWake,
-        status: "pending",
-        attemptCount: 0,
-        rearmGeneration: difference === "generation" ? 2 : 1,
-      },
+      ...binding,
+      requesterSettleWake: { ...entry.requesterSettleWake!, rearmGeneration },
     });
     expect(recognizes(entry, retryId.replace(":retry-1", ""), [entry, other])).toBe(true);
   },

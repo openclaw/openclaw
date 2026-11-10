@@ -1,16 +1,19 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
-import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.types.ts";
+import type { ChatComposerCapabilityMenuSource } from "../chat/components/chat-composer-plus-menu.types.ts";
 import {
   ComposerSkillCatalog,
+  composerMcpServers,
   composerWebSearchBaseEnabled,
 } from "../chat/composer-capability-catalog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
+
+registerChatComposerEnglish();
 
 /** Synchronous tool intent survives renderer changes and is read directly at submission. */
 export class NewSessionCapabilities {
@@ -55,58 +58,64 @@ export class NewSessionCapabilities {
     agentId: string,
   ): {
     toolOverrides: SessionToolOverrides | null;
-    capabilityMenu?: ChatComposerCapabilityMenuProps;
+    capabilityMenu?: ChatComposerCapabilityMenuSource;
   } {
     if (!context) {
       return { toolOverrides: this.toolOverridesValue, capabilityMenu: undefined };
     }
     this.skillCatalog.synchronize(gateway.client, gateway.connectionEpoch);
-    const config = context.runtimeConfig.state;
-    const runtimeConfig = currentDisplayRuntimeConfig(config);
-    const gatewayAvailable = gateway.connected && Boolean(gateway.client);
-    const access = readGatewayOperatorAccess(context.gateway.snapshot);
-    const mutationBlockedReason = !gatewayAvailable
-      ? t("chat.composer.menu.offlineBlocked")
-      : !runtimeConfig
-        ? (config.lastError ?? t("common.loading"))
-        : !access.canAdmin
-          ? t("chat.composer.menu.adminBlocked")
-          : null;
     return {
       toolOverrides: this.toolOverridesValue,
       capabilityMenu: {
-        basePath: context.basePath,
-        skills: this.skillCatalog.rows(agentId, this.toolOverridesValue),
-        skillsLoading: this.skillCatalog.isLoading(agentId),
-        skillsError: this.skillCatalog.hasError(agentId),
-        mcpServers: summarizeMcpServers(runtimeConfig) ?? [],
-        toolsEffectiveResult: null,
-        toolsEffectiveLoading: false,
-        toolsEffectiveError: false,
-        toolAccessMutationBlockedReason: mutationBlockedReason,
-        webSearchBaseEnabled: composerWebSearchBaseEnabled(runtimeConfig),
-        mutationBlockedReason,
-        canAdmin: access.canAdmin && gatewayAvailable,
-        adminBlockedReason: access.canAdmin
-          ? gatewayAvailable
-            ? null
-            : t("chat.composer.menu.offlineBlocked")
-          : t("chat.composer.menu.adminBlocked"),
-        onLoadSkills: () => {
-          const client = gateway.client;
-          const connectionEpoch = gateway.connectionEpoch;
-          this.skillCatalog.load(
-            client,
-            connectionEpoch,
-            agentId,
-            () =>
-              gateway.connected &&
-              gateway.client === client &&
-              gateway.connectionEpoch === connectionEpoch,
-          );
+        read: () => {
+          const config = context.runtimeConfig.state;
+          const runtimeConfig = currentDisplayRuntimeConfig(config);
+          const gatewayAvailable = gateway.connected && Boolean(gateway.client);
+          const access = readGatewayOperatorAccess(context.gateway.snapshot);
+          const mutationBlockedReason = !gatewayAvailable
+            ? t("chat.composer.menu.offlineBlocked")
+            : !runtimeConfig
+              ? (config.lastError ?? t("common.loading"))
+              : !access.canAdmin
+                ? t("chat.composer.menu.adminBlocked")
+                : null;
+          return {
+            basePath: context.basePath,
+            skills: this.skillCatalog.rows(agentId, this.toolOverridesValue),
+            skillsRead: this.skillCatalog.read(agentId),
+            ...composerMcpServers(runtimeConfig, {
+              auth: context.gateway.snapshot.hello?.auth ?? null,
+              loading: config.configLoading,
+            }),
+            toolsEffectiveResult: null,
+            toolsEffectiveLoading: false,
+            toolsEffectiveError: false,
+            toolAccessMutationBlockedReason: mutationBlockedReason,
+            webSearchBaseEnabled: composerWebSearchBaseEnabled(runtimeConfig),
+            mutationBlockedReason,
+            canAdmin: access.canAdmin && gatewayAvailable,
+            adminBlockedReason: access.canAdmin
+              ? gatewayAvailable
+                ? null
+                : t("chat.composer.menu.offlineBlocked")
+              : t("chat.composer.menu.adminBlocked"),
+            onLoadSkills: () => {
+              const client = gateway.client;
+              const connectionEpoch = gateway.connectionEpoch;
+              this.skillCatalog.load(
+                client,
+                connectionEpoch,
+                agentId,
+                () =>
+                  gateway.connected &&
+                  gateway.client === client &&
+                  gateway.connectionEpoch === connectionEpoch,
+              );
+            },
+            onPatchToolOverrides: (next) => this.setToolOverrides(next),
+            onNavigate: (routeId, options) => context.navigate(routeId, options),
+          };
         },
-        onPatchToolOverrides: (next) => this.setToolOverrides(next),
-        onNavigate: (routeId, options) => context.navigate(routeId, options),
       },
     };
   }

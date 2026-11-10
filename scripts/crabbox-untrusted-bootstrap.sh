@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-node_version="24.21.0"
-pnpm_spec="pnpm@12.12.1+sha512.b7f98934c0b1f29a65f5da52f2d7f994e7faad573ffdddea1497fb4dcb5aec051590ee7c7d95a38172b4bfae103a5b83edf2ee866e11731c2cafa96063610ac5"
+node_version="24.22.1"
+pnpm_spec="pnpm@12.15.0+sha512.b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61"
 # Keep exact formerly trusted pins so older contributor heads remain verifiable.
 historical_pnpm_specs=(
+  "pnpm@12.12.1+sha512.b7f98934c0b1f29a65f5da52f2d7f994e7faad573ffdddea1497fb4dcb5aec051590ee7c7d95a38172b4bfae103a5b83edf2ee866e11731c2cafa96063610ac5"
   "pnpm@12.11.1+sha512.5b0e3288239a7ea4155d2094f547066e122a1376b3cd785a680c9112e116913e64aaaecf20dd83cc34030fa67013f5c5511f9cf430dd8384188b4c60b8a2ad1e"
   "pnpm@12.10.1+sha512.ba40a37eb1a370d60fea8c4cf1d364c13bcccef518e98ad2bcee954f539d38da37458e58261a3fa55e06523450ea0ffff9f497b135be41f2c15c1642bacace6c"
   "pnpm@12.9.0+sha512.8f64efa0b792986ca98ae568791bcd7722807e274c4f0c1d9853c62116495c584119db98762a2a5343b1684d361b9ae26fdd16d551666d7635346d3fae830ddd"
@@ -50,11 +51,11 @@ fi
 case "$(/usr/bin/uname -m)" in
   x86_64)
     node_arch="x64"
-    node_sha256="fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6"
+    node_sha256="6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6"
     ;;
   aarch64 | arm64)
     node_arch="arm64"
-    node_sha256="6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2"
+    node_sha256="dbabf7a1cbf947e6059ffad2c27b80041db97dea1e553b62afdee7f13fca336e"
     ;;
   *)
     echo "unsupported architecture: $(/usr/bin/uname -m)" >&2
@@ -137,6 +138,12 @@ pnpm_version="${pnpm_spec#pnpm@}"
 pnpm_version="${pnpm_version%%+*}"
 pnpm_native_sha512=""
 case "$pnpm_version:$node_arch" in
+  12.15.0:x64)
+    pnpm_native_sha512="c9cf9095947ef7e9ebdbd2787d1ce13286a98314c10e776affea5eca8ab55d4b9f9d01677db5d4305b9d0c82b31e2e78e658a71aa98e9977e7d0da2e7cd81c3a"
+    ;;
+  12.15.0:arm64)
+    pnpm_native_sha512="a8c2fff1a097b2587cb5dff0e14f8724da94719dbe9ba11f4db592708cd9466c8fb1114dfb10782cfd54fe1ca6c5cd6248988ab46e7a1c9c767ef504ad61481b"
+    ;;
   12.12.1:x64)
     pnpm_native_sha512="ddb27792f3227fb7257f178fa01678d051af539e0684bc10f9e6f18f11ae2981f0ac3c9231fca0815191d20618729aeae883c6cba0ab4cf8aa80fe533932c2e7"
     ;;

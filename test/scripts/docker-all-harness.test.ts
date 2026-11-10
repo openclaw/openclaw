@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -104,9 +105,13 @@ function signalLeaf(pidPath: string) {
     "process.send('ready'); setInterval(() => {}, 1000);",
   ].join("\n");
 }
-function ownedFixture() {
-  return setupFixture("split", false, true, (prefix, root) =>
-    mkdtempSync(path.join(root!, prefix)),
+function ownedFixture(registryPackages?: readonly string[]) {
+  return setupFixture(
+    "split",
+    false,
+    true,
+    (prefix, root) => mkdtempSync(path.join(root!, prefix)),
+    registryPackages,
   );
 }
 let receipts: FixtureReceiptChannel;
@@ -201,6 +206,7 @@ function startOwnedScheduler(
   probe = "",
   pidFiles: readonly string[] = [],
   driver?: string,
+  entryArgs?: readonly string[],
 ) {
   const childrenPath = path.join(fixture.root, "scheduler-children.jsonl");
   const events = path.join(fixture.root, "scheduler-events");
@@ -229,7 +235,7 @@ function startOwnedScheduler(
       "const renameFixtureFile = fs.renameSync.bind(fs);",
       "fs.renameSync = (from, to) => { const result = renameFixtureFile(from, to); receipt(to); return result; };",
       "syncBuiltinESMExports();",
-      `if (${JSON.stringify(entries)}.includes(process.argv[1])) {`,
+      `if (${JSON.stringify([...entries, path.join(fixture.harness, "scripts/run-with-env.mts")])}.includes(process.argv[1])) {`,
       "  const spawn = cp.spawn;",
       "  cp.spawn = (...args) => {",
       "    const child = spawn(...args);",
@@ -246,7 +252,7 @@ function startOwnedScheduler(
       "  syncBuiltinESMExports();",
       "}",
       `if (process.argv[1] === ${JSON.stringify(entries[1])}) {`,
-      "  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {",
+      "  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => {",
       `    fs.writeFileSync(${JSON.stringify(events)} + '/' + signal, String(process.pid));`,
       "  });",
       probe,
@@ -255,7 +261,7 @@ function startOwnedScheduler(
   );
   const shim = spawn(
     process.execPath,
-    [
+    entryArgs ?? [
       ...(driver
         ? ["--import", pathToFileURL(path.join(fixture.harness, "scripts/tsx.mjs")).href]
         : []),
@@ -690,6 +696,95 @@ describe("Docker scheduler trusted harness execution", () => {
     },
   );
 
+  posixIt.for(
+    ["package-installed-recovery", "published-upgrade-survivor"].flatMap((family) =>
+      (["SIGTERM", "SIGHUP"] as const).map((signal) => ({ family, signal })),
+    ),
+  )(
+    "retains $family package command ownership through $signal cleanup",
+    { timeout: 30_000 },
+    async ({ family, signal }, { signal: abortSignal }) => {
+      const fixture = ownedFixture([
+        "@openclaw/codex",
+        "@openclaw/discord",
+        "@openclaw/matrix",
+        "@openclaw/whatsapp",
+      ]);
+      const lane = family === "package-installed-recovery" ? `${family}-partial-previous` : family;
+      configureSignalFixtureLanes(fixture, [lane]);
+      // Published baselines generate their wrapper command after catalog selection.
+      writeFileSync(
+        path.join(fixture.harness, "scripts/e2e/upgrade-survivor-docker.sh"),
+        `exec ${quote(process.execPath)} ${quote(path.join(fixture.selectedHarness, "marker.cjs"))}\n`,
+      );
+      const pidFile = path.join(fixture.root, "package-lane.pid");
+      const cleanupReady = path.join(fixture.root, "package-cleanup-ready");
+      const published = path.join(fixture.root, "package-published");
+      writeLaneMarker(fixture, [
+        "let stopping = false;",
+        "for (const signal of ['SIGTERM', 'SIGHUP']) process.on(signal, () => {",
+        "  if (stopping) return; stopping = true;",
+        // Keep the real 10s scheduler grace. The prior env wrapper exits at 5s.
+        `  setTimeout(() => fs.writeFileSync(${JSON.stringify(cleanupReady)}, String(process.pid)), 5500);`,
+        "});",
+        "process.on('SIGUSR1', () => process.exit(0));",
+        `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        "setInterval(() => {}, 1000);",
+      ]);
+      writeFileSync(
+        path.join(fixture.harness, "scripts/upgrade-survivor-diagnostics.mjs"),
+        [
+          "import assert from 'node:assert/strict';",
+          "import fs from 'node:fs';",
+          `const pid = Number(fs.readFileSync(${JSON.stringify(pidFile)}, 'utf8'));`,
+          "assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });",
+          `fs.writeFileSync(${JSON.stringify(published)}, 'joined');`,
+        ].join("\n"),
+      );
+      const scripts = readJson("package.json").scripts;
+      const [executable, ...args] = scripts[`test:docker:${family}`].split(" ");
+      expect(executable).toBe("node");
+      const owner = startOwnedScheduler(
+        fixture,
+        abortSignal,
+        {
+          OPENCLAW_DOCKER_ALL_PARALLELISM: "1",
+          OPENCLAW_DOCKER_ALL_LANES: "gateway-network",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "base",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "openclaw@2026.7.1-2",
+        },
+        "",
+        [pidFile],
+        undefined,
+        args.map((arg: string) =>
+          /^(?:\.\/)?scripts\//u.test(arg) ? path.join(fixture.harness, arg) : arg,
+        ),
+      );
+      await withScheduler(owner, async () => {
+        const pid = await owner.ready(pidFile);
+        owner.captureGroup(pid);
+        try {
+          owner.shim.kill(signal);
+          await owner.ready(cleanupReady);
+          expect(owner.shim).toMatchObject({ exitCode: null, signalCode: null });
+          expect(isProcessAlive(pid)).toBe(true);
+          expect(existsSync(published)).toBe(false);
+        } finally {
+          signalIfAlive(pid, "SIGUSR1");
+        }
+        await expectExit(owner, signal === "SIGHUP" ? 129 : 143);
+        expect(isProcessAlive(pid)).toBe(false);
+        if (family === "package-installed-recovery") {
+          expect(readFileSync(published, "utf8")).toBe("joined");
+        }
+        const summary = readJson(path.join(fixture.root, "logs/summary.json"));
+        expect(summary.cleanup).toEqual({ joined: true });
+        expect(summary.lanes).toHaveLength(1);
+        expect(summary.lanes[0].cancelled).toBe(true);
+      });
+    },
+  );
+
   posixIt.for([
     ...(["SIGINT", "SIGTERM"] as const).flatMap((signal) =>
       (["failure-first", "signal-first", "success-first"] as const).map((order) => ({
@@ -987,7 +1082,7 @@ describe("Docker scheduler trusted harness execution", () => {
         driver,
         [
           "import fs from 'node:fs';",
-          "import { runCleanupSmokePhase, runShellCommand } from './scripts/test-docker-all.mts';",
+          "import { runCleanupSmokePhase, runShellCommand, writeRunSummary } from './scripts/test-docker-all.mts';",
           callbackGateSource,
           "const phases = [];",
           ...(order === "signal-first"
@@ -1037,6 +1132,11 @@ describe("Docker scheduler trusted harness execution", () => {
           "try {",
           "const failure = await runCleanupSmokePhase(process.env, process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, phases);",
           "state.returned = true; snapshot();",
+          ...(order === "ordinary"
+            ? [
+                "await writeRunSummary(process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, { failures: [failure], lanes: [], phases, status: 'failed' });",
+              ]
+            : []),
           `const next = ${order === "signal-first" ? `await runShellCommand({ command: ${JSON.stringify(nextCommand)}, env: process.env, label: 'post-signal-admission' })` : "undefined"};`,
           `fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ failure, phases, next }));`,
           `} catch (error) {
@@ -1126,6 +1226,27 @@ describe("Docker scheduler trusted harness execution", () => {
           expect(phases).toEqual([
             expect.objectContaining({ name: "cleanup-smoke", status: "failed" }),
           ]);
+          if (order === "ordinary") {
+            const expected = {
+              rerunCommand: `(cd ${quote(fixture.selectedHarness)} && ${quote(fixture.pinnedPnpm)} test:docker:cleanup)`,
+              status: 3,
+              targetable: false,
+            };
+            const summary = readJson(path.join(fixture.root, "logs/summary.json"));
+            expect(summary).toMatchObject({
+              status: "failed",
+              failures: [{ name: "cleanup-smoke", ...expected }],
+              phases: [expect.objectContaining({ name: "cleanup-smoke", status: "failed" })],
+              lanes: [],
+            });
+            const index = readJson(path.join(fixture.root, "logs/failures.json"));
+            expect(index).not.toHaveProperty("status");
+            expect(index.combinedGhWorkflowCommand).toBeUndefined();
+            expect(index.lanes[0]?.ghWorkflowCommand).toBeUndefined();
+            expect(index.lanes).toEqual([
+              expect.objectContaining({ lane: "cleanup-smoke", ...expected }),
+            ]);
+          }
           expect(readFileSync(path.join(fixture.root, "logs/cleanup-smoke.log"), "utf8")).toContain(
             "cleanup smoke failed intentionally",
           );
@@ -1267,6 +1388,383 @@ describe("Docker scheduler trusted harness execution", () => {
         registrySha256: fixture.registrySha256,
         skipDockerBuild: "0",
       });
+    },
+  );
+
+  posixIt.each([
+    "timeout",
+    "timeout-no-tuple",
+    "signal",
+    "signal-publisher",
+    "publisher-failure",
+    "setup-failure",
+    "incomplete-success",
+  ])("publishes installed recovery after the lane group joins: %s", (mode) => {
+    const fixture = setupFixture("split");
+    const name = "package-installed-recovery-partial-previous";
+    const catalog = path.join(fixture.harness, "scripts/lib/docker-e2e-scenarios.mts");
+    const marker = path.join(fixture.root, "recovery-child.cjs");
+    const pidFile = path.join(fixture.root, "recovery-child.pid");
+    const schedulerPidFile = path.join(fixture.root, "recovery-scheduler.pid");
+    const publisherPidFile = path.join(fixture.root, "recovery-publisher.pid");
+    const joined = path.join(fixture.root, "publisher-observed-joined");
+    const privateRootFile = path.join(fixture.root, "private-root");
+    const secret = "sk-installedRecoveryDiagnosticSecret1234567890";
+    const cancelled = mode.startsWith("signal");
+    const timedOut = !cancelled && mode !== "incomplete-success";
+    const assertJoined = `
+        const pid = Number(fs.readFileSync(${JSON.stringify(pidFile)}, 'utf8'));
+        assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+        fs.writeFileSync(${JSON.stringify(joined)}, 'joined');
+      `;
+    if (mode === "setup-failure") {
+      const scheduler = path.join(fixture.harness, "scripts/test-docker-all.mts");
+      writeFileSync(
+        scheduler,
+        readFileSync(scheduler, "utf8").replace(
+          "const SCRIPT_ROOT_DIR =",
+          `
+          const originalMkdtemp = fs.promises.mkdtemp;
+          fs.promises.mkdtemp = async (...args) => {
+            if (String(args[0]).endsWith(${JSON.stringify(`${name}-diagnostics-`)})) {
+              ${assertJoined}
+              throw Object.assign(new Error('fixture publication storage unavailable'), { code: 'ENOSPC' });
+            }
+            return originalMkdtemp(...args);
+          };
+          const SCRIPT_ROOT_DIR =`,
+        ),
+      );
+    }
+    writeFileSync(
+      catalog,
+      readFileSync(catalog, "utf8") +
+        `\n{
+        const lane = mainLanes.find(lane => lane.name === ${JSON.stringify(name)});
+        lane.command = ${JSON.stringify(`exec ${quote(process.execPath)} ${quote(marker)}`)};
+        lane.timeoutMs = 1000;
+      }\n`,
+    );
+    writeFileSync(
+      marker,
+      `
+        const fs = require('node:fs'), path = require('node:path');
+        const root = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR;
+        fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+        fs.writeFileSync(${JSON.stringify(schedulerPidFile)}, String(process.ppid));
+        fs.writeFileSync(${JSON.stringify(privateRootFile)}, root);
+        const run = fs.mkdtempSync(path.join(root, 'installed-recovery-'));
+        fs.mkdirSync(path.join(run, 'partial-previous'));
+        fs.writeFileSync(path.join(run, 'partial-previous/displacement.out'), 'candidate prepared\\n');
+        fs.writeFileSync(path.join(run, 'partial-previous/displacement.err'), ${JSON.stringify(`token=${secret}\n`)});
+        fs.writeFileSync(path.join(root, 'installed-recovery.json'), JSON.stringify({
+          status: 'running', runDirectory: path.basename(run), selectedCuts: ['partial-previous'],
+          current: { cut: 'partial-previous', name: 'displacement', state: 'running',
+            stdout: 'partial-previous/displacement.out', stderr: 'partial-previous/displacement.err',
+            startedAt: Date.now(), elapsedMs: 0 }
+        }));
+        if (${cancelled}) process.kill(process.ppid, 'SIGTERM');
+        if (${JSON.stringify(mode)} !== 'incomplete-success') setInterval(() => {}, 1000);
+      `,
+    );
+    // Exercise the actual trusted publisher/redactor, after independently
+    // checking the real lane child is gone. No inner raw snapshot is produced.
+    writeFileSync(
+      path.join(fixture.harness, "scripts/upgrade-survivor-diagnostics.mjs"),
+      `
+        import assert from 'node:assert/strict';
+        import fs from 'node:fs';
+        ${assertJoined}
+        if (${JSON.stringify(mode)} === 'publisher-failure') process.exit(23);
+        if (${JSON.stringify(mode)} === 'signal-publisher') {
+          fs.writeFileSync(${JSON.stringify(publisherPidFile)}, String(process.pid));
+          process.kill(Number(fs.readFileSync(${JSON.stringify(schedulerPidFile)}, 'utf8')), 'SIGTERM');
+          await new Promise(() => setInterval(() => {}, 1000));
+        }
+        await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/upgrade-survivor-diagnostics.mjs")).href)});
+      `,
+    );
+    const { result, logDir } = runFixture(fixture, "split", [name], {
+      env: {
+        GITHUB_ACTIONS: "true",
+        OPENCLAW_DOCKER_ALL_FAILURE_TAIL_LINES: "1",
+        ...(mode === "timeout-no-tuple"
+          ? {
+              OPENCLAW_CURRENT_PACKAGE_VERSION: "",
+              OPENCLAW_CURRENT_PACKAGE_SHA256: "",
+            }
+          : {}),
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(mode === "signal" ? 143 : 1);
+    expect(readFileSync(joined, "utf8")).toBe("joined");
+    const lane = readJson(path.join(logDir, "summary.json")).lanes[0];
+    expect(lane.status).toBe(mode === "incomplete-success" ? 1 : 128);
+    expect(lane.timedOut).toBe(timedOut);
+    expect(lane.cancelled).toBe(cancelled ? true : undefined);
+    expect(lane.attempts).toHaveLength(1);
+    expect(lane.attempts[0]).toMatchObject({
+      status: mode === "incomplete-success" ? 0 : 128,
+      timedOut,
+    });
+    expect(lane.publicationStatus).toBe(
+      mode === "setup-failure"
+        ? null
+        : mode.startsWith("timeout") || mode === "signal"
+          ? 0
+          : mode === "publisher-failure"
+            ? 23
+            : mode === "signal-publisher"
+              ? 128
+              : 1,
+    );
+    const annotations = result.stderr
+      .split("\n")
+      .filter((line) => line.startsWith("::error title=Upgrade survivor failure::"));
+    expect(annotations).toEqual(
+      mode.startsWith("timeout") || mode === "signal"
+        ? [
+            `::error title=Upgrade survivor failure::phase=${timedOut ? "installed-recovery-timeout" : "installed-recovery"}; exitStatus=128; signal=none`,
+          ]
+        : [],
+    );
+    const privateRoot = readFileSync(privateRootFile, "utf8");
+    expect(privateRoot.startsWith(logDir + path.sep)).toBe(false);
+    expect(statSync(path.dirname(privateRoot)).mode & 0o777).toBe(0o700);
+    expect(statSync(privateRoot).mode & 0o7777).toBe(0o2770);
+    expect(existsSync(path.join(privateRoot, "diagnostics/raw.json"))).toBe(false);
+    if (mode === "signal-publisher") {
+      expect(isProcessAlive(Number(readFileSync(publisherPidFile, "utf8")))).toBe(false);
+    }
+    if (mode.startsWith("timeout") || mode === "signal") {
+      const directory = readdirSync(logDir).find((entry) =>
+        entry.startsWith(`${name}-diagnostics-`),
+      )!;
+      const text = readFileSync(path.join(logDir, directory, "failure.json"), "utf8");
+      expect(text).not.toContain(secret);
+      const report = JSON.parse(text);
+      expect(report).toMatchObject({
+        exitStatus: 128,
+        packageSha256: fixture.sha256,
+        host: { processGroupJoined: true, timedOut },
+        installedRecovery: {
+          status: "running",
+          current: { state: "running" },
+          logs: { stdout: "candidate prepared\n" },
+        },
+      });
+      expect(report.installedRecovery.current).not.toHaveProperty("treeJoined");
+      expect(report.installedRecovery.current).not.toHaveProperty("status");
+    }
+  });
+
+  posixIt.for(["wrapper-cleanup-failure", "timeout", "daemon-query-failure"])(
+    "settles the independent evidence producer before publication: %s",
+    { timeout: 30_000 },
+    async (mode, { signal }) => {
+      const fixture = setupFixture("split", false, true);
+      const name = "package-installed-recovery-partial-previous";
+      const cid = "a".repeat(64);
+      const published = path.join(fixture.root, "published");
+      const producer = spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+        const fs = require('node:fs');
+        setInterval(() => fs.writeFileSync(process.argv[1], String(Date.now())), 10);
+        process.send('ready');
+      `,
+          path.join(fixture.root, "producer-write"),
+        ],
+        { stdio: ["ignore", "ignore", "ignore", "ipc"] },
+      );
+      const producerClosed = new Promise<void>((resolve) => {
+        producer.once("close", () => resolve());
+      });
+      try {
+        await withinTest(
+          new Promise<void>((resolve, reject) => {
+            producer.once("message", () => resolve());
+            producer.once("error", reject);
+          }),
+          signal,
+        );
+        const bin = path.join(fixture.root, "bin");
+        mkdirSync(bin);
+        const dockerSource = `
+const assert = require('node:assert/strict');
+const args = process.argv.slice(1), cid = ${JSON.stringify(cid)}, pid = ${producer.pid};
+if (args[0] === 'rm') {
+  assert.deepEqual(args.slice(1), ['-f', cid]);
+  if (process.env.FIXTURE_WRAPPER_CLEANUP || ${JSON.stringify(mode)} === 'daemon-query-failure') process.exit(23);
+  process.kill(pid, 'SIGKILL');
+  // Wait for the real external producer to be reaped, as Docker rm waits for removal.
+  const deadline = setTimeout(() => process.exit(24), 5000);
+  const poll = setInterval(() => {
+    try { process.kill(pid, 0); }
+    catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+      clearInterval(poll); clearTimeout(deadline); process.exit(0);
+    }
+  }, 10);
+} else if (args[0] === 'ps') {
+  assert(args.includes('id=' + cid));
+  if (${JSON.stringify(mode)} === 'daemon-query-failure') process.exit(23);
+  try { process.kill(pid, 0); console.log(cid); }
+  catch (error) { if (error.code !== 'ESRCH') throw error; }
+} else process.exit(99);
+`;
+        writeFileSync(
+          path.join(bin, "docker"),
+          `#!/bin/bash\nexec ${quote(process.execPath)} --input-type=commonjs -e ${quote(dockerSource)} -- "$@"\n`,
+        );
+        chmodSync(path.join(bin, "docker"), 0o755);
+        const catalog = path.join(fixture.harness, "scripts/lib/docker-e2e-scenarios.mts");
+        const marker = path.join(fixture.root, "recovery-producer-owner.cjs");
+        writeFileSync(
+          marker,
+          `
+const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
+// Also seed the retained CID on the pre-fix scheduler: its publisher must fail
+// because the producer is alive, not because the fixture lacked an env handoff.
+const cidfile = process.env.DOCKER_E2E_CONTAINER_CIDFILE || path.join(path.dirname(process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR), 'producer.cid');
+assert.equal(path.dirname(cidfile), path.dirname(process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR));
+assert.equal(fs.statSync(path.dirname(cidfile)).mode & 0o777, 0o700);
+fs.writeFileSync(cidfile, ${JSON.stringify(cid)});
+const cleanup = require('node:child_process').spawnSync('docker', ['rm', '-f', ${JSON.stringify(cid)}], {
+  env: { ...process.env, FIXTURE_WRAPPER_CLEANUP: '1' }, stdio: 'ignore'
+});
+assert.equal(cleanup.status, 23);
+if (${JSON.stringify(mode)} === 'timeout') {
+  process.on('SIGTERM', () => {});
+  setInterval(() => {}, 1000);
+} else process.exit(7);
+`,
+        );
+        writeFileSync(
+          catalog,
+          readFileSync(catalog, "utf8") +
+            `
+const producerLane = mainLanes.find(lane => lane.name === ${JSON.stringify(name)});
+producerLane.command = ${JSON.stringify(`exec ${quote(process.execPath)} ${quote(marker)}`)};
+producerLane.timeoutMs = 1000;
+`,
+        );
+        writeFileSync(
+          path.join(fixture.harness, "scripts/upgrade-survivor-diagnostics.mjs"),
+          `
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+assert.throws(() => process.kill(${producer.pid}, 0), { code: 'ESRCH' });
+fs.writeFileSync(${JSON.stringify(published)}, 'producer settled before evidence read');
+`,
+        );
+        const owner = startOwnedScheduler(
+          fixture,
+          signal,
+          {
+            OPENCLAW_DOCKER_ALL_LANES: name,
+            PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+          },
+          // The regression needs real SIGKILL/group settlement, not a ten-second grace wait.
+          mode === "timeout"
+            ? `
+            const nativeTimeout = globalThis.setTimeout;
+            globalThis.setTimeout = (callback, ms, ...args) => nativeTimeout(callback, ms === 10_000 ? 1 : ms, ...args);
+          `
+            : "",
+        );
+        await withScheduler(
+          owner,
+          async () => {
+            await expectExit(owner, 1);
+            const lane = readJson(path.join(fixture.root, "logs/summary.json")).lanes[0];
+            expect(lane.status).toBe(mode === "timeout" ? 128 : 7);
+            expect(lane.timedOut).toBe(mode === "timeout");
+            expect(
+              lane.publicationStatus,
+              readFileSync(path.join(fixture.root, "logs", `${name}.log`), "utf8"),
+            ).toBe(mode === "daemon-query-failure" ? 1 : 0);
+            expect(existsSync(published)).toBe(mode !== "daemon-query-failure");
+          },
+          () =>
+            runQaGatewayFixture(
+              async () => {
+                if (producer.exitCode === null && producer.signalCode === null) {
+                  producer.kill("SIGKILL");
+                }
+                await producerClosed;
+              },
+              () => owner.cleanup(),
+            ),
+        );
+      } finally {
+        if (producer.exitCode === null && producer.signalCode === null) {
+          producer.kill("SIGKILL");
+        }
+        await producerClosed;
+      }
+    },
+  );
+
+  posixIt(
+    "owns a separate private producer CID for every recovery cut and clears inherited CIDs",
+    () => {
+      const fixture = setupFixture("split", false, true);
+      const names = [
+        "partial-previous",
+        "anchor-before",
+        "anchor-after",
+        "anchor-sync",
+        "helper-before",
+        "helper-after",
+        "helper-sync",
+      ].map((cut) => `package-installed-recovery-${cut}`);
+      const handoffs = path.join(fixture.root, "producer-handoffs.jsonl");
+      const marker = path.join(fixture.root, "producer-handoff.cjs");
+      writeFileSync(
+        marker,
+        `
+const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
+const name = process.env.OPENCLAW_DOCKER_ALL_LANE_NAME, cid = process.env.DOCKER_E2E_CONTAINER_CIDFILE;
+if (name === 'gateway-concurrency') assert.equal(cid, undefined);
+else {
+  const evidence = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR;
+  assert.equal(path.dirname(cid), path.dirname(evidence));
+  assert.notEqual(cid, evidence);
+  assert.equal(fs.existsSync(cid), false);
+  assert.equal(fs.statSync(path.dirname(cid)).mode & 0o777, 0o700);
+}
+fs.appendFileSync(${JSON.stringify(handoffs)}, JSON.stringify({ name, cid }) + '\\n');
+`,
+      );
+      const catalog = path.join(fixture.harness, "scripts/lib/docker-e2e-scenarios.mts");
+      writeFileSync(
+        catalog,
+        readFileSync(catalog, "utf8") +
+          `
+for (const lane of mainLanes) if (${JSON.stringify([...names, "gateway-concurrency"])}.includes(lane.name)) {
+  lane.command = ${JSON.stringify(`exec ${quote(process.execPath)} ${quote(marker)}`)};
+}
+`,
+      );
+      writeFileSync(
+        path.join(fixture.harness, "scripts/upgrade-survivor-diagnostics.mjs"),
+        "process.exit(0);\n",
+      );
+      const foreign = path.join(fixture.root, "foreign.cid");
+      writeFileSync(foreign, "foreign producer must stay untouched");
+      const { result } = runFixture(fixture, "split", [...names, "gateway-concurrency"], {
+        env: { DOCKER_E2E_CONTAINER_CIDFILE: foreign },
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const rows = readCalls(handoffs);
+      expect(rows.map((row) => row.name).toSorted((a, b) => a.localeCompare(b))).toEqual(
+        [...names, "gateway-concurrency"].toSorted((a, b) => a.localeCompare(b)),
+      );
+      expect(new Set(rows.flatMap((row) => (row.cid ? [row.cid] : []))).size).toBe(7);
+      expect(readFileSync(foreign, "utf8")).toBe("foreign producer must stay untouched");
     },
   );
 
@@ -1421,6 +1919,7 @@ if (${JSON.stringify(failure)} === "timeout") {
       );
       for (const call of calls) {
         expect(call).toMatchObject({
+          cwd: call.lane === "gateway-network" ? fixture.selectedHarness : fixture.target,
           target: fixture.target,
           harness: fixture.selectedHarness,
           liveTarget: fixture.target,
@@ -1433,11 +1932,6 @@ if (${JSON.stringify(failure)} === "timeout") {
           cache: path.join(fixture.target, "relative cache"),
           tools: path.join(fixture.target, "relative tools"),
         });
-      }
-      for (const lane of laneNames) {
-        expect(calls.find((call) => call.lane === lane).cwd).toBe(
-          lane === "gateway-network" ? fixture.selectedHarness : fixture.target,
-        );
       }
       const summary = readJson(path.join(logDir, "summary.json"));
       expect(summary.status).toBe("passed");

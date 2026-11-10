@@ -9,7 +9,7 @@ import type { InstalledPluginIndexRefreshReason } from "./installed-plugin-index
 import { createPluginCache, getScopedPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   hasPluginLifecycleLease,
-  withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
   type PluginMetadataLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
@@ -69,7 +69,7 @@ export async function refreshPluginRegistryAfterConfigMutation(
     },
   });
   const callerLease = owner && guardLease(owner);
-  await callerLease?.assertOwned();
+  callerLease?.assertCurrent();
   const warn = (error: unknown) =>
     params.logger?.warn?.(`Plugin registry refresh failed: ${formatErrorMessage(error)}`);
   const refresh = async (acquiredLease: PluginMetadataLeaseContext) => {
@@ -98,7 +98,6 @@ export async function refreshPluginRegistryAfterConfigMutation(
               }),
             { command: params.traceCommand ?? "registry-refresh" },
           ));
-        await lease.assertOwned();
         await tracePluginLifecyclePhaseAsync(
           "registry refresh",
           async () => {
@@ -131,13 +130,12 @@ export async function refreshPluginRegistryAfterConfigMutation(
       await lease.assertOwned();
       warn(error);
     }
-    await lease.assertOwned();
   };
   try {
     if (callerLease) {
       await refresh(callerLease);
     } else {
-      await withPluginLifecycleLease(params.env ? { env: params.env } : {}, refresh);
+      await withPluginLifecycleLeaseAsync(params.env ? { env: params.env } : {}, refresh);
     }
   } catch (error) {
     if (authorityRefusal) {
@@ -146,7 +144,6 @@ export async function refreshPluginRegistryAfterConfigMutation(
     await callerLease?.assertOwned();
     warn(error);
   }
-  await callerLease?.assertOwned();
   if (params.invalidateRuntimeCache !== false) {
     await invalidatePluginRuntimeDiscoveryAfterConfigMutation({
       ...params,

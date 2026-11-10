@@ -1,4 +1,3 @@
-// Covers question message finalization lifecycle and delivery races.
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,6 +56,13 @@ function deliver(
 ) {
   runtime.registerDelivery({ questionId, deliveryId, finalize });
 }
+
+const freshRuntime = (scope: string) =>
+  importFreshModule<typeof import("./question-channel-runtime.js")>(
+    import.meta.url,
+    `./question-channel-runtime.js?scope=${scope}`,
+  );
+const expire = (id = record.id) => runtime.handleResolved({ id, status: "expired" });
 
 describe("question channel runtime", () => {
   it.each(["known", "unbound"] as const)(
@@ -156,9 +162,7 @@ describe("question channel runtime", () => {
           otherGatewayDrained = true;
         });
         await nextTurn();
-        expect(pluginDrained).toBe(true);
-        expect(otherGatewayDrained).toBe(true);
-        expect(gatewayDrained).toBe(false);
+        expect([pluginDrained, otherGatewayDrained, gatewayDrained]).toEqual([true, true, false]);
 
         release.resolve();
         await Promise.all([closingGateway, closingPlugin, closingOtherGateway]);
@@ -178,15 +182,11 @@ describe("question channel runtime", () => {
     let clearing: Promise<void> | undefined;
     try {
       runtime.handleRequested(record, scheduler);
-      runtime.registerDelivery({
-        questionId: record.id,
-        deliveryId: "reentrant-clear",
-        finalize: () => {
-          clearing = runtime.clear();
-          return release.promise;
-        },
+      deliver("reentrant-clear", () => {
+        clearing = runtime.clear();
+        return release.promise;
       });
-      runtime.handleResolved({ id: record.id, status: "expired" });
+      expire();
       expect(clearing).toBeDefined();
       expect(clock.armedAtMs).toBeNull();
       release.resolve();
@@ -233,9 +233,9 @@ describe("question channel runtime", () => {
       await closing;
       runtime.retireGateway(gateway.signal);
       deliver("stale", staleFinalize);
-      runtime.handleResolved({ id: record.id, status: "expired" });
+      expire();
       expect(staleFinalize).not.toHaveBeenCalled();
-      runtime.handleResolved({ id: otherRecord.id, status: "expired" });
+      expire(otherRecord.id);
       expect(otherFinalize).toHaveBeenCalledExactlyOnceWith("Expired");
     } finally {
       resolveQuestion.resolve();
@@ -255,12 +255,8 @@ describe("question channel runtime", () => {
       const admission = mode === "rooted" ? tryBeginGatewayRootWorkAdmission() : null;
       const deliverWithAdmission = async () => {
         runtime.handleRequested(record, scheduler);
-        runtime.registerDelivery({
-          questionId: record.id,
-          deliveryId: "root-retention",
-          finalize: () => release.promise,
-        });
-        runtime.handleResolved({ id: record.id, status: "expired" });
+        deliver("root-retention", () => release.promise);
+        expire();
       };
       try {
         if (mode === "rooted") {
@@ -280,14 +276,8 @@ describe("question channel runtime", () => {
   );
 
   it("shares finalizers between separately evaluated gateway and plugin runtime modules", async () => {
-    const gateway = await importFreshModule<typeof import("./question-channel-runtime.js")>(
-      import.meta.url,
-      "./question-channel-runtime.js?scope=question-gateway-owner",
-    );
-    const plugin = await importFreshModule<typeof import("./question-channel-runtime.js")>(
-      import.meta.url,
-      "./question-channel-runtime.js?scope=question-plugin-sdk",
-    );
+    const gateway = await freshRuntime("question-gateway-owner");
+    const plugin = await freshRuntime("question-plugin-sdk");
     const finalize = vi.fn();
 
     try {
@@ -307,10 +297,7 @@ describe("question channel runtime", () => {
 
   it("clears shared callbacks and retention timers when the gateway restarts", async () => {
     try {
-      const gateway = await importFreshModule<typeof import("./question-channel-runtime.js")>(
-        import.meta.url,
-        "./question-channel-runtime.js?scope=question-gateway-lifecycle",
-      );
+      const gateway = await freshRuntime("question-gateway-lifecycle");
       const staleFinalize = vi.fn();
       gateway.handleQuestionChannelRequested(record, scheduler);
       gateway.registerQuestionChannelDelivery({
@@ -354,7 +341,7 @@ describe("question channel runtime", () => {
     const finalize = vi.fn();
 
     runtime.handleRequested(record, scheduler);
-    runtime.handleResolved({ id: record.id, status: "expired" });
+    expire();
     await clock.advanceBy(15_001);
     deliver("slack:late", finalize);
 
@@ -368,7 +355,7 @@ describe("question channel runtime", () => {
     runtime.handleRequested({ ...record, createdAtMs: 20_000, expiresAtMs: 30_000 }, scheduler);
     deliver("new-question", finalize);
     expect(finalize).not.toHaveBeenCalled();
-    runtime.handleResolved({ id: record.id, status: "expired" });
+    expire();
     expect(finalize).toHaveBeenCalledExactlyOnceWith("Expired");
   });
 
@@ -391,7 +378,7 @@ describe("question channel runtime", () => {
       let delivery: Promise<void> | undefined;
       try {
         await gateway.track(() => runtime.handleRequested(record, scheduler));
-        runtime.handleResolved({ id: record.id, status: "expired" });
+        expire();
         await capturingScope.track(() => {
           delivery = runtime.runWithDeliveries(
             [record.id],
@@ -445,12 +432,8 @@ describe("question channel runtime", () => {
     const onFinalizeError = vi.fn();
     runtime = createQuestionChannelRuntime({ onFinalizeError });
     runtime.handleRequested(record, scheduler);
-    runtime.registerDelivery({
-      questionId: record.id,
-      deliveryId: "discord:1",
-      finalize: () => {
-        throw error;
-      },
+    deliver("discord:1", () => {
+      throw error;
     });
     runtime.handleResolved({ id: record.id, status: "cancelled" });
     runtime.handleResolved({ id: record.id, status: "cancelled" });

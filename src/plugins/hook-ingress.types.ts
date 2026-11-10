@@ -5,12 +5,12 @@
  * and album members. Final route-bound ingress authority remains with the later
  * native context builder.
  */
-export type PluginHookBeforeChannelIngressEvent = {
+export type PluginHookBeforeChannelAttachmentLoadEvent = {
   /** Channel-specific primitive DTO; never the transport's native journal/update object. */
   readonly providerUpdate: Readonly<Record<string, unknown>>;
 };
 
-export type PluginHookBeforeChannelIngressContext = {
+export type PluginHookBeforeChannelAttachmentLoadContext = {
   readonly channelId: string;
   readonly accountId: string;
   readonly abortSignal: AbortSignal;
@@ -19,7 +19,7 @@ export type PluginHookBeforeChannelIngressContext = {
   readonly heartbeatIntervalMs?: number;
 };
 
-export type PluginHookBeforeChannelIngressResult = {
+export type PluginHookBeforeChannelAttachmentLoadResult = {
   /** Prepared inbound text, not an outbound reply or adoption receipt. */
   text: string;
   /** Skip native attachment loading when the text already replaces those attachments. */

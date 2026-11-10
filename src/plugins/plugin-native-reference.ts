@@ -97,14 +97,54 @@ export function createPluginNativeReferenceValidator(boundary: string, pluginId:
           verdict = { placements: new Set(), members: new Set() };
           admitted.set(namespace, verdict);
         }
-        assertPluginNativeReferenceDirectory(
-          target,
-          namespace,
-          boundary,
-          directory,
-          verdict.members,
+        const admittedMembers = verdict.members;
+        // Hardlinks keep bytes but not realpath parents; only a coherent captured directory can use them.
+        nativeReferenceProgress.publish({
           pluginId,
-        );
+          completed: verifiedMembers,
+        } satisfies NativeReferenceProgress);
+        for (const [name, member] of Object.entries(namespace.members)) {
+          if (!isPathInside(directory, name || ".")) {
+            continue;
+          }
+          const memberPath = path.join(path.dirname(target), path.relative(directory, name || "."));
+          // Parent and child native directories can cover the same member at the same placement.
+          const memberKey = `${name}\0${memberPath}`;
+          if (admittedMembers.has(memberKey)) {
+            continue;
+          }
+          const filename = fs.realpathSync(memberPath);
+          if (
+            !isPathInside(boundary, filename) &&
+            !isPathInside(pluginNativeNamespaceBoundary(namespace), filename)
+          ) {
+            throw new Error(`Companion ${name} leaves the captured generation`);
+          }
+          const current = fs.statSync(filename, { bigint: true });
+          if (member.sizeBytes === undefined) {
+            if (!current.isDirectory()) {
+              throw new Error(`Companion ${name} is not a directory`);
+            }
+          } else {
+            const captured = fs.statSync(pluginNativeNamespaceMemberPath(namespace, name), {
+              bigint: true,
+            });
+            if (current.dev !== captured.dev || current.ino !== captured.ino) {
+              const content = hashPluginSourceFile(filename, path.dirname(filename));
+              if (
+                content.contentHash !== member.contentHash ||
+                content.sizeBytes !== member.sizeBytes
+              ) {
+                throw new Error(`Companion ${name} differs from its captured bytes`);
+              }
+            }
+          }
+          admittedMembers.add(memberKey);
+          nativeReferenceProgress.publish({
+            pluginId,
+            completed: ++verifiedMembers,
+          } satisfies NativeReferenceProgress);
+        }
         verdict.placements.add(placement);
       }
       if (expectedHost) {
@@ -120,60 +160,6 @@ export function createPluginNativeReferenceValidator(boundary: string, pluginId:
       );
     }
   };
-}
-
-/** Hardlinks keep bytes but not realpath parents; only a coherent captured directory can use them. */
-function assertPluginNativeReferenceDirectory(
-  target: string,
-  namespace: PluginNativeNamespaceFact,
-  boundary: string,
-  directory: string,
-  admittedMembers: Set<string>,
-  pluginId: string,
-): void {
-  nativeReferenceProgress.publish({
-    pluginId,
-    completed: verifiedMembers,
-  } satisfies NativeReferenceProgress);
-  for (const [name, member] of Object.entries(namespace.members)) {
-    if (!isPathInside(directory, name || ".")) {
-      continue;
-    }
-    const memberPath = path.join(path.dirname(target), path.relative(directory, name || "."));
-    // Parent and child native directories can cover the same member at the same placement.
-    const memberKey = `${name}\0${memberPath}`;
-    if (admittedMembers.has(memberKey)) {
-      continue;
-    }
-    const filename = fs.realpathSync(memberPath);
-    if (
-      !isPathInside(boundary, filename) &&
-      !isPathInside(pluginNativeNamespaceBoundary(namespace), filename)
-    ) {
-      throw new Error(`Companion ${name} leaves the captured generation`);
-    }
-    const current = fs.statSync(filename, { bigint: true });
-    if (member.sizeBytes === undefined) {
-      if (!current.isDirectory()) {
-        throw new Error(`Companion ${name} is not a directory`);
-      }
-    } else {
-      const captured = fs.statSync(pluginNativeNamespaceMemberPath(namespace, name), {
-        bigint: true,
-      });
-      if (current.dev !== captured.dev || current.ino !== captured.ino) {
-        const content = hashPluginSourceFile(filename, path.dirname(filename));
-        if (content.contentHash !== member.contentHash || content.sizeBytes !== member.sizeBytes) {
-          throw new Error(`Companion ${name} differs from its captured bytes`);
-        }
-      }
-    }
-    admittedMembers.add(memberKey);
-    nativeReferenceProgress.publish({
-      pluginId,
-      completed: ++verifiedMembers,
-    } satisfies NativeReferenceProgress);
-  }
 }
 
 /** The caller has selected this exact recovery-map entry; symlinks and hardlinks retain its inode. */

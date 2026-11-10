@@ -19,7 +19,9 @@ it("remeasures each disclosure's own content on pointer and focus interactions",
       />
     </>
   ));
-  await waitForSolid(() => expect(container.querySelectorAll(".chat-tool-row")).toHaveLength(2));
+  await waitForSolid(() =>
+    expect(container.querySelectorAll(".chat-tool-row:not([aria-busy])")).toHaveLength(2),
+  );
   const [first, second] = [...container.querySelectorAll<HTMLElement>(".chat-tool-row")];
   let firstWidth = 80;
   for (const [row, width] of [

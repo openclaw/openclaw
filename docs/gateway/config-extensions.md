@@ -15,7 +15,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 
 OpenClaw-managed MCP server definitions live under `mcp.servers` for embedded
 OpenClaw and other runtime adapters. `openclaw mcp list`, `show`, `set`, and
-`unset` manage this block without connecting to the servers. The Fetch example
+`unset` manage this block without connecting to the servers. The [Fetch server](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch) example
 requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```json5
@@ -82,10 +82,17 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   for private endpoints and mutual TLS.
 - `mcp.servers.<name>.toolFilter`: optional per-server tool selection. `include`
   limits the discovered MCP tools to matching names; `exclude` hides matching
-  names. Entries are exact MCP tool names or simple `*` globs. Servers with
-  resources or prompts also generate utility tool names (`resources_list`,
-  `resources_read`, `prompts_list`, `prompts_get`), and those names use the
-  same filter.
+  names. Entries are exact MCP tool names or simple `*` globs. An exact entry
+  that names no advertised raw tool can also be an unambiguous unsuffixed name
+  shown by `openclaw mcp probe` (for example `docs__search`). Exact raw names
+  take precedence, and globs match raw names only. Use raw names for colliding
+  probe names, including names with a collision suffix such as `-2`: in
+  `include` such a name selects nothing, and in `exclude` it hides every tool
+  that could carry it. If `include` is set and the filter leaves none of the
+  advertised tools, OpenClaw logs a warning; an exclude-only filter that hides
+  every tool is treated as intentional. Servers with resources or prompts also
+  generate utility tool names (`resources_list`, `resources_read`,
+  `prompts_list`, `prompts_get`), and those names use the same filter.
 - `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
   This block is OpenClaw metadata for Codex app-server threads only; it does not
   affect ACP sessions, generic Codex harness config, or other runtime adapters.
@@ -131,6 +138,18 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   A runtime can own multiple
   configured server connections. Sessions without available MCP servers and
   sign-in-only catalogs do not consume this limit. Native client runtimes manage their own bounds.
+- Retained stdio MCP children do not consume the spawn broker's 256 concurrent
+  startup slots once their startup handoff completes. Ordinary commands can
+  continue starting while session servers stay alive. The broker also limits
+  pending and retained children to 512 total, with at most 448 MCP children,
+  leaving 64 slots available to ordinary commands. Both host and worker enforce
+  these limits; capacity errors direct you to close unused sessions or running
+  processes before retrying. Reservations last until process cleanup settles.
+  Unconfirmed launch outcomes keep their reservations across broker restarts;
+  restart the Gateway if capacity remains unavailable after session cleanup.
+  Session and command owners retain control of process lifetime. The runtime
+  limit above still applies, and native broker resources have a separate
+  256-resource limit.
 - MCP config changes retire only changed or removed server connections. Unchanged
   servers keep their transports and tool catalogs; active runs can continue calling
   their tools and resources. The next turn's discovery creates changed servers from the new config. Plugin
@@ -206,7 +225,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
       "voice-call": {
         enabled: true,
         hooks: {
-          allowPromptInjection: false,
+          allowPromptModification: false,
         },
         config: { provider: "twilio" },
       },
@@ -222,7 +241,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
-- `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks prompt-mutating hooks such as `before_prompt_build`. Applies to native plugin hooks and supported bundle-provided hook directories.
+- `plugins.entries.<id>.hooks.allowPromptModification`: when `false`, core blocks prompt-mutating hooks such as `before_prompt_build`. Applies to native plugin hooks and supported bundle-provided hook directories.
 - `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_run`, `before_agent_finalize`, and `agent_end`. It also grants the bounded, invocation-scoped `session_end` ended-transcript reader; metadata-only `session_end` handlers remain registerable without the grant.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of normalized `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
@@ -301,6 +320,11 @@ conversation bindings, or any non-Codex harness.
   marketplace-qualified. `/codex plugins available` lists discoverable
   identities, and an owner or `operator.admin` can install one with
   `/codex plugins install <plugin>@<marketplace>`.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.read_only`: defaults to
+  `false`. When `true`, only connected-app tools explicitly marked read-only
+  and enabled in the current app inventory are available. Unknown tools and
+  stale native tool grants are denied. This restriction applies with every
+  `allow_destructive_actions` value; it does not change that flag when disabled.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the
@@ -380,8 +404,7 @@ See [Plugins](/tools/plugin).
 ```
 
 - `host.enabled` is the single Canvas host switch and defaults to enabled. It
-  gates hosted widget documents under `/__openclaw__/canvas/` and A2UI renderer
-  assets under `/__openclaw__/a2ui/`.
+  gates hosted widget documents under `/__openclaw__/canvas/`.
 - Local-only: keep `gateway.bind: "loopback"` (default).
 - Non-loopback binds: these routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
 - Node WebViews typically don't send auth headers; after a macOS node is paired and connected, the Gateway advertises a node-scoped `pluginSurfaceUrls.canvas` capability URL.

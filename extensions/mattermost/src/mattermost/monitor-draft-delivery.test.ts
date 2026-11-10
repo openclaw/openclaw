@@ -50,6 +50,13 @@ function createDeliveryResult(
   };
 }
 
+const visible = (messageIds: string[], content: string, outcome?: "text" | "media") => ({
+  messageIds,
+  visibleReplySent: true,
+  content,
+  ...(outcome ? { outcome } : {}),
+});
+
 type DraftStreamMock = ReturnType<typeof createDraftStreamMock>;
 
 function createDraftStreamMock(postId: string | null | undefined = "preview-post-1") {
@@ -183,12 +190,7 @@ it("records thread participation when a same-thread final finalizes the preview 
     updateMattermostPostSpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
   );
   expect(recordThreadParticipation).toHaveBeenCalledTimes(1);
-  expect(result).toMatchObject({
-    outcome: "text",
-    messageIds: ["patched"],
-    visibleReplySent: true,
-    content: "All good",
-  });
+  expect(result).toMatchObject(visible(["patched"], "All good", "text"));
 });
 
 it("delivers native value buttons instead of losing them in a preview edit", async () => {
@@ -206,12 +208,7 @@ it("reports a final already published in a sealed preview generation", async () 
   const result = await deliverPublished();
 
   expect(deliverFinal).not.toHaveBeenCalled();
-  expect(result).toMatchObject({
-    outcome: "text",
-    messageIds: ["sealed-post-1"],
-    visibleReplySent: true,
-    content: "Already visible",
-  });
+  expect(result).toMatchObject(visible(["sealed-post-1"], "Already visible", "text"));
 });
 
 it("delivers unsent presentation controls after preview text was already published", async () => {
@@ -234,12 +231,9 @@ it("still delivers media when the text is already published", async () => {
     text: "",
     mediaUrl: "https://example.com/image.png",
   });
-  expect(result).toMatchObject({
-    outcome: "media",
-    messageIds: ["sealed-post-1", "media-post-1"],
-    visibleReplySent: true,
-    content: "Already visible",
-  });
+  expect(result).toMatchObject(
+    visible(["sealed-post-1", "media-post-1"], "Already visible", "media"),
+  );
 });
 
 it("keeps a finalized preview after a later warning when participation failed", async () => {
@@ -256,11 +250,7 @@ it("keeps a finalized preview after a later warning when participation failed", 
   const firstDelivery = deliverDraftPreview({ text: "Successful assistant final" }, params);
   await expect(firstDelivery).rejects.toMatchObject({
     code: "CHANNEL_PARTIAL_DELIVERY",
-    deliveryResult: {
-      messageIds: ["patched"],
-      visibleReplySent: true,
-      content: "Successful assistant final",
-    },
+    deliveryResult: visible(["patched"], "Successful assistant final"),
   });
   await deliverDraftPreview({ text: "Tool error warning", isError: true }, params);
 
@@ -280,11 +270,7 @@ it("preserves a completed normal send when preview cleanup fails", async () => {
     { effectiveReplyToId: undefined },
   );
 
-  expect(result).toMatchObject({
-    messageIds: ["delivered-post-1"],
-    visibleReplySent: true,
-    content: "Already visible",
-  });
+  expect(result).toMatchObject(visible(["delivered-post-1"], "Already visible"));
   expect(deliverFinal).toHaveBeenCalledTimes(1);
   expect(draftStream.clear).toHaveBeenCalledTimes(1);
 });
@@ -301,31 +287,22 @@ it("keeps the preview and sends media-only for TTS supplement finals", async () 
 });
 
 it("retries an explicitly unsent TTS supplement through normal delivery", async () => {
-  let deliveryAttempt = 0;
-  const deliverPayload = vi.fn(async (payload: { text?: string }) => {
-    deliveryAttempt += 1;
-    if (deliveryAttempt === 1) {
-      return {
-        outcome: "empty" as const,
-        visibleReplySent: false,
-        suppression: { reason: "no_visible_result" as const },
-      };
-    }
-    return {
+  const deliverPayload = vi
+    .fn<DraftDeliveryParams["deliverPayload"]>(async (payload) => ({
       ...createDeliveryResult("supplement-post-1", payload.text ?? "", "media"),
       outcome: "text" as const,
-    };
-  });
+    }))
+    .mockResolvedValueOnce({
+      outcome: "empty",
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
 
   const result = await deliverDraftPreview(ttsPayload(), { deliverPayload });
 
   expect(deliverPayload).toHaveBeenCalledTimes(2);
   expect(deliverPayload.mock.calls[1]?.[0]).not.toHaveProperty("text");
-  expect(result).toMatchObject({
-    messageIds: ["patched", "supplement-post-1"],
-    visibleReplySent: true,
-    content: "Spoken answer",
-  });
+  expect(result).toMatchObject(visible(["patched", "supplement-post-1"], "Spoken answer"));
 });
 
 it("preserves the finalized preview receipt when its supplement fails after sending", async () => {
@@ -342,11 +319,7 @@ it("preserves the finalized preview receipt when its supplement fails after send
   const delivery = deliverDraftPreview(ttsPayload(), { deliverPayload });
   await expect(delivery).rejects.toSatisfy(isChannelPartialDeliveryError);
   await expect(delivery).rejects.toMatchObject({
-    deliveryResult: {
-      messageIds: ["patched", "media-post-1"],
-      visibleReplySent: true,
-      content: "Spoken answer",
-    },
+    deliveryResult: visible(["patched", "media-post-1"], "Spoken answer"),
   });
 });
 

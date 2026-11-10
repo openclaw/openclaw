@@ -18,7 +18,7 @@
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .emoji-search-panel__search:focus-visible {

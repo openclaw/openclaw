@@ -29,17 +29,11 @@ describe("argv-invocation", () => {
 
   it.each([
     ["skills", ["--agent", "verify"], ["skills"]],
-
     ["skills", ["--", "verify"], ["skills", "verify"]],
   ])("matches Commander for %s %j", async (rootName, args, expectedPath) => {
     const program = new Command().name("openclaw").enablePositionalOptions();
-    const root = program.command(rootName);
-    if (rootName === "config") {
-      root.option("--section <section>");
-    } else {
-      root.option("--agent <id>").option("--json");
-    }
-    const child = root.command(rootName === "config" ? "get" : "verify");
+    const root = program.command(rootName).option("--agent <id>").option("--json");
+    const child = root.command("verify");
     let parsedPath: string[] = [];
     for (const command of [root, child]) {
       command.action(() => {

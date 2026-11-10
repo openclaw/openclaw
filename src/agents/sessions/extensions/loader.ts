@@ -78,7 +78,6 @@ export function createExtensionRuntime(): ExtensionRuntime {
 }
 
 /**
- * Create the ExtensionAPI for an extension.
  * Registration methods write to the extension object.
  * Action methods delegate to the shared runtime.
  */

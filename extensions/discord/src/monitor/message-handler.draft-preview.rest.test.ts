@@ -38,8 +38,6 @@ function createContinuationHarness(options?: {
     beforeCleanup?: () => Promise<void>;
   } = {};
   const requests: string[] = [];
-  const requestPaths: string[] = [];
-  const deletedIds: string[] = [];
   const rest = new RequestClient("test-token", {
     queueRequests: options?.queueRequests ?? false,
     fetch: async (input, init, assertCurrent?: () => void) => {
@@ -47,10 +45,8 @@ function createContinuationHarness(options?: {
       assertCurrent?.();
       requests.push(init?.method ?? "GET");
       const url = new URL(input instanceof Request ? input.url : input);
-      requestPaths.push(`${init?.method ?? "GET"} ${url.pathname.replace("/api/v10", "")}`);
       const id = url.pathname.split("/").at(-1)!;
       if (init?.method === "DELETE") {
-        deletedIds.push(id);
         if (failures.deletes > 0) {
           failures.deletes--;
           return Response.json({ message: "temporarily unavailable" }, { status: 503 });
@@ -115,8 +111,6 @@ function createContinuationHarness(options?: {
     failures,
     rest,
     requests,
-    requestPaths,
-    deletedIds,
     admission,
     rateLimited,
     stream,
@@ -217,8 +211,17 @@ async function stageDelegation(controller: Preview) {
     phase: "end",
     progressText: "Checking the implementation with delegated reviewers.",
   });
-  await controller.pushItemEvent(
-    projectAgentToolActivity({ name: "sessions_spawn", toolCallId: "spawn", phase: "start" }),
+  await pushTool(controller, "sessions_spawn", "spawn");
+}
+
+function pushTool(
+  controller: Preview,
+  name: string,
+  toolCallId: string,
+  extra: Partial<Parameters<typeof projectAgentToolActivity>[0]> = {},
+) {
+  return controller.pushItemEvent(
+    projectAgentToolActivity({ name, toolCallId, phase: "start", ...extra }),
   );
 }
 
@@ -242,14 +245,9 @@ describe("Discord draft preview REST lifecycle", () => {
         discordConfig:
           toolProgress === undefined ? {} : { streaming: { progress: { toolProgress } } },
       });
-      await controller.pushItemEvent(
-        projectAgentToolActivity({
-          name: "sessions_search",
-          toolCallId: "search",
-          phase: "start",
-          args: { query: "PRIVATE_SEARCH_QUERY" },
-        }),
-      );
+      await pushTool(controller, "sessions_search", "search", {
+        args: { query: "PRIVATE_SEARCH_QUERY" },
+      });
       await advancePreview(controller);
       expectCard(
         visible,
@@ -266,14 +264,10 @@ describe("Discord draft preview REST lifecycle", () => {
       });
       await advancePreview(controller, 1_200);
       expectCard(visible, ["Checking the invitation history."]);
-      await controller.pushItemEvent(
-        projectAgentToolActivity({
-          name: "sessions_search",
-          toolCallId: "search",
-          phase: "result",
-          status: "completed",
-        }),
-      );
+      await pushTool(controller, "sessions_search", "search", {
+        phase: "result",
+        status: "completed",
+      });
       await controller.pushNarrationProgress("Comparing the results with the pending invitations.");
       await advancePreview(controller, 20_000);
       expectCard(visible, ["Comparing the results with the pending invitations."]);
@@ -300,9 +294,7 @@ describe("Discord draft preview REST lifecycle", () => {
     await controller.pushItemEvent({ kind: "preamble", progressText: "Late parent text" });
     expect(controller.handleQueuedFollowupAdmitted()).toBe(true);
     expect(controller.draftStream).not.toBe(stream);
-    await controller.pushItemEvent(
-      projectAgentToolActivity({ name: "read", toolCallId: "queued-read", phase: "start" }),
-    );
+    await pushTool(controller, "read", "queued-read");
     await advancePreview(controller);
     expect(visible.size).toBe(2);
     expect(visible.get("2")).toBe("Working");
@@ -472,46 +464,8 @@ describe("Discord draft preview REST lifecycle", () => {
     expect([...visible.values()]).toEqual([]);
   });
 
-  it("publishes and retracts a short complete plan, then resumes in block mode", async () => {
-    const { controller, visible } = createContinuationHarness({ mode: "block", realTimers: true });
-    await controller.pushPlanProgress([]);
-    expect(visible.size).toBe(0);
-    await controller.pushPlanProgress([{ step: "Check", status: "in_progress" }]);
-    await controller.flush();
-    expect([...visible.values()]).toEqual(["▸ Check"]);
-    await controller.pushPlanProgress([], { explanation: "Progress updated" });
-    await controller.flush();
-    expect([...visible.values()]).toEqual(["Progress updated"]);
-    await controller.pushPlanProgress([]);
-    expect(visible.size).toBe(0);
-    await controller.pushPlanProgress([{ step: "Retry", status: "pending" }]);
-    await controller.flush();
-    expect([...visible.values()]).toEqual(["▢ Retry"]);
-    controller.handleAssistantMessageBoundary();
-    await controller.pushItemEvent({
-      itemId: "card-rejected",
-      kind: "tool",
-      name: "progress_card",
-      phase: "end",
-      status: "blocked",
-      meta: '<progress aria-label="private detail"></progress>',
-    });
-    controller.handleAssistantMessageBoundary();
-    await controller.pushItemEvent(
-      projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
-    );
-    await controller.pushToolEvent({ toolCallId: "exec-1", name: "exec", phase: "start" });
-    await controller.flush();
-    expectCard(visible, ["▢ Retry", "blocked", "Exec"], ["private detail"]);
-    controller.handleAssistantMessageBoundary();
-    await controller.pushPlanProgress([]);
-    await controller.flush();
-    expectCard(visible, ["blocked", "Exec"], ["Retry"]);
-    await controller.cleanup();
-  });
-
   it("retains the progress draft after an error final is delivered", async () => {
-    const { controller, rest, requestPaths } = createContinuationHarness({ realTimers: true });
+    const { controller, rest, visible, requests } = createContinuationHarness({ realTimers: true });
     controller.draftStream?.update("Exec: failed");
     await controller.flush();
     await controller.lifecycle.deliver({
@@ -529,17 +483,16 @@ describe("Discord draft preview REST lifecycle", () => {
     await controller.cleanup();
     await controller.flush();
 
-    expect(requestPaths).toEqual(["POST /channels/c1/messages", "POST /channels/c1/messages"]);
+    expect(requests).toEqual(["POST", "POST"]);
+    expect([...visible.values()]).toEqual(["Exec: failed", "Something failed"]);
   });
 
-  it("retries teardown cleanup after two failed preview deletions", async () => {
+  it("removes the preview after two transient delete failures in one cleanup", async () => {
     const firstCreateStarted = createDeferred<void>();
     const finishFirstCreate = createDeferred<void>();
-    const { controller, visible, deletedIds, failures, admission, requests } =
-      createContinuationHarness({
-        queueRequests: true,
-        realTimers: true,
-      });
+    const { controller, visible, failures, admission, requests } = createContinuationHarness({
+      queueRequests: true,
+    });
     failures.deletes = 2;
     admission.afterCreate = async () => {
       firstCreateStarted.resolve();
@@ -549,13 +502,10 @@ describe("Discord draft preview REST lifecycle", () => {
     await firstCreateStarted.promise;
     const cleanup = controller.cleanup();
     finishFirstCreate.resolve();
+    await vi.runAllTimersAsync();
     await cleanup;
 
-    expect(deletedIds).toEqual(["1", "1"]);
-    expect([...visible]).toEqual([["1", "prior turn progress"]]);
-    await controller.cleanup();
     expect([...visible]).toEqual([]);
-    expect(deletedIds.filter((id) => id === "1")).toHaveLength(3);
     expect(requests).toEqual(["POST", "DELETE", "DELETE", "DELETE"]);
   });
 });

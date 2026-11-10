@@ -5,9 +5,9 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
-  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
@@ -62,8 +62,6 @@ type TrajectoryRuntimeAppendResult = {
   receipt: {
     kind: "trajectory-runtime-append";
     sessionId: string;
-    appendedRange: { firstSeq: number; lastSeq: number } | undefined;
-    removedThroughSeq: number | undefined;
     windowFacts: TrajectoryRuntimeWindowFacts;
   };
 };
@@ -126,8 +124,6 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
       receipt: {
         kind: "trajectory-runtime-append",
         sessionId,
-        appendedRange: { firstSeq: known.nextSeq, lastSeq: known.nextSeq + rows.length - 1 },
-        removedThroughSeq: undefined,
         windowFacts: {
           nextSeq: known.nextSeq + rows.length,
           retainedBytes: known.retainedBytes + retainedBytes,
@@ -188,8 +184,6 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
         receipt: {
           kind: "trajectory-runtime-append" as const,
           sessionId,
-          appendedRange: rows.length ? { firstSeq: window.nextSeq, lastSeq: seq - 1 } : undefined,
-          removedThroughSeq: window.removeThroughSeq,
           windowFacts: {
             nextSeq: window.removeThroughSeq === seq - 1 ? 0 : seq,
             retainedBytes: window.retainedBytes,
@@ -314,7 +308,6 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
               events.select(["event_json", "event_utf8_bytes"]).as("events"),
               Math.floor(scope.maxEventBytes),
               "Trajectory runtime store",
-              { hasExactUtf8Bytes: true },
             );
           }
           let query = events
@@ -406,13 +399,13 @@ function prepareSqliteTrajectoryRuntimeWindow(
         ];
       })
       .where("session_id", "=", sessionId)
-      .orderBy("seq", "desc"),
+      .orderBy("seq", known ? "asc" : "desc"),
   );
-  let nextSeq: number | undefined;
-  let retainedBytes = input.retainedBytes;
+  let nextSeq = known?.nextSeq;
+  let retainedBytes = input.retainedBytes + (known?.retainedBytes ?? 0);
   let removeThroughSeq: number | undefined;
-  // The same descending read supplies the next sequence and the persisted suffix.
-  // Close it before inserting under this transaction's existing writer lock.
+  // Committed window facts let overflow read only the prefix it expires. A cold
+  // window still reads backward to recover its sequence and retained suffix.
   for (const row of rows) {
     nextSeq ??= sqliteNumber(row.seq) + 1;
     if (input.discardPrevious || input.expiredThroughIndex >= 0) {
@@ -422,11 +415,18 @@ function prepareSqliteTrajectoryRuntimeWindow(
       (row.event_json === null
         ? sqliteNumber(row.event_bytes)
         : Buffer.byteLength(row.event_json, "utf8")) + 1;
-    if (!(retainedBytes + rowBytes <= input.maxRuntimeBytes)) {
+    if (known) {
+      retainedBytes -= rowBytes;
+      removeThroughSeq = row.seq;
+      if (retainedBytes <= input.maxRuntimeBytes) {
+        break;
+      }
+    } else if (!(retainedBytes + rowBytes <= input.maxRuntimeBytes)) {
       removeThroughSeq = row.seq;
       break;
+    } else {
+      retainedBytes += rowBytes;
     }
-    retainedBytes += rowBytes;
   }
   nextSeq ??= 0;
   if (input.expiredThroughIndex >= 0) {

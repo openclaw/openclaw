@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
 import { compareCards } from "./store-card-helpers.js";
@@ -59,9 +60,9 @@ function writeLine(value: string): void {
 
 function formatCardLine(card: WorkboardCard): string {
   const boardId = card.metadata?.automation?.boardId ?? "default";
-  const agent = card.agentId ? ` ${card.agentId}` : "";
+  const agent = card.agentId ? terminalText` ${card.agentId}` : "";
   const archived = card.metadata?.archivedAt ? " (archived)" : "";
-  return `${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}${archived}`;
+  return terminalText`${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}${archived}`;
 }
 
 function writeCards(cards: WorkboardCard[], options: JsonOptions): void {
@@ -219,7 +220,12 @@ export function registerWorkboardCli(params: {
       }
       writeCard(card, options);
       if (!options.json && card.notes) {
-        writeLine(card.notes);
+        writeLine(
+          card.notes
+            .split("\n")
+            .map((line) => terminalText`${line}`)
+            .join("\n"),
+        );
       }
     });
 
@@ -321,7 +327,7 @@ export function registerWorkboardCli(params: {
           typeof failure.cardId === "string" &&
           typeof failure.error === "string"
         ) {
-          writeLine(`${failure.cardId.slice(0, 8)}: ${failure.error}`);
+          writeLine(terminalText`${failure.cardId.slice(0, 8)}: ${failure.error}`);
         }
       }
     }

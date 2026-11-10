@@ -17,7 +17,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
-import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
 
 it.each([false, true])(
   "settles native idle WAL close and preserves foreign writes (foreign write: %s)",
@@ -48,10 +48,7 @@ it.each([false, true])(
         expect(fs.existsSync(`${pathname}-shm`)).toBe(true);
         const databaseGenerations = readUpdateDatabaseGenerations([pathname]);
         const admission = resolveDoctorUpdateAdmission(state.env);
-        const maintenance = await beginDoctorMaintenance({
-          root: null,
-          options: { repair: true, nonInteractive: true },
-          runtime: { log() {}, error() {}, exit() {} },
+        const maintenance = await beginDoctorRepair({
           databaseGenerations,
           assertCurrent: admission.assertCurrent,
         });
@@ -94,16 +91,12 @@ it.each([false, true])(
             readUpdateDatabaseGenerations([pathname]),
           );
           if (foreignWrite) {
-            const preserved = new DatabaseSync(pathname, { readOnly: true });
-            try {
-              expect(
-                preserved
-                  .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-                  .get("test.foreign-write"),
-              ).toEqual({ value_json: "99" });
-            } finally {
-              preserved.close();
-            }
+            using preserved = new DatabaseSync(pathname, { readOnly: true });
+            expect(
+              preserved
+                .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+                .get("test.foreign-write"),
+            ).toEqual({ value_json: "99" });
           }
         } finally {
           await maintenance?.release();
@@ -124,22 +117,15 @@ it("refuses rollback attribution for a foreign write during Doctor maintenance",
       seed.exec("CREATE TABLE evidence(value INTEGER); INSERT INTO evidence VALUES (1)");
       seed.close();
       const databaseGenerations = await readUpdatePhysicalDatabaseGenerations([pathname]);
-      const maintenance = await beginDoctorMaintenance({
-        root: null,
-        options: { repair: true, nonInteractive: true },
-        runtime: { log() {}, error() {}, exit() {} },
-        databaseGenerations,
-      });
+      const maintenance = await beginDoctorRepair({ databaseGenerations });
       try {
         expect(maintenance).toBeDefined();
         expect(maintenance!.databaseWrites).toBeUndefined();
         // A raw SQLite connection does not participate in Gateway ownership.
         // Doctor never opens this database or owns this writer's transaction.
-        const foreign = new DatabaseSync(pathname);
-        try {
+        {
+          using foreign = new DatabaseSync(pathname);
           foreign.exec("INSERT INTO evidence VALUES (99)");
-        } finally {
-          foreign.close();
         }
         await maintenance!.releaseState();
         const receipt = maintenance!.databaseWrites;
@@ -175,14 +161,10 @@ it("refuses rollback attribution for a foreign write during Doctor maintenance",
         ).toBe(false);
         expect(result.reason).toBe("state-migrated-no-rollback");
         expect(result.steps[0]?.stderrTail).toContain("run openclaw doctor from the candidate");
-        const preserved = new DatabaseSync(pathname, { readOnly: true });
-        try {
-          expect(preserved.prepare("SELECT value FROM evidence WHERE value = 99").get()).toEqual({
-            value: 99,
-          });
-        } finally {
-          preserved.close();
-        }
+        using preserved = new DatabaseSync(pathname, { readOnly: true });
+        expect(preserved.prepare("SELECT value FROM evidence WHERE value = 99").get()).toEqual({
+          value: 99,
+        });
       } finally {
         await maintenance?.release();
       }

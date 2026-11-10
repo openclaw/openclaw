@@ -55,7 +55,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
 
 jobs:
@@ -536,7 +536,8 @@ jobs:
         # Corepack reads this checkout's packageManager before pnpm processes arguments.
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
-      - name: Materialize locked ClawHub CLI
+      - &materialize_bootstrap_clawhub_cli
+        name: Materialize locked ClawHub CLI
         id: clawhub_cli
         run: |
           set -euo pipefail
@@ -686,16 +687,10 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Materialize locked ClawHub CLI
-        id: clawhub_cli
-        run: |
-          set -euo pipefail
-          bash .release-harness/scripts/materialize-clawhub-cli.sh \
-            .release-harness/.github/release/clawhub-cli \
-            "${RUNNER_TEMP}/clawhub-cli" \
-            "${GITHUB_OUTPUT}"
+      - *materialize_bootstrap_clawhub_cli
 
-      - name: Download and verify immutable ClawHub bootstrap artifact
+      - &download_bootstrap_clawhub_artifact
+        name: Download and verify immutable ClawHub bootstrap artifact
         env:
           ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
           ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
@@ -732,7 +727,8 @@ jobs:
             --workflow-ref "${WORKFLOW_REF}" \
             --workflow-sha "${WORKFLOW_SHA}"
 
-      - name: Rehash immutable ClawHub bootstrap artifacts
+      - &rehash_bootstrap_clawhub_artifact
+        name: Rehash immutable ClawHub bootstrap artifacts
         env:
           ARTIFACT_NAME: ${{ needs.pack_bootstrap_plugins.outputs.artifact_name }}
           ARTIFACT_RUN_ATTEMPT: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_attempt }}
@@ -843,79 +839,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Materialize locked ClawHub CLI
-        id: clawhub_cli
-        run: |
-          set -euo pipefail
-          bash .release-harness/scripts/materialize-clawhub-cli.sh \
-            .release-harness/.github/release/clawhub-cli \
-            "${RUNNER_TEMP}/clawhub-cli" \
-            "${GITHUB_OUTPUT}"
+      - *materialize_bootstrap_clawhub_cli
 
-      - name: Download and verify immutable ClawHub bootstrap artifact
-        env:
-          ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
-          ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
-          ARTIFACT_NAME: ${{ needs.pack_bootstrap_plugins.outputs.artifact_name }}
-          ARTIFACT_RUN_ATTEMPT: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_attempt }}
-          ARTIFACT_RUN_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}
-          ARTIFACT_SIZE: ${{ needs.pack_bootstrap_plugins.outputs.artifact_size }}
-          GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
-          WORKFLOW_HEAD_BRANCH: ${{ github.ref_name }}
-          WORKFLOW_REF: ${{ github.ref }}
-          WORKFLOW_SHA: ${{ github.sha }}
-          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
-          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
-          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
-        run: |
-          set -euo pipefail
-          node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs download \
-            --artifact-digest "${ARTIFACT_DIGEST}" \
-            --artifact-id "${ARTIFACT_ID}" \
-            --artifact-name "${ARTIFACT_NAME}" \
-            --artifact-size "${ARTIFACT_SIZE}" \
-            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
-            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
-            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
-            --consumer-run-attempt "${GITHUB_RUN_ATTEMPT}" \
-            --output-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
-            --producer-job-name "Pack immutable ClawHub bootstrap artifacts" \
-            --repository "${GITHUB_REPOSITORY}" \
-            --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
-            --run-id "${ARTIFACT_RUN_ID}" \
-            --target-sha "${TARGET_SHA}" \
-            --workflow-head-branch "${WORKFLOW_HEAD_BRANCH}" \
-            --workflow-ref "${WORKFLOW_REF}" \
-            --workflow-sha "${WORKFLOW_SHA}"
+      - *download_bootstrap_clawhub_artifact
 
-      - name: Rehash immutable ClawHub bootstrap artifacts
-        env:
-          ARTIFACT_NAME: ${{ needs.pack_bootstrap_plugins.outputs.artifact_name }}
-          ARTIFACT_RUN_ATTEMPT: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_attempt }}
-          ARTIFACT_RUN_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}
-          RELEASE_PLUGINS: ${{ inputs.plugins }}
-          TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
-          WORKFLOW_SHA: ${{ github.sha }}
-          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
-          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
-          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
-        run: |
-          set -euo pipefail
-          node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs verify \
-            --artifact-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
-            --artifact-name "${ARTIFACT_NAME}" \
-            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
-            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
-            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
-            --manifest "${RUNNER_TEMP}/clawhub-bootstrap-artifact/manifest.json" \
-            --output "${RUNNER_TEMP}/clawhub-bootstrap-validated.json" \
-            --plugins "${RELEASE_PLUGINS}" \
-            --repository "${GITHUB_REPOSITORY}" \
-            --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
-            --run-id "${ARTIFACT_RUN_ID}" \
-            --target-sha "${TARGET_SHA}" \
-            --workflow-sha "${WORKFLOW_SHA}"
+      - *rehash_bootstrap_clawhub_artifact
 
       - name: Validate packed ClawHub package identities before credentials
         env:

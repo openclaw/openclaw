@@ -4,16 +4,18 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
 import { NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT } from "../app/native-link-routing.ts";
 import { formatDateTimeMs } from "../lib/format.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update-card.tsx";
 
 let originalWebkit: PropertyDescriptor | undefined;
-const checkFailure = "Could not check the latest update";
-const reconnectFailure = "Could not refresh. Check your connection and try again.";
+const checkFailure = "Couldn’t check for updates. Try again.";
+const reconnectFailure = "Couldn't reach the server";
 async function settle() {
   await Promise.resolve();
   flush();
@@ -130,14 +132,63 @@ afterEach(async () => {
   await Promise.resolve();
   vi.useRealTimers();
   vi.restoreAllMocks();
-  if (originalWebkit) {
-    Object.defineProperty(window, "webkit", originalWebkit);
-  } else {
-    Reflect.deleteProperty(window, "webkit");
-  }
+  restorePropertyDescriptor(window, "webkit", originalWebkit);
 });
 
 describe("SidebarUpdateCard", () => {
+  it("opens confirmation after a successful compact target check", async () => {
+    const restoreDialog = installDialogPolyfill();
+    const expansion = createDeferred<boolean>();
+    const opening = createDeferred<boolean>();
+    const element = await mount(gitUpdate, {
+      compact: true,
+      onCheckStatus: vi
+        .fn()
+        .mockReturnValueOnce(expansion.promise)
+        .mockImplementationOnce(async () => {
+          const ready = await opening.promise;
+          element.setProps({ updateAvailable: freshGitUpdate });
+          return ready;
+        }),
+    });
+    try {
+      await element.expand();
+      expansion.resolve(true);
+      await vi.waitFor(() => expect(element.action()?.disabled).toBe(false));
+      const action = element.action()!;
+      action.click();
+      await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(2));
+      expect(element.action()).toBe(action);
+      expect(action.disabled).toBe(true);
+      opening.resolve(true);
+      await vi.waitFor(() =>
+        expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull(),
+      );
+      const modal = document.querySelector("openclaw-modal-dialog")!;
+      expect(modal.textContent).toContain("cccccccc");
+      expect(modal.textContent).toContain("9 commits");
+      expect(modal.textContent).not.toContain("bbbbbbbb");
+    } finally {
+      document.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
+      restoreDialog();
+    }
+  });
+
+  it("reviews updates through the latest callback on the retained card", async () => {
+    const initial = vi.fn();
+    const current = vi.fn();
+    const card = await mount(stableUpdate, {
+      statusBanner: { tone: "warn", text: "Review available update" },
+      onReviewUpdate: initial,
+    });
+    const review = card.find<HTMLButtonElement>(".sidebar-update-card__review")!;
+    await card.update({ onReviewUpdate: current });
+    review.click();
+    expect(current).toHaveBeenCalledOnce();
+    expect(initial).not.toHaveBeenCalled();
+    expect(card.find(".sidebar-update-card__review")).toBe(review);
+  });
+
   it.each([
     ["native", false],
     ["native", true],
@@ -216,7 +267,7 @@ describe("SidebarUpdateCard", () => {
           const failedModal = document.querySelector("openclaw-modal-dialog");
           expect(failedModal).not.toBeNull();
           expect(failedModal?.textContent).toContain(
-            "Status could not be refreshed. Check your connection and try again.",
+            "Couldn’t refresh update status. Check your connection and try again.",
           );
           await element.update({
             statusBanner: {
@@ -315,17 +366,31 @@ describe("SidebarUpdateCard", () => {
   );
 
   it("retries a failed fresh target check in the compact row", async () => {
+    const check = createDeferred<boolean>();
+    const retryCheck = createDeferred<boolean>();
     const element = await mount(stableUpdate, {
       compact: true,
-      onCheckStatus: vi.fn(async () => false),
+      onCheckStatus: vi
+        .fn()
+        .mockReturnValueOnce(check.promise)
+        .mockReturnValueOnce(retryCheck.promise)
+        .mockResolvedValue(false),
       onUpdate: vi.fn(),
     });
     element.find("details")!.open = true;
+    await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledOnce());
+    expect(element.action()?.disabled).toBe(true);
+    expect(element.action()?.getAttribute("aria-busy")).toBe("true");
+    check.reject(new Error("Status unavailable"));
     await vi.waitFor(() => expect(element.text()).toContain(checkFailure));
     const action = element.action()!;
     await vi.waitFor(() => expect(action.disabled).toBe(false));
     action.click();
     await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(2));
+    expect(element.action()).toBe(action);
+    expect(action.disabled).toBe(true);
+    expect(element.text()).not.toContain(checkFailure);
+    retryCheck.resolve(false);
     await vi.waitFor(() => expect(action.disabled).toBe(false));
     expect(element.text()).toContain(checkFailure);
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
@@ -350,22 +415,22 @@ describe("SidebarUpdateCard", () => {
     expect(element.props().onUpdate).not.toHaveBeenCalled();
   });
 
-  it("ignores an obsolete refresh result after recovery state is re-established", async () => {
-    const element = await mount(null);
+  it("retains refresh retries across shell updates and ignores obsolete recovery results", async () => {
     const first = createDeferred<boolean>();
     const second = createDeferred<boolean>();
-    const onRefresh = vi
-      .fn<() => Promise<boolean>>()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    await element.update({ refreshRequired: true, onRefresh });
+    const third = createDeferred<boolean>();
+    const onRefresh = vi.fn<() => Promise<boolean>>();
+    for (const request of [first, second, third]) {
+      onRefresh.mockReturnValueOnce(request.promise);
+    }
+    const element = await mount(null, { refreshRequired: true, onRefresh });
 
-    element.action()?.click();
+    element.find<HTMLButtonElement>(".refresh-notice__surface")?.click();
     await settle();
 
     await element.update({ refreshRequired: false });
     await element.update({ refreshRequired: true });
-    const action = element.action();
+    const action = element.find<HTMLButtonElement>(".refresh-notice__surface");
     action?.click();
     await settle();
     expect(onRefresh).toHaveBeenCalledTimes(2);
@@ -378,11 +443,42 @@ describe("SidebarUpdateCard", () => {
     expect(action?.disabled).toBe(true);
     expect(element.text()).not.toContain(reconnectFailure);
 
+    await element.update({ connected: false });
+    expect(action?.disabled).toBe(true);
     second.resolve(false);
     await vi.waitFor(() => expect(action?.disabled).toBe(false));
     expect(element.text()).toContain(reconnectFailure);
+    await element.update({ connected: true });
+    expect(element.text()).toContain(reconnectFailure);
+    expect(action?.textContent).toContain("Retry");
     action?.click();
     expect(onRefresh).toHaveBeenCalledTimes(3);
+    await settle();
+    expect(element.find<HTMLButtonElement>(".refresh-notice__surface")).toBe(action);
+    expect(element.text()).not.toContain(reconnectFailure);
+    third.resolve(true);
+    await settle();
+    await element.update({ connected: false });
+    expect(element.find<HTMLButtonElement>(".refresh-notice__surface")).toBe(action);
+    expect(action?.disabled).toBe(true);
+    expect(action?.textContent).toContain("Refreshing");
+  });
+
+  it("keeps a guard-blocked refresh out of the connection failure state", async () => {
+    const releaseGuard = registerControlUiReloadGuard(
+      () => false,
+      () => undefined,
+    );
+    try {
+      const element = await mount(null, { refreshRequired: true, onRefresh: async () => false });
+      const action = element.find<HTMLButtonElement>(".refresh-notice__surface");
+      action?.click();
+      await vi.waitFor(() => expect(element.text()).toContain("Finish pending work first"));
+      expect(element.text()).not.toContain(reconnectFailure);
+      expect(element.find(".sidebar-update-card__status")).toBeNull();
+    } finally {
+      releaseGuard();
+    }
   });
 
   it.each([false, true])(
@@ -492,7 +588,7 @@ describe("SidebarUpdateCard", () => {
     { state: "running", ageMinutes: 30 },
     { state: "campaign", ageMinutes: 20 },
   ] as const)(
-    "shows the recorded $state age beside the compact row's detail",
+    "shows the recorded $state age beside the compact row's title",
     async ({ state, ageMinutes }) => {
       const now = Date.parse("2026-09-23T12:00:00Z");
       vi.useFakeTimers({ now });
@@ -524,10 +620,9 @@ describe("SidebarUpdateCard", () => {
       )?.updateComplete;
 
       const title = element.find("summary .sidebar-issues-panel__entity");
-      const meta = title?.nextElementSibling;
-      const time = meta?.querySelector("time");
+      const time = title?.parentElement?.querySelector("time");
       const timestamp = now - ageMinutes * 60_000;
-      expect(meta?.querySelector(".sidebar-issues-panel__state")).not.toBeNull();
+      expect(element.find("summary .sidebar-issues-panel__state")).not.toBeNull();
       expect(time?.getAttribute("datetime")).toBe(new Date(timestamp).toISOString());
       expect(time?.getAttribute("title")).toBe(formatDateTimeMs(timestamp));
       expect(time?.textContent?.trim()).toBe(`${ageMinutes}m ago`);
@@ -579,7 +674,9 @@ describe("SidebarUpdateCard", () => {
     expect(action?.getAttribute("aria-disabled")).toBe("true");
     expect(action?.getAttribute("aria-describedby")).not.toBeNull();
     expect(tooltip?.hasAttribute("open-on-click")).toBe(true);
-    expect(tooltip?.content).toContain("Administrator access is required");
+    expect(tooltip?.content).toContain(
+      "You need admin access to change update settings or start an update.",
+    );
     action?.click();
     expect(onUpdate).not.toHaveBeenCalled();
   });
@@ -614,19 +711,26 @@ describe("SidebarUpdateCard", () => {
     expect(clearInterval).toHaveBeenCalled();
   });
 
-  it("keeps a consumed hold hidden across shared-state rerenders after expiry", async () => {
+  it("retries a declined hold and keeps a consumed hold hidden across rerenders after expiry", async () => {
     vi.useFakeTimers({ now: 1_000 });
-    const onHoldUpdate = vi.fn(async () => true);
+    const holding = createDeferred<boolean>();
+    const onHoldUpdate = vi.fn().mockReturnValueOnce(holding.promise).mockResolvedValue(true);
     const element = await mount(stableUpdate, {
       updateSchedule: packageSchedule({}),
       onHoldUpdate,
     });
 
-    element.find<HTMLButtonElement>(".sidebar-update-card__hold")?.click();
-    await Promise.resolve();
+    const hold = element.find<HTMLButtonElement>(".sidebar-update-card__hold")!;
+    hold.click();
     await settle();
-
+    expect(hold.disabled).toBe(true);
+    hold.click();
     expect(onHoldUpdate).toHaveBeenCalledOnce();
+    holding.resolve(false);
+    await vi.waitFor(() => expect(hold.disabled).toBe(false));
+    expect(element.find(".sidebar-update-card__hold")).toBe(hold);
+    hold.click();
+    await vi.waitFor(() => expect(onHoldUpdate).toHaveBeenCalledTimes(2));
     await element.update({
       heldUpdateCampaignId: "campaign-1",
       updateSchedule: packageSchedule({ holdUntilMs: 61_000 }),

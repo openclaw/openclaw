@@ -1,16 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
-function formatBonjourInstanceName(displayName: string) {
-  const trimmed = displayName.trim();
-  if (!trimmed) {
-    return "OpenClaw";
-  }
-  if (/openclaw/i.test(trimmed)) {
-    return trimmed;
-  }
-  return `${trimmed} (OpenClaw)`;
-}
-
 export default definePluginEntry({
   id: "bonjour",
   name: "Bonjour Gateway Discovery",
@@ -20,9 +9,14 @@ export default definePluginEntry({
       id: "bonjour",
       advertise: async (ctx) => {
         const { startGatewayBonjourAdvertiser } = await import("./src/advertiser.js");
+        const displayName = ctx.machineDisplayName.trim();
         return startGatewayBonjourAdvertiser(
           {
-            instanceName: formatBonjourInstanceName(ctx.machineDisplayName),
+            instanceName: !displayName
+              ? "OpenClaw"
+              : /openclaw/i.test(displayName)
+                ? displayName
+                : `${displayName} (OpenClaw)`,
             gatewayPort: ctx.gatewayPort,
             gatewayTlsEnabled: ctx.gatewayTlsEnabled,
             gatewayTlsFingerprintSha256: ctx.gatewayTlsFingerprintSha256,

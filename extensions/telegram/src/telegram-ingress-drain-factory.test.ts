@@ -1,7 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type {
-  PluginHookBeforeChannelIngressEvent,
-  PluginHookBeforeChannelIngressResult,
+  PluginHookBeforeChannelAttachmentLoadEvent,
+  PluginHookBeforeChannelAttachmentLoadResult,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordTelegramMessageProcessingResult } from "./bot-processing-outcome.js";
@@ -16,8 +16,8 @@ const mocks = vi.hoisted(() => ({
   prepare:
     vi.fn<
       (
-        event: PluginHookBeforeChannelIngressEvent,
-      ) => Promise<PluginHookBeforeChannelIngressResult | undefined>
+        event: PluginHookBeforeChannelAttachmentLoadEvent,
+      ) => Promise<PluginHookBeforeChannelAttachmentLoadResult | undefined>
     >(),
 }));
 // mock-isolation: Factory-only projection/lifecycle tests must not open the durable spool; SQLite admission is covered by the integration sibling.
@@ -29,7 +29,10 @@ vi.mock("./telegram-ingress-drain.js", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/plugin-hook-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-hook-runtime")>()),
-  getGlobalHookRunner: () => ({ hasHooks: () => true, runBeforeChannelIngress: mocks.prepare }),
+  getGlobalHookRunner: () => ({
+    hasHooks: () => true,
+    runBeforeChannelAttachmentLoad: mocks.prepare,
+  }),
 }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
@@ -87,7 +90,7 @@ describe("Telegram native ingress preparation", () => {
   });
 
   it("awaits preparation inside middleware before downstream media processing", async () => {
-    const preparation = createDeferred<PluginHookBeforeChannelIngressResult>();
+    const preparation = createDeferred<PluginHookBeforeChannelAttachmentLoadResult>();
     mocks.prepare.mockReturnValue(preparation.promise);
     const f = fixture();
     const originalMessage = f.update.message;
@@ -201,7 +204,7 @@ describe("Telegram native ingress preparation", () => {
   });
 
   it("rejects late prepared text after the native owner aborts", async () => {
-    const preparation = createDeferred<PluginHookBeforeChannelIngressResult>();
+    const preparation = createDeferred<PluginHookBeforeChannelAttachmentLoadResult>();
     mocks.prepare.mockReturnValue(preparation.promise);
     const f = fixture();
     const dispatched = f.dispatch(f.update, f.lifecycle);

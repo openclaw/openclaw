@@ -57,11 +57,6 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
     "channel_pairing_requests",
     ["idx_channel_pairing_requests_code", "idx_channel_pairing_requests_created"],
   ],
-  ["claw_cron_refs", []],
-  ["claw_installs", []],
-  ["claw_mcp_server_refs", []],
-  ["claw_package_refs", []],
-  ["claw_workspace_files", []],
   ["clawhub_promotion_claims", []],
   ["config_health_entries", []],
   ["config_machine_state", []],
@@ -98,10 +93,12 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ],
   ["device_bootstrap_tokens", ["idx_device_bootstrap_tokens_ts"]],
   ["device_pair_setup_completions", []],
+  ["device_pairing_browser_requests", []],
   ["device_pairing_join_codes", []],
   ["device_pairing_paired", ["idx_device_pairing_paired_approved"]],
   ["device_pairing_pending", ["idx_device_pairing_pending_device"]],
   ["diagnostic_events", ["idx_diagnostic_events_scope_sequence"]],
+  ["durable_background_processes", []],
   ["exec_approvals_config", []],
   [
     "execution_decision_facts",
@@ -131,7 +128,10 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
       "idx_github_repository_publication_shared_request",
     ],
   ],
+  ["local_workspace_manifest_nodes", []],
   ["local_workspace_projections", []],
+  ["local_workspace_source_path_sets", []],
+  ["local_workspace_tree_packs", []],
   ["macos_port_guardian_records", ["idx_macos_port_guardian_records_port"]],
   [
     "managed_outgoing_image_records",
@@ -260,6 +260,11 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
       "idx_task_runs_runtime_run",
     ],
   ],
+  ["template_cron_refs", []],
+  ["template_installs", []],
+  ["template_mcp_server_refs", []],
+  ["template_package_refs", []],
+  ["template_workspace_files", []],
   ["update_runs", ["idx_update_runs_active", "idx_update_runs_created"]],
   ["user_background_images", []],
   ["user_preferences", []],
@@ -297,6 +302,24 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ["worktree_provisioned_file_chunks", []],
   ["worktree_templates", []],
   ["worktrees", ["idx_worktrees_removed_at", "idx_worktrees_repo_fingerprint"]],
+  [
+    "worker_environments",
+    ["idx_worker_environments_provider_lease", "idx_worker_environments_terminal_changed"],
+  ],
+  ["session_repository_workspaces", []],
+  ["worker_workspace_pending_results", []],
+  [
+    "worker_environments",
+    ["idx_worker_environments_provider_lease", "idx_worker_environments_terminal_changed"],
+  ],
+  ["agent_provenance", []],
+  ["claw_cron_refs", []],
+  ["claw_installs", []],
+  ["claw_mcp_server_refs", []],
+  ["claw_package_refs", []],
+  ["claw_workspace_files", []],
+  ["local_workspace_projections", []],
+  ["local_workspace_projections", []],
   ["acp_replay_events", ["idx_acp_replay_events_session_seq"]],
   ["skill_usage", ["idx_skill_usage_key"]],
   ["state_leases", ["idx_state_leases_expiry", "idx_state_leases_owner"]],
@@ -325,6 +348,7 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ["github_publication_requests", []],
   ["skill_workshop_changes", []],
   ["state_leases", []],
+  ["migration_runs", []],
   [
     "commitments",
     [
@@ -342,73 +366,193 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
 ];
 const fingerprints: Readonly<Record<string, CatalogReference>> = {
   // state
-  a14abb596ae2ad416f9e7573f075bdc0314e6c31fb7fabdb732cbb7fac597adf: [
+  "5bde97da769150d9e0cc19830a835a11599f82cf51c544e629e9d7f5f205b3d5": [
     "state",
-    "587dd22498db1b171f12a7838200384e50360089996b15307855845552be952d",
+    "70b4fd11db71810de8ee5166356977770b88edce037b477b3795972a1af93209",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
       49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
       72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94,
       95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
-      115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128,
+      115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133,
+    ],
+    [],
+  ],
+  // state-before-v39
+  "5e0139d79dd8c2afc05547febacaabd1a3c4e1db117850eb4979d50497ac6bed": [
+    "state-before-v39",
+    "0005407e34cc3d7a1fce80a43dbad7436e9fef36f83d8c40d80cda57e381906c",
+    [
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+      49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
+      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94,
+      95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
+      115, 116, 117, 134, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133,
+    ],
+    [],
+  ],
+  // state-before-v38
+  "45a3bc2bb8d637d0d66b71b896d7358705a35b563f387f2e5928dfdf480361da": [
+    "state-before-v38",
+    "4472e175cdad8af97e4cee7309fef16db37100511d961120ace83120957a6e1c",
+    [
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+      49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
+      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89, 90, 91, 92, 93, 94,
+      95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
+      115, 116, 117, 134, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
+    ],
+    [],
+  ],
+  // state-before-v37
+  dd2ebb6cede2bd4add13191f656661139fd6d28ab49e23328c2fc9f1714a2d39: [
+    "state-before-v37",
+    "14d4ac6624327534a4e70aff71c604eb295883c8ba142ca3e905c8f6afd08060",
+    [
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+      49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
+      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89, 90, 91, 92, 93, 94,
+      95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
+      115, 116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
+    ],
+    [],
+  ],
+  // state-before-v36
+  ecf6643df08a2dc1cc34f29cc15dbac2bedbcf68202b363eb4a6d4a8cbd383a1: [
+    "state-before-v36",
+    "37bae9ecf7ebaac7b839851fed9f68fb61d5f893d23efa58f3f8e89fbf73e24a",
+    [
+      0, 1, 2, 3, 4, 5, 138, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 139, 140, 141, 142, 143, 18,
+      19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+      42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
+      65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87,
+      135, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 110, 111, 112, 113,
+      114, 115, 116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132,
+      133,
+    ],
+    [],
+  ],
+  // state-before-v35
+  bae8f41801bc9019d39639d7d0fd2951dd61bad670bb173c46736ceb27d2bbf9: [
+    "state-before-v35",
+    "8563861244f477b736cc68c736c77b3a7f6584430d97a7467087d7bc4479e612",
+    [
+      0, 1, 2, 3, 4, 5, 138, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 139, 140, 141, 142, 143, 18,
+      19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+      42, 43, 44, 45, 46, 47, 48, 49, 50, 144, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66,
+      67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89,
+      90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 110, 111, 112, 113, 114, 115,
+      116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
+    ],
+    [],
+  ],
+  // state-before-v31
+  "992e0317d6607b9cc9448f648a27a1c9ab8ac2dda4dc230be1b9352221343a12": [
+    "state-before-v31",
+    "10a8b240b88d0d7abc8ac632bf5c6e727f7d62739f451ad59baad6bac00333be",
+    [
+      0, 1, 2, 3, 4, 5, 138, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 139, 140, 141, 142, 143, 18,
+      19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+      42, 43, 44, 45, 46, 47, 48, 49, 145, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89, 90,
+      91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 110, 111, 112, 113, 114, 115,
+      116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
     ],
     [],
   ],
   // state-before-v27
-  "40d1a6a4efb0313a76c2ebaa665dd3cae29ab4089554c60e9e89226f673b37d6": [
+  b57cd8be914461cf225583d1642e2b966d7d2371af34ee64367f3c96690bb1a9: [
     "state-before-v27",
-    "7c96f5aeee1c1410ac0dd23b2a9534ab346f6528f34ab00fb9d724b74d6a3f59",
+    "1fabe89ba54401be0d35f295c5db555997216816bef727b168d6341485a61c75",
     [
-      129, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-      25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-      48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70,
-      71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93,
-      94, 95, 96, 97, 98, 130, 100, 131, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113,
-      114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128,
+      146, 1, 2, 3, 4, 5, 138, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 139, 140, 141, 142, 143, 18,
+      19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+      42, 43, 44, 45, 46, 47, 48, 49, 145, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89, 90,
+      91, 92, 93, 94, 95, 96, 97, 98, 147, 100, 148, 102, 103, 104, 110, 111, 112, 113, 114, 115,
+      116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
     ],
     [],
   ],
   // state-before-v26
-  "5ed6aaffd7039839e46546a30e3e9bab125eff71d791546990cdede84f537fdf": [
+  a1c617aecdc8e2441f050e505f85c06e0f9931df71e87c119a44514f91b4595c: [
     "state-before-v26",
-    "13c4baab95b591ab2bb07e7e06557f456b0b2207741bb7554e0f08e5d247b12e",
+    "280db181e3351cb3f50ff04f2443bac1f1dd9ff3743aa1b12b1e82bbf49ca125",
     [
-      129, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-      25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-      48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70,
-      71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 132, 91, 92, 93,
-      94, 95, 96, 97, 98, 130, 100, 131, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113,
-      114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128,
+      146, 1, 2, 3, 4, 5, 138, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 139, 140, 141, 142, 143, 18,
+      19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+      42, 43, 44, 45, 46, 47, 48, 49, 145, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89, 149,
+      91, 92, 93, 94, 95, 96, 97, 98, 147, 100, 148, 102, 103, 104, 110, 111, 112, 113, 114, 115,
+      116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
     ],
+    [],
+  ],
+  // fragment-local_workspace_projections
+  "54911300fd4efbb44a652d781badc61c60be05619fba7bd6a64b1d1bc2121a81": [
+    "fragment-local_workspace_projections",
+    "39ab9e54cafe71df0cfcd6b83585693118657dd954cce42b24093e1c4779b497",
+    [50, 51, 52, 53],
+    [],
+  ],
+  // state-feature-local_workspace_projections
+  f0e11a6fff0a4b79b69a28a0f2ec4694fa1ee88672cac3b7338bc0a3bb9f8d19: [
+    "state-feature-local_workspace_projections",
+    "39ab9e54cafe71df0cfcd6b83585693118657dd954cce42b24093e1c4779b497",
+    [50, 51, 52, 53],
+    [],
+  ],
+  // state-feature-local_workspace_manifest_nodes
+  e119e5203e18e9fba13d43368408775eca1d809807579a697482ab2b7011e840: [
+    "state-feature-local_workspace_manifest_nodes",
+    "8db5abfb2c2f4c380c80647305b1e4bb5e6af7ac2fec71205a52a97d86835291",
+    [50],
+    [],
+  ],
+  // state-feature-local_workspace_tree_packs
+  "3142caa54d9bd7d285b37ed3338ed9f4307ad3b32469bd88deecb8725301861e": [
+    "state-feature-local_workspace_tree_packs",
+    "a63984593fd118417812466c9ee0c189fd7d819401af1943a6f9c11730c47d87",
+    [53],
+    [],
+  ],
+  // state-feature-local_workspace_source_path_sets
+  e95059f2306c8231ee92ef3d76dfcb434a80885f08cbf39380f88a287f98bade: [
+    "state-feature-local_workspace_source_path_sets",
+    "ead9623df4d41d649f8e4af2351694db5bc8c4e70edb7d2322ba76c11d0dfddb",
+    [52],
     [],
   ],
   // fragment-user_profiles
   bc86e378ea153c42527b6106b01ba4cb8285cca40378ffa0142656577309723e: [
     "fragment-user_profiles",
     "268e6f3b53eb2048a3edf527da424f8df229a01166befc8137ea94dbb560227e",
-    [133, 108, 134],
+    [150, 113, 151],
     [],
   ],
   // state-feature-user_profiles
   f5b54f0fedd88d94c24add8a1fd987ac8592b05d4615424bab9dbc0d19c9cd4a: [
     "state-feature-user_profiles",
     "2c2611b7d0c64f467494ae3922f763dee7fc023a5ee6b92d5821639b18e825aa",
-    [133, 135, 134],
+    [150, 152, 151],
     [],
   ],
   // state-feature-user_profile_emails
   "9eaae0feb245733106045a2c6766d2a2a729a9bdb22b98ec4434c09d76663264": [
     "state-feature-user_profile_emails",
     "202fadb0df4fc5da385edddbda27e96126d0d7a2db6a63375fa506221163a4fb",
-    [136],
+    [153],
     [],
   ],
   // state-feature-user_profile_identities
   "45451969c6ea5bebf37bbfba310467e482af74731a7cb0f2affb316059e21528": [
     "state-feature-user_profile_identities",
     "3a24e89bd446dffbef50b7bd4b87288abc6eb470c290eaabcb1761fbe5244c06",
-    [135],
+    [152],
     [],
   ],
   // fragment-skill_library_entries
@@ -471,7 +615,14 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "7b8bf2fd3ae786c589bf138b32270450c1a2582bcb9a825c1eaf7fb3a7bcea06": [
     "fragment-worker_environment_session_attachments",
     "b95d7054311f0f2d1e0885104c66ff243dfe4f68b84ed2d814ae68e748574417",
-    [137],
+    [154],
+    [],
+  ],
+  // fragment-durable_background_processes, state-feature-durable_background_processes
+  "32cc45ee15a4c4dd21d3ebeb9c259fe465085ed35ee781e611f293af5bbda189": [
+    "fragment-durable_background_processes",
+    "a12b3e39e6d9ed28b9aea95a15a7a60f4c9615ad48d323de7a52560475c62ea4",
+    [36],
     [],
   ],
   // fragment-sandbox_persistent_execs
@@ -485,41 +636,34 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "156673e9396f27223073abdbbd2e13269bd7f45f577ed6aff00e017ab232d940": [
     "state-feature-sandbox_persistent_execs",
     "026ac7355b83187c8f7eef5cbd48ab36ba7de1b4fe40413ee1168ebff6c2d67a",
-    [138],
+    [155],
     [],
   ],
   // fragment-user_background_images, state-feature-user_background_images
   "61e308c5a715e5ee5ff29b65a31d2e7ccd039498494d9afe120129f62f86b764": [
     "fragment-user_background_images",
     "1da03995969350f59b3f8a64d9144b781d467e6ea75f70d5abcd6e18734678e1",
-    [106],
-    [],
-  ],
-  // fragment-local_workspace_projections, state-feature-local_workspace_projections
-  d0ec3d578cb9bd043233f9d8f4ff47d08a0d0f30fa373d80670635ed9908f446: [
-    "fragment-local_workspace_projections",
-    "8af0a00d6122acbbc1d88f1d92cf039711294bd8aa93ab1885373fd8b6f050f2",
-    [53],
+    [111],
     [],
   ],
   // fragment-update_runs
   b36f4fc0be0d53e48e207f50a3cba34df76c4028a2d85201f7b262b1c7a4c2ab: [
     "fragment-update_runs",
     "7a03cbf22978be3aa41cb030aadff21440667a0035fd3a9795492c10f89b1a55",
-    [105],
+    [110],
     [],
   ],
   // state-feature-update_runs
   c3db4ffcf4092146e5d923b60516a00a8db41825f8bffb138b848195576b987b: [
     "state-feature-update_runs",
     "4caad814f837565106a1a17b982bf4ff004bbdba00a6ff05a3b9c5ef2e5a5945",
-    [139],
+    [156],
     [],
   ],
   // fragment-session_repository_workspaces, state-feature-session_repository_workspaces
-  "7d47dc1ae79e1c40ab11a56da183af8e8e5dd1435e044ac4e44be2c6595783e0": [
+  a0323917d8786f2e6cbc3470d86c2a4e123103b84a5dc95d59bbf20759b8ab4c: [
     "fragment-session_repository_workspaces",
-    "7f1a1b36d06c7c4cb5e84d6a16ca23de89dbac6b68c97c31897d1d1825a17d01",
+    "51ee403217b5a9bff65b4d3b93a571f8fbeb60a7b2935860db7e21e7959e7833",
     [88],
     [],
   ],
@@ -527,63 +671,63 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   d62b52a34e2626a7983ae5c48268f04567e93170457e63502b7096486a6ce9f7: [
     "fragment-github_repository_publication_requests",
     "1ae034bde6e00a9b919bcbb987df8aebc5856ab6f4c979743355ecb682418a99",
-    [52],
+    [49],
     [],
   ],
   // state-feature-github_repository_publication_requests
   "6d205ed705fcf89e34e2679f192b2dd50e4cbcb9b06b473c3e81dd48c8811102": [
     "state-feature-github_repository_publication_requests",
     "bc5c46f3cc22c0572b25d10344108465509d7189e1d51b0f6fa335b1d86497cf",
-    [140],
+    [157],
     [],
   ],
   // fragment-github_publication_session_lifecycles, state-feature-github_publication_session_lifecycles
   "079ee34fc1ed4ca27e807b01c7456deceacc57fead388917ff1b275b5047ab06": [
     "fragment-github_publication_session_lifecycles",
     "755e9a26722c11b5edd9d4f6bf270bfdc706428593de4216c311f85fad0a8e69",
-    [51],
+    [48],
     [],
   ],
   // fragment-github_personal_publication_requests, state-indexed-github_personal_publication_requests
   fc4d434c6c76c4e5c5b1fb9c54ebe7e98a395fea6370ada7ac4767ad755051ac: [
     "fragment-github_personal_publication_requests",
     "eda486fc6d1c12adfe86012cfa6d0f6afb64906b1d4c75e3785bda082281a4e1",
-    [49],
+    [46],
     [],
   ],
   // state-feature-github_personal_publication_requests
   "8a4a42e9e8549a0f2e73b33b4031673e2e939624d95586693bc2ac43742bf30f": [
     "state-feature-github_personal_publication_requests",
     "aeb05b8ff41f64e5bab165feac6f1abcdb6dfefc2a5bfbbe88e34861cc40922e",
-    [141],
+    [158],
     [],
   ],
   // fragment-cron_job_runtime_authorities, state-feature-cron_job_runtime_authorities
   "0f3d662483be17f95f492157a8ba28b163afab9c52429ab6ff277ebe8b0a27fd": [
     "fragment-cron_job_runtime_authorities",
     "ebce08da69716c0011c0db38decb38e5eaa0069c6f8360e85afdec8c624a360e",
-    [27],
+    [22],
     [],
   ],
   // fragment-cron_run_trigger_state_retirements, state-feature-cron_run_trigger_state_retirements
   e16c741ca5371718cf7d95114ee1043ad33db04c470f268ccbe3130f699998d9: [
     "fragment-cron_run_trigger_state_retirements",
     "0e85a9fecddeef5129569f503fb32cc0d94e9c98877286be10e15eb657e682bb",
-    [31],
+    [26],
     [],
   ],
   // fragment-execution_identity_contexts
   "632466e72325a428d8b4c4dfa1b7a14be9f57236bee791e9412ea07b24fca254": [
     "fragment-execution_identity_contexts",
     "15be6a7de30d2ecb9b15fed1eb13dd65da858f1eb378e95f737f14241c11b3d9",
-    [42],
+    [39],
     [],
   ],
   // state-feature-execution_identity_contexts
   "7683ab1fd0bccb8e29499c3b6df0070d9cc7cd6249c8c103d654b015ce309417": [
     "state-feature-execution_identity_contexts",
     "2dc283d04b315fd0199a9e13653edb03c8614d12be2ca6f005c7e110aab62d2a",
-    [142],
+    [159],
     [],
   ],
   // fragment-mcp_oauth_pending_authorizations, state-feature-mcp_oauth_pending_authorizations
@@ -632,7 +776,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "5dc1cf9bb59834e9497e191514c7bfb850e062f7744047c7a4289516b4b0e214": [
     "state-feature-node_worker_launches",
     "f07514c3996f79e89f46d771b58859826342f72a12f024b29726a82f6481d6f9",
-    [143],
+    [160],
     [],
   ],
   // fragment-node_worker_prepared_workspaces, state-feature-node_worker_prepared_workspaces
@@ -653,11 +797,11 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "64cf0d044c7dede24d58a370a2f52cf19616efc9523343a698f7127c4d187f1d": [
     "state-feature-node_worker_turns",
     "d1d9be01c96d9dd47e4e23d0099074f561aedb976de062622daffd173443c17d",
-    [144],
+    [161],
     [],
   ],
   // fragment-operator_approval_execution_identities, state-feature-operator_approval_execution_identities
-  e4c3e5a0b5ac4c54be7ffd15ac84095dc8d7f7802679b808a97997eb46e3c6ca: [
+  eee176fa30fb315a218b50f12be8d9e4e5561441d59250cf7029aac4edd9eb38: [
     "fragment-operator_approval_execution_identities",
     "0f2bc5e4d656eda1ad36b778905e7e55f8685c0b41a68883f6e9fb1b838a874c",
     [72],
@@ -667,35 +811,35 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "57562a3e6f834f876e5c03711f50dc514c8bdd432a87f1f54cbac2901642d5d4": [
     "fragment-web_push_approval_deliveries",
     "f11526f4044590884acc313f8a8fb921ce93fb2372e2e64a635989af93d3012e",
-    [109],
+    [114],
     [],
   ],
   // state-feature-web_push_approval_deliveries
   "74b05c720f6b4a8ff88824c9843816992d5233b93ccd85bea66c2fbd2a3480c5": [
     "state-feature-web_push_approval_deliveries",
     "92bd2e9265be63167980a22960aa201502864ec59e283821ad3eab6e765744ce",
-    [145],
+    [162],
     [],
   ],
   // fragment-execution_decision_facts
   "0b710f9ea230c2d23182de151edebc06dfb2800ad6207647d27ccb2c900b5d6a": [
     "fragment-execution_decision_facts",
     "251fe6aa9c0c1ef726ab36810df59e644d472757b269b7e6ac36a5b7b1864ccc",
-    [41],
+    [38],
     [],
   ],
   // state-feature-execution_decision_facts
   "9cd9f63b1002094a7e0538c52b75f2c8d26664937ff5559f64a004feabe47816": [
     "state-feature-execution_decision_facts",
     "8235ed3d9eb951894768fa49670db7390f7950e96618daded2851a55c2e827ed",
-    [146],
+    [163],
     [],
   ],
   // fragment-execution_owner_lifecycle_bindings, state-feature-execution_owner_lifecycle_bindings
   "49e2b7094b1bf25586bc63b3ce3e971873c26584de40bd96654a31b945b3881f": [
     "fragment-execution_owner_lifecycle_bindings",
     "83228457b7900a349a7a60693f5be9fe5ce2b86f8ea3be6bd1b3bcbae9381c73",
-    [43],
+    [40],
     [],
   ],
   // fragment-outbound_message_execution_bindings
@@ -709,7 +853,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   f782e56e1dca81426ff88a94a9702580d0c6bdd1a420e8c1741fef3aa7c18b81: [
     "state-feature-outbound_message_execution_bindings",
     "c29af535c3d6cf16bb31a085c7b68d150c132921b51f560495e75dd1f5451f2d",
-    [147],
+    [164],
     [],
   ],
   // fragment-outbound_message_progress
@@ -723,13 +867,13 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "6e2c6c197a77c179716d6ddead9a7226c49db5e8b69c1775ea8808e5e24cf271": [
     "state-feature-outbound_message_progress",
     "b1fdd16f1d29ceeed6d32e873b0ef54831ad693b4e910c1fe55bc59aa60c4709",
-    [148],
+    [165],
     [],
   ],
   // fragment-agent_provenance, state-feature-agent_provenance
-  "25c32be86573d9b5afa4b27c5805e4b97e08bec73b93293431ece50b8c03b5e8": [
+  ab3748daca8019e0908cc9906304f50a26cffd9d5e9ea3ba1ea3a759315737cb: [
     "fragment-agent_provenance",
-    "262097e093ff61e63a2ece1eb7563e8778c825ee5b703365c8b47cb0d11b8034",
+    "da5d017b6840d65ebd1bc234ae3fdf4540bd00256bfc50c599a4195d15066c17",
     [6],
     [],
   ],
@@ -737,21 +881,21 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   be11d3e5a672ca34875c1f06cfc6d5d5a1293a7077302a759c12c2c17b2cdcb6: [
     "fragment-cron_run_receipts",
     "593a0b293257e23cf22f14e308c7f75a7032d5f0bdbba0fa3d307f3382e3bd4c",
-    [30],
+    [25],
     [],
   ],
   // state-feature-cron_run_receipts
   "41824738e9d17ef8abfa9bda96824ab259ca9e81d3ad647b16b407a6bc4dc28f": [
     "state-feature-cron_run_receipts",
     "1c1c9f4b60d18e51e0db6940a6813c5a7a1a14dffbe38921318e61c295597112",
-    [149],
+    [166],
     [],
   ],
   // fragment-config_revision_keys, state-feature-config_revision_keys
   "8b28fd18dffd5b09fb5a09d8e0d04b2dbf1372081b356131f1df2f4c41895745": [
     "fragment-config_revision_keys",
     "8b416bf248c7702519e58249d29725d42d52a95d8a22084964637f3ed57cae9d",
-    [26],
+    [21],
     [],
   ],
   // fragment-secret_store_entries, state-indexed-secret_store_entries
@@ -765,7 +909,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "10e3ba9552ac35206e3f3d467a44f71602f4b1d3404204836f72106155b5fe6d": [
     "state-feature-secret_store_entries",
     "1eefc2ba0eecf91c8fd96442e750b4e555fb97485569f3bd2bf7205c02466cee",
-    [150],
+    [167],
     [],
   ],
   // fragment-projects, state-feature-projects
@@ -779,42 +923,49 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "7b5e9bd4ec7f91f71f2fcea1deaa9058d06f907e460e2d1a2a8fa333bf6942c0": [
     "fragment-worktree_templates",
     "a9481ceaf044b2db824f5df1823d0619c7b9e53310b83a32c4399421cc6a7e18",
-    [127],
+    [132],
     [],
   ],
   // fragment-user_preferences, state-feature-user_preferences
   "85b0f3fbf9815fa0125a5a823eacebc68306ac4864d89047bb2699611b0044c5": [
     "fragment-user_preferences",
     "24c5cd67b1014eb8ca50a492d93a9b9ec5e5a3b936722c35c7b0768a8b1823e2",
-    [107],
+    [112],
     [],
   ],
   // fragment-device_pair_setup_completions, state-feature-device_pair_setup_completions
   "1f164add8aeb9d28f7c779f88fe40dc7a344e14479fe9a017181151330bca6fd": [
     "fragment-device_pair_setup_completions",
     "3400a6259bccdb3546a778b36215284bd14c9613a1ece543e9deaf3539e3b288",
-    [35],
+    [30],
     [],
   ],
   // fragment-github_publication_requests
   "54a593978142e9fdd957d9aff2368fd3b9d26702968b4ede856df3a933023139": [
     "fragment-github_publication_requests",
     "81c333517fb89efb345896c6452909c6963d2a049bb8b76a8d8adcb626ad592e",
-    [50],
+    [47],
     [],
   ],
   // state-feature-github_publication_requests
   "4c1eb061476b0ecbfc022fb1bd4c927c7c4b3868f40702507c9911ccd3504b2f": [
     "state-feature-github_publication_requests",
     "0375d1a5a88363e5cd216f3addbf170f8be1098ea8626e0e0f95ebb91768588d",
-    [151],
+    [168],
     [],
   ],
   // fragment-device_pairing_join_codes, state-feature-device_pairing_join_codes
   "1f844843f7e4c042331e07eb663873d85bfb1291db181f98c0834a0d01bbf2e2": [
     "fragment-device_pairing_join_codes",
     "4ada0f17fe210baff80cc7da940a58ef4bd27911312469dd15a3473ef1119ad0",
-    [36],
+    [32],
+    [],
+  ],
+  // fragment-device_pairing_browser_requests, state-feature-device_pairing_browser_requests
+  "5ac69298f3597ee21ed377f802610edbd4e638bc0d0cd5be7b2066f5c9104b1e": [
+    "fragment-device_pairing_browser_requests",
+    "c65ddfeaf2ea8a7653a6e2d374d86422deb3fccbb4424f456bd8d0901c69b4c7",
+    [31],
     [],
   ],
   // fragment-skill_workshop_changes
@@ -828,70 +979,70 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   d3bf805006eb83550c1d4a662610e8897cd41ce52de6e370424d3f3ed26e3d80: [
     "state-feature-skill_workshop_changes",
     "01b83680a33b4f2e7d46a70f3e122ebe40044b44ff733891a29a340bdcbba3fb",
-    [152],
+    [169],
     [],
   ],
   // fragment-worker_environment_ssh_fallback_ports, state-feature-worker_environment_ssh_fallback_ports
-  "1d476b2f726e80112ec34821c59c8d5373a322d151ba1ee6b1d0b6d0143c991e": [
+  "59c7fa24ee5aa93144f936173f6efde68e9d2af33d074d5e208f971d500ac5d3": [
     "fragment-worker_environment_ssh_fallback_ports",
     "18ead5da9eec5f58b75326fdaf9ed55a3d0433facc14dad465add6bd80dff080",
-    [112],
+    [117],
     [],
   ],
   // fragment-worker_session_placement_moves, state-feature-worker_session_placement_moves
   "62bf1862f7ce3c0abcaaf4cc070834c5f402e1696b78d22e7ca7bd23b0fec36d": [
     "fragment-worker_session_placement_moves",
     "8188e7a581a51d08faad38cdf6b07041e2b2e760d17bcfa109df49ec0c83c430",
-    [115],
+    [120],
     [],
   ],
   // state-runtime-0-0
-  afa66eb69e44dd92c813867068e02fd59e81543dadee9cfd670fc2b68fa6362c: [
+  "0c3068a4622b9151d2321f80af94861f162d8288b6391c38d89822e20f856639": [
     "state-runtime-0-0",
-    "2fc16073d1dbd5e14508c5589b238c496c511d420606c2c14f0b3f7de179a7b0",
+    "0d8a0829977f7e6ec02a3fa9febb23562a521779369ad959613d26c4a96d72fe",
     [
-      0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28,
-      29, 32, 33, 34, 37, 38, 39, 40, 44, 45, 46, 47, 48, 54, 55, 57, 58, 59, 60, 61, 62, 63, 71,
-      75, 76, 79, 80, 81, 84, 85, 87, 89, 90, 91, 92, 97, 98, 99, 101, 102, 103, 104, 110, 111, 113,
-      114, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 128,
+      0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 23, 24, 27, 28, 29, 33,
+      34, 35, 37, 41, 42, 43, 44, 45, 54, 55, 57, 58, 59, 60, 61, 62, 63, 71, 75, 76, 79, 80, 81,
+      84, 85, 87, 89, 90, 91, 92, 97, 98, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109, 115, 116,
+      118, 119, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 133,
     ],
     [],
   ],
   // state-runtime-0-1
-  cf3d4dee176e2974593e89aaaaab98d344badfb8968c89bf765284dbdd2b03ee: [
+  "3075984cf7583cf173b40648a7b27d0cf683b2c9d38d218e6584da4efd0ef951": [
     "state-runtime-0-1",
-    "ce2d6f0447febc966212cc6891905d2c3463a32447a8cc6961ec4d53a9a5e998",
+    "b866dbf70f630e748a46d2ad5a2c48c5d95bd4070784a9f7fcec3dc349d28af1",
     [
-      0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28,
-      29, 32, 33, 34, 37, 38, 39, 40, 44, 45, 46, 47, 48, 54, 55, 57, 58, 59, 60, 61, 62, 63, 71,
-      75, 76, 79, 80, 81, 84, 85, 87, 89, 90, 91, 92, 97, 98, 99, 101, 102, 103, 104, 110, 111, 113,
-      114, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 128,
+      0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 23, 24, 27, 28, 29, 33,
+      34, 35, 37, 41, 42, 43, 44, 45, 54, 55, 57, 58, 59, 60, 61, 62, 63, 71, 75, 76, 79, 80, 81,
+      84, 85, 87, 89, 90, 91, 92, 97, 98, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109, 115, 116,
+      118, 119, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 133,
     ],
     [],
   ],
   // state-runtime-1-0
-  "72dff6dab4aed0517c75fbd044a002e6dc7f7c3fe29578f8fa17179eb8fa3612": [
+  "90569dbff4f9ac27a68a4c13ddd2baaeb92962f32e1a58a6790eb5baeeb453fc": [
     "state-runtime-1-0",
-    "f001a3be86701cfea0434c8a13b8afb3214f47285dacb3ea20e417eda0b2e485",
+    "0fc6212e574b5022f924a9ed41c6ffadb979ca10c37deb9fc7f3ecd8af9c03f8",
     [
-      0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-      28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 44, 45, 46, 47, 48, 50, 54, 55, 57, 58, 59,
-      60, 61, 62, 63, 71, 75, 76, 79, 80, 81, 82, 84, 85, 86, 87, 89, 90, 91, 92, 97, 98, 99, 100,
-      101, 102, 103, 104, 107, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123,
-      124, 125, 126, 127, 128,
+      0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 27, 28,
+      29, 30, 31, 32, 33, 34, 35, 37, 41, 42, 43, 44, 45, 47, 54, 55, 57, 58, 59, 60, 61, 62, 63,
+      71, 75, 76, 79, 80, 81, 82, 84, 85, 86, 87, 89, 90, 91, 92, 97, 98, 99, 100, 101, 102, 103,
+      104, 105, 106, 107, 108, 109, 112, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126,
+      127, 128, 129, 130, 131, 132, 133,
     ],
     [],
   ],
   // state-runtime-1-1
-  "4a40d76e135b1a4ba40b21d0f45dd53e2248ebc2a7847ec8713d70b7c39980cd": [
+  d99906589af97e0bc4e77af6f5e155e6eb689abfde8ef42d8534862f0c0f4d7d: [
     "state-runtime-1-1",
-    "33d7b0a655b753aa5e1fe0b16b8cedd812c219f999716d2687c2366bdd0971d0",
+    "288cbad6e819ed548b3fc769bc808be2a06f2b837db943abf969ff334872d540",
     [
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-      26, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 44, 45, 46, 47, 48, 50, 54, 55, 57, 58,
-      59, 60, 61, 62, 63, 71, 75, 76, 79, 80, 81, 82, 84, 85, 86, 87, 89, 90, 91, 92, 97, 98, 99,
-      100, 101, 102, 103, 104, 107, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
-      123, 124, 125, 126, 127, 128,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 27,
+      28, 29, 30, 31, 32, 33, 34, 35, 37, 41, 42, 43, 44, 45, 47, 54, 55, 57, 58, 59, 60, 61, 62,
+      63, 71, 75, 76, 79, 80, 81, 82, 84, 85, 86, 87, 89, 90, 91, 92, 97, 98, 99, 100, 101, 102,
+      103, 104, 105, 106, 107, 108, 109, 112, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125,
+      126, 127, 128, 129, 130, 131, 132, 133,
     ],
     [],
   ],
@@ -913,14 +1064,14 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   dc1f04127c4146d414429aba7f0f055680178ac035c1566f8202cb8ba6ba2575: [
     "state-table-config_machine_state",
     "21025ec6d7ee6da8951d3f519c48e44744b0392597ce821984dd3a9e5abb1787",
-    [25],
+    [20],
     [],
   ],
   // state-table-gateway_restart_intent
   "246e73f17e8b92383ee8d6dfe4b657ee3dc3040e8c6398ff36c17ee14222eb37": [
     "state-table-gateway_restart_intent",
     "91a30a8d1423b5d855a975ceb40e2ef07bdfa21f284c59bee6d189679ca8dba9",
-    [47],
+    [44],
     [],
   ],
   // state-table-schema_meta
@@ -934,77 +1085,84 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   cb1f3279e7e3b90290d5ab10856edf532f9c69f278116dd1a8002a4b050f2c1c: [
     "state-table-state_leases",
     "6117e088b6b48fe1007de8ef29868981f820404cc3be99040c2bcd899902b7cc",
-    [153],
+    [170],
     [],
   ],
   // state-table-worker_session_tool_operations
   a503e610cfb224030ab2473b374631cefa4972377d9d04e07b5d5efb07cee14c: [
     "state-table-worker_session_tool_operations",
     "a146f78ad23ec99bfcb50819c65478b5e94c4a8e4159086ef5073fc76e26cc2d",
-    [117],
+    [122],
     [],
   ],
   // state-table-worker_turn_tool_authorities
   "4f45746754bef21a88b4fdfc0932df58b22bf31590a961e4a53957cce7ccd873": [
     "state-table-worker_turn_tool_authorities",
     "fef54ec7cc72bf3869c78b67f31ce96ed842a1ba872f7090e52feff5f547560c",
-    [120],
+    [125],
     [],
   ],
   // state-indexed-github_publication_requests
   "8cbef48665eec155650765377478b38fde1c87ef57fadb423438f85f8c91ad66": [
     "state-indexed-github_publication_requests",
     "81c333517fb89efb345896c6452909c6963d2a049bb8b76a8d8adcb626ad592e",
-    [50],
+    [47],
     [],
   ],
   // state-indexed-update_runs
   c7c1408a52e8649cf030b636ee3d984e969c5fdb96f6834634e7cb4807e624f2: [
     "state-indexed-update_runs",
     "7a03cbf22978be3aa41cb030aadff21440667a0035fd3a9795492c10f89b1a55",
-    [105],
+    [110],
     [],
   ],
   // state-existing-state_leases
   d40fd26bedb861443248d33289dc8d89a1750f3631730dfde2ae285f2c7988ca: [
     "state-existing-state_leases",
     "4289076cebb114b14ac96672941b2be0679f1033e23fe059eedce8dc2b1eea57",
-    [85, 153],
+    [85, 170],
     [],
   ],
   // state-existing-agent_database_leases
   "13150d745ef24ab5e6aafe0b365af15d6c5d471a659e5eb2a1c38e359984a47f": [
     "state-existing-agent_database_leases",
     "9fe50268db674b01265b7e77701aedcfffe36567086fc763de8b89f87f4cb67d",
-    [3, 85, 153],
+    [3, 85, 170],
+    [],
+  ],
+  // state-existing-migration_runs
+  cc6464642f0f115776287e4d0966e2fc564b8e62db519c2bfad7a25c9e67de51: [
+    "state-existing-migration_runs",
+    "c8d7a60b14124212b817fab783e7e9e97253d27ae97c14dd6107ba9f1ad727f1",
+    [171, 85],
     [],
   ],
   // state-node-worker-lineage
   "789bdcc904f4b35b57f9cb829909f2c9cda541c86179beb6904977146665c0c9": [
     "state-node-worker-lineage",
     "f235501e3f5767c362c7aebce3e678d33cdb45e3b776391980019cdf7cc0f37d",
-    [65, 143],
+    [65, 160],
     [],
   ],
   // state-node-worker-descendants
   "7c5c2640b3ec45cbac611c07c67f478f0ddc85a4bbfceb9c3576f0d7aa3bd14a": [
     "state-node-worker-descendants",
     "0991532bbc3ca042fc5c1c2026b8aa8d50b24a5bccf26e53675340a4853a665e",
-    [65, 67, 143],
+    [65, 67, 160],
     [],
   ],
   // state-retired-commitments
   "72c354791974ce88794c96c16135a89f07b48b9b03542f968beadf05b76aae1e": [
     "state-retired-commitments",
     "19bef9367d336bb367e75740610741cb67deeef86a7f54065758609d67ae8a38",
-    [154],
+    [172],
     [],
   ],
   // state-retired-commitments-shipped
   "2309aff06f4bac77072697764926a0042e6b6069c9504d5bb8c6a0601e9d1314": [
     "state-retired-commitments-shipped",
     "f4d088664f133eea8b1e83fd342d1effaa86d836f8593e02778531468372a303",
-    [155],
+    [173],
     [],
   ],
 };

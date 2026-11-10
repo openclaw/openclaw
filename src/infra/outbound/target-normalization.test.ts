@@ -1,6 +1,4 @@
-// Covers target input normalization and plugin resolver defaults.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   looksLikeTargetId,
   maybeResolvePluginMessagingTarget,
@@ -24,69 +22,43 @@ beforeEach(() => {
   getChannelPluginMock.mockReset();
 });
 
-describe("normalizeTargetForProvider", () => {
-  it("returns undefined for missing raw input", () => {
-    expect(normalizeTargetForProvider("alpha", undefined)).toBeUndefined();
-  });
+it("normalizeTargetForProvider returns undefined for missing raw input", () => {
+  expect(normalizeTargetForProvider("alpha", undefined)).toBeUndefined();
 });
 
-describe("resolveNormalizedTargetInput", () => {
-  it("returns undefined for blank input", () => {
-    expect(resolveNormalizedTargetInput("alpha", "   ")).toBeUndefined();
-  });
+it("resolveNormalizedTargetInput returns undefined for blank input", () => {
+  expect(resolveNormalizedTargetInput("alpha", "   ")).toBeUndefined();
 });
 
-describe("looksLikeTargetId", () => {
-  it("falls back to the built-in thread heuristic", () => {
-    getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
-    getChannelPluginMock.mockReturnValueOnce(undefined);
-    expect(looksLikeTargetId({ channel: "workspace", raw: "foo@thread" })).toBe(true);
-  });
+it("looksLikeTargetId falls back to the built-in thread heuristic", () => {
+  expect(looksLikeTargetId({ channel: "workspace", raw: "foo@thread" })).toBe(true);
 });
 
-describe("maybeResolvePluginMessagingTarget", () => {
-  const cfg = {} as OpenClawConfig;
-
-  it("invokes the plugin resolver with normalized input and defaults source", async () => {
-    const resolveTarget = vi.fn().mockResolvedValue({
-      to: "channel:C123ABC",
-      kind: "group",
-      display: "general",
-    });
-    getLoadedChannelPluginMock
-      .mockReturnValueOnce({
-        messaging: {
-          normalizeTarget: (raw: string) => raw.trim().toUpperCase(),
-        },
-      })
-      .mockReturnValueOnce({
-        messaging: {
-          targetResolver: {
-            resolveTarget,
-          },
-        },
-      });
-
-    await expect(
-      maybeResolvePluginMessagingTarget({
-        cfg,
-        channel: "workspace",
-        input: "  channel:c123abc  ",
-      }),
-    ).resolves.toEqual({
-      to: "channel:C123ABC",
-      kind: "group",
-      display: "general",
-      source: "normalized",
-      resolutionSource: "plugin",
+it("invokes the plugin resolver with normalized input and defaults source", async () => {
+  const cfg = {};
+  const resolved = { to: "channel:C123ABC", kind: "group", display: "general" };
+  const resolveTarget = vi.fn().mockResolvedValue(resolved);
+  getLoadedChannelPluginMock
+    .mockReturnValueOnce({
+      messaging: { normalizeTarget: (raw: string) => raw.trim().toUpperCase() },
+    })
+    .mockReturnValueOnce({
+      messaging: { targetResolver: { resolveTarget } },
     });
 
-    expect(resolveTarget).toHaveBeenCalledWith({
-      cfg,
-      accountId: undefined,
-      input: "channel:c123abc",
-      normalized: "CHANNEL:C123ABC",
-      preferredKind: undefined,
-    });
+  await expect(
+    maybeResolvePluginMessagingTarget({ cfg, channel: "workspace", input: "  channel:c123abc  " }),
+  ).resolves.toEqual({
+    ...resolved,
+    source: "normalized",
+    resolutionSource: "plugin",
+  });
+
+  expect(resolveTarget).toHaveBeenCalledWith({
+    cfg,
+    accountId: undefined,
+    input: "channel:c123abc",
+    normalized: "CHANNEL:C123ABC",
+    preferredKind: undefined,
   });
 });

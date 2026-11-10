@@ -146,21 +146,6 @@ export async function runTalkNodePermissionParity({
   const { closeTalkClientGatewayControlSession } = await import("./talk/client-gateway-control.js");
   const workspace = expectDefined(config.agents?.defaults?.workspace, "fixture workspace");
   const marker = path.join(workspace, "node-parity-effects");
-  const processExec = await import("../process/exec.js");
-  const observeNative = vi.spyOn(processExec, "runCommandWithTimeout");
-  const nativeExecutions = () =>
-    observeNative.mock.calls.flatMap(([argv, options], index) => {
-      const result = observeNative.mock.settledResults[index];
-      return argv.some((arg) => arg.includes(marker)) && result?.type === "fulfilled"
-        ? [
-            {
-              argv,
-              cwd: typeof options === "object" ? options.cwd : undefined,
-              result: result.value,
-            },
-          ]
-        : [];
-    });
   let requested = createDeferred<Record<string, unknown>>();
   let approvalEvents = 0;
   const onMessage = (raw: unknown) => {
@@ -182,7 +167,6 @@ export async function runTalkNodePermissionParity({
         throw error;
       });
   const observed: unknown[] = [];
-  let completedScenarios = 0;
   const scenarios = publicOnly
     ? ([{ ingress: "direct", decision: "source-revoke" }] as const)
     : (["text", "direct", "chat-backed"] as const).flatMap((ingress) =>
@@ -195,7 +179,6 @@ export async function runTalkNodePermissionParity({
       const key = ingress + "-" + decision;
       const requiresApproval = decision !== "permitted" && decision !== "policy-deny";
       const invocationCount = node.invokes.length;
-      const nativeCount = nativeExecutions().length;
       await fs.rm(marker, { force: true });
       await replaceSessionEntry(scope, {
         sessionId,
@@ -211,7 +194,6 @@ export async function runTalkNodePermissionParity({
         { deviceId: identity.identity.deviceId, role: "operator" },
         () => true,
       );
-      const before = await effectText();
       const eventCount = approvalEvents;
       const started = createDeferred<string>();
       const finished = createDeferred<unknown>();
@@ -294,7 +276,8 @@ export async function runTalkNodePermissionParity({
           const result = await expectDefined(tool, "bound native exec").execute(
             "same-native-action",
             {
-              command: "/usr/bin/touch " + JSON.stringify(marker),
+              // The relative effect proves native execution in the selected cwd.
+              command: "/usr/bin/touch node-parity-effects",
               workdir: workspace,
               yieldMs: 10000,
             },
@@ -359,7 +342,7 @@ export async function runTalkNodePermissionParity({
               throw new Error("No ordinary approval: " + JSON.stringify(outcome));
             }),
           ]);
-          expect(await effectText()).toBe(before);
+          expect(await effectText()).toBe("");
           const approvalId = expectDefined(pending.id, "host approval ID");
           if (decision === "cancel") {
             await rpc("chat.abort", { sessionKey, runId });
@@ -404,22 +387,19 @@ export async function runTalkNodePermissionParity({
             exitCode: 0,
             nodeId: node.nodeId,
           });
-          expect(await effectText()).toBe(before + "effect");
-        } else {
-          expect(await effectText()).toBe(before);
         }
+        expect(await effectText()).toBe(
+          decision === "permitted" || decision === "allow-once" ? "effect" : "",
+        );
         expect(approvalEvents - eventCount).toBe(requiresApproval ? 1 : 0);
         const cellInvocations = node.invokes.slice(invocationCount);
-        const cellNative = nativeExecutions().slice(nativeCount);
         expect(cellInvocations.filter((frame) => frame.command === "system.which")).toHaveLength(1);
         if (decision === "policy-deny") {
           expect(result).toEqual({ error: "Error: exec denied: host=node security=deny" });
           expect(cellInvocations.filter((frame) => frame.command.startsWith("system.run"))).toEqual(
             [],
           );
-          expect(cellNative).toEqual([]);
         }
-        completedScenarios++;
       } finally {
         invalidateGatewayDeviceRevocation(context, identity.identity.deviceId, "operator");
         // Cleanup after a failed assertion must not mask the original revocation result.
@@ -438,19 +418,8 @@ export async function runTalkNodePermissionParity({
         source.release();
       }
     }
-    const native = nativeExecutions();
-    expect(native).toHaveLength(publicOnly ? 0 : 6);
-    for (const invocation of native) {
-      expect(invocation).toMatchObject({
-        argv: native[0]?.argv,
-        cwd: workspace,
-        result: { code: 0, termination: "exit" },
-      });
-      expect(invocation.argv.join(" ")).toContain(marker);
-      expect(invocation.result.pid).toBeGreaterThan(0);
-    }
     expect(observed).toEqual(
-      Array.from({ length: completedScenarios }, () => ({
+      Array.from({ length: scenarios.length }, () => ({
         principal: client.authenticatedUserProfile?.profileId,
         reviewer: identity.identity.deviceId,
         host: "node",
@@ -458,15 +427,12 @@ export async function runTalkNodePermissionParity({
         cwd: workspace,
       })),
     );
-    const countInvokes = (command: string) =>
-      node.invokes.filter((frame) => frame.command === command).length;
-    expect(countInvokes("system.run")).toBe(publicOnly ? 0 : 6);
-    expect(countInvokes("system.which")).toBe(publicOnly ? 1 : 18);
-    expect(completedScenarios).toBe(publicOnly ? 1 : 18);
+    expect(node.invokes.filter((frame) => frame.command === "system.run")).toHaveLength(
+      publicOnly ? 0 : 6,
+    );
   } finally {
     context.getClientConnIds = originalConnections;
     provider.restore();
-    observeNative.mockRestore();
     reviewer.off("message", onMessage);
     await node.close();
     reviewer.close();

@@ -13,6 +13,7 @@ import type {
 } from "./goals-operations.types.js";
 import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
@@ -165,10 +166,8 @@ export type ResolvedSessionEntryUpdateResult<T> =
     }
   | {
       canonicalKey: string;
-      entry: SessionEntry;
       found: true;
       result: T;
-      storeKey: string;
     };
 
 export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"> & {
@@ -218,13 +217,6 @@ export type SessionEntrySummary = {
   sessionKey: string;
   /** Entry value cloned from the backing store unless the caller requested borrowed reads. */
   entry: SessionEntry;
-};
-
-export type SessionEntryReadView = {
-  /** Row stored under the exact persisted key; no alias or canonical-key resolution. */
-  get(sessionKey: string): SessionEntry | undefined;
-  /** Every persisted row; call only when exact-key probes cannot settle the lookup. */
-  entries(): SessionEntrySummary[];
 };
 
 /** Session entry read by the exact persisted session key, without alias resolution. */
@@ -397,6 +389,8 @@ export type SessionTranscriptWriteLockAccessorContext = {
   /** Reads bounded indexed facts for supplied transcript mirror identities. */
   readMessageFacts: (params: {
     idempotencyKeys: readonly string[];
+    /** Limit identities to the current active branch; default includes abandoned branches. */
+    activeBranchOnly?: boolean;
     sourceRunId?: string;
   }) => Promise<{
     anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
@@ -505,7 +499,6 @@ export type SessionTranscriptTurnPersistOptions = {
 export interface SessionTranscriptTurnPersistResult {
   predicateSkipped?: boolean;
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
-  appendedCount: number;
   messages: TranscriptMessageAppendResult<unknown>[];
   rejectedReason?: "session-rebound";
   sessionEntry: SessionEntry | undefined;
@@ -778,7 +771,7 @@ export type SessionBranchListResult =
 export type SessionBranchListParams = Pick<
   SessionMessageCutMutationParams,
   "agentId" | "env" | "sessionKey" | "sessionStoreKey" | "storePath"
->;
+> & { signal?: AbortSignal };
 
 export type SessionBranchSwitchMutationResult =
   | {
@@ -829,6 +822,9 @@ export type SessionEntryCreationPhase =
   | "publication";
 
 export type SessionEntryCreateWithTranscriptOptions = {
+  /** Opt in to storage-certified rejection outcomes for an external creation claim. */
+  certifyNotCommitted?: true;
+  creationOperation?: SessionCreationOperation;
   /** Explicit label claim, checked again inside the final write transaction. */
   label?: string;
   onPhase?: (phase: SessionEntryCreationPhase) => void;
@@ -883,7 +879,6 @@ export type {
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
   DeletedAgentSessionEntryPurgeParams,
-  SessionArchivedTranscriptCleanupRule,
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,

@@ -4,15 +4,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import * as confirmDialog from "../../components/confirm-dialog.ts";
-import {
-  createTestSessionCapability,
-  sessionsResult,
-} from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionRequest as mockSessionRequests } from "../../lib/sessions/hydration-family.test-support.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
-import { createContext, createGateway, createRenderedPage } from "./sessions-page.test-support.ts";
+import { createLiveSessionContext, createRenderedPage } from "./sessions-page.test-support.ts";
 
 const archiveImport = vi.hoisted(() => {
   const held = Promise.withResolvers<void>();
@@ -40,12 +38,9 @@ async function setup() {
     sharingRole: "owner",
     hasActiveRun: true,
   };
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    if (method === "sessions.list") {
-      const query = params as { spawnedBy?: string } | undefined;
+  const request = mockSessionRequests<{ spawnedBy?: string }>({
+    "sessions.subscribe": () => ({ subscribed: true }),
+    "sessions.list": (query) => {
       return sessionsResult(
         query?.spawnedBy === row.key
           ? [{ ...row, key: "agent:main:child", sessionId: "child-session" }]
@@ -54,19 +49,12 @@ async function setup() {
             : [row],
         1,
       );
-    }
-    if (method === "sessions.describe") {
-      return { session: row };
-    }
-    throw new Error("Unexpected request: " + method);
+    },
+    "sessions.describe": () => ({ session: row }),
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  const gateway = createGateway(client);
-  const sessions = createTestSessionCapability(gateway.gateway);
-  const page = await createRenderedPage(
-    createContext(gateway.gateway, sessions),
-    sessionsResult([row], 1),
-  );
+  const { connection: gateway, sessions, context } = createLiveSessionContext(client);
+  const page = await createRenderedPage(context, sessionsResult([row], 1));
   const writes = () =>
     request.mock.calls.filter(
       ([method]) => method === "sessions.patch" || method === "sessions.patchMany",

@@ -1,6 +1,6 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { CurrentInboundPromptContext } from "../agents/internal-runtime-context.js";
-import type { ReplyExpectation } from "../agents/reply-completion.js";
+import type { ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../agents/subagents/announce/subagent-announce-handoff.js";
@@ -19,6 +19,7 @@ import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "./input-provenance.js";
+import type { ReplyBackendTurnStatus } from "./session-controller.turn-status.types.js";
 import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
@@ -29,6 +30,8 @@ export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;
+  /** Host-captured human reply identity, independent of pending-question eligibility. */
+  isInboundUserReply?: boolean;
   /** User-authorized controls retain sender authority but are not answers to pending questions. */
   allowPendingUserInputAnswer?: false;
   terminalReplyExpectation?: ReplyExpectation;
@@ -118,8 +121,6 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   toolsAllow?: string[];
   disableTools: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   traceAuthorized: boolean;
   approvalReviewerDeviceId?: string;
   clientCaps?: string[];
@@ -208,6 +209,11 @@ export type ReplyToolAuthorityPreparation = {
 export type ReplyBackendMessageInjectionV2 = {
   readonly version: 2;
   isAvailable(): boolean;
+  /** Tool-only interruption for a captured input; the controller owns queued followup custody. */
+  steerNow?: {
+    read(queueIdentity: string, queuedFollowup?: boolean): ReplySteerNowState | undefined;
+    send(queueIdentity: string): ReplySteerNowResult;
+  };
   /** @deprecated Use queueMessageAsync with fresh policy preparation. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   queueMessage(
     text: string,
@@ -247,6 +253,16 @@ export type ReplyBackendMessageInjectionV2 = {
   ): Promise<boolean>;
 };
 
+export type ReplySteerNowState = {
+  status: "available" | "blocked";
+  tools: string[];
+};
+
+export type ReplySteerNowResult = {
+  status: "interrupted" | "idle" | "blocked" | "settled" | "unavailable";
+  tools: string[];
+};
+
 export type ReplyBackendHandle = {
   readonly kind: "embedded" | "cli";
   readonly runId?: string;
@@ -254,6 +270,8 @@ export type ReplyBackendHandle = {
   readonly toolAuthorityFingerprint?: string;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   readonly terminalReplyExpectation?: ReplyExpectation;
+  /** The sink records a human reply obligation only upon accepted steering. */
+  readonly supportsUserReplyPromotion?: boolean;
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
@@ -278,6 +296,8 @@ export type ReplyBackendHandle = {
   isAbortable?: () => boolean;
   /** Recover a stalled model request while retaining this native turn for fallback. */
   recoverStalledModelCall?: () => boolean;
+  /** Stable within one registration; re-read identity because it can be replaced or cleared. */
+  readonly turnStatus?: ReplyBackendTurnStatus;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
   queueMessage?: ReplyBackendMessageInjection["queueMessage"];
   /**
@@ -286,3 +306,38 @@ export type ReplyBackendHandle = {
    */
   isCompacting?: () => boolean;
 };
+
+export type ReplyMessageInjectionResolution =
+  | {
+      reason: ReplyMessageInjectionRejectionReason;
+      errorMessage?: string;
+      backend?: ReplyBackendHandle;
+      cancelPendingUserInput?: ReplyBackendHandle["cancelPendingUserInput"];
+    }
+  | {
+      backend: ReplyBackendHandle;
+      injection: ReplyBackendMessageInjection;
+      /** Internal FIFO preflight for a released synchronous sink. */
+      prepareQueueMessage?: () => Promise<void>;
+    };
+
+export type ReplyMessageInjectionRejectionReason =
+  | "no_active_run"
+  | "not_running"
+  | "stale_run"
+  | "injection_unavailable"
+  | "guarded_injection_unsupported"
+  | "requester_origin_mismatch"
+  | "audio_input_unsupported"
+  | "collaborative_steering_disabled"
+  | ReplyBackendQueueMessageMismatch
+  | "runtime_rejected";
+
+export type ReplyBackendQueueMessageMismatch =
+  | "transcript_commit_wait_unsupported"
+  | "input_visibility_mismatch"
+  | "tool_authority_mismatch"
+  | "image_input_unsupported"
+  | "source_reply_delivery_mode_mismatch"
+  | "reply_expectation_mismatch"
+  | "task_suggestion_delivery_mode_mismatch";

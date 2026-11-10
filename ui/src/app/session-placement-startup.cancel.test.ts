@@ -16,7 +16,7 @@ it("cancels the client-owned first-send wait before reclaiming its worker", asyn
     if (method === "sessions.dispatch") {
       return Promise.resolve({ placement: createStartupPlacement("active", 1) });
     }
-    if (method === "sessions.send") {
+    if (method === "chat.send") {
       const signal = options?.signal;
       if (!signal) {
         throw new Error("initial send must have an owner cancellation signal");
@@ -47,7 +47,7 @@ it("cancels the client-owned first-send wait before reclaiming its worker", asyn
     await requestCloudWorkerStop(client, { key: input.recovery.sessionKey }, startup);
     expect(sendingSignal.aborted).toBe(true);
     await flushStartupMicrotasks();
-    expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   } finally {
     startup.dispose();
   }

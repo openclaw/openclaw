@@ -49,7 +49,6 @@ describe("Codex binding app-server connection", () => {
       expect(connection).toMatchObject({
         appServer: { start: { homeScope } },
         usesSupervisionConnection: supervised,
-        requestAuthProfileId: supervised ? undefined : "openai:work",
         clientAuthProfileId: homeScope === "user" ? null : "openai:work",
       });
     },

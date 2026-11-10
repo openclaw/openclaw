@@ -5,6 +5,7 @@ import type {
   PluginAcceptedDeclaredSurface,
   PluginInstallRecord,
 } from "../config/types.plugins.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { resolveUserPath } from "../utils.js";
 import {
   inspectPluginCapabilityArtifact,
@@ -36,7 +37,7 @@ import {
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
   resolvePluginMetadataSnapshot,
@@ -112,12 +113,7 @@ function throwManagedPluginCapabilityConsentRequired(
 ): never {
   pendingPluginCapabilityReviews.delete(review.pluginId);
   pendingPluginCapabilityReviews.set(review.pluginId, review);
-  if (pendingPluginCapabilityReviews.size > 32) {
-    const oldest = pendingPluginCapabilityReviews.keys().next().value;
-    if (oldest !== undefined) {
-      pendingPluginCapabilityReviews.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(pendingPluginCapabilityReviews, 32);
   throw new ManagedPluginLifecycleError(
     `Plugin "${review.pluginId}" requires capability consent. ${recovery}`,
     {
@@ -145,7 +141,7 @@ export async function resolvePluginCapabilityConsent(params: {
   metadata?: PluginMetadataSnapshot;
 }): Promise<void> {
   const env = params.env ?? process.env;
-  return await withPluginLifecycleLease({ env }, async (lease) => {
+  return await withPluginLifecycleLeaseAsync({ env }, async (lease) => {
     const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
     const metadata =
       params.metadata ??
@@ -276,7 +272,13 @@ export function createManagedPluginArtifactConsentHandler(params: {
       }
     }
   }
-  const pendingAcceptedSurfaces = new Map<string, PluginAcceptedDeclaredSurface | undefined>();
+  const pendingAcceptedSurfaces = new Map<
+    string,
+    {
+      declared?: PluginAcceptedDeclaredSurface;
+      contextEngineIdsByPlugin: Record<string, string[]>;
+    }
+  >();
   return {
     onBeforePluginArtifactCommit: async (
       artifact: PluginInstallArtifactConsentRequest,
@@ -382,11 +384,11 @@ export function createManagedPluginArtifactConsentHandler(params: {
         await beforePersistentEffect?.();
       }
       // Interactive consent yields; re-read the final stage so a replaced artifact cannot inherit it.
-      const { declared: finalDeclared, manifest: finalManifest } = inspectPluginCapabilityArtifact(
-        artifactDir,
-        env,
-        artifactContext,
-      );
+      const {
+        declared: finalDeclared,
+        manifest: finalManifest,
+        contextEngineIdsByPlugin,
+      } = inspectPluginCapabilityArtifact(artifactDir, env, artifactContext);
       const finalToken = computeDeclaredSurfaceHash(finalDeclared);
       if (
         !acknowledgment ||
@@ -407,16 +409,24 @@ export function createManagedPluginArtifactConsentHandler(params: {
         (!official || recordOfficialCapabilities) && (enabled || acceptanceCurrent)
           ? finalDeclared
           : undefined;
-      pendingAcceptedSurfaces.set(artifact.pluginId, acceptedSurface);
+      pendingAcceptedSurfaces.set(artifact.pluginId, {
+        declared: acceptedSurface,
+        contextEngineIdsByPlugin,
+      });
     },
     applyAcceptedSurface: (pluginId, record) => {
-      const declared = pendingAcceptedSurfaces.get(pluginId);
-      if (!pendingAcceptedSurfaces.has(pluginId)) {
+      const reviewed = pendingAcceptedSurfaces.get(pluginId);
+      if (!reviewed) {
         throw new ManagedPluginLifecycleError(
           `Plugin "${pluginId}" did not expose its verified artifact for capability review.`,
         );
       }
-      return declared ? acceptManagedPluginDeclaredSurface(record, declared) : record;
+      const next = { ...record };
+      delete next.contextEngineIdsByPlugin;
+      if (Object.keys(reviewed.contextEngineIdsByPlugin).length > 0) {
+        next.contextEngineIdsByPlugin = structuredClone(reviewed.contextEngineIdsByPlugin);
+      }
+      return reviewed.declared ? acceptManagedPluginDeclaredSurface(next, reviewed.declared) : next;
     },
   };
 }

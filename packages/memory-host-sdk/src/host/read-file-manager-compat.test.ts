@@ -26,8 +26,13 @@ describe("MemoryIndexManager.readFile", () => {
     await fs.writeFile(absPath, content, "utf-8");
     return absPath;
   }
-  const read = (relPath: string, extraPaths: string[] = []) =>
-    readMemoryFile({ workspaceDir, extraPaths, relPath });
+  const read = (
+    relPath: string,
+    extraPaths: string[] = [],
+    options: Partial<Parameters<typeof readMemoryFile>[0]> = {},
+  ) => readMemoryFile({ workspaceDir, extraPaths, relPath, ...options });
+  const numberedLines = (count: number, suffix = "") =>
+    Array.from({ length: count }, (_, index) => `line ${index + 1}${suffix}`).join("\n");
 
   it("returns not found when the requested file does not exist", async () => {
     const relPath = "memory/2099-01-01.md";
@@ -37,17 +42,8 @@ describe("MemoryIndexManager.readFile", () => {
 
   it("returns content slices when the file exists", async () => {
     const relPath = "memory/2026-02-20.md";
-    const absPath = path.join(workspaceDir, relPath);
-    await fs.mkdir(path.dirname(absPath), { recursive: true });
-    await fs.writeFile(absPath, ["line 1", "line 2", "line 3"].join("\n"), "utf-8");
-
-    const result = await readMemoryFile({
-      workspaceDir,
-      extraPaths: [],
-      relPath,
-      from: 2,
-      lines: 1,
-    });
+    await write(relPath, numberedLines(3));
+    const result = await read(relPath, [], { from: 2, lines: 1 });
     expect(result).toEqual({
       status: "ok",
       text: "line 2\n\n[More content available. Use from=3 to continue.]",
@@ -59,113 +55,48 @@ describe("MemoryIndexManager.readFile", () => {
     });
   });
 
-  it("returns a default-sized excerpt when no line range is provided", async () => {
+  it.each([undefined, 21])("returns a default-sized excerpt starting at %s", async (from) => {
     const relPath = "memory/default-window.md";
-    await write(relPath, Array.from({ length: 150 }, (_, index) => `line ${index + 1}`).join("\n"));
-
-    const result = requireMemoryReadSuccess(await read(relPath));
-
+    await write(relPath, numberedLines(160));
+    const start = from ?? 1;
+    const nextFrom = start + 120;
+    const result = requireMemoryReadSuccess(await read(relPath, [], { from }));
     expect(result).toMatchObject({
       path: relPath,
-      from: 1,
+      from: start,
       lines: 120,
       truncated: true,
-      nextFrom: 121,
+      nextFrom,
     });
-    expect(result.text).toContain("line 1");
-    expect(result.text).toContain("line 120");
-    expect(result.text).not.toContain("line 121");
-    expect(result.text).toContain("Use from=121 to continue.");
-  });
-
-  it("returns a bounded window when from is provided without lines", async () => {
-    const relPath = "memory/from-only.md";
-    const absPath = path.join(workspaceDir, relPath);
-    await fs.mkdir(path.dirname(absPath), { recursive: true });
-    await fs.writeFile(
-      absPath,
-      Array.from({ length: 160 }, (_, index) => `line ${index + 1}`).join("\n"),
-      "utf-8",
-    );
-
-    const result = requireMemoryReadSuccess(
-      await readMemoryFile({
-        workspaceDir,
-        extraPaths: [],
-        relPath,
-        from: 21,
-      }),
-    );
-
-    expect(result.from).toBe(21);
-    expect(result.lines).toBe(120);
-    expect(result.truncated).toBe(true);
-    expect(result.nextFrom).toBe(141);
-    expect(result.text).toContain("line 21");
-    expect(result.text).toContain("line 140");
-    expect(result.text).not.toContain("line 141");
+    expect(result.text).toContain(`line ${start}`);
+    expect(result.text).toContain(`line ${nextFrom - 1}`);
+    expect(result.text).not.toContain(`line ${nextFrom}`);
+    expect(result.text).toContain(`Use from=${nextFrom} to continue.`);
   });
 
   it("honors injected defaultLines and maxChars overrides", async () => {
     const relPath = "memory/agent-limits.md";
-    const absPath = path.join(workspaceDir, relPath);
-    await fs.mkdir(path.dirname(absPath), { recursive: true });
-    await fs.writeFile(
-      absPath,
-      Array.from({ length: 40 }, (_, index) => `line ${index + 1}: ${"x".repeat(40)}`).join("\n"),
-      "utf-8",
-    );
-
+    await write(relPath, numberedLines(40, `: ${"x".repeat(40)}`));
     const result = requireMemoryReadSuccess(
-      await readMemoryFile({
-        workspaceDir,
-        extraPaths: [],
-        relPath,
-        defaultLines: 5,
-        maxChars: 220,
-      }),
+      await read(relPath, [], { defaultLines: 5, maxChars: 220 }),
     );
-
-    expect(result.from).toBe(1);
+    expect(result).toMatchObject({ from: 1, truncated: true });
     expect(result.lines).toBeLessThanOrEqual(5);
-    expect(result.truncated).toBe(true);
     expect(result.nextFrom).toBeGreaterThan(1);
     expect(result.text).toContain("Use from=");
   });
 
   it("returns empty text when the requested slice is past EOF", async () => {
     const relPath = "memory/window.md";
-    const absPath = path.join(workspaceDir, relPath);
-    await fs.mkdir(path.dirname(absPath), { recursive: true });
-    await fs.writeFile(absPath, ["alpha", "beta"].join("\n"), "utf-8");
-
-    const result = await readMemoryFile({
-      workspaceDir,
-      extraPaths: [],
-      relPath,
-      from: 10,
-      lines: 5,
-    });
+    await write(relPath, "alpha\nbeta");
+    const result = await read(relPath, [], { from: 10, lines: 5 });
     expect(result).toEqual({ status: "ok", text: "", path: relPath, from: 10, lines: 0 });
   });
 
   it("caps returned text to the default max chars and exposes continuation metadata", async () => {
     const relPath = "memory/char-cap.md";
-    const absPath = path.join(workspaceDir, relPath);
-    await fs.mkdir(path.dirname(absPath), { recursive: true });
-    await fs.writeFile(
-      absPath,
-      Array.from({ length: 200 }, (_, index) => `${index + 1}: ${"x".repeat(200)}`).join("\n"),
-      "utf-8",
-    );
-
-    const result = requireMemoryReadSuccess(
-      await readMemoryFile({
-        workspaceDir,
-        extraPaths: [],
-        relPath,
-      }),
-    );
+    await write(relPath, numberedLines(200, `: ${"x".repeat(200)}`));
+    const result = requireMemoryReadSuccess(await read(relPath));
 
     expect(result.truncated).toBe(true);
     expect(result.nextFrom).toBeGreaterThan(1);
@@ -174,51 +105,23 @@ describe("MemoryIndexManager.readFile", () => {
     expect(result.text).toContain("Use from=");
   });
 
-  it("suggests read fallback for pathological single-line truncation in workspace memory files", async () => {
-    const relPath = "memory/oversized-line.md";
-    const absPath = path.join(workspaceDir, relPath);
-    await fs.mkdir(path.dirname(absPath), { recursive: true });
-    await fs.writeFile(absPath, `1: ${"x".repeat(20_000)}`, "utf-8");
-
-    const result = requireMemoryReadSuccess(
-      await readMemoryFile({
-        workspaceDir,
-        extraPaths: [],
-        relPath,
-      }),
-    );
-
-    expect(result.truncated).toBe(true);
-    expect(result.lines).toBe(1);
-    expect(result.nextFrom).toBeUndefined();
-    expect(result.text).toContain("use read on the source file");
-    expect(result.text).not.toContain("Use from=");
-  });
-
-  it("does not advertise line continuation when a single oversized line is cut mid-line", async () => {
-    const relPath = "memory/oversized-line-with-tail.md";
-    await write(relPath, [`1: ${"x".repeat(20_000)}`, "line 2"].join("\n"));
-
-    const result = requireMemoryReadSuccess(await read(relPath));
-
-    expect(result).toMatchObject({ truncated: true, lines: 1 });
-    expect(result.nextFrom).toBeUndefined();
-    expect(result.text).not.toContain("Use from=");
-  });
+  it.each(["", "\nline 2"])(
+    "truncates oversized workspace lines without continuation (%j)",
+    async (tail) => {
+      const relPath = "memory/oversized-line.md";
+      await write(relPath, `1: ${"x".repeat(20_000)}${tail}`);
+      const result = requireMemoryReadSuccess(await read(relPath));
+      expect(result).toMatchObject({ truncated: true, lines: 1 });
+      expect(result.nextFrom).toBeUndefined();
+      expect(result.text).toContain("use read on the source file");
+      expect(result.text).not.toContain("Use from=");
+    },
+  );
 
   it("omits truncation metadata when the full excerpt fits and no more lines remain", async () => {
     const relPath = "memory/complete.md";
-    const absPath = path.join(workspaceDir, relPath);
-    await fs.mkdir(path.dirname(absPath), { recursive: true });
-    await fs.writeFile(absPath, ["alpha", "beta", "gamma"].join("\n"), "utf-8");
-
-    const result = await readMemoryFile({
-      workspaceDir,
-      extraPaths: [],
-      relPath,
-    });
-
-    expect(result).toEqual({
+    await write(relPath, "alpha\nbeta\ngamma");
+    expect(await read(relPath)).toEqual({
       status: "ok",
       text: "alpha\nbeta\ngamma",
       path: relPath,
@@ -246,13 +149,7 @@ describe("MemoryIndexManager.readFile", () => {
   });
 
   it("rejects non-memory paths", async () => {
-    await expect(
-      readMemoryFile({
-        workspaceDir,
-        extraPaths: [],
-        relPath: "NOTES.md",
-      }),
-    ).rejects.toThrow("path is not an allowed Markdown memory file");
+    await expect(read("NOTES.md")).rejects.toThrow("path is not an allowed Markdown memory file");
   });
 
   it("allows additional memory paths and blocks symlinks", async () => {

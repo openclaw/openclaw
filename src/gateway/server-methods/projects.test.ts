@@ -5,8 +5,10 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as githubReadIdentity from "../../agents/github-read-identity.js";
 import * as runtimeOwnership from "../../agents/harness/session-runtime-ownership.js";
+import * as worktreeGit from "../../agents/worktrees/git.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -21,6 +23,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as gitWorker from "../../infra/git-worker.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
+import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -34,7 +37,12 @@ import {
   type SessionRowProjection,
 } from "../session-row-projection.js";
 import * as rowInputs from "../session-utils-row.js";
-import { clonedProject } from "./projects-shard.test-support.js";
+import {
+  clonedProject,
+  expectCheckoutInUse,
+  expectProjectListingChanged,
+  projectConfig,
+} from "./projects-shard.test-support.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import {
   execFileAsync,
@@ -46,6 +54,8 @@ import {
   withProjectState,
 } from "./projects.test-support.js";
 
+const discoverRepository = resolveRepositoryIdentity.getMockImplementation()!;
+
 function mockGitHubFetch() {
   const fetchImpl = vi.fn<typeof fetch>().mockImplementation(
     async () =>
@@ -53,6 +63,19 @@ function mockGitHubFetch() {
         headers: { "content-type": "application/json" },
       }),
   );
+  vi.stubGlobal("fetch", fetchImpl);
+  return fetchImpl;
+}
+
+function mockRepositoryVisibility(visibility: Record<string, string>) {
+  const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const value = visibility[new URL(url).pathname.replace(/^\/repos\//u, "")];
+    return new Response(JSON.stringify(value ? { visibility: value } : { message: "Not Found" }), {
+      status: value ? 200 : 404,
+      headers: { "content-type": "application/json" },
+    });
+  });
   vi.stubGlobal("fetch", fetchImpl);
   return fetchImpl;
 }
@@ -97,10 +120,10 @@ function expectFetchAuthority(
   }
 }
 
-function seedProjectSession(id: string, execCwd: string, entry: Partial<SessionEntry> = {}) {
+function seedProjectSession(id: string, spawnedCwd: string, entry: Partial<SessionEntry> = {}) {
   replaceSessionEntrySync(
     { agentId: "main", sessionKey: `agent:main:${id}` },
-    { sessionId: id, updatedAt: 1, execCwd, ...entry },
+    { sessionId: id, updatedAt: 1, spawnedCwd, ...entry },
   );
 }
 
@@ -281,48 +304,71 @@ test("registered anonymous native search does not borrow the service credential"
   }
 });
 
-test("checkout options preserve permitted Current access without exposing paths", async () => {
-  await withProjectState(async (state) => {
-    const workspace = await initializeRepository(state.root, "workspace");
-    const outside = await initializeRepository(state.root, "outside");
-    const project = await registerProjectRegistry({ path: outside });
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
-    };
-    for (const scopes of [
-      ["operator.admin"],
-      ["operator.sessions.read", "operator.sessions.write"],
-    ]) {
+test.each(["registered", "cloned"] as const)(
+  "checkout options keep %s project placement with its owner",
+  async (source) => {
+    await withProjectState(async (state) => {
+      const workspace = await initializeRepository(state.root, "workspace");
+      const outside = await initializeRepository(state.root, "outside");
+      const project =
+        source === "cloned"
+          ? await registerClonedProjectRegistry({
+              path: outside,
+              name: "Shared clone",
+              originUrl: "https://github.com/openclaw/openclaw.git",
+            })
+          : await registerProjectRegistry({ path: outside });
+      // Session-scoped callers may open public GitHub repositories only.
+      mockRepositoryVisibility({ "openclaw/openclaw": "public" });
+      using gitReads = vi
+        .spyOn(worktreeGit, "runGit")
+        .mockRejectedValue(new Error("Git is stalled"));
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
+      };
+      for (const scopes of [
+        ["operator.admin"],
+        ["operator.sessions.read", "operator.sessions.write"],
+      ]) {
+        expect(
+          await invoke(
+            "projects.checkoutOptions",
+            { projectId: project.id, agentId: "main" },
+            cfg,
+            scopes,
+          ),
+        ).toEqual({
+          ok: true,
+          payload: { current: source !== "cloned", worktree: true },
+          error: undefined,
+        });
+        expect(gitReads).not.toHaveBeenCalled();
+        gitReads.mockClear();
+      }
+      const params = { projectId: project.id, agentId: "main" };
+      expect(
+        await invoke("projects.checkoutOptions", params, cfg, ["operator.read"]),
+      ).toMatchObject({
+        ok: true,
+        payload: { current: false, worktree: false },
+      });
+      let authorityChecks = 0;
       expect(
         await invoke(
           "projects.checkoutOptions",
-          { projectId: project.id, agentId: "main" },
+          params,
           cfg,
-          scopes,
+          ["operator.admin"],
+          undefined,
+          projectsHandlers,
+          undefined,
+          () => cfg,
+          { hasCurrentClientAuthority: () => ++authorityChecks === 1 },
         ),
-      ).toEqual({ ok: true, payload: { current: true, worktree: true }, error: undefined });
-    }
-    const params = { projectId: project.id, agentId: "main" };
-    expect(await invoke("projects.checkoutOptions", params, cfg, ["operator.read"])).toMatchObject({
-      ok: true,
-      payload: { current: false, worktree: false },
+      ).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
     });
-    let authorityChecks = 0;
-    expect(
-      await invoke(
-        "projects.checkoutOptions",
-        params,
-        cfg,
-        ["operator.admin"],
-        undefined,
-        projectsHandlers,
-        undefined,
-        () => cfg,
-        { hasCurrentClientAuthority: () => ++authorityChecks === 1 },
-      ),
-    ).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-  });
-});
+  },
+);
 
 test("projects.list exposes a normalized configured default repository", async () => {
   const config = {
@@ -351,12 +397,12 @@ test("projects.list exposes a normalized configured default repository", async (
   });
   const readOnly = await listProjects(config, { scopes: ["operator.read"] });
   expect(readOnly?.payload).not.toHaveProperty("defaultRepository");
-  expect(
-    await listProjects(config, { scopes: ["operator.read", "operator.sessions.write"] }),
-  ).toMatchObject({
-    ok: true,
-    payload: { defaultRepository: { identity: "acme/private-repo" } },
+  // Opening the default repository uses projectGitUrl, which needs operator.write.
+  const creatorOnly = await listProjects(config, {
+    scopes: ["operator.read", "operator.sessions.write"],
   });
+  expect(creatorOnly).toMatchObject({ ok: true });
+  expect(creatorOnly?.payload).not.toHaveProperty("defaultRepository");
 });
 
 test("projects.list refuses a default repository from a replaced config during registry lookup", async () => {
@@ -373,17 +419,14 @@ test("projects.list refuses a default repository from a replaced config during r
       current = { gateway: { github: { host: "github.com" } } };
       return [];
     });
-  expect(await listProjects(original, { getConfig: () => current })).toMatchObject({
-    ok: false,
-    error: { code: "UNAVAILABLE", message: expect.stringContaining("Project access changed") },
-  });
+  expectProjectListingChanged(await listProjects(original, { getConfig: () => current }));
 });
 
 test("projects.list replies before cold or stale observed Git discovery settles", async () => {
   await withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);
     seedProjectSession("observed", repo);
-    const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    const cfg = projectConfig(state.workspaceDir);
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     using _ = { [Symbol.dispose]: () => projection.dispose() };
     const list = () =>
@@ -416,8 +459,8 @@ test("projects.list replies before cold or stale observed Git discovery settles"
           observedProjects: [{ name: "registered", originUrl: "https://example.test/repo.git" }],
         },
       });
-      using clock = vi.spyOn(Date, "now");
-      clock.mockReturnValue(Date.now() + 60_001);
+      using clock = vi.spyOn(performance, "now");
+      clock.mockReturnValue(performance.now() + 60_001);
       const refresh = Promise.withResolvers<Awaited<typeof held.promise>>();
       discovery.mockImplementation((operation, options) =>
         operation.type === "repository.identities" ? refresh.promise : run(operation, options),
@@ -455,24 +498,32 @@ test("projects.searchRemote redacts unexpected error diagnostics", async () => {
   expect(JSON.stringify(result)).not.toContain("synthetic-secret");
 });
 
-test("projects.list exposes checkout details only at write scope", async () => {
+test("projects.list exposes safe repository identity at read scope and checkout details only at write scope", async () => {
   return withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);
     await registerProjectRegistry({ path: repo, name: "Registered" });
-    const cfg = {
-      agents: {
-        entries: { main: { workspace: "/workspace/alpha" } },
-      },
-    };
+    const privateRepo = await initializeRepository(
+      state.root,
+      "org-private",
+      "https://github.com/openclaw/openclaworg.git",
+    );
+    await registerProjectRegistry({ path: privateRepo, name: "Org private" });
+    mockRepositoryVisibility({ "openclaw/openclaw": "public", "openclaw/openclaworg": "private" });
+    const cfg = projectConfig("/workspace/alpha");
 
-    const readResult = await listProjects(cfg, { scopes: ["operator.read"] });
+    const readResult = await listProjects(cfg, { scopes: ["operator.sessions.read"] });
     if (!readResult) {
       throw new Error("projects.list did not respond");
     }
     const readProjects = (readResult.payload as { projects: Record<string, unknown>[] }).projects;
     expect(readProjects).toEqual([
       { id: "workspace:main", displayName: "alpha", source: "workspace", agentId: "main" },
-      { id: "registered", displayName: "Registered", source: "registered" },
+      {
+        id: "registered",
+        displayName: "Registered",
+        source: "registered",
+        repositoryIdentity: "openclaw/openclaw",
+      },
     ]);
     expect(readResult.payload).not.toHaveProperty("observedProjects");
     expect(readResult.payload).not.toHaveProperty("githubHost");
@@ -480,6 +531,7 @@ test("projects.list exposes checkout details only at write scope", async () => {
     expect(resolveRepositoryIdentity).not.toHaveBeenCalled();
 
     const readOptIn = await listProjects(cfg, { observed: true, scopes: ["operator.read"] });
+    expect(readOptIn?.payload).toMatchObject({ projects: readProjects });
     expect(readOptIn?.payload).not.toHaveProperty("observedProjects");
     expect(listRegistryRecords).not.toHaveBeenCalled();
 
@@ -492,9 +544,16 @@ test("projects.list exposes checkout details only at write scope", async () => {
           projects: [
             { id: "workspace:main", repoRoot: "/workspace/alpha" },
             {
+              id: "org-private",
+              repoRoot: privateRepo,
+              originUrl: "https://github.com/openclaw/openclaworg.git",
+              repositoryIdentity: "openclaw/openclaworg",
+            },
+            {
               id: "registered",
               repoRoot: repo,
               originUrl: "https://github.com/openclaw/openclaw.git",
+              repositoryIdentity: "openclaw/openclaw",
             },
           ],
         },
@@ -521,7 +580,9 @@ test("project responses redact credentials and URL suffixes from registered orig
       "remote",
       "set-url",
       "origin",
-      ["https://user", ":placeholder", "@host/private.git?visible=value#branch"].join(""),
+      ["https://user", ":placeholder", "@github.com/acme/private.git?visible=value#branch"].join(
+        "",
+      ),
     ]);
 
     const registered = await invoke("projects.register", { path: repo, name: "Private" }, {}, [
@@ -529,16 +590,26 @@ test("project responses redact credentials and URL suffixes from registered orig
     ]);
     expect(registered).toMatchObject({
       ok: true,
-      payload: { originUrl: "https://host/private.git" },
+      payload: { originUrl: "https://github.com/acme/private.git" },
     });
 
+    // A credential-bearing origin has no verifiable public identity, so read-scope
+    // discovery hides it instead of looking it up.
+    const fetchImpl = mockRepositoryVisibility({ "acme/private": "public" });
+    const read = await listProjects({}, { scopes: ["operator.sessions.read"] });
+    expect(read).toMatchObject({ ok: true, payload: { projects: [{ id: "workspace:main" }] } });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(JSON.stringify(read)).not.toContain("placeholder");
     const listed = await listProjects();
     expect(listed).toMatchObject({
       ok: true,
       payload: {
         projects: expect.arrayContaining([
           expect.objectContaining({ id: "workspace:main" }),
-          expect.objectContaining({ id: "private", originUrl: "https://host/private.git" }),
+          expect.objectContaining({
+            id: "private",
+            originUrl: "https://github.com/acme/private.git",
+          }),
         ]),
       },
     });
@@ -551,9 +622,7 @@ test("registered projects.list serves current session metadata without broad rea
   try {
     const repo = await initializeRepository(state.root);
     const profile = ensureProfileForEmail("projects-worker@example.test");
-    const cfg = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
-    };
+    const cfg = projectConfig(state.workspaceDir);
     const session = {
       spawnedCwd: repo,
       createdActor: { type: "human", source: "profile", id: profile.id },
@@ -621,12 +690,12 @@ test.each(["unrelated creation", "activity", "visibility", "replacement"])(
   async (change) => {
     await withProjectState(async (state) => {
       const profile = ensureProfileForEmail("projects-churn@example.test");
-      const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+      const cfg = projectConfig(state.workspaceDir);
       setRuntimeConfigSnapshot(cfg);
       seedProjectSession("listed-project", "/projects/listed", {
         createdActor: { type: "human", source: "profile", id: profile.id },
       });
-      const stop = onSessionIdentityMutation(bumpGatewayAccessRevision);
+      using _ = { [Symbol.dispose]: onSessionIdentityMutation(bumpGatewayAccessRevision) };
       resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
         if (change === "unrelated creation") {
           seedProjectSession("unrelated", "/projects/unrelated", { updatedAt: 2 });
@@ -641,38 +710,22 @@ test.each(["unrelated creation", "activity", "visibility", "replacement"])(
                   : { updatedAt: 2, title: "Active session" },
           );
         }
-        return {
-          checkoutRoot: checkoutPath,
-          repoRoot: checkoutPath,
-          originUrl: "",
-          fingerprint: checkoutPath,
-        };
+        return discoverRepository(checkoutPath);
       });
-      try {
-        const result = await listProjects(cfg, { observed: true, profileId: profile.id });
-        if (change !== "unrelated creation" && change !== "activity") {
-          expect(result).toMatchObject({
-            ok: false,
-            error: {
-              code: "UNAVAILABLE",
-              message: expect.stringContaining("Project access changed"),
-            },
-          });
-          expect(result?.payload).toBeUndefined();
-          return;
-        }
-        expect(result).toMatchObject({
-          ok: true,
-          payload: {
-            recents: [{ kind: "folder", folder: "/projects/listed" }],
-            observedProjects: [
-              { name: "listed", checkouts: [{ runnerId: "gateway", path: "/projects/listed" }] },
-            ],
-          },
-        });
-      } finally {
-        stop();
-      }
+      const result = await listProjects(cfg, { observed: true, profileId: profile.id });
+      // Disclosure-relevant changes restart the read against the current session facts.
+      expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(
+        change === "visibility" || change === "replacement" ? 2 : 1,
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        payload: {
+          recents: [{ kind: "folder", folder: "/projects/listed" }],
+          observedProjects: [
+            { name: "listed", checkouts: [{ runnerId: "gateway", path: "/projects/listed" }] },
+          ],
+        },
+      });
     });
   },
 );
@@ -682,9 +735,7 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
   async (change) => {
     await withProjectState(async (state) => {
       const profile = ensureProfileForEmail("projects-scope@example.test");
-      const cfg = {
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
-      };
+      const cfg = projectConfig(state.workspaceDir);
       seedProjectSession("scope", "/private/project", {
         spawnedCwd: "/private/project",
         createdActor: { type: "human", source: "profile", id: profile.id },
@@ -707,12 +758,7 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
       if (change === "probe access") {
         resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
           bumpGatewayAccessRevision();
-          return {
-            checkoutRoot: checkoutPath,
-            repoRoot: checkoutPath,
-            originUrl: "",
-            fingerprint: checkoutPath,
-          };
+          return discoverRepository(checkoutPath);
         });
       }
       if (change === "registry access") {
@@ -809,19 +855,13 @@ test.each([
       if (reference === "live-worktree") {
         await insertRegistryWorktree(
           process.env,
-          {
-            id: reference,
-            name: reference,
+          makeWorktreeRecord(repo, reference, {
             repoFingerprint: fingerprint,
-            repoRoot: repo,
             path: path.join(state.stateDir, "worktrees", fingerprint, reference),
             branch: `openclaw/${reference}`,
             baseRef: "main",
-            ownerKind: "session",
             ownerId: "agent:main:session",
-            createdAt: 1,
-            lastActiveAt: 1,
-          },
+          }),
           { provisionedPaths: [] },
         );
       }
@@ -835,17 +875,8 @@ test.each([
           },
         );
       }
-      const cfg =
-        reference === "agent workspace"
-          ? { agents: { entries: { main: { workspace: repo } } } }
-          : {};
-      expect(
-        await invoke("projects.remove", { id: project.id, deleteCheckout: true }, cfg),
-      ).toMatchObject({
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: expect.stringContaining(reference) },
-      });
-      await expect(fs.stat(repo)).resolves.toBeDefined();
+      const cfg = reference === "agent workspace" ? projectConfig(repo) : {};
+      await expectCheckoutInUse(repo, project.id, cfg, reference);
     });
   },
 );

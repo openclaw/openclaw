@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { buildCatalogModel, catalogFixture } from "../plugin-sdk/provider-catalog.test-support.js";
 import { pluginProcessRuntimeEntrypoints } from "../plugins/process-runtime.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -13,8 +14,8 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupStartupPluginSourceCaptures } from "./startup-plugin-source-captures.js";
 
-it("keeps an inspected native image outside Doctor's disposable database snapshot", async () => {
-  await withOpenClawTestState(
+it("keeps an inspected native image outside Doctor's disposable database snapshot", () =>
+  withOpenClawTestState(
     {
       label: "doctor-native-capture",
       env: {
@@ -26,6 +27,8 @@ it("keeps an inspected native image outside Doctor's disposable database snapsho
     async (state) => {
       const plugin = state.path("native-plugin");
       fs.mkdirSync(plugin);
+      const write = (name: string, body: string) => fs.writeFileSync(path.join(plugin, name), body);
+      const writeJson = (name: string, value: unknown) => write(name, JSON.stringify(value));
       const require = createRequire(import.meta.url);
       const nativeRequire = createRequire(require.resolve("@openclaw/fs-safe/package.json"));
       const manifest = nativeRequire("./package.json") as {
@@ -42,25 +45,19 @@ it("keeps an inspected native image outside Doctor's disposable database snapsho
         });
       expect(nativeImages).toHaveLength(1);
       fs.copyFileSync(nativeImages[0]!, path.join(plugin, "fixture.node"));
-      fs.writeFileSync(path.join(plugin, "companion.txt"), "retained native companion");
-      fs.writeFileSync(
-        path.join(plugin, "package.json"),
-        JSON.stringify({
-          name: "native-capture-proof",
-          version: "1.0.0",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(plugin, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "native-capture-proof",
-          contracts: { tools: ["capture_probe"] },
-          configSchema: { type: "object", additionalProperties: false },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(plugin, "index.cjs"),
+      write("companion.txt", "retained native companion");
+      writeJson("package.json", {
+        name: "native-capture-proof",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      writeJson("openclaw.plugin.json", {
+        id: "native-capture-proof",
+        contracts: { tools: ["capture_probe"] },
+        configSchema: { type: "object", additionalProperties: false },
+      });
+      write(
+        "index.cjs",
         `
 const fs = require("node:fs");
 const path = require("node:path");
@@ -78,31 +75,15 @@ module.exports = { id: "native-capture-proof", register(api) {
 } };
 `,
       );
+      const model = buildCatalogModel("local", { name: "Local fixture" });
+      const { providerConfig } = catalogFixture("fixture", "http://127.0.0.1:1/v1", [model]);
       await state.writeConfig({
         agents: {
           ownership: "explicit",
           defaults: { systemAgent: { agentId: "main" }, model: "fixture/local" },
           entries: { main: { workspace: state.workspaceDir, tools: { allow: ["capture_probe"] } } },
         },
-        models: {
-          providers: {
-            fixture: {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:1/v1",
-              models: [
-                {
-                  id: "local",
-                  name: "Local fixture",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                },
-              ],
-            },
-          },
-        },
+        models: { providers: { fixture: providerConfig } },
         plugins: {
           allow: ["native-capture-proof"],
           load: { paths: [plugin] },
@@ -110,28 +91,24 @@ module.exports = { id: "native-capture-proof", register(api) {
         },
         memory: { search: { enabled: false } },
       });
-      const database = openOpenClawStateDatabase();
-      const databasePath = database.path;
+      const { path: databasePath } = openOpenClawStateDatabase();
       await closeOpenClawStateDatabaseAsync();
       const before = fs.readFileSync(databasePath);
       const entry = resolveRuntimeWorkerUrl(
         pluginProcessRuntimeEntrypoints.doctorLintNativeCapture,
       );
-      const result = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
-          ...resolveRuntimeWorkerArgv(entry),
-          state.path("nested-state"),
-        ],
-        {
-          env: state.env,
-          encoding: "utf8",
-          timeout: 120_000,
-          maxBuffer: 2 * 1024 * 1024,
-        },
-      );
+      const args = [
+        "--import",
+        pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+        ...resolveRuntimeWorkerArgv(entry),
+        state.path("nested-state"),
+      ];
+      const result = spawnSync(process.execPath, args, {
+        env: state.env,
+        encoding: "utf8",
+        timeout: 120_000,
+        maxBuffer: 2 * 1024 * 1024,
+      });
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr + result.stdout).toBe(0);
       const receipt = result.stdout.split("\n").find((line) => line.startsWith("CAPTURE_PROOF:"));
@@ -148,5 +125,4 @@ module.exports = { id: "native-capture-proof", register(api) {
         expect(fs.existsSync(companion)).toBe(false);
       }
     },
-  );
-});
+  ));

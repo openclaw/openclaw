@@ -29,16 +29,17 @@ import { LruCache } from "../infra/lru-cache.js";
 import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
 import {
-  type ExecApprovalRegistration,
   isExecApprovalRunAbortedError,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import {
   buildApprovalPendingMessage,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
-import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 import { isExecDeniedResultText } from "./exec-approval-result.js";
+import type { ExecApprovalRegistration, ExecApprovalTransport } from "./exec-approval-transport.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
@@ -321,6 +322,7 @@ function classifyExecApprovalWaitFailure(error: unknown) {
 /** Waits for an approval and normalizes cancellation, request failure, and resolved policy. */
 export async function resolveExecApprovalWaitOutcome<TTimeoutContext = undefined>(
   params: Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision"> & {
+    approvalTransport?: ExecApprovalTransport;
     approvalId: string;
     expiresAtMs?: number;
     preResolvedDecision: string | null | undefined;
@@ -338,6 +340,7 @@ export async function resolveExecApprovalWaitOutcome<TTimeoutContext = undefined
   let decision: string | null;
   try {
     decision = await resolveRegisteredExecApprovalDecision({
+      approvalTransport: params.approvalTransport,
       approvalId: params.approvalId,
       expiresAtMs: params.expiresAtMs,
       preResolvedDecision: params.preResolvedDecision,

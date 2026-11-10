@@ -1,4 +1,3 @@
-// Google Meet tests cover bounded Drive document export response reads.
 import { describe, expect, it, vi } from "vitest";
 import { listGoogleMeetCalendarEvents } from "./calendar.js";
 import { exportGoogleDriveDocumentText } from "./drive.js";
@@ -11,23 +10,21 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const mockFetch = vi.mocked(fetchWithSsrFGuard);
+const exportDocument = () =>
+  exportGoogleDriveDocumentText({ accessToken: "tok", documentId: "doc-id" });
+function mockResponse(response: Response) {
+  const release = vi.fn(async () => undefined);
+  mockFetch.mockResolvedValueOnce({ response, finalUrl: "https://googleapis.com/", release });
+  return release;
+}
 
 const googleApiRequests = [
-  {
-    name: "Meet",
-    run: () => fetchGoogleMeetSpace({ accessToken: "tok", meeting: "abc-defg-hij" }),
-  },
-  {
-    name: "Calendar",
-    run: () => listGoogleMeetCalendarEvents({ accessToken: "tok" }),
-  },
-  {
-    name: "Drive",
-    run: () => exportGoogleDriveDocumentText({ accessToken: "tok", documentId: "doc-id" }),
-  },
-];
+  ["Meet", () => fetchGoogleMeetSpace({ accessToken: "tok", meeting: "abc-defg-hij" })],
+  ["Calendar", () => listGoogleMeetCalendarEvents({ accessToken: "tok" })],
+  ["Drive", exportDocument],
+] as const;
 
-describe.each(googleApiRequests)("$name guarded response cleanup", ({ run }) => {
+describe.each(googleApiRequests)("%s guarded response cleanup", (_name, run) => {
   it.each(["error response", "body read failure"])("releases after %s", async (failure) => {
     const response =
       failure === "error response"
@@ -39,8 +36,7 @@ describe.each(googleApiRequests)("$name guarded response cleanup", ({ run }) => 
               },
             }),
           );
-    const release = vi.fn(async () => undefined);
-    mockFetch.mockResolvedValueOnce({ response, finalUrl: "https://googleapis.com/", release });
+    const release = mockResponse(response);
 
     await expect(run()).rejects.toThrow(
       failure === "error response" ? "failed (403): denied" : "body read failed",
@@ -49,61 +45,29 @@ describe.each(googleApiRequests)("$name guarded response cleanup", ({ run }) => 
   });
 });
 
-function makeStreamResponse(sizeBytes: number, status = 200): Response {
-  const chunk = new Uint8Array(Math.min(sizeBytes, 65536)).fill(0x78); // 'x'
-  let sent = 0;
+function makeStreamResponse(sizeBytes: number): Response {
+  const chunk = new Uint8Array(Math.min(sizeBytes, 65536)).fill(0x78);
   const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (sent >= sizeBytes) {
-        controller.close();
-        return;
+    start(controller) {
+      for (let sent = 0; sent < sizeBytes; sent += chunk.length) {
+        controller.enqueue(chunk.subarray(0, sizeBytes - sent));
       }
-      const remaining = sizeBytes - sent;
-      const toSend = Math.min(chunk.length, remaining);
-      controller.enqueue(chunk.subarray(0, toSend));
-      sent += toSend;
+      controller.close();
     },
   });
-  return new Response(stream, {
-    status,
-    headers: { "Content-Type": "text/plain" },
-  });
+  return new Response(stream, { headers: { "Content-Type": "text/plain" } });
 }
 
 describe("exportGoogleDriveDocumentText bound", () => {
   it("returns document text when response is within the 16 MiB cap", async () => {
-    const UNDER_CAP = 256;
-    const response = makeStreamResponse(UNDER_CAP);
-    const release = vi.fn(async () => undefined);
-    mockFetch.mockResolvedValueOnce({
-      response,
-      finalUrl: "https://www.googleapis.com/drive/v3/files/doc-id/export?mimeType=text%2Fplain",
-      release,
-    });
-
-    const result = await exportGoogleDriveDocumentText({
-      accessToken: "tok",
-      documentId: "doc-id",
-    });
-
-    expect(result).toBe("x".repeat(256));
+    const release = mockResponse(makeStreamResponse(256));
+    expect(await exportDocument()).toBe("x".repeat(256));
     expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("rejects with a size error when response exceeds 16 MiB cap (fail-closed)", async () => {
-    const OVER_CAP = 17 * 1024 * 1024; // 17 MiB
-    const response = makeStreamResponse(OVER_CAP);
-    const release = vi.fn(async () => undefined);
-    mockFetch.mockResolvedValueOnce({
-      response,
-      finalUrl: "https://www.googleapis.com/drive/v3/files/doc-id/export?mimeType=text%2Fplain",
-      release,
-    });
-
-    await expect(
-      exportGoogleDriveDocumentText({ accessToken: "tok", documentId: "doc-id" }),
-    ).rejects.toThrow(/exceeds/i);
-
+    const release = mockResponse(makeStreamResponse(17 * 1024 * 1024));
+    await expect(exportDocument()).rejects.toThrow(/exceeds/i);
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

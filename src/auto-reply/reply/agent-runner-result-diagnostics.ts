@@ -180,17 +180,59 @@ export async function buildReplyDiagnosticsPayload(params: {
       promptTokens,
       usage,
     });
-    const requestContextBlock = formatRequestContextTraceBlock({
-      provider: providerUsed,
-      model: modelUsed,
-      contextLimit: contextTokensUsed,
-      promptTokens: resolvedPromptTokens,
-    });
+    let requestContextBlock: string | undefined;
+    const contextLimit = asFiniteNumber(contextTokensUsed);
+    const contextUsed = asFiniteNumber(resolvedPromptTokens);
+    if (
+      (contextLimit !== undefined && contextLimit > 0) ||
+      (contextUsed !== undefined && contextUsed > 0) ||
+      providerUsed ||
+      modelUsed
+    ) {
+      const headroom =
+        contextLimit !== undefined && contextUsed !== undefined
+          ? Math.max(0, contextLimit - contextUsed)
+          : undefined;
+      const percent =
+        contextLimit !== undefined && contextLimit > 0 && contextUsed !== undefined
+          ? Math.round((contextUsed / contextLimit) * 100)
+          : undefined;
+      requestContextBlock = `🔎 Context Window (Last Model Request):\n~~~text\n${[
+        `provider=${providerUsed ?? "n/a"}`,
+        `model=${modelUsed ?? "n/a"}`,
+        formatTraceUsageLine("used", contextUsed),
+        formatTraceUsageLine("limit", contextLimit),
+        `headroom=${headroom !== undefined ? `${headroom.toLocaleString()} tok (${formatTokenCount(headroom)})` : "n/a"}`,
+        `usage=${percent !== undefined ? `${percent}%` : "n/a"}`,
+      ].join("\n")}\n~~~`;
+    }
+    let promptSegmentsBlock: string | undefined;
+    if (promptSegments?.length || rawUserText?.length) {
+      const promptSegmentLines = (promptSegments ?? []).map(
+        (segment) => `${segment.key}=${segment.chars.toLocaleString()} chars`,
+      );
+      if (rawUserText?.length) {
+        promptSegmentLines.push(`totalPromptText=${rawUserText.length.toLocaleString()} chars`);
+      }
+      promptSegmentsBlock = `🔎 Prompt Segments:\n~~~text\n${promptSegmentLines.join("\n")}\n~~~`;
+    }
     const usageBlocks = [
       formatUsageTraceBlock("Usage (Session Total)", sessionUsage),
       formatUsageTraceBlock("Usage (Last Turn Total)", usage),
       requestContextBlock,
-      formatExecutionResultTraceBlock(executionTrace),
+      !executionTrace?.winnerProvider && !executionTrace?.winnerModel
+        ? undefined
+        : formatKeyValueTraceBlock("Execution Result", [
+            [
+              "winner",
+              executionTrace.winnerProvider && executionTrace.winnerModel
+                ? `${executionTrace.winnerProvider}/${executionTrace.winnerModel}`
+                : undefined,
+            ],
+            ["fallbackUsed", executionTrace.fallbackUsed],
+            ["attempts", executionTrace.attempts?.length],
+            ["runner", executionTrace.runner],
+          ]),
       formatFallbackChainTraceBlock(executionTrace),
       formatKeyValueTraceBlock("Request Shaping", [
         ["provider", providerUsed],
@@ -203,8 +245,15 @@ export async function buildReplyDiagnosticsPayload(params: {
         ["fallbackEligible", requestShaping.fallbackEligible],
         ["blockStreaming", requestShaping.blockStreaming],
       ]),
-      formatPromptSegmentsTraceBlock(promptSegments, rawUserText),
-      formatToolSummaryTraceBlock(toolSummary),
+      promptSegmentsBlock,
+      !toolSummary || toolSummary.calls <= 0
+        ? undefined
+        : formatKeyValueTraceBlock("Tool Summary", [
+            ["calls", toolSummary.calls],
+            ["tools", toolSummary.tools.length > 0 ? toolSummary.tools.join(", ") : undefined],
+            ["failures", toolSummary.failures],
+            ["totalToolTimeMs", toolSummary.totalToolTimeMs],
+          ]),
       formatKeyValueTraceBlock("Completion", [
         ["finishReason", completion?.finishReason],
         ["stopReason", completion?.stopReason],
@@ -310,25 +359,6 @@ function formatKeyValueTraceBlock(
   return `🔎 ${title}:\n~~~text\n${lines.join("\n")}\n~~~`;
 }
 
-function formatExecutionResultTraceBlock(
-  executionTrace: EmbeddedAgentRunMeta["executionTrace"],
-): string | undefined {
-  if (!executionTrace?.winnerProvider && !executionTrace?.winnerModel) {
-    return undefined;
-  }
-  return formatKeyValueTraceBlock("Execution Result", [
-    [
-      "winner",
-      executionTrace.winnerProvider && executionTrace.winnerModel
-        ? `${executionTrace.winnerProvider}/${executionTrace.winnerModel}`
-        : undefined,
-    ],
-    ["fallbackUsed", executionTrace.fallbackUsed],
-    ["attempts", executionTrace.attempts?.length],
-    ["runner", executionTrace.runner],
-  ]);
-}
-
 function formatFallbackChainTraceBlock(
   executionTrace: EmbeddedAgentRunMeta["executionTrace"],
 ): string | undefined {
@@ -425,66 +455,4 @@ function derivePromptSegments(prompt: string | undefined): EmbeddedAgentRunMeta[
   }
   const result = Array.from(segments.entries()).map(([key, chars]) => ({ key, chars }));
   return result.length > 0 ? result : undefined;
-}
-
-function formatPromptSegmentsTraceBlock(
-  segments: EmbeddedAgentRunMeta["promptSegments"],
-  totalPromptText: string | undefined,
-): string | undefined {
-  if (!segments?.length && !totalPromptText?.length) {
-    return undefined;
-  }
-  const lines = (segments ?? []).map(
-    (segment) => `${segment.key}=${segment.chars.toLocaleString()} chars`,
-  );
-  if (totalPromptText?.length) {
-    lines.push(`totalPromptText=${totalPromptText.length.toLocaleString()} chars`);
-  }
-  return `🔎 Prompt Segments:\n~~~text\n${lines.join("\n")}\n~~~`;
-}
-
-function formatToolSummaryTraceBlock(
-  toolSummary: EmbeddedAgentRunMeta["toolSummary"],
-): string | undefined {
-  if (!toolSummary || toolSummary.calls <= 0) {
-    return undefined;
-  }
-  return formatKeyValueTraceBlock("Tool Summary", [
-    ["calls", toolSummary.calls],
-    ["tools", toolSummary.tools.length > 0 ? toolSummary.tools.join(", ") : undefined],
-    ["failures", toolSummary.failures],
-    ["totalToolTimeMs", toolSummary.totalToolTimeMs],
-  ]);
-}
-
-function formatRequestContextTraceBlock(params: {
-  provider?: string;
-  model?: string;
-  contextLimit?: number;
-  promptTokens?: number;
-}): string | undefined {
-  const limit = asFiniteNumber(params.contextLimit);
-  const used = asFiniteNumber(params.promptTokens);
-  if (
-    (limit === undefined || limit <= 0) &&
-    (used === undefined || used <= 0) &&
-    !params.provider &&
-    !params.model
-  ) {
-    return undefined;
-  }
-  const headroom =
-    limit !== undefined && used !== undefined ? Math.max(0, limit - used) : undefined;
-  const percent =
-    limit !== undefined && limit > 0 && used !== undefined
-      ? Math.round((used / limit) * 100)
-      : undefined;
-  return `🔎 Context Window (Last Model Request):\n~~~text\n${[
-    `provider=${params.provider ?? "n/a"}`,
-    `model=${params.model ?? "n/a"}`,
-    formatTraceUsageLine("used", used),
-    formatTraceUsageLine("limit", limit),
-    `headroom=${headroom !== undefined ? `${headroom.toLocaleString()} tok (${formatTokenCount(headroom)})` : "n/a"}`,
-    `usage=${percent !== undefined ? `${percent}%` : "n/a"}`,
-  ].join("\n")}\n~~~`;
 }

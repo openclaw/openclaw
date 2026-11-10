@@ -130,9 +130,7 @@ export function listMatrixApprovalReactionBindings(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): ApprovalReactionDecisionBinding[] {
   const allowed = new Set(allowedDecisions);
-  return MATRIX_APPROVAL_REACTION_BINDINGS.filter(({ decision }) => allowed.has(decision)).map(
-    (binding) => Object.assign({}, binding),
-  );
+  return MATRIX_APPROVAL_REACTION_BINDINGS.filter(({ decision }) => allowed.has(decision));
 }
 
 export function buildMatrixApprovalReactionHint(

@@ -1,44 +1,33 @@
-import { createServer, type Server } from "node:http";
+import { EventEmitter, once } from "node:events";
+import { createServer } from "node:http";
 import type { Duplex } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { promisify } from "node:util";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 import { createGatewayWsClient } from "../../scripts/lib/gateway-ws-client.js";
 
-let server: Server | undefined;
-let wss: WebSocketServer | undefined;
-let activeClient: ReturnType<typeof createGatewayWsClient> | undefined;
-let closing = false;
-const sockets = new Set<Duplex>();
-
-afterEach(async () => {
-  closing = true;
-  activeClient?.close();
-  // Terminate peers before wss.close(), including after a failed assertion.
-  for (const client of wss?.clients ?? []) {
-    client.terminate();
-  }
-  for (const socket of sockets) {
-    socket.destroy();
-  }
-  if (wss) {
-    await new Promise<void>((resolve) => {
-      wss!.close(() => resolve());
-    });
-  }
-  wss = undefined;
-  if (server) {
-    await new Promise<void>((resolve, reject) => {
-      server!.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-  server = undefined;
-  activeClient = undefined;
-  sockets.clear();
-});
-
 async function makeClient(handler?: (ws: WebSocket) => void, openTimeoutMs = 8000) {
-  closing = false;
-  server = createServer();
+  const server = createServer();
+  const sockets = new Set<Duplex>();
+  let wss: WebSocketServer | undefined;
+  let client: ReturnType<typeof createGatewayWsClient> | null = null;
+  let closing = false;
+  onTestFinished(async () => {
+    closing = true;
+    client?.close();
+    // Join both peers and TCP sockets, including after a failed assertion.
+    for (const peer of wss?.clients ?? []) {
+      peer.terminate();
+    }
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    if (wss) {
+      await promisify(wss.close.bind(wss))();
+    }
+    await promisify(server.close.bind(server))();
+  });
   server.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
@@ -54,19 +43,16 @@ async function makeClient(handler?: (ws: WebSocket) => void, openTimeoutMs = 800
     server.on("upgrade", () => {});
   }
   await new Promise<void>((resolve) => {
-    server!.listen(0, "127.0.0.1", resolve);
+    server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("test websocket server did not get a TCP address");
   }
-  activeClient = createGatewayWsClient({ url: `ws://127.0.0.1:${address.port}`, openTimeoutMs });
-  return activeClient;
-}
-
-async function openClient(handler: (ws: WebSocket) => void = () => {}) {
-  const client = await makeClient(handler);
-  await client.waitOpen();
+  client = createGatewayWsClient({
+    url: `ws://127.0.0.1:${address.port}`,
+    openTimeoutMs,
+  });
   return client;
 }
 
@@ -76,11 +62,12 @@ describe("createGatewayWsClient", () => {
     ["gateway closes", "gateway websocket closed (1011): boom"],
     ["socket errors", "socket exploded"],
   ])("rejects pending RPC requests when the %s", async (cause, error) => {
-    const client = await openClient((ws) => {
+    const client = await makeClient((ws) => {
       if (cause === "gateway closes") {
         ws.on("message", () => ws.close(1011, "boom"));
       }
     });
+    await client.waitOpen();
     const pending = client.request("health", {}, 1000);
     if (cause === "client closes") {
       client.close();
@@ -108,3 +95,79 @@ describe("createGatewayWsClient", () => {
     });
   });
 });
+
+it.each(["ready", "stalled retry", "deadline", "other refusal", "not opted in"])(
+  "bounds opt-in startup admission retries over the wire: %s",
+  async (outcome) => {
+    const requests = new EventEmitter();
+    const received: unknown[] = [];
+    const refusal = {
+      code: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: outcome === "deadline" ? 180_000 : 500,
+      details: { reason: outcome === "other refusal" ? "draining" : "startup-sidecars" },
+    };
+    const client = await makeClient((ws) => {
+      ws.on("message", (raw) => {
+        const frame = JSON.parse(rawDataToString(raw));
+        received.push(frame.params);
+        requests.emit("request");
+        if (received.length === 2 && outcome === "stalled retry") {
+          return;
+        }
+        ws.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: received.length > 1,
+            ...(received.length > 1 ? { payload: "created" } : { error: refusal }),
+          }),
+        );
+      });
+    });
+    await client.waitOpen();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const firstResponse = once(client.ws, "message");
+      const pending = client.request("sessions.create", { key: "synthetic" }, 180_000, {
+        retryStartup: outcome !== "not opted in",
+      });
+      let settled = false;
+      const result = pending
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      await firstResponse;
+      if (outcome === "other refusal" || outcome === "not opted in") {
+        expect(await result).toMatchObject({ ok: false, error: refusal });
+        expect(received).toHaveLength(1);
+        expect(log).not.toHaveBeenCalled();
+        return;
+      }
+      if (outcome === "ready" || outcome === "stalled retry") {
+        await vi.advanceTimersByTimeAsync(499);
+        expect(settled).toBe(false);
+        expect(received).toHaveLength(1);
+        const retried = once(requests, "request");
+        await vi.advanceTimersByTimeAsync(1);
+        await retried;
+        expect(received).toEqual([{ key: "synthetic" }, { key: "synthetic" }]);
+      }
+      if (outcome === "ready") {
+        expect(await result).toMatchObject({ ok: true, payload: "created" });
+      } else {
+        await vi.advanceTimersByTimeAsync(outcome === "deadline" ? 120_000 : 119_500);
+        expect(await result).toBeInstanceOf(Error);
+        expect(performance.now()).toBe(120_000);
+        expect(received).toHaveLength(outcome === "deadline" ? 1 : 2);
+      }
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("STARTUP RETRY sessions.create"));
+    } finally {
+      log.mockRestore();
+      vi.useRealTimers();
+    }
+  },
+);

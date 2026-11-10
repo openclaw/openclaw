@@ -3,6 +3,7 @@ import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ContinueInTerminalDialog } from "./continue-in-terminal-dialog.tsx";
 
@@ -60,11 +61,7 @@ it.each(["click", "Enter", " "] as const)(
     } finally {
       mounted.unmount();
       restoreDialog();
-      if (clipboard) {
-        Object.defineProperty(navigator, "clipboard", clipboard);
-      } else {
-        Reflect.deleteProperty(navigator, "clipboard");
-      }
+      restorePropertyDescriptor(navigator, "clipboard", clipboard);
     }
   },
 );

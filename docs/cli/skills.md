@@ -74,6 +74,11 @@ openclaw skills workshop archive <name> --reason "Superseded"
 openclaw skills workshop restore <name>
 ```
 
+Read-only browsing (`skills`, `skills list`, `skills check`, and `skills info`)
+remains available with unrelated invalid configuration so you can inspect skills
+while repairing it. These commands do not repair or rewrite the configuration;
+installation and other mutations still require valid configuration.
+
 `search`, `update`, and `verify` use ClawHub directly. `install @owner/<slug>`
 installs a native ClawHub skill. `install skills-sh:<owner>/<repo>/<slug>` asks
 ClawHub to resolve an external listing to its exact synchronized GitHub commit;
@@ -106,6 +111,9 @@ The skills table renders horizontal tabs as single spaces so descriptions
 stay aligned with the neighboring columns.
 JSON output preserves tabs and line endings in descriptions and paths as escaped
 characters.
+
+Human-readable `list`, `info`, and `check` output neutralizes terminal control
+sequences in installed skill metadata before styling.
 
 `info` resolves an exact skill name before a metadata key. Key, case-insensitive,
 and separator-normalized matches must identify one skill; ambiguous selectors
@@ -159,6 +167,8 @@ command when one exists; otherwise, change `security.installPolicy` to return
 nor the acknowledgement overrides `block` or a policy failure.
 
 Notes:
+
+Press Ctrl-C to cancel a pending search or Trending request without printing results afterward.
 
 | Flag/behavior                    | Description                                                                                                                                                                                                                                                                                                                       |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -251,6 +261,10 @@ CLI host.
 openclaw skills library --help
 ```
 
+Human-readable library metadata neutralizes terminal control sequences and displays
+embedded tabs and line breaks as visible escapes. JSON retains the original values.
+`library read` prints the requested skill and supporting-file contents verbatim.
+
 List your library:
 
 ```bash
@@ -323,11 +337,12 @@ you can attach, without changing the session. `read --session <session-key>`
 also requires `--revision <hash>` and reads only that exact selected revision;
 it does not expose other private revisions or grant permission to edit them.
 
-Personal operations require an authenticated Gateway profile. The Control UI on a
-single-user Gateway uses a durable owner profile, but ephemeral CLI connections
-do not inherit it. A CLI shared token or password alone still has no personal
-profile; use the existing workspace commands in that case. An explicitly selected
-remote Gateway never falls back to a client-local personal library.
+Personal operations require an authenticated Gateway profile. On a single-user
+Gateway, the Control UI and authenticated CLI token or password connections use
+the same durable owner profile, even when the CLI connection is omitted from
+presence. This is a shared owner, not a separate personal sign-in for each client.
+An explicitly selected remote Gateway never falls back to a client-local personal
+library.
 
 Sharing makes a skill available to teammates but does not grant edit access.
 Transfer to team ownership requires administrator authority. Saving affects
@@ -353,18 +368,22 @@ openclaw skills workshop restore release-notes
 openclaw skills workshop restore release-notes --version <version-id>
 ```
 
-| Command                                        | Description                                                                                                                     |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `list`                                         | Lists live learned skills with usage counts, plus archived skills. Shows the autonomous mode and skills root.                   |
-| `changes [--limit <n>]`                        | Shows recent changes, newest first: who made them (`agent`, `review`, `curator`, `user`), the action, and the saved version id. |
-| `show <name> [--file <path>] [--version <id>]` | Prints `SKILL.md` or one support file, from the live skill or a saved version.                                                  |
-| `archive <name> [--reason <text>]`             | Hides the skill from its agent. The skill stays restorable.                                                                     |
-| `restore <name> [--version <id>]`              | Restores the newest saved version, or the named one. The current live copy is saved first, so restore is undoable.              |
+| Command                                        | Description                                                                                                                      |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `list`                                         | Lists live learned skills with usage counts, plus archived skills and waiting drafts. Shows the autonomous mode and skills root. |
+| `changes [--limit <n>]`                        | Shows recent changes, newest first: who made them (`agent`, `review`, `curator`, `user`), the action, and the saved version id.  |
+| `show <name> [--file <path>] [--version <id>]` | Prints `SKILL.md` or one support file, from the live skill or a saved version.                                                   |
+| `archive <name> [--reason <text>]`             | Hides the skill from its agent. The skill stays restorable.                                                                      |
+| `restore <name> [--version <id>]`              | Restores the newest saved version, or the named one. The current live copy is saved first, so restore is undoable.               |
 
 Every Workshop command accepts `--agent <id>` and `--json`. `archive` and
 `restore` act as `user` in the change feed. The printed archive Undo command
 includes the archived agent's `--agent <id>`, so it restores that agent even
 when your current directory selects a different agent.
+
+The human-readable `workshop list` root path neutralizes terminal controls and
+shows embedded line breaks and tabs as visible escapes. `--json` retains the
+original path, and the directory used on disk is unchanged.
 
 ## Related
 

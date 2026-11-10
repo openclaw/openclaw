@@ -17,6 +17,7 @@ import {
   extractGatewayMessageText,
 } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
+import { readQaAssistantToolCalls } from "./runtime-transcript.js";
 import { findSubagentHandoffReply } from "./subagent-handoff-reply.js";
 import type { QaSkillStatusEntry, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { projectQaToolActivity, readQaNestedToolActivity } from "./tool-activity.js";
@@ -26,13 +27,19 @@ type QaGatewayCallEnv = Pick<
   "gateway" | "primaryModel" | "alternateModel" | "providerMode"
 >;
 
+type QaSessionTranscriptSeedMessage =
+  | {
+      role: "assistant" | "user";
+      text: string;
+      timestamp: number;
+      // Assistant tool calls let seeds carry paired tool results for compaction flows.
+      toolCalls?: readonly { id: string; name: string }[];
+    }
+  | { role: "toolResult"; toolCallId: string; toolName: string; text: string; timestamp: number };
+
 type QaSessionTranscriptSeedParams = {
   label?: string;
-  messages: readonly {
-    role: "assistant" | "user";
-    text: string;
-    timestamp: number;
-  }[];
+  messages: readonly QaSessionTranscriptSeedMessage[];
   sessionId: string;
   sessionKey: string;
   updatedAt: number;
@@ -63,35 +70,6 @@ type QaSessionTranscriptSummaryOptions = {
 
 function readSessionTranscriptEventMessage(event: unknown) {
   return isRecord(event) && isRecord(event.message) ? event.message : undefined;
-}
-
-function readAssistantToolCalls(message: Record<string, unknown>): Array<{
-  arguments?: unknown;
-  id?: string;
-  name: string;
-}> {
-  if (!Array.isArray(message.content)) {
-    return [];
-  }
-  return message.content.flatMap((block) => {
-    if (!isRecord(block)) {
-      return [];
-    }
-    const type = readNonEmptyString(block.type);
-    if (type !== "toolCall" && type !== "toolUse" && type !== "tool_use") {
-      return [];
-    }
-    const name = readNonEmptyString(block.name);
-    return name
-      ? [
-          {
-            arguments: block.arguments ?? block.input,
-            id: readNonEmptyString(block.id),
-            name,
-          },
-        ]
-      : [];
-  });
 }
 
 function readWaitingCodeModeRunId(message: Record<string, unknown>) {
@@ -189,8 +167,7 @@ function summarizeSessionTranscriptEvents(
       : [];
     lastAssistantErrorMessage = readNonEmptyString(message.errorMessage);
     lastAssistantStopReason = readNonEmptyString(message.stopReason);
-    const assistantToolCalls = readAssistantToolCalls(message);
-    for (const toolCall of assistantToolCalls) {
+    for (const toolCall of readQaAssistantToolCalls(message, readNonEmptyString)) {
       if (toolCall.id) {
         if (
           pendingCodeModeExecNeedle &&
@@ -352,6 +329,33 @@ async function seedQaSessionEntries(
   }
 }
 
+function buildSeedTranscriptMessage(seed: QaSessionTranscriptSeedMessage) {
+  if (seed.role === "toolResult") {
+    return {
+      role: seed.role,
+      toolCallId: seed.toolCallId,
+      toolName: seed.toolName,
+      isError: false,
+      timestamp: seed.timestamp,
+      content: [{ type: "text" as const, text: seed.text }],
+    };
+  }
+  const toolCalls = seed.role === "assistant" ? (seed.toolCalls ?? []) : [];
+  return {
+    role: seed.role,
+    timestamp: seed.timestamp,
+    content: [
+      ...(seed.text ? [{ type: "text" as const, text: seed.text }] : []),
+      ...toolCalls.map((call) => ({
+        type: "toolCall" as const,
+        id: call.id,
+        name: call.name,
+        arguments: {},
+      })),
+    ],
+  };
+}
+
 async function seedQaSessionTranscript(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   params: QaSessionTranscriptSeedParams,
@@ -391,11 +395,7 @@ async function seedQaSessionTranscript(
       sessionKey,
       storePath,
       now: seed.timestamp,
-      message: {
-        role: seed.role,
-        timestamp: seed.timestamp,
-        content: [{ type: "text", text: seed.text }],
-      },
+      message: buildSeedTranscriptMessage(seed),
     });
     if (!appended?.appended) {
       throw new Error(`failed to seed QA session transcript for ${sessionKey}`);

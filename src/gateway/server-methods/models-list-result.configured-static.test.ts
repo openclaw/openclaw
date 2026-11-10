@@ -2,8 +2,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOAuthRefreshCredential } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import * as personalCatalogReads from "../../agents/auth-profiles/sqlite-read.js";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
+import { resolveStatusUtilityModel } from "../../commands/models/list.status-utility.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
@@ -18,37 +18,29 @@ import {
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   catalogEntry,
   createModelsListTestContext,
   listModels,
+  modelAuthStore,
   providerCatalogEntry,
-  WITHOUT_OPENAI_ENV_AUTH,
+  requestModelsList,
+  withModelsListState,
 } from "./models-list-result.openai-routes.test-support.js";
-import { modelsHandlers } from "./models.js";
-import type { GatewayClient, RespondFn } from "./types.js";
 
 const luna = "gpt-5.6-luna";
 const sol = "gpt-5.6-sol";
 const sonnet = "claude-sonnet-4-6";
 
 const withState = (run: (state: OpenClawTestState) => Promise<void>, withoutAuth = false) =>
-  withOpenClawTestState(
-    {
-      layout: "state-only",
-      prefix: "configured-catalog-",
-      ...(withoutAuth ? { env: WITHOUT_OPENAI_ENV_AUTH } : {}),
-    },
-    run,
-  );
+  withModelsListState(run, withoutAuth ? { env: WITHOUT_OPENAI_ENV_AUTH } : {});
 const configuredList = (state: OpenClawTestState, params: Parameters<typeof listModels>[0]) =>
   listModels({
     agentDir: state.agentDir(),
@@ -57,22 +49,6 @@ const configuredList = (state: OpenClawTestState, params: Parameters<typeof list
     preparedOnly: true,
     ...params,
   });
-async function requestModels(
-  context: ReturnType<typeof createModelsListTestContext>,
-  params: Record<string, unknown>,
-  client: GatewayClient | null = null,
-) {
-  const respond = vi.fn<RespondFn>();
-  await modelsHandlers["models.list"]!({
-    req: { type: "req", id: "configured-catalog", method: "models.list", params },
-    client,
-    context,
-    params,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  return respond;
-}
 function agentConfig(
   defaults: NonNullable<OpenClawConfig["agents"]>["defaults"],
   rest: Omit<OpenClawConfig, "agents"> = {},
@@ -172,23 +148,20 @@ it("projects utility runtimes for API, subscription, unavailable, and disabled s
       }),
     );
     expect(result.defaultModels).toEqual({
-      automaticUtilityModel: `openai/${luna}`,
-      utilityRuntime: { id: "openclaw", kind: "api", label: "OpenClaw Default" },
+      automaticUtilityModel: "openai/gpt-5.5",
+      utilityRuntime: { id: "codex", kind: "harness", label: "OpenAI Codex" },
     });
     const pinnedConfig = agentConfig(
       { ...cfg.agents?.defaults, utilityModel: "openai/gpt-5.5@openai:utility" },
       { ...cfg, models: undefined },
     );
-    const subscription: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:utility": createOAuthRefreshCredential({
-          access: "synthetic-access",
-          refresh: "synthetic-refresh",
-          expires: Date.now() + 3_600_000,
-        }),
-      },
-    };
+    const subscription = modelAuthStore({
+      "openai:utility": createOAuthRefreshCredential({
+        access: "synthetic-access",
+        refresh: "synthetic-refresh",
+        expires: Date.now() + 3_600_000,
+      }),
+    });
     for (const [name, authStore, expected] of [
       ["subscription", subscription, { id: "codex", kind: "harness", label: "OpenAI Codex" }],
       ["missing", { version: 1, profiles: {} }, undefined],
@@ -212,7 +185,7 @@ it("projects utility runtimes for API, subscription, unavailable, and disabled s
         catalog: [catalogEntry("gpt-5.5", "openai-chatgpt-responses")],
       });
       expect(projected.defaultModels, name).toEqual({
-        automaticUtilityModel: `openai/${luna}`,
+        automaticUtilityModel: "openai/gpt-5.5",
         ...(expected ? { utilityRuntime: expected } : {}),
       });
     }
@@ -260,7 +233,7 @@ it.each(["small", undefined])(
         catalog: ["custom", "other"].map((provider) => providerCatalogEntry(provider, "primary")),
         metadataSnapshot,
       });
-      const respond = await requestModels(context, {
+      const respond = await requestModelsList(context, {
         agentId: "worker",
         view: "configured",
         preparedOnly: true,
@@ -278,6 +251,64 @@ it.each(["small", undefined])(
     });
   },
 );
+
+it("publishes the requested agent's account-scoped utility decision for status", async () => {
+  await withState(async (state) => {
+    const cfg = agentConfig(
+      { model: "other/primary" },
+      {
+        models: {
+          providers: {
+            custom: { api: "openai-completions", baseUrl: "https://custom.example/v1", models: [] },
+          },
+        },
+      },
+      { worker: { model: "custom/primary@work", utilityModel: { fallbacks: ["custom/backup"] } } },
+    );
+    const result = await configuredList(state, {
+      cfg,
+      agentId: "worker",
+      agentDir: state.agentDir("worker"),
+      view: "all",
+      includeDefaultModels: true,
+      catalog: ["primary", "small", "backup"].map((id) => providerCatalogEntry("custom", id)),
+      preparedAuthStore: modelAuthStore({
+        work: { type: "api_key", provider: "custom", key: "synthetic-key" },
+      }),
+      catalogDiagnostics: {
+        providerOutcomes: [
+          { provider: "custom", profileId: "work", status: "ready", listedModelIds: ["primary"] },
+        ],
+      },
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "custom",
+            providers: ["custom", "other"],
+            modelCatalog: {
+              providers: {
+                custom: { defaultUtilityModel: "small", models: [] },
+                other: { defaultUtilityModel: "tiny", models: [] },
+              },
+            },
+          },
+        ],
+      }),
+    });
+    expect(result.defaultModels?.automaticUtilityModel).toBe("other/tiny");
+    expect(result.utilityModel).toEqual({
+      modelRef: "custom/primary@work",
+      source: "provider-default",
+    });
+    expect(result.providerOutcomes?.[0]).not.toHaveProperty("listedModelIds");
+    expect(
+      resolveStatusUtilityModel({ cfg, agentId: "worker", gatewayCatalog: result }),
+    ).toMatchObject({
+      ref: "custom/primary@work",
+      source: "provider-default",
+    });
+  }, true);
+});
 
 it("projects personal-only models for the authenticated requester without publishing shared auth", async () => {
   await withState(async (state) => {
@@ -310,7 +341,7 @@ it("projects personal-only models for the authenticated requester without publis
       loadDeferred: async () => owner,
     });
     const read = async (profileId?: string, expectedSuccess = true) => {
-      const respond = await requestModels(
+      const respond = await requestModelsList(
         context,
         { agentId: "main", view: "configured", includeDefaultModels: false },
         profileId
@@ -321,12 +352,7 @@ it("projects personal-only models for the authenticated requester without publis
                 client: { id: "cli", version: "test", platform: "test", mode: "cli" },
                 caps: [],
               },
-              authenticatedUserProfile: {
-                profileId,
-                displayName: null,
-                hasAvatar: false,
-                updatedAt: 1,
-              },
+              authenticatedUserProfile: gatewayProfile(profileId),
             }
           : null,
       );

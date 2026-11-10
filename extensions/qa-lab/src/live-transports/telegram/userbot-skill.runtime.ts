@@ -93,13 +93,11 @@ function parseRestoredCredential(value: unknown): RestoredTelegramTestCredential
 }
 
 export async function loadTelegramUserbotSkillRuntime(params?: {
-  env?: NodeJS.ProcessEnv;
   repoRoot?: string;
 }): Promise<TelegramUserbotSkillRuntime> {
-  const env = params?.env ?? process.env;
   const repoRoot = params?.repoRoot ?? process.cwd();
   const skillDir = path.resolve(
-    env.TELEGRAM_E2E_SKILL_DIR?.trim() ||
+    process.env.TELEGRAM_E2E_SKILL_DIR?.trim() ||
       path.join(repoRoot, ".agents", "skills", "telegram-e2e-userbot"),
   );
   const credentialPath = path.join(skillDir, "scripts", "telegram-test-credential.mjs");

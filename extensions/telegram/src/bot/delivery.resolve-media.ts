@@ -66,7 +66,7 @@ function isRetryableGetFileError(err: unknown): boolean {
   if (isFileTooBigError(err)) {
     return false;
   }
-  if (isRetryableTelegramApiError(err, { context: "polling" })) {
+  if (isRetryableTelegramApiError(err)) {
     return true;
   }
   // Telegram reports pending file availability as a documented getFile 400.

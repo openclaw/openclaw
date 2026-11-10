@@ -1,7 +1,9 @@
-import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { filterVisibleSessionRows, sessionMatchesArchivedFilter } from "../lib/sessions/index.ts";
+import {
+  filterVisibleSessionRows,
+  sessionMatchesArchivedFilter,
+} from "../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isSubagentSessionKey,
@@ -12,7 +14,6 @@ import {
   resolveUiSessionRowAgentId,
 } from "../lib/sessions/session-key.ts";
 import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
-import { adoptedCatalogSessionKeys } from "./app-sidebar-session-catalogs.ts";
 import {
   collectCategorizedChildRootRows,
   collectSidebarSessionRowsByKey,
@@ -38,7 +39,6 @@ type AgentSessionRowsHost = {
     | Pick<ApplicationContext, "agents" | "gateway" | "sessions">
     | undefined;
   readonly sessionData: SessionDataOwner;
-  visibleSessionCatalogs(): readonly SessionCatalog[];
   selectedAgentMainSessionKey(agentId: string): string;
   readonly sessionsShowCron: boolean;
   readonly sessionsShowSystem: boolean;
@@ -79,9 +79,6 @@ export function projectSidebarAgentSessionRows({
         childRowsByParent: host.sessionData.childSessionRowsByParent,
       })
     : null;
-  const adopted = grouped
-    ? new Set<string>()
-    : adoptedCatalogSessionKeys(host.visibleSessionCatalogs());
   const loadedAgentId = normalizeAgentId(host.sessionData.sessionsAgentId ?? "");
   const routeAgentId = normalizeAgentId(navigationState.selectedAgentId);
   const visibilityOptions = {
@@ -93,17 +90,8 @@ export function projectSidebarAgentSessionRows({
     archivedFilter: host.sessionsStatusFilter,
   } as const;
   const visibility = projectSidebarArchiveVisibility({
-    sessionData: grouped
-      ? {
-          sessionsAgentId: selected,
-          sessionsResult: result,
-          sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
-          childSessionRowsByParent: host.sessionData.childSessionRowsByParent,
-          loadedChildSessionKeys: host.sessionData.loadedChildSessionKeys,
-          loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
-          childSessionErrorsByParent: host.sessionData.childSessionErrorsByParent,
-        }
-      : host.sessionData,
+    sessionData: host.sessionData,
+    sourceRows: (grouped ? result : host.sessionData.resultForAgent(selected))?.sessions ?? [],
     selectedAgentId: selected,
     statusFilter: host.sessionsStatusFilter,
     now: Date.now(),
@@ -136,15 +124,14 @@ export function projectSidebarAgentSessionRows({
   const lineageAgentId = normalizeAgentId(
     parseAgentSessionKey(lineageRoot?.key ?? "")?.agentId ?? "",
   );
-  // Selection can supplement pagination, not Gateway-owned involvement membership.
-  // Adopted catalog keys already render in Coding, so do not duplicate them here.
+  // Selection supplements pagination, never Gateway-owned involvement membership.
+  // Owner filtering and catalog placement run after the complete tree is built.
   const selectedFallback = navigationState.visibleSessionRows.find(
     (session) =>
       (grouped ? inScope(session) : selected === routeAgentId || lineageAgentId === selected) &&
       session.key === navigationState.activeRowKey &&
       (!host.sessionInvolvingMeFilterActive || rowsByKey.has(session.key)) &&
       !isSessionHidden(session) &&
-      !adopted.has(session.key) &&
       !isMainSession(session.key),
   );
   const mainSessionKeys = new Set(canonicalMainKeys);
@@ -161,20 +148,18 @@ export function projectSidebarAgentSessionRows({
     (grouped
       ? inScope(lineageRoot)
       : lineageAgentId === selected || lineageRouteAgentId === selected) &&
-    !adopted.has(lineageRoot.key) &&
     !isMainSession(lineageRoot.key) &&
     !scopedRootRows.some((row) => row.key === lineageRoot.key)
   ) {
     scopedRootRows.push(lineageRoot);
   }
-  // The shared window includes archives; supplemental child loads must obey
-  // the same status and Gateway-owned involvement membership as group roots.
+  // Supplemental children obey Gateway-owned involvement in every sidebar mode;
+  // the shared window also includes archives that need the selected status filter.
   const visibleRowsByKey = new Map(
     [...sessionRowsByKey].filter(
       ([key, row]) =>
-        !grouped ||
-        (sessionMatchesArchivedFilter(row, host.sessionsStatusFilter) &&
-          (!host.sessionInvolvingMeFilterActive || rowsByKey.has(key))),
+        (!grouped || sessionMatchesArchivedFilter(row, host.sessionsStatusFilter)) &&
+        (!host.sessionInvolvingMeFilterActive || rowsByKey.has(key)),
     ),
   );
   // A directly opened Home can live only in the accepted lineage descriptor,
@@ -193,6 +178,8 @@ export function projectSidebarAgentSessionRows({
     for (const row of [...scopedRootRows, ...(selectedFallback ? [selectedFallback] : [])]) {
       visibleRowsByKey.set(row.key, row);
     }
+  }
+  if (grouped || host.sessionInvolvingMeFilterActive) {
     for (const [key, row] of visibleRowsByKey) {
       const childSessions = row.childSessions?.filter(
         (childKey) =>
@@ -256,17 +243,15 @@ export function projectSidebarAgentSessionRows({
     promotedRows.length > 0 || categorizedChildRows.length > 0
       ? scopedRootRows.toSorted(compareSessions)
       : scopedRootRows;
-  // `adopted` holds only catalog-bound keys (adoptedCatalogSessionKeys), not
-  // fetched child rows: a catalog-adopted promoted child intentionally
-  // renders as its live row inside the Coding catalog, never as a thread.
+  // Owner filtering and catalog placement consume the complete tree;
+  // dropping a parent first would orphan or lose matching descendants.
   const projected = projectSessionTree({
     mainSessionKeys,
-    roots: orderedRootRows.filter(
-      (row) => !adopted.has(row.key) && (!grouped || visibleRowsByKey.has(row.key)),
-    ),
+    roots: orderedRootRows.filter((row) => !grouped || visibleRowsByKey.has(row.key)),
     rowsByKey: visibleRowsByKey,
     loadingChildKeys: host.sessionData.loadingChildSessionKeys,
     isChildSessionVisible,
+    compareSessions,
     resolveAttention,
     toSidebarSession: navigationState.toSidebarSession,
   });
@@ -286,6 +271,69 @@ export type SidebarHomeSession = SidebarRecentSession & {
   metadataVisible: boolean;
 };
 
+/** Explicit references use the same tree and lifecycle visibility as Home. */
+export function projectSidebarSessionReference({
+  host,
+  row,
+  agentId,
+  result,
+  navigationState,
+  resolveAttention,
+  mainSessionKeys,
+  involvingMe = false,
+  ownerId,
+}: {
+  host: Pick<
+    AgentSessionRowsHost,
+    "sessionDataContext" | "sessionData" | "sessionsStatusFilter" | "selectedAgentMainSessionKey"
+  >;
+  row: GatewaySessionRow;
+  agentId: string;
+  result?: SessionsListResult | null;
+  navigationState: SidebarSessionNavigationState;
+  resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
+  mainSessionKeys?: ReadonlySet<string>;
+  involvingMe?: boolean;
+  ownerId?: string | null;
+}) {
+  const visibility = projectSidebarArchiveVisibility({
+    sessionData: host.sessionData,
+    sourceRows:
+      (result !== undefined ? result : host.sessionData.resultForAgent(agentId))?.sessions ?? [],
+    selectedAgentId: agentId,
+    statusFilter: host.sessionsStatusFilter,
+    now: Date.now(),
+    deletionState: (key, owner) => host.sessionDataContext?.sessions.deletionState(key, owner),
+    archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
+  });
+  const { rows, childSessionRowsByParent, isChildSessionVisible } = visibility;
+  const involvedKeys = involvingMe ? new Set(rows.map((entry) => entry.key)) : null;
+  const scopedRow = { ...row, agentId, sidebarRoot: true };
+  const own = navigationState.toSidebarSession(scopedRow);
+  const projected = projectSessionTree({
+    roots: [scopedRow],
+    mainSessionKeys: mainSessionKeys ?? new Set([host.selectedAgentMainSessionKey(agentId)]),
+    rowsByKey: collectSidebarSessionRowsByKey({
+      rows: [...rows, scopedRow],
+      childRowsByParent: childSessionRowsByParent,
+    }),
+    loadingChildKeys: host.sessionData.loadingChildSessionKeys,
+    isChildSessionVisible: (parent, key, child) =>
+      (!involvedKeys || involvedKeys.has(key)) && isChildSessionVisible(parent, key, child),
+    resolveAttention,
+    toSidebarSession: (session, isChild) =>
+      isChild ? navigationState.toSidebarSession(session, true) : own,
+  })[0]!;
+  const session = ownerId
+    ? applySidebarSessionOwnerFilter({
+        projected: [projected],
+        ownerFacet: [],
+        selectedOwnerId: ownerId,
+      }).rows[0]!
+    : projected;
+  return { session, own, visibility };
+}
+
 /** Home is a navigation root even when its persisted lineage points to itself. */
 export function projectSidebarHomeSession({
   host,
@@ -302,41 +350,19 @@ export function projectSidebarHomeSession({
   navigationState: SidebarSessionNavigationState;
   resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
 }): SidebarHomeSession {
-  const visibility = projectSidebarArchiveVisibility({
-    sessionData:
-      result !== undefined
-        ? {
-            childSessionRowsByParent: host.sessionData.childSessionRowsByParent,
-            loadedChildSessionKeys: host.sessionData.loadedChildSessionKeys,
-            loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
-            childSessionErrorsByParent: host.sessionData.childSessionErrorsByParent,
-            sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
-            sessionsAgentId: agentId,
-            sessionsResult: result,
-          }
-        : host.sessionData,
-    selectedAgentId: agentId,
-    statusFilter: host.sessionsStatusFilter,
-    now: Date.now(),
-    deletionState: (key, owner) => host.sessionDataContext?.sessions.deletionState(key, owner),
-    archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
-  });
-  const { rows, childSessionRowsByParent, isChildSessionVisible } = visibility;
-  const scopedRow = { ...row, agentId, sidebarRoot: true };
-  const own = navigationState.toSidebarSession(scopedRow);
-  const home = projectSessionTree({
-    roots: [scopedRow],
-    mainSessionKeys: new Set([row.key, host.selectedAgentMainSessionKey(agentId)]),
-    rowsByKey: collectSidebarSessionRowsByKey({
-      rows: [...rows, scopedRow],
-      childRowsByParent: childSessionRowsByParent,
-    }),
-    loadingChildKeys: host.sessionData.loadingChildSessionKeys,
-    isChildSessionVisible,
+  const {
+    session: home,
+    own,
+    visibility,
+  } = projectSidebarSessionReference({
+    host,
+    row,
+    agentId,
+    result,
+    navigationState,
     resolveAttention,
-    toSidebarSession: (session, isChild) =>
-      isChild ? navigationState.toSidebarSession(session, true) : own,
-  })[0]!;
+    mainSessionKeys: new Set([row.key, host.selectedAgentMainSessionKey(agentId)]),
+  });
   if (result === undefined) {
     return { ...home, metadataVisible: true };
   }

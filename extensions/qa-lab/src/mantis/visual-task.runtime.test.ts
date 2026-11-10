@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createMantisCommandRunner,
+  requireArgAfter,
+  writeMantisArtifacts,
+} from "./run.test-support.js";
 import {
   runMantisVisualDriver,
   runMantisVisualTask,
@@ -10,17 +14,10 @@ import {
   type MantisVisualTaskOptions,
 } from "./visual-task.runtime.js";
 
-vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@openclaw/crabbox-provider/cli-runtime-api.js")>();
-  return {
-    ...actual,
-    ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
-      binary,
-      version: "999.0.0",
-    })),
-  };
-});
+// mock-isolation: Preserve actual module exports and create a fresh managed-binary mock per suite.
+vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async () =>
+  (await import("./run.test-support.js")).mockManagedCrabboxBinary(),
+);
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -33,51 +30,32 @@ function expectArgsContainSequence(args: readonly string[], expected: readonly s
   expect(startIndex).toBeGreaterThanOrEqual(0);
 }
 
-function requireArgAfter(args: readonly string[], flag: string): string {
-  const flagIndex = args.indexOf(flag);
-  if (flagIndex < 0) {
-    throw new Error(`Expected ${flag} argument`);
-  }
-  return expectDefined(args[flagIndex + 1], `${flag} argument value`);
-}
-
 function recordingRunner(options: { video: boolean; error?: string }) {
-  const commands: { args: readonly string[]; command: string }[] = [];
-  const runner = vi.fn(async (command: string, args: readonly string[]) => {
-    commands.push({ command, args });
-    if (command === "/tmp/crabbox" && args[0] === "warmup") {
-      return { stdout: "ready lease cbx_abc123\n", stderr: "" };
-    }
-    if (command === "/tmp/crabbox" && args[0] === "inspect") {
-      return {
-        stdout: '{"id":"cbx_abc123","provider":"hetzner","slug":"brisk-mantis","state":"active"}\n',
-        stderr: "",
-      };
-    }
-    if (command === "/tmp/crabbox" && args[0] === "record") {
-      const outputDir = requireArgAfter(args, "--output-dir");
-      await fs.mkdir(outputDir, { recursive: true });
-      if (options.video) {
-        const outputPath = requireArgAfter(args, "--output");
-        await fs.mkdir(path.dirname(outputPath), { recursive: true });
-        await fs.writeFile(outputPath, "mp4");
+  return createMantisCommandRunner(
+    { id: "cbx_abc123", provider: "hetzner", slug: "brisk-mantis", state: "active" },
+    async (command, args) => {
+      if (command === "/tmp/crabbox" && args[0] === "record") {
+        const outputDir = requireArgAfter(args, "--output-dir");
+        await fs.mkdir(outputDir, { recursive: true });
+        if (options.video) {
+          const outputPath = requireArgAfter(args, "--output");
+          await fs.mkdir(path.dirname(outputPath), { recursive: true });
+          await fs.writeFile(outputPath, "mp4");
+        }
+        await writeMantisArtifacts(outputDir, {
+          "visual-task.png": "png",
+          "mantis-visual-task-driver-result.json": `${JSON.stringify({
+            matched: true,
+            status: "pass",
+            vision: { mode: "metadata", timeoutMs: 120000 },
+          })}\n`,
+        });
+        if (options.error) {
+          throw new Error(options.error);
+        }
       }
-      await fs.writeFile(path.join(outputDir, "visual-task.png"), "png");
-      await fs.writeFile(
-        path.join(outputDir, "mantis-visual-task-driver-result.json"),
-        `${JSON.stringify({
-          matched: true,
-          status: "pass",
-          vision: { mode: "metadata", timeoutMs: 120000 },
-        })}\n`,
-      );
-      if (options.error) {
-        throw new Error(options.error);
-      }
-    }
-    return { stdout: "", stderr: "" };
-  });
-  return { commands, runner };
+    },
+  );
 }
 
 function driverRunner(text?: string) {
@@ -114,7 +92,6 @@ describe("mantis visual task runtime", () => {
   const runTask = (options: MantisVisualTaskOptions) =>
     runMantisVisualTask({
       ...commonOptions(),
-      now: () => new Date("2026-05-04T12:00:00.000Z"),
       visionMode: "metadata",
       ...options,
     });
@@ -140,18 +117,24 @@ describe("mantis visual task runtime", () => {
   });
 
   it("records a visible browser task and keeps screenshot/video artifacts", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-04T12:00:00.000Z"));
     const { commands, runner } = recordingRunner({ video: true });
 
-    const result = await runTask({ commandRunner: runner, duration: "12s" });
+    const result = await runTask({ commandRunner: runner, duration: "12s", outputDir: undefined });
 
     expect(result.status).toBe("pass");
+    expect(result.outputDir).toBe(
+      path.join(repoRoot, ".artifacts/qa-e2e/mantis/visual-task-2026-05-04T12-00-00-000Z"),
+    );
     const warmupArgs = commands.find((entry) => entry.args[0] === "warmup")?.args ?? [];
     expectArgsContainSequence(warmupArgs, ["--class", "beast"]);
     expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual(
       ["warmup", "inspect", "record", "stop"].map((action) => ["/tmp/crabbox", action]),
     );
     const recordArgs = commands.find((entry) => entry.args[0] === "record")?.args ?? [];
-    const finalVideoPath = path.join(repoRoot, outputDir, "visual-task.mp4");
+    const finalVideoPath = path.join(result.outputDir, "visual-task.mp4");
+    expect(requireArgAfter(recordArgs, "--output-dir")).toBe(result.outputDir);
     const stagedVideoPath = requireArgAfter(recordArgs, "--output");
     expectArgsContainSequence(recordArgs, ["--duration", "12s"]);
     expectArgsContainSequence(recordArgs, [
@@ -181,55 +164,44 @@ describe("mantis visual task runtime", () => {
     });
   });
 
-  it("fails when recording breaks after the visual driver passes", async () => {
-    const { commands, runner } = recordingRunner({
-      video: false,
-      error: "crabbox record failed after driver exit",
-    });
-
-    const result = await runTask({ commandRunner: runner });
-
-    expect(result.status).toBe("fail");
-    expect(JSON.parse(await fs.readFile(result.summaryPath, "utf8")).crabbox).toEqual({
-      bin: "/tmp/crabbox",
-      createdLease: true,
-      id: "cbx_abc123",
-      provider: "hetzner",
-      slug: "brisk-mantis",
-      state: "active",
-      vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
-    });
-    expect(result.videoPath).toBeUndefined();
-    expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual(
-      ["warmup", "inspect", "record"].map((action) => ["/tmp/crabbox", action]),
-    );
-    expect(JSON.parse(await fs.readFile(result.summaryPath, "utf8"))).toMatchObject({
-      error: "crabbox record failed after driver exit",
-      recording: { error: "crabbox record failed after driver exit", required: true },
-      status: "fail",
-    });
-  });
-
-  it("preserves the video artifact when recording fails after writing output", async () => {
-    const { commands, runner } = recordingRunner({
-      video: true,
-      error: "crabbox record failed after writing video",
-    });
-
-    const result = await runTask({ commandRunner: runner });
-
-    expect(result.status).toBe("fail");
-    expect(result.videoPath).toBe(path.join(repoRoot, outputDir, "visual-task.mp4"));
-    await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
-    const recordArgs = commands.find((entry) => entry.args[0] === "record")?.args ?? [];
-    await expectPathMissing(requireArgAfter(recordArgs, "--output"));
-    expect(JSON.parse(await fs.readFile(result.summaryPath, "utf8"))).toMatchObject({
-      artifacts: { videoPath: result.videoPath },
-      error: "crabbox record failed after writing video",
-      recording: { error: "crabbox record failed after writing video", required: true },
-      status: "fail",
-    });
-  });
+  it.each([false, true])(
+    "preserves available artifacts after recording fails (video=%s)",
+    async (video) => {
+      const error = video
+        ? "crabbox record failed after writing video"
+        : "crabbox record failed after driver exit";
+      const { commands, runner } = recordingRunner({ video, error });
+      const result = await runTask({ commandRunner: runner });
+      expect(result.status).toBe("fail");
+      const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8"));
+      expect(summary).toMatchObject({
+        error,
+        recording: { error, required: true },
+        status: "fail",
+      });
+      if (video) {
+        expect(result.videoPath).toBe(path.join(repoRoot, outputDir, "visual-task.mp4"));
+        await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
+        const recordArgs = commands.find((entry) => entry.args[0] === "record")?.args ?? [];
+        await expectPathMissing(requireArgAfter(recordArgs, "--output"));
+        expect(summary.artifacts.videoPath).toBe(result.videoPath);
+      } else {
+        expect(summary.crabbox).toEqual({
+          bin: "/tmp/crabbox",
+          createdLease: true,
+          id: "cbx_abc123",
+          provider: "hetzner",
+          slug: "brisk-mantis",
+          state: "active",
+          vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
+        });
+        expect(result.videoPath).toBeUndefined();
+        expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual(
+          ["warmup", "inspect", "record"].map((action) => ["/tmp/crabbox", action]),
+        );
+      }
+    },
+  );
 
   it("drives a lease, screenshots it, and verifies image-describe text", async () => {
     const { commands, runner } = driverRunner(

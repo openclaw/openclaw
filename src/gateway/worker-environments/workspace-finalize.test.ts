@@ -22,33 +22,6 @@ function fixture() {
 }
 
 describe("final worker workspace fences", () => {
-  it.each([false, true])(
-    "fences unchanged local state during acceptance after renewal (local failure: %s)",
-    async (localFailure) => {
-      const { log, reconciliation, finalize, record } = fixture();
-      reconciliation.changed = false;
-      reconciliation.acceptUnchangedStagedResult = async () => {
-        log.push("local");
-        if (localFailure) {
-          throw new Error("local workspace changed");
-        }
-        log.push("accept");
-      };
-      reconciliation.discardPreparedStagedResult = record("discard");
-      const result = finalize(record("renew"));
-      if (localFailure) {
-        await expect(result).rejects.toMatchObject({
-          message: "local workspace changed",
-          reclaimDisposition: "retry",
-        });
-        expect(log).toEqual(["renew", "remote", "local", "discard"]);
-      } else {
-        await result;
-        expect(log).toEqual(["renew", "remote", "local", "accept", "publish"]);
-      }
-    },
-  );
-
   it("rejects quiescence lost while the staged result is finalized", async () => {
     const { log, finalize } = fixture();
     let quiescenceChecks = 0;

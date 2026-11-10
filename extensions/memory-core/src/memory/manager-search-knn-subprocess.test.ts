@@ -341,32 +341,26 @@ describe("memory vector KNN subprocess boundary", () => {
       ),
     );
     using fixture = await createFileBackedVectorDatabase();
-    try {
-      insertVectorRow(fixture.db, "committed", [1, 0]);
-      fixture.db.exec("BEGIN IMMEDIATE");
-      insertVectorRow(fixture.db, "pending", [0.9, 0.1], "sessions");
+    insertVectorRow(fixture.db, "committed", [1, 0]);
+    fixture.db.exec("BEGIN IMMEDIATE");
+    insertVectorRow(fixture.db, "pending", [0.9, 0.1], "sessions");
 
-      const searchSource = (source: "memory" | "sessions") =>
-        fixture.query(2, { sourceFilter: buildMemorySourceFilter("c", [source]) });
-      const memoryResult = await searchSource("memory");
-      expect(memoryResult.rows.map((row) => row.id)).toEqual(["committed"]);
-      expect(memoryResult.fallbackScanRequired).toBe(false);
+    const searchSource = (source: "memory" | "sessions") =>
+      fixture.query(2, { sourceFilter: buildMemorySourceFilter("c", [source]) });
+    const memoryResult = await searchSource("memory");
+    expect(memoryResult.rows.map((row) => row.id)).toEqual(["committed"]);
+    expect(memoryResult.fallbackScanRequired).toBe(false);
 
-      const beforeCommit = await searchSource("sessions");
-      expect(beforeCommit.rows).toEqual([]);
+    const beforeCommit = await searchSource("sessions");
+    expect(beforeCommit.rows).toEqual([]);
 
-      fixture.db.exec("COMMIT");
-      const afterCommit = await searchSource("sessions");
-      expect(afterCommit.rows.map((row) => row.id)).toEqual(["pending"]);
-      expect(childProcess.spawn).toHaveBeenCalledTimes(1);
-      expect(fixture.db.prepare("PRAGMA journal_mode").get()).toMatchObject({
-        journal_mode: "wal",
-      });
-    } finally {
-      try {
-        fixture.db.exec("ROLLBACK");
-      } catch {}
-    }
+    fixture.db.exec("COMMIT");
+    const afterCommit = await searchSource("sessions");
+    expect(afterCommit.rows.map((row) => row.id)).toEqual(["pending"]);
+    expect(childProcess.spawn).toHaveBeenCalledTimes(1);
+    expect(fixture.db.prepare("PRAGMA journal_mode").get()).toMatchObject({
+      journal_mode: "wal",
+    });
   });
 
   it.each([

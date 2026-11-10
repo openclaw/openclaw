@@ -76,23 +76,9 @@ describe("nodes camera_ptz", () => {
     });
   });
 
-  it("routes status to the safe command with an explicit device id", async () => {
-    const result = await execute({ deviceId: "camera-id", ptzOperation: "status" });
-
-    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      {},
-      {
-        nodeId: "node-1",
-        command: "camera.ptz.status",
-        params: { deviceId: "camera-id" },
-        idempotencyKey: expect.any(String),
-      },
-    );
-    expect(result.details).toEqual({ deviceId: "camera-id", axes: {} });
-  });
-
   it.each([
+    ["status", {}, { deviceId: "camera-id" }],
+    ["home", {}, { deviceId: "camera-id", operation: "home" }],
     [
       "set",
       { panDegrees: 10, zoomPercent: 40 },
@@ -111,27 +97,20 @@ describe("nodes camera_ptz", () => {
         delta: { panDegrees: undefined, tiltDegrees: -2.5, zoomPercent: undefined },
       },
     ],
-  ])("routes %s axes under the closed operation field", async (operation, axes, expected) => {
-    await execute({ deviceId: "camera-id", ptzOperation: operation, ...axes });
+  ])("routes %s under the closed operation field", async (operation, axes, expected) => {
+    const result = await execute({ deviceId: "camera-id", ptzOperation: operation, ...axes });
 
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
       {},
-      expect.objectContaining({ command: "camera.ptz.control", params: expected }),
+      {
+        nodeId: "node-1",
+        command: operation === "status" ? "camera.ptz.status" : "camera.ptz.control",
+        params: expected,
+        idempotencyKey: expect.any(String),
+      },
     );
-  });
-
-  it("routes home without axis state", async () => {
-    await execute({ deviceId: "camera-id", ptzOperation: "home" });
-
-    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      {},
-      expect.objectContaining({
-        command: "camera.ptz.control",
-        params: { deviceId: "camera-id", operation: "home" },
-      }),
-    );
+    expect(result.details).toEqual({ deviceId: "camera-id", axes: {} });
   });
 
   it.each([

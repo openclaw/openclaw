@@ -13,16 +13,16 @@ import { bindHostSkillCatalog } from "./host-skills.js";
 
 const config = { plugins: { enabled: false } };
 function fixtureSkill(name: string, filePath: string, description = name) {
-  return Object.assign(
-    createCanonicalFixtureSkill({
+  return {
+    ...createCanonicalFixtureSkill({
       name,
       description,
       filePath,
       baseDir: path.dirname(filePath),
       source: "workspace",
     }),
-    { readContent: "Cached instructions must not bypass the root" },
-  );
+    readContent: "Cached instructions must not bypass the root",
+  };
 }
 async function rootedSkills(prefix: string) {
   const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
@@ -40,12 +40,11 @@ const snapshot = (candidates: ReturnType<typeof fixtureSkill>[]) => ({
   skills: candidates.map(({ name }) => ({ name, skillKey: name })),
   discoverySkills: candidates,
 });
-function findTool(tools: AnyAgentTool[], name: string) {
-  return expectDefined(
+const findTool = (tools: AnyAgentTool[], name: string) =>
+  expectDefined(
     tools.find((tool) => tool.name === name),
     name,
   );
-}
 
 function skillContent(location: string, content: string, note = "") {
   return [
@@ -84,7 +83,6 @@ it("binds skill reads to a late sandbox and refuses reads after host closure", a
   const host = await createHost({
     runId: "late-sandbox-skills",
     workspaceDir: "/host",
-    config,
     skillsSnapshot: { ...snapshot([skill, nodeSkill]), resolvedSkills: [nodeSkill] },
   });
   const readFile = vi.fn(async () => Buffer.from("Complete sandbox instructions"));
@@ -115,11 +113,7 @@ it("binds skill reads to a late sandbox and refuses reads after host closure", a
     host.hostCapabilities.createToolSurface,
     "admitted host tool surface",
   );
-  const tools = createToolSurface({
-    workspaceDir: "/host",
-    config,
-    sandbox,
-  });
+  const tools = createToolSurface({ workspaceDir: "/host", config, sandbox });
   const read = findTool(tools, "skills_read");
   const search = findTool(tools, "skills_search");
   expect((await search.execute("find-node", { query: "node-only" })).details).toEqual({
@@ -202,7 +196,6 @@ it("keeps the host-owned skill root when plugin options widen placement or repla
     cwd: root,
     sessionRoot: root,
     requireWorkspaceOnly: true,
-    config,
     skillsSnapshot: snapshot(candidates),
   });
   const createTools = expectDefined(host.hostCapabilities.createToolSurface, "host tools");

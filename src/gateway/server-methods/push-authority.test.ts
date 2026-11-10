@@ -13,6 +13,7 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pushHandlers } from "./push.js";
 import { holdPushStorage, pushClient, pushSubscription } from "./push.test-support.js";
 
@@ -122,11 +123,11 @@ function createInvocation(method: WriteMethod, scope: "user" | "device" = "devic
     },
     client,
     respond: vi.fn(),
-    context: {
+    context: createDirectChatContext({
       getRuntimeConfig: () => ({}),
       getClientConnIds: () => new Set(["current-connection"]),
       broadcastToConnIds: broadcast,
-    },
+    }),
     isWebchatConnect: () => false,
     signal: request.signal,
     hasCurrentClientAuthority: vi.fn(() => true),

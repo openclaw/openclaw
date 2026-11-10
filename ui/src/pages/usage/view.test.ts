@@ -1,17 +1,21 @@
 import { createSignal } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import * as usageQuery from "../../../../src/shared/usage-query.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
-import type { UsageProps, UsageTotals } from "./types.ts";
+import type { UsageProps } from "./types.ts";
+import { openUsageDisplay, openUsageFilter, texts } from "./view-render.test-support.ts";
 import {
+  usageMessages,
   buildAggregatesFromSessions,
   projectUsageData,
   createUsageProps,
   createUsageOverview,
   usageSession,
+  usageFixture,
+  usageTotals,
 } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
 
@@ -25,15 +29,13 @@ function mountFixture(
   data: Partial<UsageProps["data"]>,
   filters: Partial<UsageProps["filters"]> = {},
 ) {
-  const base = createUsageProps();
-  return mountUsage(
-    createUsageProps({ data: { ...base.data, ...data }, filters: { ...base.filters, ...filters } }),
-  );
+  return mountUsage(usageFixture(data, filters));
 }
 
 function mountReactiveUsage(props: UsageProps) {
   const [data, setData] = createSignal(props.data);
   const [display, setDisplay] = createSignal(props.display);
+  const [filters, setFilters] = createSignal(props.filters);
   const container = mountUsage({
     ...props,
     get data() {
@@ -42,27 +44,20 @@ function mountReactiveUsage(props: UsageProps) {
     get display() {
       return display();
     },
+    get filters() {
+      return filters();
+    },
   });
-  return { container, data, display, setData, setDisplay };
+  return { container, data, display, filters, setData, setDisplay, setFilters };
 }
 
 function textAt(container: ParentNode, selector: string) {
   return container.querySelector(selector)?.textContent?.trim();
 }
 
-function usageTotals(
-  input: number,
-  cost: number,
-  overrides: Partial<UsageTotals> = {},
-): UsageTotals {
-  return {
-    ...createEmptyCostUsageTotals(),
-    input,
-    totalTokens: input,
-    totalCost: cost,
-    inputCost: cost,
-    ...overrides,
-  };
+function openProviderFilter(container: HTMLElement) {
+  const { menu, surface, trigger } = openUsageFilter(container, "Provider");
+  return { dropdown: surface, surface, trigger, menu };
 }
 
 function insightCard(container: ParentNode, title: string): Element | undefined {
@@ -83,35 +78,92 @@ function averageCostSummary(container: ParentNode) {
 }
 
 describe("renderUsage", () => {
+  it("renders the toolbar's filter, display and refresh actions as one row of icon buttons", () => {
+    const { container } = mountReactiveUsage(createUsageProps());
+    const actions = [...container.querySelectorAll(".usage-view-options button")];
+    expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Filters",
+      "Display",
+      "Refresh",
+    ]);
+    expect(actions.every((button) => button.matches(".oc-icon-button--32:not(.btn)"))).toBe(true);
+  });
+
+  it("identifies each query removal action and removes only its named token", () => {
+    const props = createUsageProps();
+    props.filters.queryDraft = 'provider:openai "label:Team Planning"';
+    const { container, filters, setFilters } = mountReactiveUsage(props);
+    props.callbacks.filters.onQueryDraftChange = (queryDraft) =>
+      setFilters((current) => ({ ...current, queryDraft }));
+    const buttons = () => [
+      ...container.querySelectorAll<HTMLButtonElement>(".usage-filter-chip__remove"),
+    ];
+    expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Remove filter: Provider",
+      'Remove filter: "label:Team Planning"',
+    ]);
+    buttons()[1]!.click();
+    flush();
+    expect(filters().queryDraft.trim()).toBe("provider:openai");
+    expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Remove filter: Provider",
+    ]);
+  });
+
+  it("keeps an IME-composed Enter from applying the usage query", () => {
+    const props = createUsageProps();
+    const onApplyQuery = (props.callbacks.filters.onApplyQuery = vi.fn());
+    const container = mountUsage(props);
+    document.body.appendChild(container);
+    onTestFinished(() => container.remove());
+    openUsageFilter(container);
+    const input = container.querySelector<HTMLInputElement>(".usage-filter-menu__query input")!;
+    const enter = (init: KeyboardEventInit = {}) =>
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
+    const deliberate = enter();
+    input.dispatchEvent(deliberate);
+    expect(deliberate.defaultPrevented).toBe(true);
+    expect(onApplyQuery).toHaveBeenCalledOnce();
+    onApplyQuery.mockClear();
+    for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+      const composed = enter(composition);
+      input.dispatchEvent(composed);
+      expect(composed.defaultPrevented).toBe(false);
+    }
+    const end = new CompositionEvent("compositionend", { bubbles: true });
+    input.dispatchEvent(end);
+    const commit = Object.defineProperty(enter(), "timeStamp", { value: end.timeStamp + 1 });
+    input.dispatchEvent(commit);
+    expect(commit.defaultPrevented).toBe(false);
+    expect(onApplyQuery).not.toHaveBeenCalled();
+  });
+
   it("parses each draft once for chips, suggestions, and every filter", () => {
     const base = createUsageProps();
-    const [filters, setFilters] = createSignal({ ...base.filters, queryDraft: "provider:OpenAI" });
-    const [display, setDisplay] = createSignal(base.display);
+    base.filters.queryDraft = "provider:OpenAI";
+    const overview = createUsageOverview({
+      filterOptions: {
+        agent: [],
+        channel: ["slack"],
+        provider: ["OpenAI"],
+        model: ["synthetic-model"],
+        tool: ["read"],
+      },
+    });
     const parse = vi.spyOn(usageQuery, "extractQueryTerms");
     try {
-      const container = mountUsage({
+      const { container, setFilters, setDisplay } = mountReactiveUsage({
         ...base,
         data: {
           ...base.data,
-          overview: createUsageOverview({
-            filterOptions: {
-              agent: [],
-              channel: ["slack"],
-              provider: ["OpenAI"],
-              model: ["synthetic-model"],
-              tool: ["read"],
-            },
-          }),
-        },
-        get filters() {
-          return filters();
-        },
-        get display() {
-          return display();
+          overview,
+          filterOptions: overview.filterOptions,
         },
       });
-      expect(container.querySelectorAll(".usage-filter-select")).toHaveLength(4);
-      expect(textAt(container, ".usage-query-suggestion")).toBe("provider:OpenAI");
+      document.body.appendChild(container);
+      onTestFinished(() => container.remove());
+      openUsageFilter(container);
+      expect(textAt(container, ".usage-filter-menu__suggestion")).toBe("provider:OpenAI");
       expect(parse).toHaveBeenCalledExactlyOnceWith("provider:OpenAI");
 
       setDisplay((current) => ({ ...current, chartMode: "cost" }));
@@ -120,7 +172,7 @@ describe("renderUsage", () => {
 
       setFilters((current) => ({ ...current, queryDraft: "channel:slack" }));
       flush();
-      expect(textAt(container, ".usage-query-suggestion")).toBe("channel:slack");
+      expect(textAt(container, ".usage-filter-menu__suggestion")).toBe("channel:slack");
       expect(parse).toHaveBeenCalledTimes(2);
       expect(parse).toHaveBeenLastCalledWith("channel:slack");
     } finally {
@@ -131,21 +183,19 @@ describe("renderUsage", () => {
   it.each(["session", "day"] as const)(
     "restores the range warning after clearing a known-zero %s filter",
     (filter) => {
-      const base = createUsageProps();
       const fixture = createRecordedCostUsage();
       const zeroSession = fixture.sessions[0]!;
       const selected: Partial<UsageProps["filters"]> =
         filter === "session"
           ? { selectedSessions: [zeroSession.key] }
           : { selectedDays: zeroSession.usage!.activityDates! };
-      const props = createUsageProps({
-        data: {
-          ...base.data,
+      const props = usageFixture(
+        {
           ...fixture,
           aggregates: buildAggregatesFromSessions(fixture.sessions),
         },
-        filters: { ...base.filters, startDate: fixture.costDaily[0]!.date },
-      });
+        { startDate: fixture.costDaily[0]!.date },
+      );
       const clearedFilters = { ...props.filters };
       const container = document.createElement("div");
       const [currentFilters, setFilters] = createSignal(props.filters);
@@ -181,9 +231,7 @@ describe("renderUsage", () => {
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
     const container = mountFixture({ providerUsageUnavailable: true });
 
-    expect(container.textContent).toContain(
-      "Provider usage is unavailable; the last request failed. Refresh to retry.",
-    );
+    expect(container.textContent).toContain("Couldn’t load provider usage. Refresh to try again.");
   });
 
   it("does not fall back to global insights when a query matches no sessions", () => {
@@ -193,8 +241,8 @@ describe("renderUsage", () => {
       queryDraft: "missing-session",
     });
 
-    const providers = insightCard(container, "Top Providers");
-    expect(providers?.textContent).toContain("No provider data");
+    const providers = insightCard(container, "Top providers");
+    expect(providers?.textContent).toContain("No provider data yet.");
     expect(providers?.textContent).not.toContain("openai");
   });
 
@@ -221,70 +269,59 @@ describe("renderUsage", () => {
     const sessions = ["clear", "second"].map((provider) =>
       usageSession(`session:${provider}`, "main", provider),
     );
-    const [filters, setFilters] = createSignal(base.filters);
+    base.data = { ...base.data, ...projectUsageData(sessions) };
+    const { container, setFilters } = mountReactiveUsage(base);
     const onQueryDraftChange = vi.fn((queryDraft: string) =>
       setFilters((current) => ({ ...current, queryDraft })),
     );
-    const container = document.body.appendChild(document.createElement("div"));
+    base.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
+    document.body.appendChild(container);
     try {
-      mountUsage(
-        {
-          ...base,
-          get filters() {
-            return filters();
-          },
-          data: { ...base.data, ...projectUsageData(sessions) },
-          callbacks: {
-            ...base.callbacks,
-            filters: { ...base.callbacks.filters, onQueryDraftChange },
-          },
-        },
-        container,
-      );
-      const first = [...container.querySelectorAll(".usage-filter-option")].find(
+      expect(container.querySelector(".usage-filter-menu__query input")).toBeNull();
+      const { dropdown, surface, trigger } = openProviderFilter(container);
+      const first = [...dropdown.querySelectorAll('[role="menuitemcheckbox"]')].find(
         (item) => item.getAttribute("aria-label") === "clear",
       )!;
-      const dropdown = first.closest(".usage-filter-select")!;
-      const surface = dropdown.querySelector<HTMLElement>('[role="menu"]')!;
-      const trigger = dropdown.querySelector<HTMLButtonElement>(".usage-filter-trigger")!;
-      expect(trigger.getAttribute("aria-label")).toBe("Provider All");
-      // JSDOM has no scrolling layout; keep the real Menu click and focus paths.
-      for (const item of surface.querySelectorAll<HTMLElement>('[role^="menuitem"]')) {
-        item.scrollIntoView = vi.fn();
-      }
-      trigger.click();
+      expect(trigger.getAttribute("aria-label")).toBe("Provider");
       await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
       for (const provider of ["clear", "second"]) {
         const option = [
-          ...dropdown.querySelectorAll<HTMLButtonElement>(".usage-filter-option"),
+          ...dropdown.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]'),
         ].find((item) => item.getAttribute("aria-label") === provider)!;
         option.click();
         await waitForSolid(() => expect(option.getAttribute("aria-checked")).toBe("true"));
-        expect(trigger.getAttribute("aria-label")).toBe(`Provider ${provider === "clear" ? 1 : 2}`);
-        expect(first.closest(".usage-filter-select")).toBe(dropdown);
-        expect(dropdown.querySelector('[role="menu"]')).toBe(surface);
+        expect(trigger.textContent).toContain(provider === "clear" ? "clear" : "2");
+        expect(first.closest('[role="menu"]')).toBe(surface);
         expect(container.contains(dropdown)).toBe(true);
         expect(trigger.getAttribute("aria-expanded")).toBe("true");
         expect(surface.matches(":popover-open")).toBe(true);
       }
       expect(onQueryDraftChange.mock.lastCall?.[0]).toBe("provider:clear provider:second ");
+      const mainTrigger = container.querySelector<HTMLButtonElement>(
+        ".usage-filter-menu__trigger",
+      )!;
+      mainTrigger.click();
+      await waitForSolid(() => expect(mainTrigger.getAttribute("aria-expanded")).toBe("false"));
+      expect(first.isConnected).toBe(true);
+      openProviderFilter(container);
+      await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+      expect(dropdown.querySelector('[aria-label="clear"]')).toBe(first);
+      expect(first.getAttribute("aria-checked")).toBe("true");
     } finally {
       container.remove();
     }
   });
 
   it("updates the existing breakdown when mode and totals change", () => {
-    const base = createUsageProps();
     const initial = usageTotals(100, 1, {
       output: 20,
       totalTokens: 120,
       inputCost: 0.8,
       outputCost: 0.2,
     });
-    const { container, setData, setDisplay } = mountReactiveUsage({
-      ...base,
-      data: { ...base.data, totals: initial },
-    });
+    const { container, setData, setDisplay } = mountReactiveUsage(
+      usageFixture({ totals: initial }),
+    );
     const breakdown = container.querySelector(".cost-breakdown")!;
     expect(textAt(breakdown, ".cost-breakdown-total")).toContain("120");
     setDisplay((current) => ({ ...current, chartMode: "cost" }));
@@ -304,53 +341,56 @@ describe("renderUsage", () => {
       usageSession("second", "other", "second", { totalTokens: 100, totalCost: 2 }),
     ];
     props.data.overview = projectUsageData(props.data.sessions).overview;
+    props.data.filterOptions = props.data.overview?.filterOptions;
     props.filters.query = "provider:absent";
     props.filters.queryDraft = 'label:"Team  Planning" provider:second';
     props.callbacks.filters.onQueryDraftChange = vi.fn();
     const { container, data, display, setData, setDisplay } = mountReactiveUsage(props);
+    document.body.appendChild(container);
+    onTestFinished(() => container.remove());
+    openUsageDisplay(container);
+    container.querySelector<HTMLButtonElement>(".usage-display-menu__trigger")!.click();
+    flush();
+    const { dropdown } = openProviderFilter(container);
     const providerOptions = () =>
-      [...container.querySelectorAll<HTMLElement>(".usage-filter-select")]
-        .find((menu) =>
-          menu.querySelector(".usage-filter-trigger")?.textContent?.trim().startsWith("Provider"),
-        )!
-        .querySelectorAll<HTMLElement>(".usage-filter-option");
+      dropdown.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]');
     const values = () => [...providerOptions()].map((option) => option.getAttribute("aria-label"));
     const chartModeButton = (label: string) =>
-      [...container.querySelectorAll<HTMLButtonElement>(".usage-view-options button")].find(
+      [...container.querySelectorAll<HTMLButtonElement>(".usage-display-menu__metric button")].find(
         (button) => button.textContent?.trim() === label,
       );
 
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
-    expect(values()).toEqual(["first", "second"]);
+    expect(values()).toEqual(["second", "first"]);
     expect(
       [...providerOptions()]
         .find((option) => option.getAttribute("aria-checked") === "true")
         ?.getAttribute("aria-label"),
     ).toBe("second");
-    expect(textAt(container, ".usage-query-suggestion")).toBe("provider:second");
+    expect(textAt(container, ".usage-filter-menu__suggestion")).toBe("provider:second");
 
     setDisplay({ ...display(), chartMode: "cost" });
     flush();
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("false");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("true");
-    expect(values()).toEqual(["first", "second"]);
+    expect(values()).toEqual(["second", "first"]);
     // The replacement report is already scoped by the Gateway.
     setData({
       ...data(),
       ...projectUsageData(data().sessions.filter((session) => session.agentId === "main")),
     });
     flush();
-    expect(values()).toEqual(["first"]);
-    expect(container.querySelector(".usage-query-suggestion")).toBeNull();
+    expect(values()).toEqual(["second", "first"]);
+    expect(container.querySelector(".usage-filter-menu__suggestion")).toBeNull();
 
     setData({
       ...data(),
       ...projectUsageData([usageSession("replacement", "main", "second-new")]),
     });
     flush();
-    expect(values()).toEqual(["second-new"]);
-    container.querySelector<HTMLButtonElement>(".usage-query-suggestion")?.click();
+    expect(values()).toEqual(["second", "second-new"]);
+    container.querySelector<HTMLButtonElement>(".usage-filter-menu__suggestion")?.click();
     expect(props.callbacks.filters.onQueryDraftChange).toHaveBeenCalledWith(
       'label:"Team  Planning" provider:second-new ',
     );
@@ -369,7 +409,7 @@ describe("renderUsage", () => {
     });
 
     expect(container.querySelector(".usage-callout")?.textContent).toContain(
-      "Provider usage did not finish loading",
+      "Couldn’t finish loading provider usage",
     );
     const card = container.querySelector(".provider-usage-card");
     for (const label of ["OpenAI", "Weekly"]) {
@@ -412,10 +452,11 @@ describe("renderUsage", () => {
     }
     expect(
       Array.from(
-        container.querySelectorAll(".provider-usage-billing-row strong"),
+        container.querySelectorAll(".provider-usage__row .oc-menu-panel-usage-value"),
         (value) => value.textContent,
       ),
     ).toEqual(["$64.50", "$5.00 / $20.00", "¥13 / ¥20", "1.5  Credits  / 3  Credits "]);
+    expect(card?.querySelector(".provider-usage__window-value")?.textContent).toBe("75% left");
   });
 
   it("keeps complete insights and history beyond the visible page", () => {
@@ -427,14 +468,7 @@ describe("renderUsage", () => {
       {
         totals,
         costDaily: [
-          {
-            ...totals,
-            date: "2026-05-01",
-            input: 990,
-            totalTokens: 990,
-            totalCost: 9.9,
-            inputCost: 9.9,
-          },
+          { ...usageTotals(990, 9.9, { missingCostEntries: 1 }), date: "2026-05-01" },
           visibleDay,
         ],
         aggregates: {
@@ -456,14 +490,7 @@ describe("renderUsage", () => {
             usage: {
               ...visibleUsage,
               dailyBreakdown: [{ ...visibleDay, tokens: 10, cost: 0.1 }],
-              messageCounts: {
-                total: 2,
-                user: 1,
-                assistant: 1,
-                toolCalls: 0,
-                toolResults: 0,
-                errors: 0,
-              },
+              messageCounts: usageMessages(),
             },
           },
         ],
@@ -471,20 +498,23 @@ describe("renderUsage", () => {
       { startDate: "2026-05-01", endDate: "2026-05-14" },
     );
 
-    expect(
-      textAt(container, ".usage-overview-card .usage-summary-card--hero .usage-summary-value"),
-    ).toBe("100");
+    const messagesValue = [
+      ...container.querySelectorAll(".usage-overview-card .usage-summary-card"),
+    ]
+      .find((card) =>
+        card.querySelector(".usage-summary-title")?.textContent?.startsWith("Messages"),
+      )
+      ?.querySelector(".usage-summary-value");
+    expect(messagesValue?.textContent?.trim()).toBe("100");
     expect(container.textContent).toContain(
       "Cost data is missing for some or all sessions in this range.",
     );
-    expect(
-      [...container.querySelectorAll(".usage-metric-badge strong")].map((el) => el.textContent),
-    ).toEqual(["1.0K", "$10.00", "1"]);
+    expect(texts(container, ".usage-metric-badge strong", false)).toEqual(["1.0K", "$10.00", "1"]);
     const firstDay = container.querySelector(".daily-bar-wrapper");
     expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");
     expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");
     expect(firstDay?.querySelector(".daily-bar--empty")).toBeNull();
-    expect(textAt(container, ".cost-window-card--range .cost-window-card__value")).toBe("$10.00");
+    expect(textAt(container, ".cost-window--range .cost-window__value")).toBe("$10.00");
   });
 
   it("shows the empty state for an all-zero successful response", () => {

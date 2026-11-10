@@ -1,13 +1,6 @@
-const DEFAULT_PROGRESS_DRAFT_LABELS = ["Working"] as const;
+import { fnv1aUtf16 } from "./fnv1a.js";
 
-function hashProgressSeed(seed: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash ^= seed.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
+const DEFAULT_PROGRESS_DRAFT_LABELS = ["Working"] as const;
 
 export function selectProgressLabel(params: {
   labels?: readonly string[];
@@ -20,7 +13,7 @@ export function selectProgressLabel(params: {
   }
   const index =
     params.seed && params.seed.length > 0
-      ? hashProgressSeed(params.seed) % labels.length
+      ? fnv1aUtf16(params.seed) % labels.length
       : Math.floor(Math.max(0, Math.min(0.999999, params.random?.() ?? 0)) * labels.length);
   return labels[index] ?? labels[0];
 }

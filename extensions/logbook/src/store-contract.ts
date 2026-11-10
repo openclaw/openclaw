@@ -61,7 +61,6 @@ export type LogbookOperations = {
       startMs: number;
       endMs: number;
       drafts: LogbookCardDraft[];
-      selectKeyframes?: boolean;
     },
     void
   >;

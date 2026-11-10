@@ -7,7 +7,9 @@ import { isAbortError } from "../infra/abort-signal.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
+import type { ModelRequestHeaders } from "../llm/types.js";
 import { sanitizeCompactionMessages } from "./compaction-planning.js";
+import { isCompactionSummaryRefusal } from "./compaction-summary-refusal.js";
 import { isTimeoutError } from "./failover-error.js";
 import type {
   AgentMessage,
@@ -34,7 +36,7 @@ type CompactionSummaryParams = {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   signal: AbortSignal;
   reserveTokens: number;
   customInstructions?: string;
@@ -109,6 +111,7 @@ export async function summarizeCompactionHistory(params: CompactionSummaryParams
         // AbortErrors without caller cancellation remain retryable.
         shouldRetry: (err) =>
           !params.signal.aborted &&
+          !isCompactionSummaryRefusal(err) &&
           !(err instanceof SummaryOutputBudgetError) &&
           (isAbortError(err) || !isTimeoutError(err)),
       },

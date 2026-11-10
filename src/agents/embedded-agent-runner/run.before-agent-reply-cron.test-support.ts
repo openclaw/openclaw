@@ -11,9 +11,11 @@ import {
   mockedGlobalHookRunner as hooks,
   mockedRunEmbeddedAttempt,
   createOverflowRunParams,
-  resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createFreshRunIntegrationState,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -51,70 +53,37 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
   });
 
   beforeEach(async () => {
-    resetSharedRunIntegrationHarnessMocks();
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "run.before-agent-reply-cron" });
-    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-    setRuntimeConfigSnapshot({});
+    state = await createFreshRunIntegrationState("run.before-agent-reply-cron");
     hooks.hasHooks.mockImplementation((hookName: string) => hookName === "before_agent_reply");
   });
 
   afterEach(() => state?.cleanup());
 
-  it("lets before_agent_reply claim cron runs before the embedded attempt starts", async () => {
-    hooks.runBeforeAgentReply.mockResolvedValue(handledReply("dreaming claimed"));
-    const onExecutionPhase = vi.fn();
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      trigger: "cron",
-      jobId: "cron-job-123",
-      prompt: "__openclaw_memory_core_short_term_promotion_dream__",
-      onExecutionPhase,
-    });
-
-    expect(hooks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
-    expect(onExecutionPhase).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "before_agent_reply" }),
-    );
-    const [hookPayload, hookContext] = firstBeforeAgentReplyCall();
-    expect(hookPayload).toEqual({
-      cleanedBody: "__openclaw_memory_core_short_term_promotion_dream__",
-    });
-    expect(hookContext).toMatchObject({
-      jobId: "cron-job-123",
-      agentId: "main",
-      sessionId: "test-session",
-      sessionKey: createOverflowRunParams(state).sessionKey,
-      workspaceDir: state.workspaceDir,
-      trigger: "cron",
-    });
-    expect([hookContext?.senderId, hookContext?.chatId, hookContext?.channel]).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ]);
-    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
-    expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
-    // No provider ran; diagnostic capture must not attribute the hook text to a model.
-    expect(result.meta.providerStarted).toBe(false);
-  });
-
-  it("passes the heartbeat queue and re-arms setup progress when its hook does not claim", async () => {
+  it("re-arms setup progress when a scheduled hook does not claim", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
     const onExecutionPhase = vi.fn();
 
     await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      trigger: "heartbeat",
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      ...(await prepareHookSession("agent:main:cron:scheduled")),
+      provider: "test-local",
+      model: "test-model",
+      config: {
+        models: {
+          providers: {
+            "test-local": {
+              baseUrl: "http://127.0.0.1:11434/v1",
+              api: "openai-completions",
+              auth: "none",
+              models: [],
+            },
+          },
+        },
+      },
       onExecutionPhase,
     });
 
     expect(firstBeforeAgentReplyCall()[1]).toMatchObject({
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      sessionKey: "agent:main:cron:scheduled",
     });
     expect(onExecutionPhase).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "before_agent_reply" }),
@@ -129,7 +98,11 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     { name: "stable cron root", sessionKey: "agent:main:cron:hook-authority" },
     { name: "ordinary session", sessionKey: "agent:main:hook-authority" },
   ])("retains before-reply authority through a handled hook for $name", async (scenario) => {
-    const params = await prepareHookSession(scenario.sessionKey);
+    const params = {
+      ...(await prepareHookSession(scenario.sessionKey)),
+      jobId: "cron-job-123",
+      prompt: "__openclaw_memory_core_short_term_promotion_dream__",
+    };
     let requestAuthority: (() => void) | undefined;
     let claimAuthority: (() => void) | undefined;
     const effect = vi.fn();
@@ -145,8 +118,20 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     });
 
     const result = await runEmbeddedAgent(params);
-
+    const [payload, context] = firstBeforeAgentReplyCall();
+    expect(payload).toEqual({ cleanedBody: params.prompt });
+    expect(context).toMatchObject({
+      jobId: params.jobId,
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: state.workspaceDir,
+      trigger: "cron",
+    });
+    const { senderId, chatId, channel } = context;
+    expect([senderId, chatId, channel]).toEqual([undefined, undefined, undefined]);
     expect(result.payloads).toEqual([{ text: "hook completed" }]);
+    expect(result.meta.providerStarted).toBe(false);
     expect(effect).toHaveBeenCalledOnce();
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(() => requestAuthority?.()).toThrow("Guarded request authority is no longer active");

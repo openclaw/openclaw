@@ -1,15 +1,26 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal, merge } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
-import type { ApplicationGateway } from "../../../app/gateway.ts";
+import { observeResize } from "../../../lib/reactive/observers.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
+import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { captureChatDetailsSnapshot } from "../chat-details-snapshot.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+} from "../session-message-cache.ts";
+import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
+import "../../../styles/components.css";
 import baseStyles from "../../../styles/base.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";
+import layoutStyles from "../../../styles/chat/layout.css?inline";
 import progressStyles from "../../../styles/chat/progress-card.css?inline";
 
 const card: ProgressCard = {
@@ -36,7 +47,13 @@ function props(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
     ...overrides,
   };
 }
-async function fixture(value = props(), width = 600, fullscreen = false) {
+async function fixture(
+  value = props(),
+  width = 600,
+  fullscreen = false,
+  nativePresentation?: ChatDetailsViewProps["nativePresentation"],
+  contentPending?: boolean,
+) {
   const styles = document.createElement("style");
   styles.textContent = [baseStyles, progressStyles, detailsStyles].join("\n");
   document.head.append(styles);
@@ -53,6 +70,8 @@ async function fixture(value = props(), width = 600, fullscreen = false) {
   const pane = document.createElement("openclaw-chat-pane");
   pane.className = "sidebar-region";
   pane.style.cssText = `display:block;position:relative;width:${width}px;height:640px;margin:30px 20px`;
+  pane.style.setProperty("--desktop-side-reserve", "0px");
+  pane.style.setProperty("--desktop-divider-reserve", "0px");
   pane.append(frame);
   frame.hidden = fullscreen;
   const header = document.createElement("div");
@@ -66,6 +85,8 @@ async function fixture(value = props(), width = 600, fullscreen = false) {
     elements: { pane, frame, footer, header: fullscreen ? header : undefined },
     presentation: true,
     mobile: false,
+    nativePresentation,
+    contentPending,
     conversationVisible: !fullscreen,
     externalTrigger: fullscreen,
     setRef: (handle) => (details = handle),
@@ -93,6 +114,7 @@ async function fixture(value = props(), width = 600, fullscreen = false) {
       update({ chat: { ...current().chat!, ...patch } }),
     open: (source: HTMLElement) => details?.open(source),
     frame,
+    elements: current().elements!,
     pane,
     footer,
     get session() {
@@ -118,10 +140,205 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
+  it("retains docking after connection admits geometry measured while offline", async () => {
+    await page.viewport(1700, 900);
+    stubResizeObserver();
+    try {
+      const chatMessagesBySession: ChatMessageCache = new Map();
+      const host = {
+        assistantAgentId: "main",
+        chatMessagesBySession,
+        sessionKey: card.sessionKey,
+        currentSessionId: "details-1",
+        connected: false,
+        connectionEpoch: 0,
+        settings: { gatewayUrl: "wss://details.example" },
+        client: { recoveryScope: "account-a", recoveryScopeReady: true },
+      };
+      const target = { sessionKey: card.sessionKey };
+      cacheChatSessionSnapshot(host.chatMessagesBySession, host, target, {
+        messages: [],
+        pagination: { hasMore: false },
+        sessionId: host.currentSessionId,
+      });
+      const view = await fixture(
+        props({ connected: false, onDetailsSnapshot: captureChatDetailsSnapshot(host)!.write }),
+        1320,
+        false,
+        "desktop",
+        true,
+      );
+      const layout = JSON.stringify([1700]);
+      view.update({ dockingLayout: layout });
+      window.dispatchEvent(new Event("resize"));
+      flush();
+      const saved = () => readChatSessionSnapshot(host.chatMessagesBySession, host, target);
+      expect(saved()?.details?.docking).toBeUndefined();
+
+      host.connected = true;
+      view.updateChat({
+        connected: true,
+        onDetailsSnapshot: captureChatDetailsSnapshot(host)!.write,
+      });
+      flush();
+      expect(saved()?.details?.docking).toEqual({ layout, wide: true });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps unchanged resize targets and observes replaced refs in the same layout object", async () => {
+    await page.viewport(1700, 900);
+    const view = await fixture(props(), 1320, false, "desktop", true);
+    onTestFinished(observeResize([view.frame], () => {}));
+    const settle = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    await settle();
+    const read = vi.spyOn(view.frame, "getBoundingClientRect");
+    onTestFinished(() => read.mockRestore());
+    view.updateChat({ messages: [] });
+    flush();
+    await Promise.resolve();
+    expect(read).not.toHaveBeenCalled();
+
+    const replacement = document.createElement("div");
+    replacement.style.cssText = view.frame.style.cssText;
+    view.pane.append(replacement);
+    const replacedRead = vi.spyOn(replacement, "getBoundingClientRect");
+    onTestFinished(() => replacedRead.mockRestore());
+    view.elements.frame = replacement;
+    view.updateChat({ messages: [] });
+    flush();
+    await settle();
+    expect(replacedRead).toHaveBeenCalled();
+  });
+
+  it("resolves composer observation after refs attach", () => {
+    const observe = vi.spyOn(ResizeObserver.prototype, "observe");
+    const pane = document.createElement("div");
+    document.body.append(pane);
+    mounted.push(pane);
+    let input: HTMLTextAreaElement | null = null;
+    try {
+      mountSolid(
+        () => {
+          const details = createComponent(ChatDetails, {
+            chat: props(),
+            presentation: true,
+            mobile: false,
+            elements: { pane, getComposerInput: () => input },
+            setRef: () => {},
+          });
+          input = document.createElement("textarea");
+          pane.append(input);
+          return details;
+        },
+        { container: pane },
+      );
+      flush();
+      expect(observe.mock.calls.some(([target]) => target === input)).toBe(true);
+    } finally {
+      observe.mockRestore();
+    }
+  });
+
+  it("keeps native resize subscriptions across equivalent parent snapshots", async () => {
+    const observe = vi.spyOn(ResizeObserver.prototype, "observe");
+    const unobserve = vi.spyOn(ResizeObserver.prototype, "unobserve");
+    try {
+      const { pane, frame, footer, update } = await fixture();
+      const targets = new Set<Element>([pane, frame, footer]);
+      const calls = () => observe.mock.calls.filter(([target]) => targets.has(target)).length;
+      const initial = calls();
+      expect(initial).toBeGreaterThan(0);
+      update({ elements: { pane, frame, footer } });
+      flush();
+      expect(calls()).toBe(initial);
+      expect(unobserve.mock.calls.filter(([target]) => targets.has(target))).toHaveLength(0);
+      const replacement = document.createElement("div");
+      pane.append(replacement);
+      update({ elements: { pane, frame: replacement, footer } });
+      flush();
+      expect(observe.mock.calls.some(([target]) => target === replacement)).toBe(true);
+      expect(unobserve.mock.calls.some(([target]) => target === frame)).toBe(true);
+    } finally {
+      observe.mockRestore();
+      unobserve.mockRestore();
+    }
+  });
+
+  it.each([undefined, "desktop"] as const)(
+    "reserves automatic Details before the first resize delivery (presentation: %s)",
+    async (nativePresentation) => {
+      stubResizeObserver();
+      try {
+        await page.viewport(1700, 900);
+        const { conversation, panel } = await fixture(
+          props(),
+          1320,
+          false,
+          nativePresentation,
+          true,
+        );
+        expect(panel.hidden).toBe(false);
+        expect(getComputedStyle(conversation).right).toBe(
+          nativePresentation === "desktop" ? "313px" : "300px",
+        );
+        if (nativePresentation === "desktop") {
+          expect(panel.querySelector(".chat-details-session")).toBeNull();
+        }
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it.each(["transcript paint", "explicit open"] as const)(
+    "holds automatic content until %s and retains it through later hydration",
+    async (release) => {
+      // A cold lazy import must not accidentally satisfy the initial hold assertion.
+      await import("./chat-details-session.tsx");
+      await page.viewport(1700, 900);
+      const { update, open, conversation, trigger, panel } = await fixture(
+        props(),
+        1320,
+        false,
+        "desktop",
+        true,
+      );
+      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+      expect(panel.getAttribute("role")).toBe("complementary");
+      expect(conversation.getBoundingClientRect().right).toBeLessThanOrEqual(
+        panel.getBoundingClientRect().left,
+      );
+      expect(panel.querySelector(".chat-details-session")).toBeNull();
+
+      if (release === "transcript paint") {
+        update({ contentPending: false });
+      } else {
+        open(trigger);
+      }
+      await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
+      const session = panel.querySelector(".chat-details-session");
+      update({ contentPending: true });
+      flush();
+      expect(panel.querySelector(".chat-details-session")).toBe(session);
+      expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    },
+  );
+
   it("automatically docks within the available pane, preserves intent, and releases its column", async () => {
     await page.viewport(1700, 900);
     const { update, updateChat, frame, conversation, footer, trigger, panel } = await fixture(
-      props(),
+      props({
+        detailsWorkspace: {
+          root: "/workspace/details",
+          label: "details",
+          branch: "feature/docking",
+        },
+      }),
       1320,
     );
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
@@ -132,8 +349,8 @@ describe("chat Details presentation", () => {
     const session = panel.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
     expect(panel.getAttribute("role")).toBe("complementary");
     expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
-    const groupStyle = getComputedStyle(panel.querySelector(".chat-details__group")!);
-    expect(groupStyle.borderTopWidth).toBe("1px");
+    const groupStyle = getComputedStyle(panel.querySelector(".chat-details-desktop-section")!);
+    expect(groupStyle.borderTopWidth).toBe("0px");
     expect(groupStyle.borderInlineStartWidth).toBe("0px");
     expect(groupStyle.borderBottomWidth).toBe("0px");
     expect(panel.matches(":popover-open")).toBe(false);
@@ -149,10 +366,12 @@ describe("chat Details presentation", () => {
     const metadata = session.querySelector(".chat-details-session")!;
     // A side panel consumes pane width even when the desktop stays wide.
     frame.style.width = "900px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect
+      .poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 })
+      .toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(900);
     frame.style.width = "1320px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 }).toBe("true");
     expect(session.querySelector(".chat-details-session")).toBe(metadata);
     expect(metadata.querySelector(":scope > summary")).toBeNull();
     trigger.click();
@@ -169,8 +388,13 @@ describe("chat Details presentation", () => {
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     trigger.click();
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    // ResizeObserver and the native popover settle on the browser's rendering turn.
+    const shown = new Promise<void>((resolve) => {
+      panel.addEventListener("toggle", () => resolve(), { once: true });
+    });
     frame.style.width = "600px";
-    await expect.poll(() => panel.matches(":popover-open")).toBe(true);
+    await shown;
+    expect(panel.matches(":popover-open")).toBe(true);
     expect(panel.getAttribute("role")).toBe("dialog");
     expect(conversation.getBoundingClientRect().width).toBe(600);
     frame.style.width = "1320px";
@@ -196,71 +420,100 @@ describe("chat Details presentation", () => {
     );
   });
 
-  it("nests section content under aligned headings without shifting navigation highlights", async () => {
-    const openFiles = vi.fn();
-    const { trigger, panel } = await fixture(
-      props({
-        onOpenWorkspace: openFiles,
-        selectedSession: {
-          key: card.sessionKey,
-          kind: "direct",
-          totalTokens: 64000,
-          totalTokensFresh: true,
-          contextTokens: 128000,
-          inputTokens: 1200,
-          outputTokens: 450,
-        },
-      }),
-    );
-    trigger.click();
-    flush();
-    await expect.poll(() => panel.querySelector(".chat-details__environment")).not.toBeNull();
-    const environment = panel.querySelector(".chat-details__environment")!;
-    const navigation = environment.querySelector<HTMLButtonElement>(".chat-details__navigation")!;
-    const heading = environment.querySelector("summary")!;
-    const workspaceIcon = environment.querySelector(".chat-details__row > svg")!;
-    const leadingIcon = navigation.querySelector("svg")!;
-    const trailingIcon = navigation.querySelector("svg:last-child")!;
-    const context = panel.querySelector<HTMLDetailsElement>(".chat-details__context")!;
-    await toggle(context);
-    const contextHeading = context.querySelector("summary")!;
-    const budget = context.querySelector(".chat-details__context-budget")!;
-    const stats = context.querySelector(".chat-details__stats")!;
-    const progressHeading = panel.querySelector(".session-progress-card__summary")!;
-    const progressBody = panel.querySelector(".session-progress-card__body")!;
-    for (const width of [600, 300]) {
-      const frame = panel.closest<HTMLElement>(".chat-main__conversation-frame")!;
-      frame.style.width = width + "px";
-      window.dispatchEvent(new Event("resize"));
-      const row = navigation.getBoundingClientRect();
-      expect(leadingIcon.getBoundingClientRect().left - row.left).toBeGreaterThanOrEqual(8);
-      expect(row.right - trailingIcon.getBoundingClientRect().right).toBeGreaterThanOrEqual(8);
-      expect(leadingIcon.getBoundingClientRect().left).toBe(
-        workspaceIcon.getBoundingClientRect().left,
+  it("keeps first-attached Details insets stable and aligns the Environment diff below its branch label", async () => {
+    await page.viewport(1000, 800);
+    const openChanges = vi.fn();
+    const styles = document.createElement("style");
+    styles.textContent = [baseStyles, layoutStyles, detailsStyles].join("\n");
+    document.head.append(styles);
+    const panel = document.createElement("section");
+    panel.className = "chat-details";
+    panel.setAttribute("data-desktop", "");
+    panel.style.cssText = "position:relative;inset:auto;width:600px;max-width:none;height:400px";
+    document.body.append(panel);
+    mounted.push(panel, styles);
+    const mountContent = () =>
+      mountSolid(
+        () =>
+          createComponent(ChatDetailsDesktopContent, {
+            presented: true,
+            dismissed: false,
+            cachedReady: true,
+            progressMenuRef: () => {},
+            onHideProgress: () => {},
+            chat: props({
+              progressCard: undefined,
+              detailsWorkspace: {
+                root: "/workspace/details",
+                label: null,
+                branch: "feature/details",
+              },
+              environment: {
+                onOpenUncommitted: openChanges,
+                uncommitted: {
+                  sessionKey: card.sessionKey,
+                  branch: "feature/details",
+                  baseRef: "HEAD",
+                  files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+                  additions: 3,
+                  deletions: 1,
+                },
+              },
+            }),
+          }),
+        { container: panel },
       );
-      const headingLeft =
-        heading.getBoundingClientRect().left +
-        Number.parseFloat(getComputedStyle(heading).paddingLeft);
-      expect(headingLeft - panel.getBoundingClientRect().left - panel.clientLeft).toBe(16);
-      expect(leadingIcon.getBoundingClientRect().left - headingLeft).toBe(8);
-      expect(contextHeading.getBoundingClientRect().left).toBe(headingLeft);
-      expect(progressHeading.getBoundingClientRect().left).toBe(headingLeft);
-      expect(budget.getBoundingClientRect().left - headingLeft).toBe(8);
-      expect(stats.getBoundingClientRect().left - headingLeft).toBe(8);
-      expect(
-        progressBody.getBoundingClientRect().left +
-          Number.parseFloat(getComputedStyle(progressBody).paddingLeft) -
-          headingLeft,
-      ).toBe(8);
-      expect(row.height).toBeGreaterThanOrEqual(36);
+    // Load the public boundary, then measure a fresh scroll owner before its first layout turn.
+    const prepared = mountContent();
+    await expect
+      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
+      .not.toBeNull();
+    prepared.unmount();
+    mountContent();
+    flush();
+    const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
+    const expectHeadingInsets = () => {
+      const panelBounds = panel.getBoundingClientRect();
+      const headingBounds = heading.getBoundingClientRect();
+      expect(headingBounds.left - panelBounds.left).toBeCloseTo(17);
+      expect(panelBounds.right - headingBounds.right).toBeCloseTo(17);
+    };
+    // Measure both widths before the scroll owner's first scheduled layout read.
+    for (const width of [600, 300]) {
+      panel.style.width = width + "px";
+      expectHeadingInsets();
+    }
+    const navigation = panel.querySelector<HTMLButtonElement>(
+      ".chat-environment__branch-controls button.chat-pr__diff",
+    )!;
+    const branchLabel = panel.querySelector(".chat-environment__branch-name")!;
+    await new Promise(requestAnimationFrame);
+    expectHeadingInsets();
+    expect(navigation.getAttribute("aria-label")).toBe("Show session changes");
+    expect(navigation.textContent).toContain("+3");
+    expect(navigation.textContent).toContain("−1");
+    for (const width of [600, 300]) {
+      panel.style.width = width + "px";
+      const row = navigation.getBoundingClientRect();
+      const headingBounds = heading.getBoundingClientRect();
+      const branchBounds = branchLabel.getBoundingClientRect();
+      expect(Math.abs(row.left - branchBounds.left)).toBeLessThanOrEqual(1);
+      expect(row.top).toBeGreaterThanOrEqual(branchBounds.bottom);
+      expect(row.left).toBeGreaterThanOrEqual(headingBounds.left);
+      expect(row.right).toBeLessThanOrEqual(headingBounds.right);
+      expect(row.height).toBeGreaterThanOrEqual(
+        Number.parseFloat(getComputedStyle(navigation).lineHeight),
+      );
+      expect(navigation.scrollHeight).toBeLessThanOrEqual(navigation.clientHeight);
       expect(panel.scrollWidth).toBeLessThanOrEqual(panel.clientWidth);
     }
-    await page.getByRole("button", { name: "Show session files", exact: true }).hover();
-    const beforeFocus = navigation.getBoundingClientRect();
+    const beforeHover = navigation.getBoundingClientRect().toJSON();
+    await page.getByRole("button", { name: "Show session changes", exact: true }).hover();
+    expect(navigation.getBoundingClientRect().toJSON()).toEqual(beforeHover);
     navigation.focus();
-    expect(navigation.getBoundingClientRect().toJSON()).toEqual(beforeFocus.toJSON());
-    navigation.click();
-    expect(openFiles).toHaveBeenCalledOnce();
+    expect(navigation.getBoundingClientRect().toJSON()).toEqual(beforeHover);
+    await page.getByRole("button", { name: "Show session changes", exact: true }).click();
+    expect(openChanges).toHaveBeenCalledOnce();
   });
 
   it("starts closed, stays closed on revisions, and returns Escape focus to its labeled trigger", async () => {
@@ -288,7 +541,7 @@ describe("chat Details presentation", () => {
   it("opens full-width mobile Details from Panels and restores focus to that control", async () => {
     await page.viewport(420, 720);
     const { update, open, frame, trigger, panel } = await fixture(props(), 380);
-    update({ mobile: true });
+    update({ mobile: true, contentPending: true });
     const source = document.createElement("button");
     source.textContent = "Panels";
     frame.prepend(source);
@@ -299,6 +552,7 @@ describe("chat Details presentation", () => {
     expect(panel.matches(":popover-open")).toBe(true);
     expect(panel.getBoundingClientRect().width).toBe(364);
     expect(panel.querySelector(".chat-details__toolbar")).not.toBeNull();
+    await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
     panel.querySelector<HTMLButtonElement>("button")!.focus();
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
@@ -337,7 +591,7 @@ describe("chat Details presentation", () => {
     expect(panel.getAttribute("role")).toBe("dialog");
     const bounds = panel.getBoundingClientRect();
     const paneBounds = pane.getBoundingClientRect();
-    expect(bounds.width).toBe(352);
+    expect(bounds.width).toBe(300);
     expect(bounds.height).toBeGreaterThan(40);
     expect(bounds.left).toBeGreaterThanOrEqual(paneBounds.left);
     expect(bounds.right).toBeLessThanOrEqual(paneBounds.right);
@@ -369,8 +623,7 @@ describe("chat Details presentation", () => {
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
-    expect(menuSurface.matches(":popover-open")).toBe(true);
+    await phase(menuSurface, "open");
     updateChat({ messages: [] });
     flush();
     expect(menuSurface.matches(":popover-open")).toBe(true);
@@ -395,10 +648,14 @@ describe("chat Details presentation", () => {
     await session.updateComplete;
     flush();
     const sessionSection = session.querySelector<HTMLElement>(".chat-details-session")!;
-    const progressSection = progress.querySelector<HTMLDetailsElement>(".session-progress-card")!;
+    const progressSection = progress.querySelector<HTMLDetailsElement>(".task-progress-details")!;
     expect(sessionSection.querySelector(":scope > summary")).toBeNull();
     expect(progressSection.open).toBe(true);
-    expect(session.querySelector("[data-details-group]")).toBeNull();
+    expect(
+      session.querySelector(
+        '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
+      ),
+    ).toBeNull();
     await toggle(progressSection);
     expect(progressSection.open).toBe(false);
     expect(
@@ -472,9 +729,8 @@ describe("chat Details presentation", () => {
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
-    expect(menuSurface.matches(":popover-open")).toBe(true);
-    expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
+    await phase(menuSurface, "open");
+    expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
     const select = async (value: string) => {
       if (trigger.getAttribute("aria-expanded") !== "true") {
         trigger.click();
@@ -485,7 +741,7 @@ describe("chat Details presentation", () => {
       }
       if (menu.querySelector("button")!.getAttribute("aria-expanded") !== "true") {
         menu.querySelector<HTMLButtonElement>("button")!.click();
-        await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+        await phase(menuSurface, "open");
       }
       menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!.click();
     };
@@ -495,7 +751,7 @@ describe("chat Details presentation", () => {
     expect(clear).not.toHaveBeenCalled();
     await select("collapse");
     expect(collapse).toHaveBeenCalledWith(true);
-    expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
+    expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
     await select("settings");
     expect(settings).toHaveBeenCalledOnce();
     await select("dismiss");
@@ -513,44 +769,61 @@ describe("chat Details presentation", () => {
   });
 });
 
-it("keeps the change summary in the heading action when collapsed and omits empty Participants", async () => {
-  const request = vi.fn().mockResolvedValue({
-    files: Array.from({ length: 12 }, () => ({ path: "app.ts" })),
-    additions: 248,
-    deletions: 61,
-  });
-  // SAFETY: This fixture supplies the read-only connection surface used by Details.
-  const gateway = {
-    snapshot: { phase: "connected", client: { request }, hello: null },
-    connectionRevision: 1,
-    subscribe: () => () => {},
-    subscribeEvents: () => () => {},
-  } as unknown as ApplicationGateway;
+it("keeps Environment changes readable across disclosure toggles and omits empty Participants", async () => {
+  await page.viewport(1000, 800);
+  const openChanges = vi.fn();
+  const currentOpenChanges = vi.fn();
   const view = await fixture(
-    props({ onOpenSessionDiff: vi.fn(), pullRequestsGateway: gateway }),
+    props({
+      onOpenSessionDiff: openChanges,
+      environment: {
+        uncommitted: {
+          sessionKey: card.sessionKey,
+          files: [{ path: "app.ts", status: "modified", additions: 248, deletions: 61 }],
+          additions: 248,
+          deletions: 61,
+        },
+      },
+    }),
     360,
   );
   view.trigger.click();
-  const action = () => view.session.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
-  await vi.waitFor(() => expect(action().textContent).toContain("+248"));
-  const group = action().closest<HTMLElement>(".chat-details__group")!;
-  const disclosure = group.querySelector<HTMLDetailsElement>("details")!;
+  const action = () =>
+    view.panel.querySelector<HTMLButtonElement>(
+      '[data-details-group="environment"] .chat-environment__action',
+    )!;
+  await expect.poll(() => action()?.textContent).toContain("+248");
+  const disclosure = action().closest<HTMLDetailsElement>('[data-details-group="environment"]')!;
   const heading = disclosure.querySelector<HTMLElement>(":scope > summary")!;
   for (const width of [360, 300]) {
     view.frame.style.width = width + "px";
     const row = action().getBoundingClientRect();
     const caption = heading.getBoundingClientRect();
-    expect(row.left).toBeGreaterThan(caption.left);
+    expect(row.left).toBeGreaterThanOrEqual(caption.left);
     expect(row.right).toBeLessThanOrEqual(caption.right);
-    expect(row.bottom).toBeLessThanOrEqual(caption.bottom);
+    expect(row.top).toBeGreaterThanOrEqual(caption.bottom);
     expect(action().scrollWidth).toBeLessThanOrEqual(action().clientWidth);
   }
-  disclosure.open = false;
-  expect(action().getBoundingClientRect().height).toBeGreaterThan(0);
+  await page.getByRole("button", { name: /Changes/ }).click();
+  expect(openChanges).toHaveBeenCalledOnce();
+  view.updateChat({ onOpenSessionDiff: currentOpenChanges });
+  flush();
+  heading.click();
+  flush();
+  expect(heading.getAttribute("aria-expanded")).toBe("false");
+  expect(action().closest("[inert]")).not.toBeNull();
+  heading.click();
+  flush();
+  expect(heading.getAttribute("aria-expanded")).toBe("true");
+  expect(action().closest("[inert]")).toBeNull();
   expect(action().textContent).toContain("+248");
+  expect(action().textContent).toContain("−61");
+  await page.getByRole("button", { name: /Changes/ }).click();
+  expect(openChanges).toHaveBeenCalledOnce();
+  expect(currentOpenChanges).toHaveBeenCalledOnce();
   expect(view.session.querySelector(".chat-details__participants")).toBeNull();
-  const additions = view.session.querySelector<HTMLElement>(".chat-details__change-lines--add")!;
-  const deletions = view.session.querySelector<HTMLElement>(".chat-details__change-lines--del")!;
+  const additions = action().querySelector<HTMLElement>(".chat-environment__added")!;
+  const deletions = action().querySelector<HTMLElement>(".chat-environment__removed")!;
   expect(getComputedStyle(additions).fontVariantNumeric).toBe("tabular-nums");
   expect(getComputedStyle(additions).color).not.toBe(getComputedStyle(deletions).color);
 });

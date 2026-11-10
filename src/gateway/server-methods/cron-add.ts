@@ -9,6 +9,7 @@ import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { resolveCronDeliveryPreview } from "../../cron/delivery-preview.js";
 import { cronAddResultReadView } from "../../cron/job-read-view.js";
+import { readPluginCommandCreation } from "../../cron/plugin-command-creation.js";
 import { CronStreamApprovalEndedError } from "../../cron/stream-approval-outcome.js";
 import { cronCreateRequiresStreamExecAuthority } from "../../cron/stream-exec-authority.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
@@ -18,6 +19,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   applyCronCreateCallerScopeDefault,
+  assertCronModelJobAllowed,
   cronCreateMatchesCallerScope,
   cronJobMatchesDeclarationScope,
   readCronCallerScope,
@@ -40,7 +42,7 @@ import type { GatewayRequestHandler } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const cronAddHandler: GatewayRequestHandler = async ({
-  params,
+  params: rawParams,
   respond,
   context,
   client,
@@ -53,6 +55,8 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   if (hasCurrentClientAuthority?.() === false) {
     throw new Error("Automation caller authority is no longer active");
   }
+  const commandCreation = readPluginCommandCreation(rawParams);
+  const params = commandCreation.params;
   let candidate: unknown;
   let enabledExplicit: boolean;
   try {
@@ -67,6 +71,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   const callerScope = readCronCallerScope(client);
   // SAFETY: cron.add validates this shape; createJob normalizes its nullable selectors.
   const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
+  const cfg = context.getRuntimeConfig();
   const creator = await prepareCronCreatorSession({
     context,
     client,
@@ -75,9 +80,27 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     hasCurrentClientAuthority,
     retainExecutionPolicy: cronCreateRequiresStreamExecAuthority(candidate),
   });
+  if (commandCreation.creation) {
+    const envelope = commandCreation.creation.envelope;
+    const identity = client?.internal?.agentRuntimeIdentity;
+    const parent = creator.session;
+    if (
+      !identity ||
+      identity.agentId !== envelope.parent.agentId ||
+      identity.sessionKey !== envelope.parent.sessionKey ||
+      identity.operationalRunInstance.runId !== envelope.sourceRunId ||
+      parent?.agentId !== envelope.parent.agentId ||
+      parent.sessionKey !== envelope.parent.sessionKey ||
+      parent.entry.sessionId !== envelope.parent.sessionId ||
+      parent.entry.lifecycleRevision !== envelope.parent.lifecycleRevision
+    ) {
+      throw new Error("Scheduled command creator does not match its admitted parent incarnation.");
+    }
+  }
   let execPolicy: ReturnType<typeof resolveCronStreamExecPolicy>;
   let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
   try {
+    assertCronModelJobAllowed(client, cfg, jobCreate);
     capture = resolveCronCreatorAuthorityCapture(callerScope);
     execPolicy = resolveCronStreamExecPolicy(
       client,
@@ -95,7 +118,6 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     sessionMutationCommitGuard,
     hasCurrentClientAuthority,
   });
-  const cfg = context.getRuntimeConfig();
   if (
     !cronCreateMatchesCallerScope({
       job: jobCreate,
@@ -129,9 +151,11 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   }
   let creatorOptions: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
   const commitGuard = () => {
+    commandCreation.creation?.assertCurrent();
     assertMutationCurrent?.();
     capture?.assertCurrent();
     creatorOptions?.assertInferenceSelectionCurrent?.();
+    assertCronModelJobAllowed(client, cfg, jobCreate);
     creatorOptions?.assertOperatorSourceCurrent?.();
     creator.assertCurrent();
     execPolicy?.assertCurrentSource?.();
@@ -143,13 +167,18 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     creatorOptions = await captureCronCreatorSession(
       jobCreate,
       callerScope,
-      { client, context, signal },
+      { client, context, signal, hasCurrentClientAuthority },
       cfg,
       runtimeAuthority !== undefined,
     );
     await assertCronDoesNotTargetAgentHarness(jobCreate, cfg);
-    await assertValidCronCreateDelivery(cfg, jobCreate);
+    await assertValidCronCreateDelivery(
+      cfg,
+      { ...jobCreate, createdActor: creatorOptions.createdActor },
+      context.cron.getDefaultAgentId(),
+    );
   } catch (err) {
+    creatorOptions?.disposeOperatorSource?.();
     creatorOptions?.disposeInferenceAuthorization?.();
     respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
     return;
@@ -161,7 +190,11 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   try {
     deliveryPreview = await resolveCronDeliveryPreview({
       ...previewContext,
-      job: { ...jobCreate, sourceConversation: creatorOptions.sourceConversation },
+      job: {
+        ...jobCreate,
+        sourceConversation: creatorOptions.sourceConversation,
+        createdActor: creatorOptions.createdActor,
+      },
     });
     const streamSandbox = execPolicy?.sandboxContext
       ? (() => {
@@ -185,11 +218,22 @@ export const cronAddHandler: GatewayRequestHandler = async ({
         context.cron.add(jobCreate, {
           streamExecApproval,
           streamSandbox,
+          ...(jobCreate.schedule.kind === "stream" &&
+          !streamSandbox &&
+          creatorOptions?.operatorSource?.snapshot.openclawIdPrincipal
+            ? { streamOperatorSource: creatorOptions.operatorSource.snapshot }
+            : {}),
           execPolicy,
           sessionEntryCurrent: creator.sessionEntryCurrent,
 
           enabledExplicit,
           ...creatorOptions,
+          ...(commandCreation.creation
+            ? {
+                pluginCommand: commandCreation.creation.envelope,
+                pluginCommandSourceDigest: commandCreation.creation.sourceDigest,
+              }
+            : {}),
           commitGuard,
           ...(capture ? { captureRuntimeAuthority: capture.captureRuntimeAuthority } : {}),
           matchesExisting: (job) =>
@@ -234,9 +278,11 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
     return;
   } finally {
+    creatorOptions.disposeOperatorSource?.();
     creatorOptions.disposeInferenceAuthorization?.();
   }
   const job = "job" in result ? result.job : result;
+  commandCreation.creation?.record(job);
   context.logGateway.info("cron: job added", {
     jobId: job.id,
     declarationKey: job.declarationKey,
@@ -244,13 +290,21 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   });
   respond(
     true,
-    cronAddResultReadView({
-      result,
-      deliveryPreview:
-        "job" in result && !result.created
-          ? await resolveCronDeliveryPreview({ ...previewContext, job })
-          : deliveryPreview,
-    }),
+    {
+      ...cronAddResultReadView({
+        result,
+        deliveryPreview:
+          "job" in result && !result.created
+            ? await resolveCronDeliveryPreview({ ...previewContext, job })
+            : deliveryPreview,
+      }),
+      ...(creatorOptions?.operatorSourceUnavailable && !job.operatorSource
+        ? {
+            warning:
+              "This automation cannot retain the initiating operator grant. Protected operator actions require an interactive turn; its ingress owner must support principal recovery to run them unattended.",
+          }
+        : {}),
+    },
     undefined,
   );
 };

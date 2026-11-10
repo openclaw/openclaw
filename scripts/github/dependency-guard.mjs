@@ -6,6 +6,7 @@ import { appendFile } from "node:fs/promises";
 import {
   ObsoleteReviewError,
   assertGuardUnchanged,
+  failGuard,
   findMaintainerApproval,
   finishGuard,
   openGuard,
@@ -580,11 +581,14 @@ async function setOutput(name, value) {
   await appendFile(outputPath, `${name}=${value}\n`);
 }
 
+let currentGuard;
+
 export async function reviewDependencyChanges(
   prepared,
   mode = process.env.OPENCLAW_DEPENDENCY_GUARD_MODE ?? "enforce",
 ) {
   const guard = await openGuard(securityReviewContracts.dependency, prepared);
+  currentGuard = guard;
   if (!guard) {
     return true;
   }
@@ -825,7 +829,10 @@ export async function reviewDependencyChanges(
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   reviewDependencyChanges().catch(
-    /** @param {unknown} error */ (error) => {
+    /** @param {unknown} error */ async (error) => {
+      if (currentGuard) {
+        await failGuard(currentGuard, error, { terminal: true });
+      }
       if (error instanceof ObsoleteReviewError) {
         console.log(error.message);
         return;

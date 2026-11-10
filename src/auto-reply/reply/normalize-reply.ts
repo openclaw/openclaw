@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { stripLeadingEmptyLines } from "../../shared/text/strip-leading-empty-lines.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   copyReplyPayloadMetadata,
@@ -45,6 +46,9 @@ function resolveNormalizeReplyTransformOwner(
 type NormalizeReplyOptions = {
   responsePrefix?: string;
   applyChannelTransforms?: boolean;
+  preserveLeadingSourceBoundary?: boolean;
+  /** The same delivery owner already applied filtering, transforms, and prefix. */
+  prepared?: boolean;
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
@@ -57,21 +61,30 @@ export function normalizeReplyPayloadOutcome(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
 ): NormalizeReplyOutcome {
+  if (opts.prepared) {
+    // A prepared continuation can change dispatch lanes without repeating its
+    // prefix or channel transform; only the block's leading boundary changes.
+    return {
+      kind: "deliver",
+      payload:
+        !opts.preserveLeadingSourceBoundary && payload.text?.startsWith("\n")
+          ? copyReplyPayloadMetadata(payload, {
+              ...payload,
+              text: stripLeadingEmptyLines(payload.text),
+            })
+          : payload,
+    };
+  }
   const suppress = (reason: NormalizeReplySkipReason): NormalizeReplyOutcome => {
     opts.onSkip?.(reason);
     return { kind: "suppress", reason };
   };
   const applyChannelTransforms = opts.applyChannelTransforms ?? true;
   const hasContent = (text: string | undefined) =>
-    hasReplyPayloadContent(
-      {
-        ...payload,
-        text,
-      },
-      {
-        trimText: true,
-      },
-    );
+    hasReplyPayloadContent({
+      ...payload,
+      text,
+    });
   const trimmed = normalizeOptionalString(payload.text) ?? "";
   const hasSpeechContent = hasReplyPayloadSpeechContent(payload);
   if (!hasContent(trimmed) && !hasSpeechContent) {
@@ -79,45 +92,45 @@ export function normalizeReplyPayloadOutcome(
   }
 
   let text = payload.text;
-  // Monitoring already applied its configured acknowledgment and error-text policy.
-  if (!getReplyPayloadMetadata(payload)?.heartbeatReply) {
-    if (getReplyPayloadMetadata(payload)?.silentReply === true) {
-      if (!hasContent("") && !hasSpeechContent) {
-        return suppress("silent");
-      }
-      text = "";
-    }
-    if (text && !trimmed) {
-      // Keep empty text when media exists so media-only replies still send.
-      text = "";
-    }
-
-    if (text?.includes(HEARTBEAT_TOKEN)) {
-      const stripped = stripHeartbeatToken(text, { mode: "message" });
-      if (stripped.didStrip) {
-        opts.onHeartbeatStrip?.();
-      }
-      if (stripped.shouldSkip && !hasContent(stripped.text)) {
-        return suppress("heartbeat");
-      }
-      text = stripped.text;
-    }
-
-    if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
+  if (getReplyPayloadMetadata(payload)?.silentReply === true) {
+    if (!hasContent("") && !hasSpeechContent) {
       return suppress("silent");
     }
+    text = "";
+  }
+  if (text && !trimmed) {
+    // Keep empty text when media exists so media-only replies still send.
+    text = "";
+  }
 
-    if (text) {
-      text = payload.isError
-        ? renderUserFacingText(text, {
-            errorContext: true,
-            conversationContext: opts.conversationContext,
-          })
-        : sanitizeUserFacingText(text, { conversationContext: opts.conversationContext });
+  if (text?.includes(HEARTBEAT_TOKEN)) {
+    const stripped = stripHeartbeatToken(text, { mode: "message" });
+    if (stripped.didStrip) {
+      opts.onHeartbeatStrip?.();
     }
-    if (!hasContent(text) && !hasSpeechContent) {
-      return suppress("empty");
+    if (stripped.shouldSkip && !hasContent(stripped.text)) {
+      return suppress("heartbeat");
     }
+    text = stripped.text;
+  }
+
+  if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
+    return suppress("silent");
+  }
+
+  if (text) {
+    text = payload.isError
+      ? renderUserFacingText(text, {
+          errorContext: true,
+          conversationContext: opts.conversationContext,
+        })
+      : sanitizeUserFacingText(text, {
+          conversationContext: opts.conversationContext,
+          preserveLeadingSourceBoundary: opts.preserveLeadingSourceBoundary,
+        });
+  }
+  if (!hasContent(text) && !hasSpeechContent) {
+    return suppress("empty");
   }
 
   let enrichedPayload: ReplyPayload = copyReplyPayloadMetadata(payload, { ...payload, text });

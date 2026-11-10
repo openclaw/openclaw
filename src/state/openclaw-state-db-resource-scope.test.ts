@@ -1,14 +1,15 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  createOpenClawDatabaseMaintenanceScope,
-  getOpenClawDatabaseMaintenanceScope,
-  observeOpenClawDatabaseMaintenanceResource,
+  createOpenClawDatabaseMaintenanceScope as createScope,
+  getOpenClawDatabaseMaintenanceScope as currentScope,
+  observeOpenClawDatabaseMaintenanceResource as observeResource,
 } from "./openclaw-state-db-async-lifecycle.js";
 
 it("keeps resource custody unprivileged and preserves inherited owner validity", async () => {
-  const runtime = createOpenClawDatabaseMaintenanceScope();
-  const nestedRuntime = runtime.run(() => createOpenClawDatabaseMaintenanceScope());
+  const runtime = createScope();
+  const nestedRuntime = runtime.run(createScope);
   expect(runtime.ownsSchemaMaintenance).toBe(false);
   expect(nestedRuntime.ownsSchemaMaintenance).toBe(false);
   await nestedRuntime.close();
@@ -16,13 +17,9 @@ it("keeps resource custody unprivileged and preserves inherited owner validity",
 
   let current = true;
   const lost = new Error("Maintenance owner is no longer current");
-  const assertOwnerCurrent = vi.fn(() => {
-    if (!current) {
-      throw lost;
-    }
-  });
-  const maintenance = createOpenClawDatabaseMaintenanceScope({ assertOwnerCurrent });
-  const nested = maintenance.run(() => createOpenClawDatabaseMaintenanceScope());
+  const assertOwnerCurrent = vi.fn(() => assert(current, lost));
+  const maintenance = createScope({ assertOwnerCurrent });
+  const nested = maintenance.run(createScope);
   expect(nested.ownsSchemaMaintenance).toBe(false);
   nested.assertAdmission();
   expect(assertOwnerCurrent).toHaveBeenCalled();
@@ -40,27 +37,20 @@ it("keeps resource custody unprivileged and preserves inherited owner validity",
 });
 
 it("settles accepted work before running pre-resource cleanup", async () => {
-  const maintenance = createOpenClawDatabaseMaintenanceScope();
-  const entered = createDeferredCore();
+  const maintenance = createScope();
   const resume = createDeferredCore();
   const events: string[] = [];
   const operation = maintenance.run(async () => {
     events.push("operation-started");
-    entered.resolve();
     await resume.promise;
     events.push("operation-settled");
   });
-  await entered.promise;
-
-  const closing = maintenance.close(() => {
-    events.push("resources-closing");
-  });
+  const closing = maintenance.close(() => void events.push("resources-closing"));
   await Promise.resolve();
   expect(events).toEqual(["operation-started"]);
 
   resume.resolve();
-  await operation;
-  await closing;
+  await Promise.all([operation, closing]);
   expect(events).toEqual(["operation-started", "operation-settled", "resources-closing"]);
 });
 
@@ -69,35 +59,29 @@ it("keeps nested authority reads in their resource scope without admitting effec
   let childRevoked = false;
   let nestedEffect: "admission" | "database" | undefined;
   const resource = {};
-  const parent = createOpenClawDatabaseMaintenanceScope({
+  const parent = createScope({
     assertOwnerCurrent: () => {
-      const current = getOpenClawDatabaseMaintenanceScope();
+      const current = currentScope();
       current?.assertReadAdmission();
-      observeOpenClawDatabaseMaintenanceResource(resource);
+      observeResource(resource);
       if (nestedEffect === "database") {
         current?.assertDatabaseAccess("/private/fixture-secret/state.sqlite");
       } else if (nestedEffect) {
         current?.assertAdmission();
       }
-      if (revoked) {
-        throw new Error("requester revoked");
-      }
+      assert(!revoked, new Error("requester revoked"));
     },
   });
   const child = parent.run(() =>
-    createOpenClawDatabaseMaintenanceScope({
-      assertOwnerCurrent: () => {
-        if (childRevoked) {
-          throw new Error("child revoked");
-        }
-      },
+    createScope({
+      assertOwnerCurrent: () => assert(!childRevoked, new Error("child revoked")),
     }),
   );
   const close = vi.fn();
   try {
     child.run(() => {
       child.own(resource, "shared-handles", close);
-      observeOpenClawDatabaseMaintenanceResource(resource);
+      observeResource(resource);
       child.assertAgentSchemaMigration({
         agentId: "main",
         path: "/synthetic/agent.sqlite",

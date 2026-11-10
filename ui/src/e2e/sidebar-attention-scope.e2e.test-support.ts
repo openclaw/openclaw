@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Browser, Page } from "playwright";
+import type { Browser } from "playwright";
 import { expect } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import {
@@ -7,7 +7,9 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { twoFrames } from "./chat-presentation.test-support.ts";
 import { expectCount, expectVisible } from "./sidebar-assertions.test-support.ts";
 import { openSidebarPages, sidebarCronJob } from "./sidebar-customization.test-support.ts";
 import { setSidebarProofTheme } from "./sidebar-footer-proof.test-support.ts";
@@ -18,10 +20,6 @@ type SidebarAttentionScopeFlowOptions = {
   browser: Browser;
   captureProof: boolean;
 };
-
-function visibleDrawerButton(page: Page) {
-  return page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
-}
 
 export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScopeFlowOptions) {
   const context = await params.browser.newContext({
@@ -126,7 +124,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     const openAutomations = async () => {
       await sidebar.locator(".sidebar-issues-button").click();
       await expectCount(approvalRow, 1);
-      await sidebar.getByRole("tab", { name: /Automations/ }).click();
+      await sidebar.getByRole("tab", { name: /System/ }).click();
     };
 
     await openAutomations();
@@ -134,6 +132,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     const mainDismiss = automationRows.getByRole("button", {
       name: "Dismiss Main release digest",
     });
+    await automationRows.filter({ hasText: "Main release digest" }).hover();
     await expect
       .poll(() =>
         mainDismiss.evaluate((element) => {
@@ -143,20 +142,13 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       )
       .toEqual({ opacity: "1", pointerEvents: "auto" });
     await captureProof("08-desktop-inbox-main-agent.png", true);
-    const mainAutomationChevron = automationRows
+    await automationRows
       .filter({ hasText: "Main release digest" })
-      .locator(".sidebar-issues-panel__chevron");
-    const mainAutomationChevronBox = await mainAutomationChevron.boundingBox();
-    if (!mainAutomationChevronBox) {
-      throw new Error("Main release digest chevron has no bounding box");
-    }
-    await page.mouse.click(
-      mainAutomationChevronBox.x + mainAutomationChevronBox.width / 2,
-      mainAutomationChevronBox.y + mainAutomationChevronBox.height / 2,
-    );
-    await captureProof("08a-desktop-inbox-chevron-click-result.png");
+      .locator(".sidebar-issues-panel__entity")
+      .click();
+    await captureProof("08a-desktop-inbox-row-click-result.png");
     await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
-    await captureProof("08b-desktop-inbox-chevron-navigation.png");
+    await captureProof("08b-desktop-inbox-row-navigation.png");
     await page.goBack();
     await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
 
@@ -190,10 +182,9 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     }
     await captureProof("10-desktop-inbox-all-agents.png", true);
 
-    await automationRows
-      .filter({ hasText: "Writer release digest" })
-      .getByRole("button", { name: "Dismiss Writer release digest" })
-      .click();
+    const writerRow = automationRows.filter({ hasText: "Writer release digest" });
+    await writerRow.hover();
+    await writerRow.getByRole("button", { name: "Dismiss Writer release digest" }).click();
     await expectCount(automationRows.getByText("Writer release digest"), 0);
     await sidebar.locator(".sidebar-issues-button").click();
 
@@ -252,33 +243,29 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--mobile-nav");
-    await page.evaluate(
-      () =>
-        new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        }),
-    );
+    await twoFrames(page);
     const floatingKinds = await page
       .locator(".sidebar-attention--floating [data-attention-kind]")
       .evaluateAll((elements) =>
         elements.map((element) => element.getAttribute("data-attention-kind")),
       );
-    await visibleDrawerButton(page).click();
+    await navigationDrawerToggle(page).click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-drawer-open");
     await sidebar.locator(".sidebar-issues-button").click();
     await expectVisible(sidebarUpdate);
     await expectCount(approvalRow, 1);
-    await sidebar.getByRole("tab", { name: /Automations/ }).click();
+    await sidebar.getByRole("tab", { name: /System/ }).click();
     await expectAutomations(0, 1);
     await captureProof("11-mobile-inbox-writer-agent.png", true);
 
-    await sidebar.getByRole("button", { name: "Dismiss shown" }).click();
+    await sidebar.locator(".sidebar-issues-panel__more").click();
+    await sidebar.getByRole("menuitem", { name: "Dismiss shown" }).click();
+    await expectCount(sidebarUpdate, 0);
     await expectCount(automationRows, 0);
     await sidebar.getByRole("tab", { name: /All/ }).click();
     await expectCount(approvalRow, 1);
-    await expectVisible(sidebarUpdate);
     await captureProof("12-mobile-inbox-dismissed-alerts.png", true);
 
     expect(floatingKinds).toEqual([]);

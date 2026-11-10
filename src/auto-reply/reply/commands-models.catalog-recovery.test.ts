@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "../../agents/cli-backends.test-support.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import {
@@ -15,7 +18,6 @@ import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import type { ReplyPayload } from "../types.js";
 import { buildPreparedModelsProviderData } from "./commands-models-catalog.js";
 import { handleModelsCommand, resolveModelsCommandReply } from "./commands-models.js";
 import { createModelsTestOwner } from "./commands-models.test-support.js";
@@ -75,7 +77,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("replies with known models while acquisition is held and includes newly published rows next time", async () => {
+it("replies with known models while acquisition is held and includes newly published rows next time", async ({
+  signal,
+}) => {
   const pendingCatalog = { ...catalog("claude-opus-4-5"), pendingProviders: ["anthropic"] };
   const refreshedCatalog = catalog("claude-opus-4-5", "claude-sonnet-4-6");
   catalogMocks.authStore.profiles["anthropic:default"] = {
@@ -86,11 +90,13 @@ it("replies with known models while acquisition is held and includes newly publi
   catalogMocks.authModes = { anthropic: "api_key" };
   catalogMocks.readSnapshot.mockReturnValue(pendingCatalog);
   const acquisition = createDeferred<ModelCatalogSnapshot>();
+  const published = createDeferred();
   let completedCatalog: ModelCatalogSnapshot | undefined;
   catalogMocks.owner = {
     readFullModelCatalog: () => completedCatalog,
     loadFullModelCatalog: async () => {
       completedCatalog = await acquisition.promise;
+      published.resolve();
       return completedCatalog;
     },
   };
@@ -106,25 +112,18 @@ it("replies with known models while acquisition is held and includes newly publi
   vi.spyOn(preparedRuntime, "getPreparedModelRuntimeSnapshot").mockReturnValue(owner);
   vi.spyOn(preparedRuntime, "prepareModelRuntimeSnapshot").mockResolvedValue(owner);
   await prepareSharedAuthStoreOwnership();
-  vi.useFakeTimers();
   try {
-    let reply: ReplyPayload | null | undefined;
-    const first = browse().then((result) => {
-      reply = result;
-    });
-    await vi.advanceTimersByTimeAsync(0);
+    const reply = await withinTest(browse(), signal);
     expect(reply?.text).toContain("- anthropic/claude-opus-4-5");
     expect(reply?.text).toContain("anthropic: checking models…");
     expect(reply?.text).not.toContain("claude-sonnet-4-6");
     acquisition.resolve(refreshedCatalog);
-    await first;
-    await vi.advanceTimersByTimeAsync(0);
-    const next = await browse();
+    await withinTest(published.promise, signal);
+    const next = await withinTest(browse(), signal);
     expect(next?.text).toContain("- anthropic/claude-sonnet-4-6");
     expect(next?.text).not.toContain("checking models");
   } finally {
     acquisition.resolve(refreshedCatalog);
-    vi.useRealTimers();
   }
 });
 
@@ -148,20 +147,13 @@ it("keeps usable choices and clears the refresh warning after recovery for /mode
 it("lists bound models as unavailable when the native-auth plugin is disabled despite a provider key", async () => {
   vi.stubEnv("ANTHROPIC_API_KEY", "synthetic-provider-key");
   cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-      },
-    ],
+    resolveRuntimeCliBackends: createClaudeCliBackends,
   });
   catalogMocks.authModes = { "claude-cli": "api_key" };
   const cfg: OpenClawConfig = {
     agents: {
       defaults: {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "anthropic/claude-sonnet-4-6" },
         modelPolicy: { allow: [] },
         models: {
           "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },

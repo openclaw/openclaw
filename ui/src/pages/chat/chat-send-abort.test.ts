@@ -6,7 +6,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { row } from "./chat-outbox-recovery.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
-import { handleAbortChat, hasAbortableSessionRun } from "./run-lifecycle.ts";
+import { handleAbortChat } from "./run-lifecycle.ts";
 
 beforeEach(installOutboxBrowserStorage);
 
@@ -15,7 +15,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const sessionAbort = { key: "agent:main", clearQueued: true };
+const sessionAbort = { key: "agent:main", clearQueued: true, userInitiated: true };
 const abortTarget = { runId: "run-main", sessionKey: "agent:main" };
 const readOnly = {
   requestHandlers: {},
@@ -57,7 +57,10 @@ it.each([
     expect(host.request).toHaveBeenCalledWith("sessions.abort", sessionAbort);
     expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
   } else {
-    expect(host.request).toHaveBeenCalledWith("chat.abort", abortTarget);
+    expect(host.request).toHaveBeenCalledWith("chat.abort", {
+      ...abortTarget,
+      userInitiated: true,
+    });
   }
   expect(host.chatMessage).toBe(action === "toolbar" || action === "read-only" ? message : "");
   expect(host.chatRunId).toBe("run-main");
@@ -122,6 +125,7 @@ it.each([
   if (connected) {
     expect(host.request).toHaveBeenCalledWith("sessions.abort", {
       key,
+      userInitiated: true,
       ...(scope === "global" ? { agentId: "work" } : { clearQueued: true }),
     });
     expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
@@ -131,17 +135,4 @@ it.each([
     expect(host.chatMessage).toBe("draft");
     expect(host.request).not.toHaveBeenCalled();
   }
-});
-
-it.each([
-  ["ignores stale active-run flags once the current session is terminal", true, "done"],
-  ["ignores stale running status once the gateway reports no active run", false, "running"],
-] as const)("%s", (_name, hasActiveRun, status) => {
-  const host = makeChatHost({
-    sessionsResult: sessionListFixture([
-      row("agent:main", { hasActiveRun, status }),
-      row("agent:other", { hasActiveRun: true, status: "running" }),
-    ]),
-  });
-  expect(hasAbortableSessionRun(host)).toBe(false);
 });

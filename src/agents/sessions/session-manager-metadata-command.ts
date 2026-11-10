@@ -1,4 +1,7 @@
-import { getCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import {
+  cliHistoryWriterFacts,
+  getCliHistoryWriter,
+} from "../../config/sessions/cli-history-boundary.js";
 import type {
   SessionMetadataMessageControl,
   SessionMetadataOperations,
@@ -17,11 +20,8 @@ export function prepareSessionManagerMetadataCommand<Key extends keyof SessionMe
   ) {
     command.input = {
       ...command.input,
-      cliWriter: cliWriter && {
-        runId: cliWriter.runId,
-        authFingerprint: cliWriter.authFingerprint,
-        lifecycleRevision: cliWriter.lifecycleRevision,
-      },
+      // The worker asks the host to confirm the owner inside its transaction.
+      cliWriter: cliWriter && cliHistoryWriterFacts(cliWriter),
     };
   }
   if (command.type === "session.transcript.appendMessage") {

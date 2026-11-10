@@ -1,23 +1,19 @@
-// Browser tests cover trace output publication and Playwright lifecycle ownership.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, expect, it, vi } from "vitest";
 
 const traceTestState = vi.hoisted(() => ({
-  context: null as { tracing: { stop: ReturnType<typeof vi.fn> } } | null,
+  stop: vi.fn<(options: { path: string }) => Promise<void>>(),
   rootDir: "",
   traceState: { traceActive: true },
 }));
 
 const sessionMocks = vi.hoisted(() => ({
   ensureContextState: vi.fn(() => traceTestState.traceState),
-  getPageForTargetId: vi.fn(async () => {
-    if (!traceTestState.context) {
-      throw new Error("test trace context is missing");
-    }
-    return { context: () => traceTestState.context };
-  }),
+  getPageForTargetId: vi.fn(async () => ({
+    context: () => ({ tracing: { stop: traceTestState.stop } }),
+  })),
 }));
 
 vi.mock("./paths.js", async (importOriginal) => {
@@ -30,80 +26,53 @@ const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-trace
 traceTestState.rootDir = await fs.realpath(tempRoot);
 const { traceStopViaPlaywright } = await import("./pw-tools-core.trace.js");
 
-function installTraceStop(
-  implementation: (options: { path: string }) => Promise<void>,
-): ReturnType<typeof vi.fn> {
-  const stop = vi.fn(implementation);
-  traceTestState.context = { tracing: { stop } };
-  traceTestState.traceState.traceActive = true;
-  return stop;
+const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "tab-1" };
+const outputPath = (name: string) => path.join(traceTestState.rootDir, name);
+const stopTrace = (name: string) => traceStopViaPlaywright({ ...target, path: outputPath(name) });
+function expectStopped(active: boolean) {
+  expect(traceTestState.stop).toHaveBeenCalledOnce();
+  expect(traceTestState.traceState.traceActive).toBe(active);
 }
 
-const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "tab-1" };
+beforeEach(async () => {
+  await fs.rm(traceTestState.rootDir, { recursive: true, force: true });
+  await fs.mkdir(traceTestState.rootDir, { recursive: true });
+  traceTestState.traceState.traceActive = true;
+  vi.clearAllMocks();
+  traceTestState.stop.mockReset().mockImplementation(async ({ path: stagingPath }) => {
+    await fs.writeFile(stagingPath, "trace payload", "utf8");
+  });
+});
 
-describe("traceStopViaPlaywright", () => {
-  beforeEach(async () => {
-    await fs.rm(traceTestState.rootDir, { recursive: true, force: true });
-    await fs.mkdir(traceTestState.rootDir, { recursive: true });
-    traceTestState.context = null;
-    traceTestState.traceState.traceActive = true;
-    vi.clearAllMocks();
+afterAll(async () => {
+  await fs.rm(traceTestState.rootDir, { recursive: true, force: true });
+});
+
+it("returns fs-safe's sanitized committed path from a real temporary output root", async () => {
+  const requestedPath = outputPath("trace-\u0001.zip");
+  const committedPath = await stopTrace("trace-\u0001.zip");
+
+  expect(committedPath).not.toBe(requestedPath);
+  expect(path.dirname(committedPath)).toBe(traceTestState.rootDir);
+  await expect(fs.readFile(committedPath, "utf8")).resolves.toBe("trace payload");
+  await expect(fs.access(requestedPath)).rejects.toMatchObject({ code: "ENOENT" });
+  expectStopped(false);
+});
+
+it("clears trace state when Playwright stops before publication later fails", async () => {
+  traceTestState.stop.mockImplementationOnce(async ({ path: stagingPath }) => {
+    await fs.writeFile(stagingPath, "trace payload", "utf8");
+    await fs.unlink(stagingPath);
   });
 
-  afterAll(async () => {
-    await fs.rm(traceTestState.rootDir, { recursive: true, force: true });
-  });
+  await expect(stopTrace("publication-failure.zip")).rejects.toBeInstanceOf(Error);
+  expectStopped(false);
+});
 
-  it("returns fs-safe's sanitized committed path from a real temporary output root", async () => {
-    const requestedPath = path.join(traceTestState.rootDir, "trace-\u0001.zip");
-    const stop = installTraceStop(async ({ path: stagingPath }) => {
-      await fs.writeFile(stagingPath, "trace payload", "utf8");
-    });
+it("preserves trace state when Playwright stop itself rejects", async () => {
+  const stopError = new Error("Playwright trace stop failed");
+  traceTestState.stop.mockRejectedValueOnce(stopError);
 
-    const committedPath = await traceStopViaPlaywright({
-      ...target,
-      path: requestedPath,
-    });
-
-    expect(committedPath).not.toBe(requestedPath);
-    expect(path.dirname(committedPath)).toBe(traceTestState.rootDir);
-    await expect(fs.readFile(committedPath, "utf8")).resolves.toBe("trace payload");
-    await expect(fs.access(requestedPath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(stop).toHaveBeenCalledOnce();
-    expect(traceTestState.traceState.traceActive).toBe(false);
-  });
-
-  it("clears trace state when Playwright stops before publication later fails", async () => {
-    const stop = installTraceStop(async ({ path: stagingPath }) => {
-      await fs.writeFile(stagingPath, "trace payload", "utf8");
-      await fs.unlink(stagingPath);
-    });
-
-    await expect(
-      traceStopViaPlaywright({
-        ...target,
-        path: path.join(traceTestState.rootDir, "publication-failure.zip"),
-      }),
-    ).rejects.toBeInstanceOf(Error);
-
-    expect(stop).toHaveBeenCalledOnce();
-    expect(traceTestState.traceState.traceActive).toBe(false);
-  });
-
-  it("preserves trace state when Playwright stop itself rejects", async () => {
-    const stopError = new Error("Playwright trace stop failed");
-    const stop = installTraceStop(async () => {
-      throw stopError;
-    });
-
-    await expect(
-      traceStopViaPlaywright({
-        ...target,
-        path: path.join(traceTestState.rootDir, "stop-failure.zip"),
-      }),
-    ).rejects.toBe(stopError);
-
-    expect(stop).toHaveBeenCalledOnce();
-    expect(traceTestState.traceState.traceActive).toBe(true);
-  });
+  await expect(stopTrace("stop-failure.zip")).rejects.toBe(stopError);
+  expectStopped(true);
 });

@@ -7,6 +7,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type {
   ExecApprovalPendingReplyParams,
@@ -18,7 +19,7 @@ import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import {
   extractToolResultMediaArtifact,
@@ -535,7 +536,10 @@ export async function emitToolResultOutput(params: {
     !isToolError &&
     hasStructuredMedia &&
     mediaUrls.length > 0;
-  const shouldEmitOutput = !suppressStructuredTtsOutput && ctx.shouldEmitToolOutput();
+  const shouldEmitOutput =
+    !suppressStructuredTtsOutput &&
+    (isToolError || readAutomationDisplayState(ctx.params.runId) === "ordinary") &&
+    ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {

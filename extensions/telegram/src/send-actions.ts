@@ -6,6 +6,7 @@ import { buildTypingThreadParams } from "./bot/helpers.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { resolveTelegramSendThreadSpec } from "./reply-parameters.js";
 import {
+  isTelegramMessageAlreadyDeletedError,
   isTelegramMessageDeleteNoopError,
   withTelegramApiContext,
   type TelegramApi,
@@ -93,7 +94,7 @@ export async function sendTypingTelegram(
         );
         return { ok: true };
       },
-      (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),
+      isRecoverableTelegramNetworkError,
       "internal",
     );
   } finally {
@@ -138,7 +139,7 @@ export async function reactMessageTelegram(
       }
       return { ok: true };
     },
-    (err) => isRecoverableTelegramNetworkError(err, { context: "react" }),
+    isRecoverableTelegramNetworkError,
   );
 }
 
@@ -164,6 +165,10 @@ export async function deleteMessageTelegram(
         logVerbose(
           `[telegram] Delete skipped for message ${messageId} in chat ${chatId}: ${detail}`,
         );
+        // A retry after a lost success response also lands here.
+        if (isTelegramMessageAlreadyDeletedError(err)) {
+          return { ok: true };
+        }
         return {
           ok: false,
           warning: `Message ${messageId} was not deleted: ${detail}`,
@@ -171,7 +176,7 @@ export async function deleteMessageTelegram(
       }
       return { ok: true };
     },
-    (err) => isRecoverableTelegramNetworkError(err, { context: "delete" }),
+    isRecoverableTelegramNetworkError,
   );
 }
 

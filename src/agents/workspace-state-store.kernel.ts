@@ -19,8 +19,13 @@ import {
   type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
 import { workspaceStatePublication } from "./workspace-state-publication.js";
+import {
+  WORKSPACE_SETUP_STATE_VERSION,
+  type WorkspaceAttestation,
+  type WorkspaceSetupState,
+  type WorkspaceStateSnapshot,
+} from "./workspace-state-types.js";
 
-export const WORKSPACE_SETUP_STATE_VERSION = 1 as const;
 const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 export const WORKSPACE_LEGACY_STATE_MIGRATION_KIND = "legacy-workspace-setup-files";
 export const WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND = "workspace-content-relocation";
@@ -60,25 +65,6 @@ export function assertCanonicalIntegerTimestamp(value: number, label: string): v
     throw new Error(`workspace ${label} timestamp is invalid`);
   }
 }
-
-export type WorkspaceSetupState = {
-  version: typeof WORKSPACE_SETUP_STATE_VERSION;
-  bootstrapSeededAt?: string;
-  setupCompletedAt?: string;
-};
-
-export type WorkspaceAttestation = {
-  attestedAtMs: number;
-  generatedHashes: ReadonlyMap<string, string>;
-};
-
-export type WorkspaceStateSnapshot = {
-  identity: WorkspaceStateIdentity;
-  setupExists: boolean;
-  setupUpdatedAtMs?: number;
-  setup: WorkspaceSetupState;
-  attestation?: WorkspaceAttestation;
-};
 
 export type WorkspaceStateDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -213,7 +199,7 @@ export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
       params.database.db,
       kysely.insertInto("workspace_path_aliases").values(missing),
     );
-    workspaceStatePublication.stagePostimages(params.database.db, [true]);
+    workspaceStatePublication.stageDeletions(params.database.db, ["aliases"]);
   }
 }
 
@@ -390,7 +376,6 @@ export function replaceWorkspaceAttestationInDatabase(
       })
       .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(values)),
   );
-  workspaceStatePublication.stagePostimages(database.db, [true]);
   const committedHashes = snapshot.attestation?.generatedHashes;
   if (
     committedHashes?.size !== params.generatedHashes.size ||
@@ -421,10 +406,12 @@ export function replaceWorkspaceAttestationInDatabase(
     aliases: resolution.aliases,
     updatedAtMs,
   });
-  return {
+  const attestation = {
     attestedAtMs: params.attestedAtMs,
     generatedHashes: new Map(sortedHashes),
   };
+  workspaceStatePublication.stagePostimages(database.db, [{ ...snapshot, attestation }]);
+  return attestation;
 }
 
 export function deleteWorkspaceStateRowsInDatabase(
@@ -483,7 +470,7 @@ export function deleteWorkspaceStateRowsInDatabase(
       kysely.deleteFrom(table).where("workspace_key", "=", workspaceKey),
     );
   }
-  workspaceStatePublication.stagePostimages(database.db, [true]);
+  workspaceStatePublication.stageDeletions(database.db, [workspaceKey]);
 }
 
 export function recentWorkspaceAttestation(

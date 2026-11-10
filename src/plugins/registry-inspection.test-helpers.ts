@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
@@ -29,6 +30,7 @@ function inspectionConfig(plugins: { id: string; file: string }[], contextEngine
 export function createInspectionFixture(options?: {
   registration?: "throw" | "async-resolve" | "async-reject" | "thenable" | "tracked";
   pauseDisposal?: boolean;
+  resourceProvider?: boolean;
   disposalFailure?: boolean;
   contextEngine?: boolean;
   capturedDisposal?: "async-context" | "work-tracker";
@@ -39,10 +41,7 @@ export function createInspectionFixture(options?: {
   const id = `owned-inspection-${inspectionFixtureId++}`;
   const key = `__openclaw_${id}`;
   const connections: InspectionConnection[] = [];
-  const sibling: {
-    read?: () => unknown;
-    result?: unknown;
-  } = {};
+  const sibling: { read?: () => unknown; result?: unknown } = {};
   const captured: {
     registrationSignal?: AbortSignal;
     disposalSignal?: AbortSignal;
@@ -50,7 +49,6 @@ export function createInspectionFixture(options?: {
     read?: unknown;
     abortCleanup?: Promise<void>;
     abortRead?: unknown;
-    tracker?: ReturnType<typeof captureAsyncWorkTracker>;
   } = {};
   const state = {
     connections,
@@ -70,10 +68,7 @@ export function createInspectionFixture(options?: {
   Object.defineProperty(globalThis, key, { value: state, configurable: true });
   const plugin = writePlugin({
     id,
-    body: `const { DatabaseSync } = require("node:sqlite");
-module.exports = {
-  id: ${JSON.stringify(id)},
-  register(api) {
+    registration: `const { DatabaseSync } = require("node:sqlite");
     const state = globalThis[${JSON.stringify(key)}];
     const database = new DatabaseSync(":memory:");
     const connection = { database, disposals: 0, cleanups: 0, instanceDisposals: 0 };
@@ -128,12 +123,21 @@ module.exports = {
     if (captureMode) {
       state.captured.registrationSignal = state.getAsyncWorkSignal();
       const dispose = lifecycle.dispose.bind(lifecycle);
-      const track = state.captured.tracker = state.captureAsyncWorkTracker();
+      const track = state.captureAsyncWorkTracker();
       lifecycle.dispose = captureMode === "async-context"
         ? require("node:async_hooks").AsyncLocalStorage.bind(() => state.trackAsyncWork(dispose))
         : () => track(dispose);
     }
     api.registerRuntimeLifecycle(lifecycle);
+    if (${options?.resourceProvider === true}) {
+      api.registerProvider({
+        id: "inspection-resource", label: "Inspection resource", auth: [],
+        normalizeModelId() {
+          state.captured.read = database.prepare("SELECT 42 AS value").get();
+          return String(state.captured.read.value);
+        },
+      });
+    }
     if (${options?.contextEngine === true}) {
       api.registerContextEngine(${JSON.stringify(id)}, () => {
         state.factoryCalls++;
@@ -155,8 +159,7 @@ module.exports = {
     if (mode === "tracked") {
       void state.trackAsyncWork(finishRegistration);
     } else if (mode?.startsWith("async")) return finishRegistration();
-  },
-};`,
+`,
   });
   return {
     plugin,
@@ -164,11 +167,7 @@ module.exports = {
     config: inspectionConfig([plugin], options?.contextEngine ? id : undefined),
     state,
     connection(index = 0) {
-      const connection = connections[index];
-      if (!connection) {
-        throw new Error(`Missing native inspection connection ${index}`);
-      }
-      return connection;
+      return expectDefined(connections[index], `Missing native inspection connection ${index}`);
     },
     async cleanup(
       inspection?: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>>,

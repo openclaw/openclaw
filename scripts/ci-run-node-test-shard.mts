@@ -6,6 +6,7 @@ import {
   constants,
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -22,7 +23,7 @@ import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
-import type { CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
+import type { CiTestRuntimePolicy, CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isConstrainedCiCheckHost, isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
@@ -287,12 +288,18 @@ export function pruneFsModuleCache(root: string, maxBytes = FS_MODULE_CACHE_MAX_
   return { beforeBytes, afterBytes: totalBytes, removedFiles };
 }
 
-export function clonePersistentCacheSlots(root: string | undefined, concurrency: number) {
+export function clonePersistentCacheSlots(
+  root: string | undefined,
+  concurrency: number,
+  policy: CiTestRuntimePolicy,
+) {
   if (!root || concurrency <= 1) {
     return 0;
   }
   let clonedSlots = 0;
-  for (const prefix of ["vitest-cache", "vitest-cache-bun"]) {
+  // Bun policies can still select Node-only contracts; pure Node never uses Bun's seed.
+  const prefixes = policy === "node" ? ["vitest-cache"] : ["vitest-cache", "vitest-cache-bun"];
+  for (const prefix of prefixes) {
     const seed = join(root, `${prefix}-0`);
     if (!existsSync(seed)) {
       continue;
@@ -388,6 +395,9 @@ export function resolveShardChildCommand(
         ? [
             fileURLToPath(new URL("./lib/vitest-worker-bootstrap.mts", import.meta.url)),
             workerRun.descriptor.directory,
+            ...(workerRun.descriptor.preset && workerRun.descriptor.preset !== "full"
+              ? [`--worker-preset=${workerRun.descriptor.preset}`]
+              : []),
           ]
         : []),
       testProjectsEntrypoint,
@@ -417,12 +427,14 @@ async function loadWorkerOwner() {
     return undefined;
   }
   const { resolveSharedVitestCompilerEnv } = await import("./lib/vitest-process-env.mts");
-  const [worker, processOwner] = await Promise.all([
+  const [worker, processOwner, { resolveCiVitestWorkerPreset }] = await Promise.all([
     import("./lib/vitest-worker-run.mts"),
     import("./lib/vitest-process.mts"),
+    import("./lib/vitest-runtime-selection.mts"),
   ]);
   return {
     createWorkerRun: worker.createVitestWorkerRun,
+    resolvePreset: resolveCiVitestWorkerPreset,
     resolveCompilerEnv: resolveSharedVitestCompilerEnv,
     spawn: processOwner.spawnOwnedVitestProcess,
     exitBySignal: processOwner.exitVitestBySignal,
@@ -434,12 +446,24 @@ function createWorkerContext(
   owner: NonNullable<Awaited<ReturnType<typeof loadWorkerOwner>>>,
   env: NodeJS.ProcessEnv,
   plans: ShardPlan[],
+  hasExtraArgs: boolean,
 ) {
   const compilerEnv = owner.resolveCompilerEnv(
     plans.length > 0 ? plans.map((plan) => prepareChildEnv(plan, env)) : [env],
   );
   return {
-    workerRun: owner.createWorkerRun(compilerEnv),
+    workerRun: owner.createWorkerRun(
+      compilerEnv,
+      undefined,
+      owner.resolvePreset(
+        plans.map((entry) =>
+          entry.kind === "target"
+            ? { target: entry.target }
+            : { ...entry.plan, env: prepareChildEnv(entry, env) },
+        ),
+        hasExtraArgs,
+      ),
+    ),
     normalCompletion: true,
     spawn: owner.spawn,
     exitBySignal: owner.exitBySignal,
@@ -564,6 +588,14 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const inheritedEnv = options.env ?? process.env;
   const jobEnv = mergePlanEnv({}, parseJsonEnv(inheritedEnv, "OPENCLAW_NODE_TEST_ENV_JSON"));
   const baseEnv = mergePlanEnv(inheritedEnv, jobEnv);
+  const observationRoot = baseEnv.OPENCLAW_CI_TEST_OBSERVATIONS_DIR;
+  const observe = Boolean(
+    observationRoot &&
+    (baseEnv.GITHUB_EVENT_NAME === "schedule" ||
+      (baseEnv.GITHUB_EVENT_NAME === "pull_request" &&
+        (baseEnv.GITHUB_RUN_ID ?? "").endsWith("0"))),
+  );
+  const observedRuntimes = new Set<string>();
   const extraArgs = (entry: ShardPlan) =>
     [
       inheritedEnv,
@@ -572,43 +604,79 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
       return isStringArray(value) ? value : [];
     });
+  const preparedBuildEnv: NodeJS.ProcessEnv = {};
   if (
-    baseEnv.OPENCLAW_E2E_USE_PREBUILT_DIST === "1" &&
     fileURLToPath(import.meta.url) === join(process.cwd(), "scripts/ci-run-node-test-shard.mts")
   ) {
-    const { preparePrebuiltAiPackage, prepareVitestControlUi } =
+    const { prepareE2eVitestRuntime, preparePrebuiltAiPackage, prepareVitestControlUi } =
       await import("./lib/vitest-build-prerequisites.mts");
-    const { matchesVitestCliSelection } = await import("../test/vitest/vitest.pattern-file.ts");
-    const uiSelections = [];
+    const { buildVitestRunPlans } = await import("./test-projects.test-support.mts");
+    // A child build can invalidate inputs already captured by sibling readers.
+    // Finish selected E2E preparation before creating their shared compiler.
     for (const entry of plans) {
-      const selection = entry.kind === "target" ? { includePatterns: [entry.target] } : entry.plan;
-      const childEnv = prepareChildEnv(entry, baseEnv);
-      const code = await preparePrebuiltAiPackage([selection], childEnv);
+      const env = prepareChildEnv(entry, baseEnv);
+      const args = entry.kind === "target" ? [entry.target] : entry.plan.configs;
+      const forwarded = extraArgs(entry);
+      const selected = buildVitestRunPlans(
+        forwarded.length ? [...args, "--", ...forwarded] : args,
+        process.cwd(),
+        undefined,
+        { env },
+      ).filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
+      if (selected.length === 0) {
+        continue;
+      }
+      const { parseCLI } = await import("vitest/node");
+      const { parseVitestExecutionArgs } = await import("./lib/vitest-cli.mts");
+      if (
+        selected.some((plan) =>
+          parseVitestExecutionArgs(
+            [...(plan.watchMode ? [] : ["run"]), ...plan.forwardedArgs],
+            parseCLI,
+          ),
+        )
+      ) {
+        Object.assign(
+          preparedBuildEnv,
+          await prepareE2eVitestRuntime({ ...env, ...preparedBuildEnv }),
+        );
+      }
+    }
+    Object.assign(baseEnv, preparedBuildEnv);
+    if (baseEnv.OPENCLAW_E2E_USE_PREBUILT_DIST === "1") {
+      const { matchesVitestCliSelection } = await import("../test/vitest/vitest.pattern-file.ts");
+      const uiSelections = [];
+      for (const entry of plans) {
+        const selection =
+          entry.kind === "target" ? { includePatterns: [entry.target] } : entry.plan;
+        const childEnv = { ...prepareChildEnv(entry, baseEnv), ...preparedBuildEnv };
+        const code = await preparePrebuiltAiPackage([selection], childEnv);
+        if (code !== 0) {
+          return vitestInfrastructureExitCode(code);
+        }
+        if (childEnv.OPENCLAW_E2E_SKIP_BUILD !== "1") {
+          uiSelections.push({
+            ...selection,
+            matchesFile: (
+              file: string,
+              included: boolean,
+              includePatterns?: readonly string[] | null,
+            ) =>
+              matchesVitestCliSelection(
+                file,
+                included ? [file] : [],
+                extraArgs(entry),
+                "",
+                childEnv,
+                includePatterns,
+              ),
+          });
+        }
+      }
+      const code = await prepareVitestControlUi(uiSelections, baseEnv);
       if (code !== 0) {
         return vitestInfrastructureExitCode(code);
       }
-      if (childEnv.OPENCLAW_E2E_SKIP_BUILD !== "1") {
-        uiSelections.push({
-          ...selection,
-          matchesFile: (
-            file: string,
-            included: boolean,
-            includePatterns?: readonly string[] | null,
-          ) =>
-            matchesVitestCliSelection(
-              file,
-              included ? [file] : [],
-              extraArgs(entry),
-              "",
-              childEnv,
-              includePatterns,
-            ),
-        });
-      }
-    }
-    const code = await prepareVitestControlUi(uiSelections, baseEnv);
-    if (code !== 0) {
-      return vitestInfrastructureExitCode(code);
     }
   }
   // Historical targets use a workflow-owned adapter. Their Node
@@ -663,30 +731,26 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   }
   // Final plan admission owns both compiler and child worker budgets.
   let admittedPlans = plans.map((entry): ShardPlan => {
-    if (entry.kind !== "group" || entry.plan.fallbackMaxWorkers === undefined) {
+    if (entry.kind !== "group") {
       return entry;
     }
-    const fallback = parsePositiveInt(entry.plan.fallbackMaxWorkers, "Fallback worker limit");
-    const minTotalMemoryBytes =
-      entry.plan.minTotalMemoryBytes === undefined
-        ? 0
-        : parsePositiveInt(entry.plan.minTotalMemoryBytes, "Worker memory floor");
-    if (
-      measuredHost &&
-      (concurrency === 1 || exclusive(entry)) &&
-      measuredHost.totalMemoryBytes >= minTotalMemoryBytes
-    ) {
-      return entry;
+    // Successful shared preparation supersedes stale per-group build flags.
+    const env = mergePlanEnv(mergePlanEnv({}, entry.plan.env), preparedBuildEnv);
+    if (entry.plan.fallbackMaxWorkers !== undefined) {
+      const fallback = parsePositiveInt(entry.plan.fallbackMaxWorkers, "Fallback worker limit");
+      const minTotalMemoryBytes =
+        entry.plan.minTotalMemoryBytes === undefined
+          ? 0
+          : parsePositiveInt(entry.plan.minTotalMemoryBytes, "Worker memory floor");
+      if (
+        !measuredHost ||
+        (concurrency !== 1 && !exclusive(entry)) ||
+        measuredHost.totalMemoryBytes < minTotalMemoryBytes
+      ) {
+        env.OPENCLAW_VITEST_MAX_WORKERS = String(fallback);
+      }
     }
-    return {
-      ...entry,
-      plan: {
-        ...entry.plan,
-        env: mergePlanEnv(mergePlanEnv({}, entry.plan.env), {
-          OPENCLAW_VITEST_MAX_WORKERS: String(fallback),
-        }),
-      },
-    };
+    return { ...entry, plan: { ...entry.plan, env } };
   });
   const preparedRuntimeSelections = new Map<ShardPlan, CiTestRuntimeSelection[]>();
   const overlapRequests = admittedPlans.filter(
@@ -783,14 +847,21 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     interrupted ??= signal;
   };
   try {
-    context = workerOwner ? createWorkerContext(workerOwner, baseEnv, admittedPlans) : undefined;
+    context = workerOwner
+      ? createWorkerContext(
+          workerOwner,
+          baseEnv,
+          admittedPlans,
+          admittedPlans.some((entry) => extraArgs(entry).length > 0),
+        )
+      : undefined;
     if (hostResources) {
       console.log(
         `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
       );
       reportCiResourceSnapshot("start");
     }
-    const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency);
+    const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency, policy);
     if (clonedCacheSlots > 0) {
       process.stdout.write(
         `[shard:cache] cloned restored Vitest seed into ${clonedCacheSlots} isolated lane(s)\n`,
@@ -848,7 +919,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             selection.targets ??
             (selectedEntry.kind === "target" ? [selectedEntry.target] : selectedEntry.plan.configs);
           const selectedVitestArgs = [...(selection.vitestArgs ?? []), ...vitestExtraArgs];
-          const args = nativeBun
+          let args = nativeBun
             ? ["--native-bun", ...selection.files.map((file) => `./${file}`)]
             : selectedVitestArgs.length > 0
               ? [...selectedArgs, "--", ...selectedVitestArgs]
@@ -899,7 +970,48 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
               delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
             }
           }
-          Object.assign(childEnv, selection.env);
+          Object.assign(childEnv, selection.env, preparedBuildEnv);
+          delete childEnv.OPENCLAW_VITEST_OBSERVATION_DIR;
+          if (
+            observe &&
+            !nativeBun &&
+            !observedRuntimes.has(runtime) &&
+            selectedArgs.length === 1 &&
+            selectedArgs[0] === "test/vitest/vitest.unit-fast.config.ts"
+          ) {
+            try {
+              mkdirSync(observationRoot!, { recursive: true });
+              childEnv.OPENCLAW_VITEST_OBSERVATION_DIR = mkdtempSync(
+                join(observationRoot!, `${runtime}-`),
+              );
+              // Runtime membership and native sharding are already decided. Adding
+              // experimental flags before that boundary changes Bun eligibility.
+              args = [
+                ...selectedArgs,
+                "--",
+                ...selectedVitestArgs,
+                "--reporter=verbose",
+                ...(childEnv.GITHUB_ACTIONS === "true" ? ["--reporter=github-actions"] : []),
+                "--reporter=./scripts/lib/vitest-resource-reporter.mts",
+                "--experimental.recordDependencies",
+              ];
+              observedRuntimes.add(runtime);
+              try {
+                const { writeCiTestLaunchInputs } = await import("./lib/ci-test-launch-inputs.mts");
+                writeCiTestLaunchInputs({
+                  directory: childEnv.OPENCLAW_VITEST_OBSERVATION_DIR,
+                  repositoryRoot: process.cwd(),
+                  runtime,
+                  args,
+                  env: childEnv,
+                });
+              } catch {
+                console.warn("[adaptive-ci] launch inputs unavailable; tests unchanged");
+              }
+            } catch {
+              console.warn("[adaptive-ci] observation setup unavailable; tests unchanged");
+            }
+          }
           const timingKey = entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name;
           const timingPrefix = nativeBun
             ? "bun-native:"

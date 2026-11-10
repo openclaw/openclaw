@@ -9,10 +9,11 @@ import { createChatSubmissions } from "../../../app/chat-submissions.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { releaseChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../history-merge.ts";
+import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import { buildInitialChatSubmission, buildLocalUserMessage } from "../user-message-content.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -95,13 +96,15 @@ function mountTranscriptPane(props: ChatThreadProps) {
   const renderPane = () => {
     setCurrent({ ...props, mediaOwner: renderPane });
     flush();
-    root ??= mountSolid(
-      () => (
-        <ContentPresentation value={presented}>
-          <ChatThread props={current()} transcript={transcript} />
-        </ContentPresentation>
+    root ??= settleChatMount(() =>
+      mountSolid(
+        () => (
+          <ContentPresentation value={presented}>
+            <ChatThread props={current()} transcript={transcript} />
+          </ContentPresentation>
+        ),
+        { container },
       ),
-      { container },
     );
     transcript.update();
     flush();
@@ -212,24 +215,22 @@ async function imageFixture(
       fileName: `image-${index}.png`,
     };
   });
-  const props = {
-    ...threadProps(
-      `pane-${crypto.randomUUID()}`,
-      owner.sessionKey,
-      origin === "canonical" ? [cached] : owner.chatMessages,
-    ),
-    assistantAttachmentAuthToken: "test-auth-token",
-    connectionEpoch: 1,
-  };
+  const props = threadProps(
+    `pane-${crypto.randomUUID()}`,
+    owner.sessionKey,
+    origin === "canonical" ? [cached] : owner.chatMessages,
+    { assistantAttachmentAuthToken: "test-auth-token", connectionEpoch: 1 },
+  );
   if (origin === "queued") {
     props.queue = [
       { ...input, id: input.runId, sendRunId: input.runId, sendState: "sending", sendAttempts: 1 },
     ];
   }
   const { container, renderPane, setConnected } = mountTranscriptPane(props);
+  await vi.dynamicImportSettled();
   const images = () => [...container.querySelectorAll<HTMLImageElement>(".chat-message-image")];
+  await waitForSolid(() => expect(images()).toHaveLength(inlineUrls.length), { interval: 0 });
   const displayed = images();
-  expect(displayed).toHaveLength(inlineUrls.length);
   const previewUrls = displayed.map((image) =>
     expectDefined(image.getAttribute("src"), "displayed preview URL"),
   );
@@ -291,7 +292,10 @@ async function imageFixture(
     setConnected,
     expectImages: (expected = displayed) => expectImageNodes(images(), expected),
     receive: async (response = metadataResponse(), index = 0) => {
-      requests[index]?.resolve(response);
+      const request = await waitForSolid(() => expectDefined(requests[index], "pending metadata"), {
+        interval: 0,
+      });
+      request.resolve(response);
       await settleMedia();
     },
     expectEmpty: (reason?: string) => {
@@ -596,7 +600,7 @@ it.each(["native load error", "display load deadline"] as const)(
         view.container.querySelector(".chat-assistant-attachment-card--recoverable"),
         "recoverable image failure",
       );
-      expect(card.textContent).toContain("Could not load this image. Try again.");
+      expect(card.textContent).toContain("Couldn’t load this image. Try again.");
       const retry = expectDefined(
         card.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__retry"),
         "explicit Retry button",

@@ -6,39 +6,31 @@ import * as noOutputPolicy from "./no-output-timeout-policy.js";
 const HOST_SUSPEND_TICK_THRESHOLD_MS = 45_000;
 const WATCHDOG_TICK_MS = 1_000;
 
-export type CliWatchdogClock = {
-  now: () => number;
-  setTimeout: (callback: () => void, delayMs: number) => () => void;
-};
-
-export const defaultCliWatchdogClock: CliWatchdogClock = {
+const clock = {
   now: () => Date.now(),
-  setTimeout: (callback, delayMs) => {
+  setTimeout: (callback: () => void, delayMs: number) => {
     const timer = setTimeout(callback, delayMs);
     return () => clearTimeout(timer);
   },
 };
 
-export function createCliPluginWatchdog(
-  params: {
-    provider: string;
-    model: string;
-    sessionId: string;
-    lane: string | undefined;
-    overallTimeoutMs: number | undefined;
-    noOutputTimeoutMs: number | undefined;
-    useResume: boolean;
-    getActiveAskUserDeadline?: () => number | undefined;
-    activeToolCount: () => number;
-    backgroundTaskCount: () => number;
-    compactionActive: () => boolean;
-    hasObservedActivity: () => boolean;
-    hasReplayUnsafeActivity: () => boolean;
-    onNoOutputTimeout: (error: FailoverError) => void;
-    onOverallTimeout: () => void;
-  },
-  clock: CliWatchdogClock = defaultCliWatchdogClock,
-) {
+export function createCliPluginWatchdog(params: {
+  provider: string;
+  model: string;
+  sessionId: string;
+  lane: string | undefined;
+  overallTimeoutMs: number | undefined;
+  noOutputTimeoutMs: number | undefined;
+  useResume: boolean;
+  getActiveAskUserDeadline?: () => number | undefined;
+  activeToolCount: () => number;
+  backgroundTaskCount: () => number;
+  compactionActive: () => boolean;
+  hasObservedActivity: () => boolean;
+  hasReplayUnsafeActivity: () => boolean;
+  onNoOutputTimeout: (error: FailoverError) => void;
+  onOverallTimeout: () => void;
+}) {
   const noOutputTimeoutMs = params.noOutputTimeoutMs;
   const overallTimeoutMs = params.overallTimeoutMs;
   let lastOutputAtMs = clock.now();

@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   WorkerProviderError,
   type WorkerDesktopEndpoint,
@@ -22,6 +23,7 @@ import {
 import { withCrabboxWorkerEnvProfile } from "./crabbox-worker-env-profile.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import { buildCrabboxAllocationArgs, type parseCrabboxProfile } from "./crabbox-worker-profile.js";
+import { assertCrabboxResourceReceipt } from "./crabbox-worker-resource-receipt.js";
 import { runCrabboxSetupEgress } from "./crabbox-worker-setup-egress.js";
 import {
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
@@ -30,6 +32,8 @@ import {
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxReadyPollIntervalMs,
 } from "./crabbox-worker-timeouts.js";
+
+const bootstrapLog = createSubsystemLogger("gateway/worker-environments");
 
 /** Allocation retains host and project authority independently of cancellation or cleanup. */
 export function createCrabboxProvisionAuthority(
@@ -80,6 +84,9 @@ export async function inspectWithContext(
   params: LeaseCommandContext & {
     timeoutMs?: number;
     waitForReady?: boolean;
+    requireConfirmedAbsence?: boolean;
+    /** Only receipt-bound stop may continue to its own independent deletion confirmation. */
+    exactTeardown?: true;
     signal?: AbortSignal;
   },
 ): Promise<ParsedInspect | undefined> {
@@ -108,23 +115,32 @@ export async function inspectWithContext(
     // must preserve cleanup uncertainty so Gateway replay can inspect the lease later.
     let inspect: ParsedInspect;
     try {
-      inspect = parseInspectJson(result.stdout);
+      inspect = parseInspectJson(result.stdout, params.retention, params.resourceReceipt);
       const notice = sanitizeCrabboxNotice(result.stderr);
       if (notice) {
         inspect.lifetime = { ...inspect.lifetime, policyNotice: notice };
       }
     } catch (error) {
-      throw new WorkerProviderError(
-        error instanceof Error ? error.message : "Crabbox inspect returned invalid output",
-      );
+      const message =
+        error instanceof Error ? error.message : "Crabbox inspect returned invalid output";
+      if (params.resourceReceipt || params.retention) {
+        throw new Error(message, { cause: error });
+      }
+      throw new WorkerProviderError(message);
+    }
+    if (
+      params.resourceReceipt &&
+      (!params.retention || inspect.resourceReceipt || inspect.retention?.state === "running")
+    ) {
+      assertCrabboxResourceReceipt(params.resourceReceipt, inspect.resourceReceipt);
     }
     if (inspect.id !== params.id) {
       throw new WorkerProviderError("Crabbox inspect returned a different lease id");
     }
     return inspect;
   }
-  // Crabbox emits only text for these exact-ID lookups. Treat them as unknown, not
-  // stop proof: Gateway teardown still calls stop, which verifies complete absence.
+  // Ordinary callers accept lost-custody diagnostics; reconciliation requires
+  // provider-absence proof. Gateway teardown still verifies cleanup through stop.
   const unavailableResource =
     result.termination === "exit" &&
     result.stdout.trim() === "" &&
@@ -134,7 +150,16 @@ export async function inspectWithContext(
       (params.provider === "ascii-box" &&
         result.code === 1 &&
         /^ascii-box bx_[A-Za-z0-9_-]+ not found \(404\)$/u.test(result.stderr.trim())));
-  if (unavailableResource || isUnrecognizedLease(result, params.id, "inspect")) {
+  if (
+    (unavailableResource && !params.requireConfirmedAbsence) ||
+    isUnrecognizedLease(result, params.id, "inspect", params.requireConfirmedAbsence)
+  ) {
+    if (params.resourceReceipt && params.exactTeardown) {
+      return undefined;
+    }
+    if (params.resourceReceipt || params.retention) {
+      throw new Error("Crabbox resource observation is unavailable; ownership preserved");
+    }
     return undefined;
   }
   // An inspect response may contain connection material, even on a failed
@@ -166,7 +191,10 @@ export async function runProvisionWarmup(
   const result = await runCrabboxCommand({
     ...params,
     action: "warmup",
-    args: ["warmup", ...buildCrabboxAllocationArgs(params.profile, params.id, params.slug)],
+    args: [
+      "warmup",
+      ...buildCrabboxAllocationArgs(params.profile, params.id, params.slug, params.retention),
+    ],
     timeoutMs: params.timeoutMs(),
   });
   if (result.termination === "exit" && result.code === 0) {
@@ -238,6 +266,14 @@ export async function waitForProvisionReady(
     // Reject forbidden state immediately; omitted AWS metadata is pending only until ready.
     assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     while (inspect.ready !== true && !isNonRunnableState(inspect.state)) {
+      // A readiness probe may lag valid allocation. Poll without changing compute;
+      // a closed window still needs an explicitly authorized lifecycle operation.
+      if (
+        params.retention &&
+        (inspect.retention?.state === "expired" || inspect.retention?.state === "suspended")
+      ) {
+        throw new Error("Crabbox retained compute needs explicit lifecycle recovery");
+      }
       params.signal?.throwIfAborted();
       const remaining = remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS);
       await delay(
@@ -248,6 +284,11 @@ export async function waitForProvisionReady(
       params.signal?.throwIfAborted();
       inspect = await inspectAgain();
       assertProvisionSecurityPolicy({ inspect, provider: params.provider });
+    }
+    if (params.retention && inspect.retention?.state !== "running") {
+      throw new Error(
+        "Crabbox retained compute is not running; explicit lifecycle recovery required",
+      );
     }
     if (isNonRunnableState(inspect.state)) {
       throw new WorkerProviderError(
@@ -317,6 +358,19 @@ export async function runProvisionSetup(
             }),
           );
     crabboxCommandOutput(params.phase, result);
+    const output = `${result.stdout}\n${result.stderr}`;
+    for (const match of output.matchAll(
+      /^CRABBOX_TIMING:(openclaw-bootstrap-[a-z-]+):(\d+)\r?$/gmu,
+    )) {
+      bootstrapLog.info(`Cloud worker ${params.inspect.id}: ${match[1]} ${match[2]}ms`);
+    }
+    for (const match of output.matchAll(
+      /^CRABBOX_WARNING:openclaw-bootstrap-unlocked-install:([a-zA-Z0-9 _-]+)\r?$/gmu,
+    )) {
+      bootstrapLog.warn(
+        `Cloud worker ${params.inspect.id}: using unlocked runtime install (${match[1]})`,
+      );
+    }
   } catch (error) {
     params.signal?.throwIfAborted();
     return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);

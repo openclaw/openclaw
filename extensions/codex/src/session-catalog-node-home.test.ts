@@ -10,11 +10,8 @@ import {
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_NODE_CONTINUE_COMMANDS,
-  createCodexTestBindingStore,
-  createControl,
-  createGatewayApi,
+  createCatalogTestProvider,
   createRuntime,
-  registerCodexSessionCatalog,
   transcriptMirrorMocks,
   type OpenClawConfig,
   type PluginRuntime,
@@ -33,6 +30,7 @@ type HomeWire = {
 };
 const marker = { sourceHostId: hostId, sourceThreadId: threadId, nodeId };
 const importHistory = transcriptMirrorMocks.importCodexThreadHistoryToTranscript;
+const payload = (value: unknown) => ({ payloadJSON: JSON.stringify(value) });
 
 function createHomeFixture(options: HomeWire = {}, entries: EntrySummary[] = []) {
   const wire: HomeWire = { sourceHomeId: homeA, ...options };
@@ -58,21 +56,19 @@ function createHomeFixture(options: HomeWire = {}, entries: EntrySummary[] = [])
       if (hasSecondPage) {
         wire.sourceHomeId = wire.secondPageHome;
       }
-      return { payloadJSON: JSON.stringify(page) };
+      return payload(page);
     }
     if (command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND) {
       const id = wire.sourceHomeId === homeA ? "history-a" : "history-b";
-      return {
-        payloadJSON: JSON.stringify({
-          data: [
-            {
-              id,
-              status: "completed",
-              items: [{ id: `${id}-item`, type: "agentMessage", text: id }],
-            },
-          ],
-        }),
-      };
+      return payload({
+        data: [
+          {
+            id,
+            status: "completed",
+            items: [{ id: `${id}-item`, type: "agentMessage", text: id }],
+          },
+        ],
+      });
     }
     throw new Error(`unexpected node command: ${command}`);
   });
@@ -95,30 +91,31 @@ function createHomeFixture(options: HomeWire = {}, entries: EntrySummary[] = [])
     async ({ sessionKey }) => findEntry(sessionKey),
   );
   const config: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
-  const { api, getProvider } = createGatewayApi(runtimeFixture.runtime, config);
-  registerCodexSessionCatalog({
-    api,
-    bindingStore: createCodexTestBindingStore(),
-    control: createControl(),
+  const provider = createCatalogTestProvider({
+    runtime: runtimeFixture.runtime,
+    startupConfig: config,
     getRuntimeConfig: () => config,
   });
-  const provider = getProvider();
-  const continueSession = provider?.continueSession;
-  if (!provider || !continueSession) {
-    throw new Error("Codex continuation provider did not register");
-  }
   const continueAt = (sourceHomeId?: string) =>
-    continueSession({
+    provider.continueSession!({
       hostId,
       threadId,
       ...(sourceHomeId ? { sourceHomeId } : {}),
       clientScopes: ["operator.admin"],
     });
+  const entry = (sessionKey: string) => {
+    const result = findEntry(sessionKey);
+    if (!result) {
+      throw new Error("missing adopted session entry");
+    }
+    return result;
+  };
   return {
     ...runtimeFixture,
     provider,
     wire,
     continueAt,
+    list: () => provider.list({ hostIds: [hostId] }),
     adopt: async (sourceHomeId: string) => {
       const adopted = await continueAt(sourceHomeId);
       await adopted.afterConversationBound?.();
@@ -128,22 +125,22 @@ function createHomeFixture(options: HomeWire = {}, entries: EntrySummary[] = [])
       expect(runtimeFixture.createSessionEntry).not.toHaveBeenCalled();
       expect(importHistory).not.toHaveBeenCalled();
     },
-    entry: (sessionKey: string) => {
-      const entry = findEntry(sessionKey);
-      if (!entry) {
-        throw new Error("missing adopted session entry");
-      }
-      return entry;
-    },
+    entry,
+    expectHome: (sessionKey: string, sourceHomeId: string) =>
+      expect(readNodeSessionMarker(entry(sessionKey))).toMatchObject({ ...marker, sourceHomeId }),
   };
 }
 
-it("keeps copied thread ids in different homes in separate chats with their own history", async () => {
+it("rejects stale locators and keeps copied ids in separate chats with their own history", async () => {
   const fixture = createHomeFixture();
   const first = await fixture.adopt(homeA);
   fixture.wire.sourceHomeId = homeB;
+  await expect(fixture.continueAt(homeA)).rejects.toThrow(/source/i);
+  expect(fixture.createSessionEntry).toHaveBeenCalledOnce();
+  expect(importHistory).toHaveBeenCalledOnce();
+  fixture.expectHome(first.sessionKey, homeA);
 
-  const changed = await fixture.provider.list({ hostIds: [hostId] });
+  const changed = await fixture.list();
   expect(changed[0]?.sessions[0]?.sessionKey).toBeUndefined();
   const second = await fixture.adopt(homeB);
 
@@ -154,9 +151,7 @@ it("keeps copied thread ids in different homes in separate chats with their own 
     [1, first, homeA, "history-a"],
     [2, second, homeB, "history-b"],
   ] as const) {
-    expect(readNodeSessionMarker(fixture.entry(adopted.sessionKey))).toMatchObject({
-      sourceHomeId,
-    });
+    fixture.expectHome(adopted.sessionKey, sourceHomeId);
     expect(importHistory).toHaveBeenNthCalledWith(
       index,
       expect.objectContaining({
@@ -165,26 +160,12 @@ it("keeps copied thread ids in different homes in separate chats with their own 
       }),
     );
     fixture.wire.sourceHomeId = sourceHomeId;
-    const listed = await fixture.provider.list({ hostIds: [hostId] });
+    const listed = await fixture.list();
     expect(listed[0]?.sessions[0]).toMatchObject({
       sourceHomeId,
       sessionKey: adopted.sessionKey,
     });
   }
-});
-
-it("rejects a stale home locator before reusing or creating an adopted chat", async () => {
-  const fixture = createHomeFixture();
-  const adopted = await fixture.adopt(homeA);
-  fixture.wire.sourceHomeId = homeB;
-  fixture.createSessionEntry.mockClear();
-  importHistory.mockClear();
-
-  await expect(fixture.continueAt(homeA)).rejects.toThrow(/source/i);
-  fixture.expectNoAdoption();
-  expect(readNodeSessionMarker(fixture.entry(adopted.sessionKey))).toMatchObject({
-    sourceHomeId: homeA,
-  });
 });
 
 it.each([
@@ -199,7 +180,7 @@ it.each([
 it("keeps source-less node pages readable without allowing a new adoption", async () => {
   const fixture = createHomeFixture({ sourceHomeId: undefined });
 
-  expect(await fixture.provider.list({ hostIds: [hostId] })).toMatchObject([
+  expect(await fixture.list()).toMatchObject([
     { sessions: [{ threadId, name: "Copied task", canContinue: false }] },
   ]);
   await expect(fixture.continueAt()).rejects.toThrow(/source|update/i);
@@ -260,11 +241,7 @@ it("preserves a shipped source-less marker while explicit re-adoption creates a 
   expect(adopted.sessionKey).not.toBe(legacyKey);
   expect(legacy).toEqual(original);
   expect(fixture.entries).toHaveLength(2);
-  expect(readNodeSessionMarker(fixture.entry(adopted.sessionKey))).toMatchObject({
-    sourceHomeId: homeA,
-    sourceHostId: hostId,
-    sourceThreadId: threadId,
-  });
+  fixture.expectHome(adopted.sessionKey, homeA);
   expect(fixture.createSessionEntry).toHaveBeenCalledOnce();
   expect(importHistory).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({

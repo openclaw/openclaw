@@ -692,22 +692,16 @@ describe("message tool secret scoping", () => {
   it("keeps automatic WebChat final-answer guidance while selecting the tool-local sink", async () => {
     mockSendResult();
 
-    const input = await executeSend({
-      action: { message: "hi" },
-      toolOptions: {
-        currentChannelProvider: "webchat",
-        sourceReplyDeliveryMode: "automatic",
-        agentSessionKey: "agent:main:webchat:dm:dashboard",
-      },
-    });
-
-    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
-    const tool = createMessageTool({
+    const toolOptions = {
       currentChannelProvider: "webchat",
       sourceReplyDeliveryMode: "automatic",
       agentSessionKey: "agent:main:webchat:dm:dashboard",
-    });
+    } as const;
+    const input = await executeSend({ action: { message: "hi" }, toolOptions });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    const tool = createMessageTool(toolOptions);
     expect(tool.description).not.toContain("Normal final answers stay private");
   });
 
@@ -825,7 +819,6 @@ describe("message tool secret scoping", () => {
       expect(progress?.params).not.toHaveProperty("final");
       expect(terminal?.params).not.toHaveProperty("final");
       if (remote) {
-        expect(terminal?.gateway?.terminalSourceReplyReceiptOwner).toBe("caller");
         expect(terminal?.gateway?.resolveAgentRuntimeIdentityToken).toEqual(expect.any(Function));
       }
     },
@@ -1308,7 +1301,7 @@ it.each([false, true])("respects a prepared catalog absence: %s", (preparedAbsen
 it.each<{
   name: string;
   options: Parameters<typeof createOpenClawTools>[0];
-  action: Record<string, unknown>;
+  action: { target?: string; message: string };
   expected: Record<string, unknown>;
 }>([
   {
@@ -1319,7 +1312,7 @@ it.each<{
       agentThreadId: "111.222",
     },
     action: { message: "stay in thread" },
-    expected: { currentThreadTs: "111.222", replyToMode: "all" },
+    expected: { toolContext: { currentThreadTs: "111.222", replyToMode: "all" } },
   },
   {
     name: "routable DM target",
@@ -1332,28 +1325,30 @@ it.each<{
     },
     action: { target: "user:U123", message: "stay in DM thread" },
     expected: {
-      currentChannelId: "D123",
-      currentChatType: "direct",
-      currentMessagingTarget: "user:U123",
-      currentChannelProvider: "slack",
-      currentThreadTs: "111.222",
-      replyToMode: "all",
+      toolContext: {
+        currentChannelId: "D123",
+        currentChatType: "direct",
+        currentMessagingTarget: "user:U123",
+        currentChannelProvider: "slack",
+        currentThreadTs: "111.222",
+        replyToMode: "all",
+      },
     },
   },
+  {
+    name: "run model prefix context",
+    options: { modelProvider: "p", modelId: "m-latest", requesterThinkingLevel: "high" },
+    action: { message: "hi" },
+    expected: { responsePrefixContext: { provider: "p", model: "m", thinkingLevel: "high" } },
+  },
 ])("forwards $name through createOpenClawTools", async ({ options, action, expected }) => {
-  mockSendResult({
-    channel: "slack",
-    to: typeof action.target === "string" ? action.target : "channel:C123",
-  });
+  mockSendResult({ channel: "slack", to: action.target ?? "channel:C123" });
   registerPlugins(createChannelPlugin({ id: "slack", actions: ["send"] }));
   const tool = createOpenClawTools({ config: {}, agentChannel: "slack", ...options }).find(
     (candidate) => candidate.name === "message",
   );
-  if (!tool) {
-    throw new Error("message tool not found");
-  }
-  await tool.execute("1", { action: "send", channel: "slack", ...action });
-  expect(firstAction()?.toolContext).toMatchObject(expected);
+  await tool?.execute("1", { action: "send", channel: "slack", ...action });
+  expect(firstAction()).toMatchObject(expected);
 });
 
 it("keeps the tool definition stable through createOpenClawTools", () => {
@@ -1677,6 +1672,7 @@ describe("message tool schema scoping", () => {
   });
 
   it.each([
+    { action: "channel-create", fields: ["teamId", "name"], scopedOnly: false },
     { action: "conversation-open", fields: ["teamId"], scopedOnly: false },
     { action: "send", fields: [], scopedOnly: false },
     { action: "channel-move", fields: ["position", "parentId"], scopedOnly: true },
@@ -1691,6 +1687,7 @@ describe("message tool schema scoping", () => {
           "read",
           "channel-info",
           "channel-list",
+          "channel-create",
           "conversation-open",
           "channel-move",
           "category-delete",
@@ -1716,7 +1713,7 @@ describe("message tool schema scoping", () => {
         for (const field of fields) {
           expect(properties).toHaveProperty(field);
         }
-        if (action !== "conversation-open") {
+        if (action !== "conversation-open" && action !== "channel-create") {
           expect(properties).not.toHaveProperty("teamId");
           continue;
         }
@@ -1724,6 +1721,9 @@ describe("message tool schema scoping", () => {
         expect(Value.Check(tool.parameters, { action })).toBe(true);
         for (const teamId of ["11111111-1111-1111-1111-111111111111", "T11111111"]) {
           expect(Value.Check(tool.parameters, { action, teamId })).toBe(true);
+        }
+        if (action === "channel-create") {
+          expect(Value.Check(tool.parameters, { action, name: "project-planning" })).toBe(true);
         }
         if (currentChannelProvider && action === "conversation-open") {
           for (const field of ["channelId", "guildId", "userId", "roleId"]) {

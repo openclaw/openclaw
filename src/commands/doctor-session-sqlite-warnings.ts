@@ -4,11 +4,13 @@ import { extractGeneratedTranscriptSessionId } from "../config/sessions/generate
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readCanonicalSessionMainKey } from "../config/sessions/session-canonical-key.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
   formatMigrationWarningSummary,
   MIGRATION_WARNING_EXAMPLE_LIMIT,
 } from "../infra/migration-warning-summary.js";
+import { isHistoricalSessionSqliteMigrationIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
@@ -197,29 +199,95 @@ export function readSessionSqliteMigrationWarnings(env = process.env): string[] 
         continue;
       }
       seen.add(key);
-      warnings.push(
-        ...formatSessionSqliteMigrationWarnings(
-          [
-            {
-              ...target,
-              issues: currentMigrationIssues(target, env).map((issue) =>
-                issue.code === "active_sqlite_transcript_jsonl"
-                  ? {
-                      code: issue.code,
-                      sessionKey: issue.sessionKey,
-                      message: issue.message.replace(
-                        /Run openclaw doctor --fix or .*$/s,
-                        "Run openclaw doctor --session-sqlite inspect to check current originals before choosing recovery.",
-                      ),
-                    }
-                  : issue,
-              ),
-            },
-          ],
-          env,
-        ),
-      );
+      for (const warning of formatSessionSqliteMigrationWarnings(
+        [
+          {
+            ...target,
+            issues: currentMigrationIssues(target, env).map((issue) =>
+              issue.code === "active_sqlite_transcript_jsonl"
+                ? {
+                    code: issue.code,
+                    sessionKey: issue.sessionKey,
+                    message: issue.message.replace(
+                      /Run openclaw doctor --fix or .*$/s,
+                      "Run openclaw doctor --session-sqlite inspect to check current originals before choosing recovery.",
+                    ),
+                  }
+                : issue,
+            ),
+          },
+        ],
+        env,
+      )) {
+        warnings.push(warning);
+      }
     }
   }
   return warnings;
+}
+
+/** Bound human presentation; manifests and warning result channels retain their evidence. */
+export function collectSessionSqliteMigrationFindings(
+  targets: readonly Pick<DoctorSessionSqliteTargetReport, "storePath" | "issues">[],
+  env = process.env,
+): HealthFinding[] {
+  const inspect = formatCliCommand(
+    "openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json",
+    env,
+  );
+  const findings: HealthFinding[] = [];
+  const historicalExamples: { storePath: string; message: string }[] = [];
+  const historicalPaths = new Set<string>();
+  let historicalCount = 0;
+  const docsUrl = "https://docs.openclaw.ai/cli/doctor/sqlite-maintenance#session-sqlite-migration";
+  for (const target of targets) {
+    const current: DoctorSessionSqliteTargetReport["issues"][number][] = [];
+    for (const issue of target.issues) {
+      if (isHistoricalSessionSqliteMigrationIssue(issue)) {
+        historicalCount++;
+        historicalPaths.add(target.storePath);
+        if (historicalExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
+          historicalExamples.push({ storePath: target.storePath, message: issue.message });
+        }
+      } else {
+        current.push(issue);
+      }
+    }
+    const common = {
+      checkId: "core/doctor/session-transcripts",
+      severity: "warning" as const,
+      category: "fix-now" as const,
+      path: target.storePath,
+      fixHint: `Inspect with "${inspect}" before attempting recovery.`,
+      docsUrl,
+    };
+    for (const issue of current) {
+      findings.push({ ...common, errorCode: issue.code, message: issue.message });
+    }
+  }
+  if (historicalCount > 0) {
+    const summary =
+      historicalCount > MIGRATION_WARNING_EXAMPLE_LIMIT
+        ? formatMigrationWarningSummary({
+            summary: `${historicalCount} historical recovery notice(s)`,
+            count: historicalCount,
+            detail: "Recovery evidence remains retained.",
+          })
+        : `${historicalCount} historical recovery notice(s). Recovery evidence remains retained.`;
+    findings.push({
+      checkId: "core/doctor/session-transcripts",
+      severity: "warning",
+      category: "historical",
+      ...(historicalPaths.size === 1 ? { path: [...historicalPaths][0] } : {}),
+      message: [
+        summary,
+        ...historicalExamples.map(({ storePath, message }) =>
+          historicalPaths.size > 1 ? `  - ${storePath}: ${message}` : `  - ${message}`,
+        ),
+      ].join("\n"),
+      fixHint: `No action needed if expected conversations are visible. Keep recovery archives. If a conversation is missing, inspect with "${inspect}".`,
+      docsUrl,
+    });
+  }
+  return findings;
 }

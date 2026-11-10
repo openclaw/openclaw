@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import {
   presenceViewerActivity,
@@ -7,10 +7,14 @@ import {
   projectPresenceViewers,
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../lib/reactive/observers.ts";
+import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
+import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
+import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import {
   renderPersonalSessionEmpty,
-  renderSessionMutationError,
+  renderSessionListError,
 } from "./app-sidebar-session-filter-summary.tsx";
 import type {
   RenderableSessionSection,
@@ -18,64 +22,63 @@ import type {
   PersonHeaders,
   SessionCatalogRenderSnapshot,
 } from "./app-sidebar-session-render-types.ts";
-import {
-  renderChildSessionLoadError,
-  renderPendingSessionCreateRow,
-} from "./app-sidebar-session-row-render.tsx";
+import { renderChildSessionLoadError } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
-import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
+import { PersonalSessionGroups } from "./personal-session-groups.tsx";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
-/** Fetching a page is useless if the new rows land behind a section's local cap,
- *  so an explicit roster load reveals a page in every section too -- otherwise
- *  the click can look like undefined happened. */
-function renderRosterLoadMore(
-  host: SidebarSessionListHost,
-  sections: RenderableSessionSection[],
-  hasMore: boolean | undefined,
-  loading: boolean,
-) {
-  if (!hasMore) {
-    return undefined;
-  }
+function RosterLoadMore(props: {
+  host: SidebarSessionListHost;
+  hasMore: boolean;
+  loading: boolean;
+}) {
+  const [button, setButton] = createSignal<HTMLButtonElement>();
+  // One page per entry into view: the button has to leave and come back before
+  // the next load, so a page whose rows land off-screen or a failed load never
+  // turns into a request loop. The button stays as the manual fallback.
+  // Grouped and people-sorted views place older rows inside earlier sections,
+  // so they keep the explicit button. The flat list mostly appends; when
+  // Created order or catalog sections put a page above the fold, this still
+  // loads at most one page per entry into view.
+  createIntersectionObserver(
+    () => {
+      const target = button();
+      return target ? [target] : [];
+    },
+    (entries) => {
+      const host = props.host;
+      if (
+        host.effectiveSessionsGrouping() === "none" &&
+        host.effectiveSessionSortMode() !== "people" &&
+        entries.some((entry) => entry.isIntersecting)
+      ) {
+        void host.loadMoreSidebarSessions();
+      }
+    },
+  );
   return (
-    <div class="sidebar-session-pagination sidebar-session-pagination--roster">
-      <button
-        type="button"
-        class="sidebar-session-pagination__button"
-        aria-label={loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
-        disabled={loading}
-        aria-busy={loading ? "true" : "false"}
-        onClick={() => {
-          // The request owner changes before the DOM commits the disabled attribute.
-          // A repeated activation must not reveal local rows during that read.
-          if (host.sessionData.sessionsLoading) {
-            return;
+    <Show when={props.hasMore}>
+      <div class="sidebar-session-pagination sidebar-session-pagination--roster">
+        <button
+          ref={setButton}
+          type="button"
+          class="sidebar-session-pagination__button"
+          aria-label={
+            props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")
           }
-          void host.sessionData.loadMoreSidebarSessions().then(() => {
-            for (const section of sections) {
-              host.setVisibleSessionLimit(
-                section.id,
-                section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
-              );
-            }
-          });
-        }}
-      >
-        {loading ? <span class="session-run-spinner" aria-hidden="true" /> : undefined}
-        {loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
-      </button>
-    </div>
+          disabled={props.loading}
+          aria-busy={props.loading ? "true" : "false"}
+          onClick={() => void props.host.loadMoreSidebarSessions()}
+        >
+          {props.loading ? <span class="session-run-spinner" aria-hidden="true" /> : undefined}
+          {props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
+        </button>
+      </div>
+    </Show>
   );
 }
 
-function renderSessionListBody(params: {
-  host: SidebarSessionListHost;
-  sections: RenderableSessionSection[];
-  nativeSessionsHaveMore: boolean;
-  catalogs: SessionCatalogRenderSnapshot;
-  catalogRenderer: SessionCatalogGroupsRenderer | null;
-}) {
+function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) {
   const host = createMemo(() => params.host);
   const personHeaders = createMemo<PersonHeaders | undefined>(() => {
     if (host().sessionsGrouping !== "person") {
@@ -106,41 +109,39 @@ function renderSessionListBody(params: {
   );
   return (
     <For each={params.sections} keyed={(section) => section.id}>
-      {(section) => {
-        // For keys this branch by id; all changing section facts remain reactive below.
-        const initialSectionId = untrack(() => section().id);
-        if (initialSectionId.startsWith("catalog:")) {
-          return (
-            <Show when={params.catalogRenderer && catalogsBySectionId().get(section().id)}>
-              {(catalog) => {
-                // The parent section retains this lazy renderer for the catalog's lifetime.
-                const InitialRenderer = params.catalogRenderer!;
-                return (
-                  <InitialRenderer host={host()} snapshot={params.catalogs} catalog={catalog()} />
-                );
-              }}
+      {(section) => (
+        <Show
+          when={section().id.startsWith("catalog:")}
+          fallback={
+            // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
+            <Show
+              when={
+                !(section().id === "work" && section().totalRowCount === 0) &&
+                !(
+                  section().id === "ungrouped" &&
+                  section().totalRowCount === 0 &&
+                  !params.nativeSessionsHaveMore &&
+                  !host().sessionOwnershipVisibility.filters &&
+                  host().sessionsStatusFilter === "active" &&
+                  host().sessionOrganizer.draggingSessionKey === null
+                )
+              }
+            >
+              <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
             </Show>
-          );
-        }
-        // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
-        return (
-          <Show
-            when={
-              !(section().id === "work" && section().totalRowCount === 0) &&
-              !(
-                section().id === "ungrouped" &&
-                section().totalRowCount === 0 &&
-                !params.nativeSessionsHaveMore &&
-                !host().sessionOwnershipVisibility.filters &&
-                host().sessionsStatusFilter === "active" &&
-                host().sessionOrganizer.draggingSessionKey === null
-              )
-            }
-          >
-            <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
+          }
+        >
+          <Show when={catalogsBySectionId().get(section().id)}>
+            {(catalog) => (
+              <params.catalogRenderer
+                host={host()}
+                snapshot={params.catalogs}
+                catalog={catalog()}
+              />
+            )}
           </Show>
-        );
-      }}
+        </Show>
+      )}
     </For>
   );
 }
@@ -151,27 +152,25 @@ export function renderSessionList(params: {
   nativeSessionsHaveMore: boolean;
   nativeSessionsLoading: boolean;
   catalogs: SessionCatalogRenderSnapshot;
-  catalogRenderer: SessionCatalogGroupsRenderer | null;
+  catalogRenderer: SessionCatalogGroupsRenderer;
 }) {
   const host = createMemo(() => params.host);
   return renderSessionListFrame(
     host,
     <div class="sidebar-recent-sessions">
-      {renderPendingSessionCreateRow(host)}
       {renderSessionListBody(params)}
-      {renderRosterLoadMore(
-        host(),
-        params.sections,
-        params.nativeSessionsHaveMore,
-        params.nativeSessionsLoading,
-      )}
+      <RosterLoadMore
+        host={host()}
+        hasMore={params.nativeSessionsHaveMore}
+        loading={params.nativeSessionsLoading}
+      />
       {renderPersonalSessionEmpty(
         host(),
         params.empty && params.sections.every((section) => section.totalRowCount === 0),
         host().connected &&
           host().sessionData.sessionsResult !== null &&
           !host().sessionData.sessionsLoading &&
-          !host().sessionData.sessionMutationError &&
+          !host().sessionData.sessionListError &&
           !params.nativeSessionsHaveMore &&
           params.catalogs.catalogs.length === 0 &&
           areSessionCatalogsSettled(host().sessionData),
@@ -182,7 +181,51 @@ export function renderSessionList(params: {
     </div>,
   );
 }
-export function renderSessionListFrame(host: () => SidebarSessionListHost, body: JSX.Element) {
+/** Personal pins keep their saved order in one section above every list section. */
+function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
+  const section = createMemo((): RenderableSessionSection | undefined => {
+    const host = params.host;
+    const zone = host.reconciledSidebarZone();
+    const sessions = host.sessionDataContext?.sessions;
+    const now = Date.now();
+    const hasSnoozedPins = nextSessionSnoozeWakeAt(zone.sessionRows.values(), now) !== null;
+    const rows = sidebarPinnedSessionRows(
+      zone,
+      (key) => sessions?.archiveVisibility(key),
+      hasSnoozedPins ? readVisibleTime(1_000) : now,
+    );
+    if (rows.length === 0) {
+      return undefined;
+    }
+    const collapsed = host.collapsedSessionSections.has("pinned");
+    return {
+      id: "pinned",
+      rows,
+      totalRowCount: rows.length,
+      visibleRowCount: collapsed ? 0 : rows.length,
+      visibleLimit: rows.length,
+      collapsedVisibleRowCount: rows.length,
+      renderHeader: true,
+    };
+  });
+  return (
+    <Show when={section()}>
+      {(pinned) => (
+        // The list container owns row insets; chip and roster bodies share this section.
+        <div class="sidebar-recent-sessions sidebar-recent-sessions--pinned">
+          <SessionSection host={params.host} section={pinned()} personHeaders={undefined} />
+        </div>
+      )}
+    </Show>
+  );
+}
+
+/** The roster leads with its agents; the session list keeps its own sections first. */
+export function renderSessionListFrame(
+  host: () => SidebarSessionListHost,
+  body: JSX.Element,
+  bodyFirst = false,
+) {
   const home = createMemo(() =>
     host().sidebarAgentsMode === "roster" ? null : host().mainSessionRow(),
   );
@@ -222,7 +265,11 @@ export function renderSessionListFrame(host: () => SidebarSessionListHost, body:
           {t("sessionsView.moveToTopLevel")}
         </div>
       ) : undefined}
-      {renderSessionMutationError(host())} {body}
+      {renderSessionListError(host())}
+      {bodyFirst ? body : undefined}
+      <PinnedSessionSection host={host()} />
+      <PersonalSessionGroups host={host()} />
+      {bodyFirst ? undefined : body}
     </section>
   );
 }

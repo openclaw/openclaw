@@ -85,20 +85,30 @@ it("isolates identities and publishes optimistic skill revisions", async () => {
       const list = (client: SkillLibraryWireClient) =>
         client.request<SkillsLibraryListResult>("skills.library.list", {});
       await expect(list(localAdmin)).resolves.toMatchObject({
-        profileId: null,
+        profileId: GATEWAY_OWNER_PROFILE_ID,
         multipleProfiles: false,
         defaultTarget: "workspace",
         canManageWorkspace: true,
       });
-      // Multiple real anonymous operator connections must not masquerade as multiple people.
-      const { client: otherAnonymous } = await connect();
-      await expect(list(otherAnonymous)).resolves.toMatchObject({
+      // Shared-secret connections reuse one durable owner, not separate people.
+      const { client: otherOwner } = await connect();
+      await expect(list(otherOwner)).resolves.toMatchObject({
+        profileId: GATEWAY_OWNER_PROFILE_ID,
         multipleProfiles: false,
         defaultTarget: "workspace",
       });
-      await expectLibraryError(
-        localAdmin.request("skills.library.save", skillLibraryProofBundle()),
-        "IDENTITY_REQUIRED",
+      const ownerSkill = await save(localAdmin, skillLibraryProofBundle());
+      expect(ownerSkill).toMatchObject({
+        state: "published",
+        target: "personal",
+        entry: {
+          ownerProfileId: GATEWAY_OWNER_PROFILE_ID,
+          authorProfileId: GATEWAY_OWNER_PROFILE_ID,
+          shared: false,
+        },
+      });
+      expect((await list(otherOwner)).entries).toContainEqual(
+        expect.objectContaining({ skillId: ownerSkill.entry.skillId }),
       );
 
       const user = (email: string, scopes?: string[]) =>

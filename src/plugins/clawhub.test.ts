@@ -68,9 +68,7 @@ vi.mock("../version.js", async (importOriginal) => ({
 
 // mock-isolation: Fixture installation results avoid writing host plugin state.
 vi.mock("./install.js", () => ({
-  PLUGIN_INSTALL_ERROR_CODE: {
-    PLUGIN_ID_MISMATCH: "plugin_id_mismatch",
-  },
+  PLUGIN_INSTALL_ERROR_CODE: { PLUGIN_ID_MISMATCH: "plugin_id_mismatch" },
   installPluginFromArchive: mocks.installArchive,
 }));
 
@@ -97,11 +95,7 @@ async function useRealInstaller(archivePath: string) {
   mocks.installArchive.mockImplementationOnce(installPluginFromArchive);
   return path.join(path.dirname(archivePath), "extensions");
 }
-const npmArtifact = {
-  kind: "npm-pack",
-  format: "tgz",
-  sha256: DEMO_CLAWPACK_SHA256,
-};
+const npmArtifact = { kind: "npm-pack", format: "tgz", sha256: DEMO_CLAWPACK_SHA256 };
 const npmProvenance = { npmIntegrity: "sha512-clawpack", npmShasum: "1".repeat(40) };
 const npmDownload = {
   archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
@@ -112,6 +106,12 @@ const npmDownload = {
   ...npmProvenance,
 };
 const manifestFile = clawHubArchiveFile("openclaw.plugin.json", '{"id":"demo"}');
+const artifactPath = "/api/v1/packages/demo/versions/2026.3.22/artifact";
+const archiveEntryError = "ClawHub archive fallback verification rejected the downloaded archive: ";
+const inventoryError =
+  'ClawHub archive contents do not match files[] metadata for "demo@2026.3.22": ';
+const requestError = (status: number, body: string, requestPath = artifactPath) =>
+  new ClawHubRequestError({ path: requestPath, status, body });
 
 function expectUnused(...calls: ReturnType<typeof vi.fn>[]) {
   for (const call of calls) {
@@ -239,9 +239,7 @@ it("does not publish a ClawHub plugin after authority closes during artifact rev
     ok: false,
     error: expect.stringContaining("plugin installation authority closed"),
   });
-  await expect(fs.stat(path.join(extensionsDir, "demo"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  await expect(fs.stat(path.join(extensionsDir, "demo"))).rejects.toMatchObject({ code: "ENOENT" });
   expect(mocks.cleanup).toHaveBeenCalledTimes(1);
 });
 
@@ -284,25 +282,21 @@ it.each<[Record<string, unknown>, string | undefined, string]>([
 it("passes custom-registry provenance and authority to consent", async () => {
   const baseUrl = "https://plugins.example.test";
   const onBeforePluginArtifactCommit = vi.fn();
+  const artifact = {
+    pluginId: "demo",
+    stagedArtifactDir: "/tmp/openclaw/plugins/demo",
+    mode: "install" as const,
+  };
   mocks.installArchive.mockImplementationOnce(
     async (params: { onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler }) => {
-      await params.onBeforePluginArtifactCommit({
-        pluginId: "demo",
-        stagedArtifactDir: "/tmp/openclaw/plugins/demo",
-        mode: "install",
-      });
+      await params.onBeforePluginArtifactCommit(artifact);
       return { ok: true, pluginId: "demo", targetDir: "/tmp/openclaw/plugins/demo" };
     },
   );
-  const result = await installDemo({
-    baseUrl,
-    onBeforePluginArtifactCommit,
-  });
+  const result = await installDemo({ baseUrl, onBeforePluginArtifactCommit });
   expect(result.ok).toBe(true);
   expect(onBeforePluginArtifactCommit).toHaveBeenCalledWith({
-    pluginId: "demo",
-    stagedArtifactDir: "/tmp/openclaw/plugins/demo",
-    mode: "install",
+    ...artifact,
     sourceRecord: {
       source: "clawhub",
       spec: "clawhub:demo",
@@ -499,13 +493,7 @@ it.each([
 );
 
 it("falls back to version metadata when the ClawHub artifact resolver route is missing", async () => {
-  mocks.fetchArtifact.mockRejectedValueOnce(
-    new ClawHubRequestError({
-      path: "/api/v1/packages/demo/versions/2026.3.22/artifact",
-      status: 404,
-      body: "Not Found",
-    }),
-  );
+  mocks.fetchArtifact.mockRejectedValueOnce(requestError(404, "Not Found"));
   mockVersion({
     artifact: {
       ...npmArtifact,
@@ -534,7 +522,7 @@ it("rejects ClawPack artifacts when the download digest does not match version m
   const mismatchedSha256 = "c".repeat(64);
   mockVersion({ artifact: npmArtifact });
   mockDownload({
-    archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
+    archivePath: npmDownload.archivePath,
     integrity: `sha256-${Buffer.from(mismatchedSha256, "hex").toString("base64")}`,
     sha256Hex: mismatchedSha256,
     artifact: "clawpack",
@@ -573,13 +561,7 @@ it.each([
   ],
 ] as const)("maps artifact download %s/%s to %s", async (status, body, code, version, error) => {
   mockVersion({ artifact: npmArtifact });
-  mocks.download.mockRejectedValueOnce(
-    new ClawHubRequestError({
-      path: "/api/v1/packages/demo/versions/2026.3.22/artifact/download",
-      status,
-      body,
-    }),
-  );
+  mocks.download.mockRejectedValueOnce(requestError(status, body, `${artifactPath}/download`));
   const result = await installDemo({ baseUrl: "https://clawhub.ai" });
   expectInstallFailureFields(result, code, error);
   expect(expectInstallFailure(result).version).toBe(version);
@@ -739,21 +721,11 @@ it("keeps extraction failures typed and prevents install work after a corrupt ZI
 });
 
 const collisionError = expect.stringContaining(
-  "ClawHub archive fallback verification rejected the downloaded archive: archive entries collide at output path",
+  `${archiveEntryError}archive entries collide at output path`,
 );
 it.each<[string, string[], number | undefined, unknown]>([
-  [
-    "symlink",
-    ["extra.txt"],
-    0o120777,
-    "ClawHub archive fallback verification rejected the downloaded archive: zip entry is a link: extra.txt",
-  ],
-  [
-    "other",
-    ["extra.txt"],
-    0o160644,
-    'ClawHub archive contents do not match files[] metadata for "demo@2026.3.22": unexpected file "extra.txt".',
-  ],
+  ["symlink", ["extra.txt"], 0o120777, `${archiveEntryError}zip entry is a link: extra.txt`],
+  ["other", ["extra.txt"], 0o160644, `${inventoryError}unexpected file "extra.txt".`],
   ["case collision", ["README.md", "readme.md"], undefined, collisionError],
   ["Unicode normalization collision", ["caf\u00e9.md", "cafe\u0301.md"], undefined, collisionError],
 ])("explains portable ZIP %s rejection before install work", async (_kind, names, mode, error) => {
@@ -787,10 +759,7 @@ it.each<[Record<string, string>, readonly ClawHubArchiveFile[], string]>([
   [{ "nested\\extra.txt": "unexpected" }, [manifestFile], 'unexpected file "nested/extra.txt".'],
 ])("rejects fallback inventory %j (%j): %s", async (entries, files, error) => {
   await mockArchive({ entries, files });
-  expectArchiveFailure(
-    await installDemo(),
-    `ClawHub archive contents do not match files[] metadata for "demo@2026.3.22": ${error}`,
-  );
+  expectArchiveFailure(await installDemo(), `${inventoryError}${error}`);
 });
 
 it.each([
@@ -858,10 +827,7 @@ it("rejects fallback verification when a file hash drifts from files[] metadata"
 });
 
 it("rejects archive path traversal before install work", async () => {
-  await mockArchive({
-    entries: { "../extra.txt": "unsafe" },
-    files: [manifestFile],
-  });
+  await mockArchive({ entries: { "../extra.txt": "unsafe" }, files: [manifestFile] });
   expectArchiveFailure(
     await installDemo(),
     expect.stringMatching(
@@ -987,3 +953,60 @@ it.each<[(typeof errors)[keyof typeof errors], string, RejectedInstall]>([
     expectUnused(mocks.download, mocks.installArchive, mocks.cleanup);
   },
 );
+
+it.each([
+  { baseUrl: "https://clawhub.ai", blocked: false },
+  { baseUrl: "https://mirror.example.test", blocked: true },
+])("binds official archive hook bypass to the registry $baseUrl", async ({ baseUrl, blocked }) => {
+  mocks.parseSpec.mockReturnValueOnce({ name: "demo", version: "2026.3.22" });
+  const archive = await mockArchive({ entries: DEMO_PLUGIN_ARCHIVE_ENTRIES });
+  const extensionsDir = await useRealInstaller(archive.archivePath);
+  mockPackage({ verification: { tier: "source-linked", sourceRepo: "openclaw/openclaw" } });
+  const { createHookRunner } = await import("./hooks.js");
+  const { createMockPluginRegistry } = await import("./hooks.test-helpers.js");
+  const hookRunnerGlobal = await import("./hook-runner-global.js");
+  const rejectInstall = vi
+    .fn()
+    .mockReturnValue({ block: true, blockReason: "registry policy rejected fixture" });
+  const hookRunner = createHookRunner(
+    createMockPluginRegistry([
+      { pluginId: "registry-policy", hookName: "before_install", handler: rejectInstall },
+    ]),
+  );
+  const archiveApi = await import("../infra/archive.js");
+  vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(hookRunner);
+  const extraction = vi.spyOn(archiveApi, "extractArchive");
+  const artifactReview = vi.fn();
+  const result = await installPluginFromClawHub({
+    spec: "clawhub:demo@2026.3.22",
+    baseUrl,
+    config: {},
+    extensionsDir,
+    env: { OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.3.22" },
+    onInstallPolicyWarning: async () => ({ status: "approved" }),
+    onBeforePluginArtifactCommit: artifactReview,
+  });
+  expect(mocks.fetchDetail).toHaveBeenCalledWith(expect.objectContaining({ baseUrl }));
+  expect(mocks.download).toHaveBeenCalledWith(expect.objectContaining({ baseUrl }));
+  expect(extraction).toHaveBeenCalledOnce();
+  expect(mocks.cleanup).toHaveBeenCalledOnce();
+  if (blocked) {
+    expect(result).toMatchObject({
+      ok: false,
+      code: "security_scan_blocked",
+      error: expect.stringContaining("registry policy rejected fixture"),
+    });
+    expect(rejectInstall).toHaveBeenCalledOnce();
+    expect(artifactReview).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(extensionsDir, "demo"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  } else {
+    expect(result).toMatchObject({ ok: true, pluginId: "demo" });
+    expect(rejectInstall).not.toHaveBeenCalled();
+    expect(artifactReview).toHaveBeenCalledOnce();
+    expect(await fs.readFile(path.join(extensionsDir, "demo", "index.js"), "utf8")).toBe(
+      DEMO_PLUGIN_ARCHIVE_ENTRIES["index.js"],
+    );
+  }
+});

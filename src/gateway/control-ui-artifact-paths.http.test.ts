@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readHttp, startControlUiFixture } from "./control-ui-fixture.test-support.js";
@@ -12,6 +13,8 @@ const files = {
   "100%.js": 'export const label = "percent";\n',
 };
 const scriptBody = 'console.log("contained alias");\n';
+const documentBody =
+  '<!doctype html><html><head><script type="importmap">{"imports":{"./assets/_app.js":"./assets/app.js","remote":"https://cdn.invalid/module.js"}}</script><link rel="modulepreload" href="./assets/app.js"><link rel="stylesheet" href="./assets/style.css"><script type="module" src="./assets/app.js"></script></head><body>Ready</body></html>';
 
 describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePath) => {
   const tempDirs = createTempDirTracker();
@@ -26,11 +29,11 @@ describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePat
     await fs.writeFile(path.join(root, "payload"), scriptBody);
     await fs.writeFile(path.join(root, "payload.gz"), gzipSync(scriptBody));
     await fs.symlink("../payload", path.join(root, "assets", "app.js"));
-    await fs.writeFile(
-      path.join(root, "document"),
-      '<!doctype html><html><head><script src="./assets/app.js"></script></head><body>Ready</body></html>',
-    );
+    await fs.writeFile(path.join(root, "document"), documentBody);
     await fs.symlink("document", path.join(root, "index.html"));
+    await fs.mkdir(path.join(root, "nested"));
+    await fs.writeFile(path.join(root, "nested", "index.html"), documentBody);
+    await fs.symlink("../nested/index.html", path.join(root, "assets", "document.js"));
     server = await startControlUiFixture({ basePath, root: { kind: "bundled", path: root } });
   });
 
@@ -69,13 +72,23 @@ describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePat
   });
 
   it("prepares a symlinked index for direct and fallback documents", async () => {
-    for (const route of ["/", "/chat"]) {
-      const get = await read(route);
+    for (const route of ["/", "/chat", "/settings/appearance", "/assets/document.js"]) {
+      const get = await read(route, "GET", "gzip, identity;q=0");
       expect(get.status).toBe(200);
       expect(get.headers["content-type"]).toBe("text/html; charset=utf-8");
-      expect(get.body.toString()).toContain(`data-openclaw-control-ui-base-path="${basePath}"`);
-      expect(get.body.toString()).toContain(`src="${basePath}/assets/app.js"`);
-      const head = await read(route, "HEAD");
+      expect(get.headers["content-encoding"]).toBe("gzip");
+      const html = gunzipSync(get.body).toString();
+      expect(html).toContain(`data-openclaw-control-ui-base-path="${basePath}"`);
+      expect(html).toContain(`src="${basePath}/assets/app.js"`);
+      expect(html).toContain(`<link rel="modulepreload" href="${basePath}/assets/app.js">`);
+      expect(get.headers.link).toBe(
+        `<${basePath}/assets/style.css>; rel=preload; as=style; crossorigin`,
+      );
+      const importMap = `{"imports":{"${basePath}/assets/_app.js":"${basePath}/assets/app.js","remote":"https://cdn.invalid/module.js"}}`;
+      expect(html).toContain(`<script type="importmap">${importMap}</script>`);
+      const importMapHash = createHash("sha256").update(importMap).digest("base64");
+      expect(get.headers["content-security-policy"]).toContain(`'sha256-${importMapHash}'`);
+      const head = await read(route, "HEAD", "gzip, identity;q=0");
       expect(head.status).toBe(200);
       expect(head.headers["content-type"]).toBe(get.headers["content-type"]);
       expect(head.body.length).toBe(0);

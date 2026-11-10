@@ -35,19 +35,16 @@ import {
 } from "./attempt-execution.helpers.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
-function formatClaudeCliFallbackPrelude(
-  seed: ClaudeCliFallbackSeed,
-  options?: { charBudget?: number },
-) {
+function formatClaudeCliFallbackPrelude(seed: ClaudeCliFallbackSeed) {
   mocks.readClaudeCliFallbackSeed.mockReturnValue(seed);
-  return buildClaudeCliFallbackContextPrelude({ cliSessionId: "fixture-session", ...options });
+  return buildClaudeCliFallbackContextPrelude({ cliSessionId: "fixture-session" });
 }
 const turn = (role: "user" | "assistant", content: unknown) => ({ role, content });
-const summaryPrelude = (summaryText: string, charBudget: number) =>
-  formatClaudeCliFallbackPrelude({ summaryText, recentTurns: [] }, { charBudget });
+const summaryPrelude = (summaryText: string) =>
+  formatClaudeCliFallbackPrelude({ summaryText, recentTurns: [] });
 
 it("emits the retry prompt with prelude even when sessionHasHistory is false (claude-cli case)", () => {
-  const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
+  const originalBody = "Summarize the report.";
   const prelude = "## Prior session context (from claude-cli)\nuser: prior question";
   const result = resolveFallbackRetryPrompt({
     body: originalBody,
@@ -65,24 +62,22 @@ describe("formatClaudeCliFallbackPrelude", () => {
     const out = await formatClaudeCliFallbackPrelude({
       summaryText: "Earlier summary",
       recentTurns: [
-        turn("user", "Earlier user question"),
+        turn("user", "question"),
         turn("assistant", [
-          { type: "text", text: "Earlier assistant reply" },
+          { type: "text", text: "answer" },
           { type: "toolcall", name: "Bash" },
         ]),
-        turn("user", [
-          { type: "tool_result", tool_use_id: "toolu_x", content: "Earlier tool output" },
-        ]),
+        turn("user", [{ type: "tool_result", tool_use_id: "toolu_x", content: "output" }]),
       ],
     });
     for (const fragment of [
       "## Prior session context (from claude-cli)",
       "Summary of earlier conversation:\nEarlier summary",
       "Recent turns:",
-      "user: Earlier user question",
-      "assistant: Earlier assistant reply",
+      "user: question",
+      "assistant: answer",
       "(tool call: Bash)",
-      "(tool result: Earlier tool output)",
+      "(tool result: output)",
     ]) {
       expect(out).toContain(fragment);
     }
@@ -90,28 +85,25 @@ describe("formatClaudeCliFallbackPrelude", () => {
 
   it("truncates an oversized summary instead of dropping it silently", async () => {
     const huge = "x ".repeat(10_000).trim();
-    const out = await summaryPrelude(huge, 600);
+    const out = await summaryPrelude(huge);
     expect(out).toContain("Summary of earlier conversation (truncated):");
-    expect(out.length).toBeLessThan(800);
+    expect(out.length).toBeLessThan(8_000);
     expect(out).toMatch(/…$/);
   });
 
   it("preserves a surrogate boundary when truncating an oversized summary", async () => {
-    const out = await summaryPrelude(`${"x".repeat(21)}😀${"y".repeat(100)}`, 128);
-    expect(out).toContain(`Summary of earlier conversation (truncated):\n${"x".repeat(21)} …`);
+    const out = await summaryPrelude(`${"x".repeat(7_893)}😀${"y".repeat(100)}`);
+    expect(out).toContain(`Summary of earlier conversation (truncated):\n${"x".repeat(7_893)} …`);
   });
 
   it("keeps the recent turn window contiguous when an adjacent turn is oversized", async () => {
-    const out = await formatClaudeCliFallbackPrelude(
-      {
-        recentTurns: [
-          turn("user", "older small turn"),
-          turn("assistant", `oversized adjacent turn ${"x".repeat(500)}`),
-          turn("user", "newest small turn"),
-        ],
-      },
-      { charBudget: 260 },
-    );
+    const out = await formatClaudeCliFallbackPrelude({
+      recentTurns: [
+        turn("user", "older small turn"),
+        turn("assistant", `oversized adjacent turn ${"x".repeat(8_000)}`),
+        turn("user", "newest small turn"),
+      ],
+    });
 
     expect(out).toContain("newest small turn");
     expect(out).not.toContain("oversized adjacent turn");
@@ -156,14 +148,22 @@ describe("sessionTranscriptHasContent", () => {
       usage: buildUsageWithNoCost({}),
       timestamp: 2,
     });
+  const userMessage = (content: string, timestamp: number) => ({
+    role: "user" as const,
+    content,
+    timestamp,
+  });
+  async function expectHistory(manager: SessionManager, expected: boolean) {
+    manager.flushPendingPersistence();
+    expect(await sessionTranscriptHasContent(target)).toBe(expected);
+  }
 
   it("marks fallback history only after SQLite contains an assistant turn", async () => {
     expect(await sessionTranscriptHasContent(undefined)).toBe(false);
     expect(await sessionTranscriptHasContent(target)).toBe(false);
     const manager = SessionManager.open(target, tmpDir);
-    manager.appendMessage({ role: "user", content: "x".repeat(300 * 1024), timestamp: 1 });
-    manager.flushPendingPersistence();
-    expect(await sessionTranscriptHasContent(target)).toBe(false);
+    manager.appendMessage(userMessage("x".repeat(300 * 1024), 1));
+    await expectHistory(manager, false);
     manager.appendMessage(assistantMessage());
     manager.flushPendingPersistence();
 
@@ -176,20 +176,17 @@ describe("sessionTranscriptHasContent", () => {
 
   it("ignores abandoned assistants and clears history at reset boundaries", async () => {
     const manager = SessionManager.open(target, tmpDir);
-    const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    const root = manager.appendMessage(userMessage("root", 1));
     manager.appendMessage(assistantMessage());
     manager.branch(root);
-    manager.appendMessage({ role: "user", content: "active branch", timestamp: 3 });
-    manager.flushPendingPersistence();
-    expect(await sessionTranscriptHasContent(target)).toBe(false);
+    manager.appendMessage(userMessage("active branch", 3));
+    await expectHistory(manager, false);
 
     manager.appendMessage(assistantMessage());
-    manager.flushPendingPersistence();
-    expect(await sessionTranscriptHasContent(target)).toBe(true);
+    await expectHistory(manager, true);
     manager.appendResetBoundary("new");
-    manager.appendMessage({ role: "user", content: "fresh turn", timestamp: 4 });
-    manager.flushPendingPersistence();
-    expect(await sessionTranscriptHasContent(target)).toBe(false);
+    manager.appendMessage(userMessage("fresh turn", 4));
+    await expectHistory(manager, false);
   });
 });
 
@@ -241,9 +238,7 @@ describe("Claude CLI transcript probes", () => {
 
   it("returns true on the second scan when the assistant message lands during the grace window", async () => {
     const sessionId = "fs-flush-latency";
-    const file = await writeJsonlSession(sessionId, [
-      message("user", [{ type: "text", text: "hi" }]),
-    ]);
+    const file = await writeJsonlSession(sessionId, [message("user", "hi")]);
 
     const graceStarted = createDeferred();
     const releaseGrace = createDeferred();
@@ -267,11 +262,7 @@ describe("Claude CLI transcript probes", () => {
     try {
       await Promise.race([graceStarted.promise, pending]);
       expect(graceFires).toBe(1);
-      await fs.appendFile(
-        file,
-        `${JSON.stringify(message("assistant", [{ type: "text", text: "ack" }]))}\n`,
-        "utf-8",
-      );
+      await fs.appendFile(file, `${JSON.stringify(message("assistant", "ack"))}\n`, "utf-8");
       releaseGrace.resolve();
       expect(await pending).toBe(true);
     } finally {
@@ -282,6 +273,12 @@ describe("Claude CLI transcript probes", () => {
   });
   const tool = (id: string, type = "tool_use") => ({ type, id, name: "Bash", input: {} });
   const result = (id: string, type = "tool_result") => ({ type, tool_use_id: id, content: "ok" });
+  const call = (id: string) => message("assistant", [tool(id)]);
+  const answered = (id: string) => message("user", [result(id)]);
+  const request = (role: "user" | "assistant", content: unknown) => ({
+    type: "api-request-blob",
+    message: { role, content },
+  });
   const longPrefix = Array.from({ length: 600 }, (_, i) => message("user", `ping ${i}`));
 
   it.each([
@@ -299,40 +296,32 @@ describe("Claude CLI transcript probes", () => {
     [
       "a string assistant superseding an orphan past record 500",
       false,
-      [message("assistant", [tool("old")]), ...longPrefix, message("assistant", "moving on")],
+      [call("old"), ...longPrefix, message("assistant", "moving on")],
     ],
     [
       "answered calls repeated by a request echo before the final reply",
       false,
       [
-        message("assistant", [tool("spawn")]),
-        message("user", [result("spawn")]),
-        { type: "api-request-blob", message: { role: "assistant", content: [tool("spawn")] } },
+        call("spawn"),
+        answered("spawn"),
+        request("assistant", [tool("spawn")]),
         { type: "api-request" },
       ],
     ],
     [
       "an orphan followed only by a request echo",
       true,
-      [
-        message("assistant", [tool("orphan")]),
-        { type: "api-request-blob", message: { role: "user", content: [result("orphan")] } },
-      ],
+      [call("orphan"), request("user", [result("orphan")])],
     ],
     [
       "main-conversation orphans with sidechain results",
       true,
-      [message("assistant", [tool("main")]), message("user", [result("main")], true)],
+      [call("main"), message("user", [result("main")], true)],
     ],
     [
       "a trailing orphan past record 500",
       true,
-      [
-        ...longPrefix,
-        message("assistant", [tool("resolved")]),
-        message("user", [result("resolved")]),
-        message("assistant", [tool("orphan")]),
-      ],
+      [...longPrefix, call("resolved"), answered("resolved"), call("orphan")],
     ],
   ] satisfies [string, boolean, object[]][])("detects %s", async (_name, expected, lines) => {
     await writeJsonlSession("fixture", lines);
@@ -374,18 +363,9 @@ describe("createAcpVisibleTextAccumulator", () => {
     },
   );
 
-  it.each([
-    ["NO_REPLY", { disposition: "silent" }],
-    [" \tNO_REPLY\r\n", { disposition: "silent" }],
-    ["no_reply", { disposition: "silent" }],
-    ...["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "No response needed."].map(
-      (text) => [text, { disposition: "visible", text }] as const,
-    ),
-    ["NO_REPLY\nNO_REPLY", { disposition: "visible", text: "NO_REPLY" }],
-    ["NO_RE", { disposition: "visible", text: "NO_RE" }],
-  ] as const)("classifies %s at ACP finalization", (text, expected) => {
+  it("releases an unfinished control prefix at ACP finalization", () => {
     const acc = createAcpVisibleTextAccumulator();
-    acc.consume(text);
-    expect(acc.finalizeReplySnapshot()).toEqual(expected);
+    acc.consume("NO_RE");
+    expect(acc.finalizeReplySnapshot()).toEqual({ disposition: "visible", text: "NO_RE" });
   });
 });

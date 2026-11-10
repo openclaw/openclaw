@@ -23,6 +23,14 @@ function parseStorageKind(raw: string): StorageKind {
   throw new Error("kind must be local|session");
 }
 
+function readRequiredStateString(raw: unknown, field: string): string {
+  const value = toStringOrEmpty(raw);
+  if (!value) {
+    throw new Error(`${field} is required`);
+  }
+  return value;
+}
+
 function assertRange(
   value: number | undefined,
   fieldName: string,
@@ -224,10 +232,7 @@ export function registerBrowserAgentStorageRoutes(
     "/set/timezone",
     "timezone",
     (body) => {
-      const timezoneId = toStringOrEmpty(body.timezoneId);
-      if (!timezoneId) {
-        throw new Error("timezoneId is required");
-      }
+      const timezoneId = readRequiredStateString(body.timezoneId, "timezoneId");
       return (pw, target) => pw.setTimezoneViaPlaywright({ ...target, timezoneId });
     },
     EXISTING_SESSION_LIMITS.emulation,
@@ -238,10 +243,7 @@ export function registerBrowserAgentStorageRoutes(
     "/set/locale",
     "locale",
     (body) => {
-      const locale = toStringOrEmpty(body.locale);
-      if (!locale) {
-        throw new Error("locale is required");
-      }
+      const locale = readRequiredStateString(body.locale, "locale");
       return (pw, target) => pw.setLocaleViaPlaywright({ ...target, locale });
     },
     EXISTING_SESSION_LIMITS.emulation,
@@ -252,10 +254,7 @@ export function registerBrowserAgentStorageRoutes(
     "/set/device",
     "device emulation",
     (body) => {
-      const name = toStringOrEmpty(body.name);
-      if (!name) {
-        throw new Error("name is required");
-      }
+      const name = readRequiredStateString(body.name, "name");
       return (pw, target, signal) => pw.setDeviceViaPlaywright({ ...target, name, signal });
     },
     EXISTING_SESSION_LIMITS.emulation,

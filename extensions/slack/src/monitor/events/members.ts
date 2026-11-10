@@ -5,10 +5,10 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { readSlackMessages } from "../../actions.js";
 import { SlackSystemEventAuthRetryError } from "../auth.js";
-import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackMonitorEventScope } from "../event-scope.js";
 import type { SlackMemberChannelEvent } from "../types.js";
+import { qualifySlackConversationId } from "../workspace-routing.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
 export function registerSlackMemberEvents(params: {
@@ -46,9 +46,16 @@ export function registerSlackMemberEvents(params: {
           const channelInfo = channelId
             ? await runtimeContext.resolveChannelName(channelId, eventScope)
             : {};
-          const channelType = payload.channel_type ?? channelInfo?.type;
+          const channelType = channelInfo.type ?? payload.channel_type;
           if (verb === "joined" && payload.user === runtimeContext.botUserId && channelId) {
-            const roomType = normalizeSlackChannelType(channelType, channelId);
+            // Native C/G markers cannot distinguish private channels from multi-person DMs.
+            const roomType = channelInfo.type;
+            if (!roomType) {
+              runtimeContext.runtime.log?.(
+                `slack join introduction skipped: channel=${channelId} reason=channel-type-unavailable`,
+              );
+              return;
+            }
             if (roomType === "channel" || roomType === "group") {
               // Joining is conversation admission, not a human message: sender allowlists
               // and requireMention cannot apply to the bot's own membership event.
@@ -67,8 +74,8 @@ export function registerSlackMemberEvents(params: {
                 cfg: runtimeContext.cfg,
                 channel: "slack",
                 accountId: runtimeContext.accountId,
-                conversationId: channelId,
-                deliverTo: `channel:${channelId}`,
+                conversationId: qualifySlackConversationId(channelId, eventScope),
+                deliverTo: qualifySlackConversationId(`channel:${channelId}`, eventScope),
                 route: await runtimeContext.resolveSlackSystemEventRoute({
                   channelId,
                   channelType: roomType,

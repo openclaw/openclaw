@@ -3,43 +3,34 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { afterEach, describe, expect, it, vi } from "vitest";
 import anthropicVertexPlugin from "./index.js";
 
+const globalUrl = "https://aiplatform.googleapis.com";
+const aliasParams = { canonicalModelId: "claude-sonnet-5" };
+async function resolveModel(
+  modelId: string,
+  baseUrl?: string,
+  modelRegistry = ModelRegistry.inMemory(AuthStorage.inMemory()),
+) {
+  const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+  return provider.resolveDynamicModel?.({
+    provider: "anthropic-vertex",
+    modelId,
+    modelRegistry,
+    providerConfig: { baseUrl },
+  });
+}
+
 describe("Anthropic Vertex registered runtime model resolution", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it.each([
-    {
-      region: "us-central1",
-      modelId: "claude-sonnet-4-6",
-      baseUrl: "",
-      expectedUrl: "https://us-central1-aiplatform.googleapis.com",
-      inputCost: 3,
-    },
-    {
-      region: "eu",
-      modelId: "claude-sonnet-5",
-      baseUrl: undefined,
-      expectedUrl: "https://aiplatform.eu.rep.googleapis.com",
-      inputCost: 2.2,
-    },
-    {
-      region: "us-central1",
-      modelId: "claude-sonnet-5",
-      baseUrl: "https://aiplatform.googleapis.com",
-      expectedUrl: "https://aiplatform.googleapis.com",
-      inputCost: 2,
-    },
-  ])(
-    "resolves missing $modelId using $region and $baseUrl",
-    async ({ region, modelId, baseUrl, expectedUrl, inputCost }) => {
+    ["us-central1", "claude-sonnet-4-6", "", "https://us-central1-aiplatform.googleapis.com", 3],
+    ["eu", "claude-sonnet-5", undefined, "https://aiplatform.eu.rep.googleapis.com", 2.2],
+    ["us-central1", "claude-sonnet-5", globalUrl, globalUrl, 2],
+  ] as const)(
+    "resolves missing model in %s: %s, %s",
+    async (region, modelId, baseUrl, expectedUrl, inputCost) => {
       vi.stubEnv("GOOGLE_CLOUD_LOCATION", region);
-      const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-      const model = provider.resolveDynamicModel?.({
-        provider: "anthropic-vertex",
-        modelId,
-        modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-        providerConfig: { baseUrl },
-      });
-
+      const model = await resolveModel(modelId, baseUrl);
       expect(model).toMatchObject({
         id: modelId,
         provider: "anthropic-vertex",
@@ -56,47 +47,29 @@ describe("Anthropic Vertex registered runtime model resolution", () => {
     "does not invent regional inventory for %s",
     async (modelId) => {
       vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
-      const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-      expect(
-        provider.resolveDynamicModel?.({
-          provider: "anthropic-vertex",
-          modelId,
-          modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-        }),
-      ).toBeUndefined();
+      expect(await resolveModel(modelId)).toBeUndefined();
     },
   );
 
   it.each([
-    { modelId: "claude-sonnet-4-6", baseUrl: "https://aiplatform.googleapis.com" },
-    {
-      modelId: "regional-sonnet",
-      baseUrl: "https://us-east5-aiplatform.googleapis.com",
-      params: { canonicalModelId: "claude-sonnet-5" },
+    ["claude-sonnet-4-6", globalUrl, undefined],
+    ["regional-sonnet", "https://us-east5-aiplatform.googleapis.com", aliasParams],
+  ] as const)(
+    "preserves authored %s during configured completion",
+    async (modelId, baseUrl, params) => {
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+      const authored = { api: "anthropic-messages", baseUrl, models: [{ id: modelId, params }] };
+      const registry = ModelRegistry.create(AuthStorage.inMemory(), "/fixture/agent/models.json", {
+        includePluginCatalogs: false,
+        modelsJsonContents: JSON.stringify({ providers: { "anthropic-vertex": authored } }),
+      });
+      const model = await resolveModel(
+        modelId,
+        "https://aiplatform.eu.rep.googleapis.com",
+        registry,
+      );
+      expect(model).toMatchObject({ id: modelId, baseUrl });
+      expect(registry.getError()).toBeUndefined();
     },
-  ])("preserves authored $modelId during configured completion", async (authored) => {
-    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-    const registry = ModelRegistry.create(AuthStorage.inMemory(), "/fixture/agent/models.json", {
-      includePluginCatalogs: false,
-      modelsJsonContents: JSON.stringify({
-        providers: {
-          "anthropic-vertex": {
-            api: "anthropic-messages",
-            baseUrl: authored.baseUrl,
-            models: [{ id: authored.modelId, params: authored.params }],
-          },
-        },
-      }),
-    });
-    const model = provider.resolveDynamicModel?.({
-      provider: "anthropic-vertex",
-      modelId: authored.modelId,
-      modelRegistry: registry,
-      providerConfig: { baseUrl: "https://aiplatform.eu.rep.googleapis.com" },
-    });
-
-    expect(model).toMatchObject({ id: authored.modelId, baseUrl: authored.baseUrl });
-    expect(registry.getError()).toBeUndefined();
-  });
+  );
 });

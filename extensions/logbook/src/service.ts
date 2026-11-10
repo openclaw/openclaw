@@ -505,11 +505,7 @@ export class LogbookService {
       startMs: lookbackStart,
       endMs: batch.endMs,
     });
-    const observations = await store.observationsInRange(
-      batch.day,
-      Math.min(lookbackStart, batch.startMs),
-      batch.endMs,
-    );
+    const observations = await store.observationsInRange(batch.day, lookbackStart, batch.endMs);
     const window = revisionWindow({
       batchStartMs: batch.startMs,
       batchEndMs: batch.endMs,
@@ -565,9 +561,7 @@ export class LogbookService {
     if (!parsed.ok) {
       throw new Error(`card synthesis failed validation: ${parsed.error}`);
     }
-    await store.replaceCardsInWindow(batch.day, window.startMs, window.endMs, parsed.drafts, {
-      selectKeyframes: true,
-    });
+    await store.replaceCardsInWindow(batch.day, window.startMs, window.endMs, parsed.drafts);
   }
 
   async standup(day: string, refresh: boolean) {

@@ -66,7 +66,9 @@ describe("running update status", () => {
           update.updateRun = createUpdateRunFixture({ origin: { campaignId: scenario } });
         }
       }
-      mountUpdates(createProps({ updateBusy: true, update }));
+      mountUpdates(
+        createProps({ updateBusy: true, update, statusRead: new Promise<boolean>(() => {}) }),
+      );
       expect(row("Status").textContent).toContain("Updating · Staging");
       if (scenario === "read error") {
         expect(row("Status").textContent).toContain("update.runs.get timed out");

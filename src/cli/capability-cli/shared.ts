@@ -1,4 +1,3 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import {
   resolveAgentOperationAgentId,
@@ -110,17 +109,6 @@ export function requireProviderModelOverride(
     throw new Error("Model overrides must use the form <provider/model>.");
   }
   return { provider, model };
-}
-
-export function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const value = parseStrictPositiveInteger(raw);
-  if (value === undefined) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
 }
 
 export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {

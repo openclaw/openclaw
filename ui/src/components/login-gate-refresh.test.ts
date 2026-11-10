@@ -9,15 +9,15 @@ import { gatePart, mountFailure } from "./login-gate.test-support.ts";
 
 const retry = recovery.retryStaleChunkReloadWhenReachable;
 let reload: ReturnType<typeof vi.fn<() => void>>;
-let probe: ReturnType<typeof vi.fn<() => Promise<{ ok: boolean }>>>;
+let probe: ReturnType<typeof vi.fn<() => Promise<Response>>>;
 const refresh = (element: HTMLElement) =>
   element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")!;
 const mountMismatch = () => mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
 const expectAttempt = () => expect(recovery.retryStaleChunkReloadWhenReachable);
 function deferredProbe() {
-  const { promise, resolve } = Promise.withResolvers<{ ok: boolean }>();
+  const { promise, resolve } = Promise.withResolvers<Response>();
   probe.mockReturnValueOnce(promise);
-  return () => resolve({ ok: true });
+  return () => resolve(new Response());
 }
 async function pendingRefresh() {
   const finish = deferredProbe();
@@ -33,7 +33,7 @@ async function expectCancelled() {
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
   reload = vi.fn();
-  probe = vi.fn().mockResolvedValue({ ok: false });
+  probe = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
   vi.stubGlobal("fetch", probe);
   // Exercise production retry/probe/election; replace only final navigation.
   vi.spyOn(recovery, "retryStaleChunkReloadWhenReachable").mockImplementation((deps) =>
@@ -45,9 +45,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-it("waits through a failed HEAD handoff probe and admits only one click", async () => {
+it("waits through a failed document handoff probe and admits only one click", async () => {
   vi.useFakeTimers();
-  probe.mockResolvedValueOnce({ ok: false }).mockResolvedValueOnce({ ok: true });
+  probe
+    .mockResolvedValueOnce(new Response(null, { status: 503 }))
+    .mockResolvedValueOnce(new Response());
   const element = await mountMismatch();
   refresh(element).click();
   refresh(element).click();
@@ -61,8 +63,8 @@ it("waits through a failed HEAD handoff probe and admits only one click", async 
   expect(probe).toHaveBeenCalledWith(
     new URL("/index.html", window.location.href).href,
     expect.objectContaining({
-      method: "HEAD",
       cache: "no-store",
+      headers: { "X-OpenClaw-Reachability-Probe": "1" },
       signal: expect.any(AbortSignal),
     }),
   );
@@ -74,18 +76,25 @@ it.each(["bounded wait", "rejected retry"])("returns to Retry after %s", async (
     vi.mocked(recovery.retryStaleChunkReloadWhenReachable).mockRejectedValueOnce(new Error());
   }
   const element = await mountMismatch();
-  refresh(element).click();
+  const button = refresh(element);
+  button.focus();
+  button.click();
   await vi.advanceTimersByTimeAsync(failure === "bounded wait" ? 30_000 : 0);
   await element.updateComplete;
   expect(reload).not.toHaveBeenCalled();
   expect(refresh(element).disabled).toBe(false);
   expect(refresh(element).textContent?.trim()).toBe("Retry");
-  if (failure === "bounded wait") {
-    probe.mockResolvedValue({ ok: true });
-    refresh(element).click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(reload).toHaveBeenCalledOnce();
-  }
+  expect(refresh(element)).toBe(button);
+  expect(document.activeElement).toBe(button);
+  const finish = deferredProbe();
+  button.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(refresh(element)).toBe(button);
+  expect(button.disabled).toBe(true);
+  expect(button.textContent?.trim()).toBe("Refreshing…");
+  finish();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(reload).toHaveBeenCalledOnce();
 });
 it.each([
   ["connected", { connected: true }],

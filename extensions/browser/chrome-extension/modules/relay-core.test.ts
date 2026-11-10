@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { storageArea } from "./browser.test-support.js";
 import {
   createPairingConfigStore,
@@ -7,13 +7,16 @@ import {
   directLoopbackRelayPort,
 } from "./relay-core.js";
 
+afterEach(() => vi.unstubAllGlobals());
+
 const RELAY_SECRET = "a".repeat(64);
 const localPairing = { relayUrl: "ws://127.0.0.1:18797/extension", token: RELAY_SECRET };
 const pairingKeys = ["relayUrl", "gatewayUrl", "token", "authVersion"];
 
 function pairingStore(stored: Record<string, unknown> = {}) {
   const storage = storageArea(stored);
-  return { stored: storage.values, ...storage, store: createPairingConfigStore(storage) };
+  vi.stubGlobal("chrome", { storage: { local: storage } });
+  return { stored: storage.values, ...storage, store: createPairingConfigStore() };
 }
 
 describe("parsePairingString", () => {
@@ -139,7 +142,7 @@ describe("persisted pairing storage", () => {
     expect(remove).toHaveBeenCalledWith(pairingKeys);
     expect(set).toHaveBeenCalledWith({ pairingStatus: "proxy-prefix-unsupported" });
 
-    const afterWorkerRestart = await createPairingConfigStore(storage).read();
+    const afterWorkerRestart = await createPairingConfigStore().read();
     expect(afterWorkerRestart.pairingStatusHint).toContain("openclaw browser extension pair");
   });
 

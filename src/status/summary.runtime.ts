@@ -153,15 +153,6 @@ function resolveStatusModelLookupRef(params: {
   return parsed ?? { provider: provider ?? defaultProvider, model };
 }
 
-function resolveStatusModelComparisonLabel(params: {
-  provider?: unknown;
-  model?: unknown;
-  defaultProvider?: unknown;
-}): string | null {
-  const ref = resolveStatusModelLookupRef(params);
-  return ref ? `${ref.provider}/${ref.model}` : null;
-}
-
 function resolveSessionModelRef(
   resolved: { provider: string; model: string },
   entry?:
@@ -289,5 +280,4 @@ export const statusSummaryRuntime = {
   readSessionRuntimeMetadata,
   resolveConfiguredStatusModelRef,
   resolveStatusModelLookupRef,
-  resolveStatusModelComparisonLabel,
 };

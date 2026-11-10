@@ -51,13 +51,15 @@ export async function queueSessionsSendSteeringWithCustody(
           void queued.then(
             (outcome) => {
               admission.resolve(outcome);
-              if (outcome.status === "rejected") {
+              if (outcome.status === "rejected" && !accepted) {
                 settlement.resolve();
               }
             },
             (error: unknown) => {
               admission.reject(error);
-              settlement.resolve();
+              if (!accepted) {
+                settlement.resolve();
+              }
             },
           );
           // Receiver teardown can precede a backend's queue receipt.

@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import * as githubIssue from "./github-issue.js";
@@ -17,6 +18,10 @@ import { readUpdateFailureReportReceipt } from "./restart-sentinel.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { submitUpdateFailureReport } from "./update-failure-report.js";
 
+type AsyncOverride<F extends (...args: never[]) => unknown> = (
+  ...args: Parameters<F>
+) => ReturnType<F> | Awaited<ReturnType<F>>;
+
 type ReportFixtureControls = {
   createIssue?: (
     issue: PreparedGithubIssue,
@@ -26,18 +31,9 @@ type ReportFixtureControls = {
     issue: PreparedGithubIssue,
     hooks: githubIssue.GithubIssueReconcileHooks,
   ) => Promise<githubIssue.GithubIssueReconcileResult>;
-  finalizeReceipt?: (
-    ...args: Parameters<typeof reportReceipts.finalizeUpdateFailureReportReceipt>
-  ) => boolean | Promise<boolean>;
-  markPending?: (
-    ...args: Parameters<typeof reportReceipts.markUpdateFailureReportReceiptPending>
-  ) => boolean | Promise<boolean>;
-  readReceipt?: (
-    ...args: Parameters<typeof reportReceipts.readUpdateFailureReportReceipt>
-  ) =>
-    | reportReceipts.UpdateFailureReportReceipt
-    | null
-    | Promise<reportReceipts.UpdateFailureReportReceipt | null>;
+  finalizeReceipt?: AsyncOverride<typeof reportReceipts.finalizeUpdateFailureReportReceipt>;
+  markPending?: AsyncOverride<typeof reportReceipts.markUpdateFailureReportReceiptPending>;
+  readReceipt?: AsyncOverride<typeof reportReceipts.readUpdateFailureReportReceipt>;
 };
 
 type ReportFixtureOptions = NonNullable<Parameters<typeof submitUpdateFailureReport>[2]> &
@@ -121,6 +117,10 @@ export function createUpdateFailureReportFixture(
   };
 }
 
+export async function expectMissing(file: string) {
+  await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 export function savedReportArtifactPath(
   prepared: PreparedUpdateFailureReport,
   reservationId: string,
@@ -133,43 +133,43 @@ export function savedReportArtifactPath(
   return path.join(parsed.dir, `${parsed.name}.${artifactKey}${parsed.ext}`);
 }
 
-export function mockCreatedIssue(url: string) {
+function mockIssue<T extends githubIssue.GithubIssueSubmitResult>(
+  result: T,
+  create: boolean,
+  controls: { afterAuth?: () => void; onCreate?: () => void } = {},
+) {
   return vi.fn(async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
     await hooks.afterAuthPreflight?.();
-    const commitIssueCreate = await hooks.beforeIssueCreate?.();
-    commitIssueCreate?.();
-    return { status: "created" as const, url };
+    controls.afterAuth?.();
+    if (create) {
+      const commitIssueCreate = await hooks.beforeIssueCreate?.();
+      commitIssueCreate?.();
+      controls.onCreate?.();
+    }
+    return result;
   });
 }
 
-export function mockFallbackIssue(fallbackUrl: string | undefined) {
-  if (!fallbackUrl) {
-    throw new Error("expected an available browser handoff");
-  }
-  return vi.fn(async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
-    await hooks.afterAuthPreflight?.();
-    return {
-      url: fallbackUrl,
-      reason: "cli-unavailable" as const,
-      status: "browser-fallback" as const,
-    };
-  });
-}
+export const mockCreatedIssue = (
+  url: string,
+  controls?: { afterAuth?: () => void; onCreate?: () => void },
+) => mockIssue({ status: "created", url }, true, controls);
+export const mockFallbackIssue = (url: string | undefined) => fallbackIssue(url, false);
+export const mockFallbackAfterIssueCreateNoStart = (url: string | undefined) =>
+  fallbackIssue(url, true);
 
-export function mockFallbackAfterIssueCreateNoStart(fallbackUrl: string | undefined) {
+function fallbackIssue(fallbackUrl: string | undefined, create: boolean) {
   if (!fallbackUrl) {
     throw new Error("expected an available browser handoff");
   }
-  return vi.fn(async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
-    await hooks.afterAuthPreflight?.();
-    const commitIssueCreate = await hooks.beforeIssueCreate?.();
-    commitIssueCreate?.();
-    return {
+  return mockIssue(
+    {
       url: fallbackUrl,
-      reason: "transport-unavailable" as const,
-      status: "browser-fallback" as const,
-    };
-  });
+      reason: create ? "transport-unavailable" : "cli-unavailable",
+      status: "browser-fallback",
+    },
+    create,
+  );
 }
 
 /** Age the persisted lease through a foreign writer, preserving worker-clock behavior. */

@@ -72,10 +72,9 @@ export function applySidebarSessionOwnerFilter(input: {
   };
   // An absent facet is unresolved during hydration. A present facet is the
   // Gateway's complete owner inventory, even when rows are owner-filtered.
-  const selectedOwnerId = input.selectedOwnerId?.trim() || null;
   // A complete facet may omit an owner with no rows. That means an empty
   // filtered list, never permission to broaden the selected owner to everyone.
-  const activeOwnerId = selectedOwnerId;
+  const activeOwnerId = input.selectedOwnerId?.trim() || null;
   const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
     const filtered: SidebarRecentSession[] = [];
     for (const row of treeRows) {
@@ -85,7 +84,15 @@ export function applySidebarSessionOwnerFilter(input: {
         !input.selectedProfileId ||
         (row.owner?.actor.type === "human" && ownerId === input.selectedProfileId);
       if (ownerId === activeOwnerId && profileMatches) {
-        filtered.push({ ...row, children });
+        // Retain unloaded links for discovery, but count only visible loaded children.
+        const childSessionKeys = new Set(row.childSessionKeys);
+        for (const child of row.children) {
+          childSessionKeys.delete(child.key);
+        }
+        for (const child of children) {
+          childSessionKeys.add(child.key);
+        }
+        filtered.push({ ...row, children, childSessionKeys: [...childSessionKeys] });
       } else {
         for (const child of children) {
           filtered.push({ ...child, isChild: false });

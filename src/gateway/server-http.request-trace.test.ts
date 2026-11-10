@@ -12,7 +12,6 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { buildControlUiSessionEntryUrl } from "./control-ui-session-entry-path.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -63,19 +62,15 @@ it("retries a protected session-entry probe after background agent preparation",
       createGatewayRequestContext(makeContextParams()),
       () => projection,
     );
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    const reservation = await reserveTestPortListener({
-      offsets: [0],
-      createListener: () =>
-        createServer({
-          controlUiEnabled: true,
-          resolvedAuth: { mode: "token", token: "test-token", allowTailscale: false },
-          getRuntimeConfig: () => cfg,
-          getGatewayRequestContext: () => context,
-        }),
+    using errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = createServer({
+      controlUiEnabled: true,
+      resolvedAuth: { mode: "token", token: "test-token", allowTailscale: false },
+      getRuntimeConfig: () => cfg,
+      getGatewayRequestContext: () => context,
     });
     try {
-      const url = `http://127.0.0.1:${reservation.claim.port}${buildControlUiSessionEntryUrl("/chat/worker/absent", "")}&probe=1`;
+      const url = `${await listenLoopback(server)}${buildControlUiSessionEntryUrl("/chat/worker/absent", "")}&probe=1`;
       const headers = {
         authorization: "Bearer test-token",
         "x-openclaw-scopes": "operator.admin",
@@ -91,11 +86,8 @@ it("retries a protected session-entry probe after background agent preparation",
       expect(recovered.status).toBe(403);
       await recovered.text();
     } finally {
-      reservation.listener.closeAllConnections();
-      await reservation.releaseListener();
-      await reservation.claim.release();
+      await closeHttpServer(server);
       projection.dispose();
-      errorLog.mockRestore();
       recordAgentDatabaseAdmissions([], { source: "startup" });
     }
   });

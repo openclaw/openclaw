@@ -1,4 +1,14 @@
-import { For, Show, createMemo, onSettled } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createSignal,
+  isPending,
+  onSettled,
+} from "solid-js";
 import {
   createRuntimeToolMatcher,
   createToolPolicyMatcher,
@@ -8,136 +18,83 @@ import {
   normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
-import type { ToolsEffectiveEntry } from "../../api/types.ts";
+import type { ToolsCatalogResult } from "../../api/types.ts";
+import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsSection,
   SettingsRow,
+  SettingsSegmented,
   SettingsToggle,
-  SettingsEmpty,
   SettingsLoadingSkeleton,
 } from "../../components/solid/settings-ui.tsx";
 import { GitHubIdentity } from "../../features/github-connections/github-identity-view.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import {
-  type AgentToolEntry,
-  type AgentToolSection,
   resolveToolProfileOptions,
   resolveToolSections,
+  type AgentToolEntry,
 } from "../../lib/agents/tool-catalog.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { resolveAgentConfigEntryTarget } from "../../lib/config/config-state-model.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
-import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
-import { AgentPanelAction, renderAgentPanelFacts } from "./panel-ui.tsx";
-import { resolveToolAvailability, renderToolPolicyDetails } from "./tool-access-diagnostics.tsx";
+import { AgentPanelAction, renderAgentPanelFacts, type AgentConfigState } from "./panel-ui.tsx";
+import {
+  buildToolPresentation,
+  renderToolMetaBadges,
+  resolvePreviewTools,
+  toToolAnchorId,
+  ToolListed,
+  ToolPreview,
+  ToolRuntime,
+  type EffectivePreview,
+} from "./tools-preview.tsx";
 
 registerSettingsEnglish();
 
-function renderToolMetaBadges(labels: string[]) {
-  if (labels.length === 0) {
-    return undefined;
-  }
-  return (
-    <div class="agent-tool-badges">
-      <For each={labels}>{(label) => <span class="settings-row__value">{label}</span>}</For>
-    </div>
-  );
-}
-
-function buildToolPresentation(
-  section: AgentToolSection,
-  tool: AgentToolEntry,
-  activeEntry: ToolsEffectiveEntry | null,
-) {
-  const source = tool.source ?? section.source;
-  const pluginId = tool.pluginId ?? section.pluginId;
-  const sourceLabel =
-    source === "plugin" && pluginId
-      ? t("agentTools.plugin", { id: pluginId })
-      : t("agentTools.builtIn");
-  const badges: string[] = [];
-  if (activeEntry && !activeEntry.deniedBySession) {
-    badges.push(t("agentTools.inPreview"));
-  }
-  if (source === "core" || (source === "plugin" && pluginId)) {
-    badges.push(sourceLabel);
-  }
-  if (tool.optional) {
-    badges.push(t("agentTools.optional"));
-  }
-  return { badges, sourceLabel };
-}
-
-function formatToolPolicyLabels(params: {
-  allowed: boolean;
-  baseAllowed: boolean;
-  denied: boolean;
-}) {
-  const [state, summary]: [string, string] = params.denied
-    ? ["agentTools.disabledByOverride", "agentTools.overrideOff"]
-    : params.allowed
-      ? params.baseAllowed
-        ? ["agentTools.enabledByProfile", "agentTools.enabled"]
-        : ["agentTools.enabledByOverride", "agentTools.overrideOn"]
-      : ["agentTools.notIncluded", "agentTools.profileOff"];
-  return { state: t(state), summary: t(summary) };
-}
-
-function toToolAnchorId(toolId: string) {
-  const safe = normalizeToolPolicyName(toolId).replace(/[^a-z0-9_-]+/g, "-");
-  return `agent-tool-${safe}`;
-}
-
-const MAX_RUNTIME_TOOL_CHIPS = 12;
-
-function renderEffectiveToolBadge(tool: {
-  source: "core" | "plugin" | "channel" | "mcp";
-  pluginId?: string;
-  channelId?: string;
-}) {
-  if (tool.source === "plugin") {
-    return tool.pluginId
-      ? t("agentTools.plugin", { id: tool.pluginId })
-      : t("agentTools.pluginSource");
-  }
-  if (tool.source === "channel") {
-    return tool.channelId
-      ? t("agentTools.channelSource", { id: tool.channelId })
-      : t("agentTools.channel");
-  }
-  if (tool.source === "mcp") {
-    return "MCP";
-  }
-  return t("agentTools.builtIn");
-}
-
 export function AgentTools(
-  params: AgentConfigActions &
+  params: AgentConfigState &
     AgentsPageView["tools"] &
     Pick<AgentsPageView, "readData"> & {
       agentId: string;
       configForm: Record<string, unknown> | null;
     },
 ) {
+  const toolGroups = new Map<
+    HTMLDetailsElement,
+    { readonly tools: AgentToolEntry[]; open: () => void }
+  >();
   const toolTargets = new Map<
-    string,
-    { details: HTMLDetailsElement; summary: HTMLElement; group: HTMLDetailsElement }
+    HTMLElement,
+    {
+      anchorId: () => string;
+      details: HTMLDetailsElement;
+      summary: HTMLElement;
+      group: HTMLDetailsElement;
+    }
   >();
   const jumpToTool = (event: Event, anchorId: string) => {
-    const target = toolTargets.get(anchorId);
-    if (!target) {
+    // Closed groups have no rows yet. Open the matching live group before resolving its row.
+    const group = Array.from(toolGroups).find(
+      ([element, entry]) =>
+        element.isConnected && entry.tools.some((tool) => toToolAnchorId(tool.id) === anchorId),
+    );
+    if (!group) {
       return;
     }
     event.preventDefault();
-    target.group.open = true;
-    target.details.open = true;
+    group[1].open();
     const nextUrl = new URL(window.location.href);
     nextUrl.hash = anchorId;
     window.history.replaceState(null, "", nextUrl);
     onSettled(() => {
-      if (target.details.isConnected) {
+      const target = Array.from(toolTargets.values()).find(
+        (entry) => entry.anchorId() === anchorId && entry.group === group[0],
+      );
+      if (target?.details.isConnected) {
+        target.details.open = true;
         target.details.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
         target.summary.focus();
       }
@@ -147,14 +104,6 @@ export function AgentTools(
   const agentTools = () => config().entry?.tools ?? {};
   const globalTools = () => config().globalTools ?? {};
   const profile = () => agentTools().profile ?? globalTools().profile ?? "full";
-  const profileOptions = createMemo(() => {
-    i18nRevision();
-    return resolveToolProfileOptions(params.readData().toolsCatalogResult);
-  });
-  const toolSections = createMemo(() => {
-    i18nRevision();
-    return resolveToolSections(params.readData().toolsCatalogResult);
-  });
   const profileSource = () =>
     agentTools().profile
       ? t("agentTools.profileSourceAgent")
@@ -169,17 +118,12 @@ export function AgentTools(
     const tools = globalTools();
     return Array.isArray(tools.allow) && tools.allow.length > 0;
   };
-  const catalogLoading = () =>
-    params.readData().toolsCatalogLoading &&
-    !params.readData().toolsCatalogResult &&
-    !params.readData().toolsCatalogError;
   const editable = () =>
     params.canUpdateConfig &&
     Boolean(params.configForm) &&
     !params.configLoading &&
     !params.configSaving &&
-    !hasAgentAllow() &&
-    !catalogLoading();
+    !hasAgentAllow();
   const alsoAllow = createMemo(() => {
     const tools = agentTools();
     return hasAgentAllow() ? [] : Array.isArray(tools.alsoAllow) ? tools.alsoAllow : [];
@@ -193,9 +137,6 @@ export function AgentTools(
     hasAgentAllow()
       ? { allow: agentTools().allow ?? [], deny: configuredDeny() }
       : resolveToolProfilePolicy(profile()),
-  );
-  const toolIds = createMemo(() =>
-    toolSections().flatMap((section) => section.tools.map((tool) => tool.id)),
   );
   const matchesBase = createMemo(() => createToolPolicyMatcher(basePolicy()));
   const matchesAllow = createMemo(() => createRuntimeToolMatcher(alsoAllow()));
@@ -213,55 +154,51 @@ export function AgentTools(
       denied,
     };
   };
-  const enabledCount = createMemo(
-    () => toolIds().filter((toolId) => resolveAllowed(toolId).allowed).length,
-  );
-  const preview = createMemo(() =>
-    !params.runtimeSessionMatchesSelectedAgent
-      ? { status: "otherAgent", empty: "switchAgent" }
-      : params.readData().toolsEffectiveLoading
-        ? { status: "previewLoading", empty: "loadingPreview" }
-        : params.readData().toolsEffectiveError
-          ? { status: "previewUnavailable", empty: "previewError" }
-          : !params.readData().toolsEffectiveResult
-            ? { status: "previewNotLoaded", empty: "previewNotLoaded" }
-            : null,
-  );
-  const previewStatus = createMemo(() => {
-    const current = preview();
-    return current ? t(`agentTools.${current.status}`) : null;
-  });
-  const previewResult = createMemo(() =>
-    previewStatus() ? null : params.readData().toolsEffectiveResult,
-  );
-  const unverifiedReason = () =>
-    previewStatus() ?? (params.configDirty ? t("agentTools.unsavedAvailability") : null);
-  const toolAccess = () => (unverifiedReason() ? null : (previewResult()?.toolAccess ?? null));
-  const diagnosticMap = createMemo(
-    () =>
-      new Map(toolAccess()?.tools.map((tool) => [normalizeToolPolicyName(tool.id), tool] as const)),
-  );
-  const effectiveTools = createMemo(() =>
-    (previewResult()?.groups ?? []).flatMap((group) => group.tools),
-  );
-  const activeToolMap = createMemo(
-    () =>
-      new Map(effectiveTools().map((tool) => [normalizeToolPolicyName(tool.id), tool] as const)),
-  );
-  const availableTools = createMemo(
-    () =>
-      new Map(
-        effectiveTools()
-          .filter((tool) => !tool.deniedBySession)
-          .map((tool) => [normalizeToolPolicyName(tool.id), tool] as const),
-      ),
-  );
-  const uniqueEffectiveTools = createMemo(() => [...availableTools().values()]);
-  const visibleEffectiveTools = createMemo(() =>
-    uniqueEffectiveTools().slice(0, MAX_RUNTIME_TOOL_CHIPS),
-  );
-  const hiddenEffectiveToolCount = () =>
-    uniqueEffectiveTools().length - visibleEffectiveTools().length;
+  const effectivePreviewTools = createMemo(() => resolvePreviewTools(params.readEffective()));
+
+  function EffectiveBoundary(props: { children: (preview: EffectivePreview) => JSX.Element }) {
+    const ready = (): EffectivePreview => {
+      const result = params.readEffective();
+      if (isPending(() => params.readEffective())) {
+        return { result: null, status: "previewLoading", empty: "loadingPreview" };
+      }
+      return {
+        result,
+        facts: effectivePreviewTools(),
+        status: result ? null : "previewNotLoaded",
+        empty: result ? null : "previewNotLoaded",
+      };
+    };
+    return (
+      <Show
+        when={params.runtimeSessionMatchesSelectedAgent}
+        fallback={props.children({ status: "otherAgent", empty: "switchAgent", result: null })}
+      >
+        <Show when={params.effectiveRequest ?? params.agentId} keyed>
+          <Errored
+            fallback={(_error) =>
+              props.children({
+                status: "previewUnavailable",
+                empty: "previewError",
+                result: null,
+              })
+            }
+          >
+            <Loading
+              on={params.effectiveRequest}
+              fallback={props.children({
+                status: "previewLoading",
+                empty: "loadingPreview",
+                result: null,
+              })}
+            >
+              {props.children(ready())}
+            </Loading>
+          </Errored>
+        </Show>
+      </Show>
+    );
+  }
 
   const handleToolsUpdate = (targetIds: string[], nextEnabled: boolean) => {
     const nextAllow = new Set(normalizeToolList(alsoAllow()));
@@ -282,211 +219,172 @@ export function AgentTools(
     params.onOverridesChange(params.agentId, [...nextAllow], [...nextDeny]);
   };
 
-  const runtimeAvailability = createMemo(() => {
-    const current = preview();
-    return current ? (
-      current.status === "previewLoading" ? (
-        <SettingsLoadingSkeleton label={t(`agentTools.${current.empty}`)} rows={2} />
-      ) : (
-        <SettingsEmpty message={t(`agentTools.${current.empty}`)} />
-      )
-    ) : uniqueEffectiveTools().length === 0 ? (
-      <SettingsEmpty message={t("agentTools.emptyPreview")} />
-    ) : (
-      <div class="agents-panel-body">
-        <div class="agent-tools-runtime">
-          <For each={visibleEffectiveTools()} keyed={(tool) => tool.id}>
-            {(tool) => {
-              const anchorId = () => toToolAnchorId(tool().id);
-              return (
-                <a
-                  class="agent-tools-runtime-chip"
-                  href={`#${anchorId()}`}
-                  onClick={(event: Event) => jumpToTool(event, anchorId())}
-                >
-                  <span class="mono" translate="no">
-                    {tool().label}
-                  </span>
-                  <span class="agent-tools-runtime-chip__meta">
-                    {renderEffectiveToolBadge(tool())}
-                  </span>
-                </a>
-              );
-            }}
-          </For>
-          {hiddenEffectiveToolCount() > 0 ? (
-            <span
-              class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
-              title={t("agentTools.morePreviewTitle", {
-                count: String(hiddenEffectiveToolCount()),
-              })}
-            >
-              {t("agentTools.morePreview", {
-                count: String(hiddenEffectiveToolCount()),
-              })}
-            </span>
-          ) : undefined}
-        </div>
-      </div>
+  function Configuration(props: {
+    catalog: ToolsCatalogResult | null;
+    pending?: boolean;
+    failed?: boolean;
+  }) {
+    const profileOptions = createMemo(() => {
+      i18nRevision();
+      return resolveToolProfileOptions(props.catalog);
+    });
+    const toolIds = createMemo(() =>
+      resolveToolSections(props.catalog).flatMap((section) => section.tools.map((tool) => tool.id)),
     );
-  });
-
-  return (
-    <>
-      <For
-        each={
-          [
-            [!params.configForm, "agentTools.loadConfig"],
-            [hasAgentAllow(), "agentTools.explicitAllowlist"],
-            [hasGlobalAllow(), "agentTools.globalAllowlist"],
-            [params.readData().toolsCatalogError, "agentTools.catalogFallback"],
-          ] as const
-        }
-      >
-        {(entry) => (entry[0] ? <div class="callout info">{t(entry[1])}</div> : undefined)}
-      </For>
-      <SettingsSection
-        title={t("agentTools.title")}
-        description={
-          <>
-            {t("agentTools.subtitle")}
-            <span class="mono">
-              {t("agentTools.enabledSummary", {
-                enabled: String(enabledCount()),
-                total: String(toolIds().length),
-              })}
-            </span>
-          </>
-        }
-        actions={
-          <>
-            <For each={[true, false]}>
-              {(enabled) => (
+    const enabledCount = createMemo(
+      () => toolIds().filter((toolId) => resolveAllowed(toolId).allowed).length,
+    );
+    return (
+      <>
+        <For
+          each={
+            [
+              [!params.configForm, "agentTools.loadConfig", undefined],
+              [
+                hasAgentAllow(),
+                "agentTools.explicitAllowlist",
+                resolveAgentConfigEntryTarget(params.configForm, params.agentId)
+                  ?.path.concat("tools", "allow")
+                  .join("."),
+              ],
+              [hasGlobalAllow(), "agentTools.globalAllowlist", "tools.allow"],
+              [props.failed, "agentTools.catalogFallback", undefined],
+            ] as const
+          }
+        >
+          {(entry) =>
+            entry[0] ? (
+              <InlineAlert tone="info">
+                {t(entry[1])}
+                {entry[2] ? (
+                  <>
+                    {" "}
+                    <code>{entry[2]}</code>
+                  </>
+                ) : undefined}
+              </InlineAlert>
+            ) : undefined
+          }
+        </For>
+        <SettingsSection
+          title={t("agentTools.title")}
+          description={
+            <>
+              {t("agentTools.subtitle")}{" "}
+              <span class="mono">
+                {t("agentTools.enabledSummary", {
+                  enabled: String(enabledCount()),
+                  total: String(toolIds().length),
+                })}
+              </span>
+            </>
+          }
+          actions={
+            <>
+              <Show when={props.failed}>
                 <AgentPanelAction
-                  label={t(enabled ? "agentTools.enableAll" : "agentTools.disableAll")}
-                  disabled={!editable()}
-                  onClick={() => handleToolsUpdate(toolIds(), enabled)}
+                  label={t("common.retry")}
+                  disabled={false}
+                  onClick={() => params.onRetryCatalog()}
                 />
-              )}
-            </For>
-            <AgentConfigButtons {...params} />
-          </>
-        }
-      >
-        {renderAgentPanelFacts([
-          ["agentTools.profile", <code>{profile()}</code>],
-          ["agentTools.source", profileSource()],
-          [
-            "agentTools.enabled",
-            <code>
-              {enabledCount()}/{toolIds().length}
-            </code>,
-          ],
-          ["agentTools.listed", <code>{previewStatus() ?? uniqueEffectiveTools().length}</code>],
-          [
-            "agentTools.status",
-            t(
-              params.configSaving
-                ? "agentTools.statusSaving"
-                : params.configDirty
-                  ? "agentTools.statusUnsaved"
-                  : "agentTools.statusSaved",
-            ),
-          ],
-        ])}
-        <SettingsRow
-          title={t("agentTools.quickPresets")}
-          stacked
-          control={
-            <div class="agent-tools-buttons">
-              <For each={profileOptions()}>
-                {(option) => (
-                  <button
-                    class={["btn btn--sm", { active: profile() === option.id }]}
-                    disabled={!editable()}
-                    onClick={() => params.onProfileChange(params.agentId, option.id, true)}
-                  >
-                    {option.label}
-                  </button>
+              </Show>
+              <For each={[true, false]}>
+                {(enabled) => (
+                  <AgentPanelAction
+                    label={t(enabled ? "agentTools.enableAll" : "agentTools.disableAll")}
+                    disabled={!editable() || (props.pending ?? false)}
+                    onClick={() => handleToolsUpdate(toolIds(), enabled)}
+                  />
                 )}
               </For>
-              <AgentPanelAction
-                label={t("agentTools.inherit")}
-                disabled={!editable()}
-                onClick={() => params.onProfileChange(params.agentId, null, false)}
-              />
-            </div>
+            </>
           }
-        />
-      </SettingsSection>
-      <SettingsSection
-        title={t("agentTools.previewTitle")}
-        description={
-          <>
-            {t("agentTools.previewSubtitle")}
-            <span class="mono">{params.runtimeSessionKey || t("agentTools.noSession")}</span>
-          </>
-        }
-      >
-        <Show when={previewResult()?.notices?.length}>
-          <div class="agent-tools-notices">
-            <For each={previewResult()?.notices}>
-              {(notice) => (
-                <div
-                  class={["callout", notice.severity === "warning" ? "warning" : "info"]}
-                  style={{ "margin-top": "12px" }}
-                >
-                  {formatUiExternalText(notice.message)}
-                </div>
-              )}
-            </For>
-          </div>
-        </Show>
-        {runtimeAvailability()}
-      </SettingsSection>
-      <GitHubIdentity
-        identity={params.githubIdentity}
-        onOpenConnections={params.onOpenGitHubConnections}
-      />
+        >
+          {renderAgentPanelFacts([
+            ["agentTools.profile", <code>{profile()}</code>],
+            ["agentTools.source", profileSource()],
+            [
+              "agentTools.enabled",
+              <code>
+                {enabledCount()}/{toolIds().length}
+              </code>,
+            ],
+            [
+              "agentTools.listed",
+              <EffectiveBoundary>
+                {(preview) => <ToolListed preview={preview} />}
+              </EffectiveBoundary>,
+            ],
+          ])}
+          <SettingsRow
+            title={t("agentTools.quickPresets")}
+            stackedOnNarrow
+            control={
+              <div class="agent-tools-buttons">
+                <SettingsSegmented
+                  mode="buttons"
+                  ariaLabel={t("agentTools.quickPresets")}
+                  value={profile()}
+                  options={profileOptions().map((option) => ({
+                    value: option.id,
+                    label: option.label,
+                  }))}
+                  disabled={!editable() || props.pending}
+                  onChange={(id) => params.onProfileChange(params.agentId, id, true)}
+                  onReselect={(id) => params.onProfileChange(params.agentId, id, true)}
+                />
+                <AgentPanelAction
+                  label={t("agentTools.inherit")}
+                  disabled={!editable() || (props.pending ?? false)}
+                  onClick={() => params.onProfileChange(params.agentId, null, false)}
+                />
+              </div>
+            }
+          />
+        </SettingsSection>
+      </>
+    );
+  }
+
+  function Catalog(props: { catalog: ToolsCatalogResult | null }) {
+    const toolSections = createMemo(() => {
+      i18nRevision();
+      return resolveToolSections(props.catalog);
+    });
+    return (
       <SettingsSection title={t("agentTools.catalogTitle")}>
-        {catalogLoading() ? (
-          <SettingsLoadingSkeleton label={t("agentTools.loadingCatalog")} />
-        ) : undefined}
-        <div class="agents-panel-body agent-tools-grid" hidden={catalogLoading()}>
+        <div class="agents-panel-body agent-tools-grid">
           <For each={toolSections()} keyed={(section) => section.id}>
             {(section) => {
               let group!: HTMLDetailsElement;
+              const [expanded, setExpanded] = createSignal(false);
               const toolDetails = new Set<HTMLDetailsElement>();
               const groupToggled = () => {
+                setExpanded(group.open);
                 if (!group.open) {
                   for (const details of toolDetails) {
                     details.open = false;
                   }
                 }
               };
-              const sortedTools = createMemo(() => {
-                const ranked = section().tools.map((tool) => ({
-                  tool,
-                  active: availableTools().has(normalizeToolPolicyName(tool.id)),
-                  enabled: resolveAllowed(tool.id).allowed,
-                }));
-                return ranked
-                  .toSorted(
-                    (left, right) =>
-                      Number(right.active) - Number(left.active) ||
-                      Number(right.enabled) - Number(left.enabled) ||
-                      left.tool.label.localeCompare(right.tool.label),
-                  )
-                  .map((entry) => entry.tool);
+              onSettled(() => {
+                toolGroups.set(group, {
+                  get tools() {
+                    return section().tools;
+                  },
+                  open() {
+                    group.open = true;
+                    setExpanded(true);
+                  },
+                });
+                return () => toolGroups.delete(group);
               });
+              // Name order, so a row never moves when its toggle or the preview changes.
+              const sortedTools = createMemo(() =>
+                section().tools.toSorted((left, right) => left.label.localeCompare(right.label)),
+              );
               const enabledSectionCount = createMemo(
                 () => section().tools.filter((tool) => resolveAllowed(tool.id).allowed).length,
-              );
-              const activeSectionCount = createMemo(
-                () =>
-                  section().tools.filter((tool) =>
-                    availableTools().has(normalizeToolPolicyName(tool.id)),
-                  ).length,
               );
               const previewTools = createMemo(() => sortedTools().slice(0, 4));
               const remainingPreviewCount = () => sortedTools().length - previewTools().length;
@@ -497,6 +395,7 @@ export function AgentTools(
                   onToggle={groupToggled}
                 >
                   <summary class="agent-tools-group__summary">
+                    <Icon name="chevronRight" class="agent-tools-chevron" />
                     <span class="agent-tools-group__summary-main">
                       <span class="agent-tools-group__title">
                         {section().label}
@@ -529,167 +428,170 @@ export function AgentTools(
                       </span>
                     </span>
                     <span class="agent-tools-group__counts">
-                      <For
-                        each={
-                          [
-                            ["tools", section().tools.length],
-                            ["enabledTools", enabledSectionCount()],
-                            ["listedTools", activeSectionCount()],
-                          ] as const
-                        }
+                      <span
+                        title={t("agentTools.enabledSummary", {
+                          enabled: String(enabledSectionCount()),
+                          total: String(section().tools.length),
+                        })}
                       >
-                        {(entry) =>
-                          entry[0] === "listedTools" && entry[1] === 0 ? undefined : (
-                            <span>
-                              {t(`agentTools.${entry[0]}${entry[1] === 1 ? "One" : ""}`, {
-                                count: String(entry[1]),
-                              })}
-                            </span>
-                          )
-                        }
-                      </For>
+                        {enabledSectionCount()}/{section().tools.length}
+                      </span>
                     </span>
                   </summary>
-                  <div class="agent-tools-list">
-                    <For each={sortedTools()} keyed={(tool) => tool.id}>
-                      {(tool) => {
-                        let details!: HTMLDetailsElement;
-                        let summary!: HTMLElement;
-                        onSettled(() => {
-                          const key = anchorId();
-                          toolDetails.add(details);
-                          toolTargets.set(key, { details, summary, group });
-                          return () => {
-                            toolDetails.delete(details);
-                            toolTargets.delete(key);
+                  <Show when={expanded()}>
+                    <div class="agent-tools-list">
+                      <For each={sortedTools()} keyed={(tool) => tool.id}>
+                        {(tool) => {
+                          let details!: HTMLDetailsElement;
+                          let summary!: HTMLElement;
+                          onSettled(() => {
+                            toolDetails.add(details);
+                            return () => {
+                              toolDetails.delete(details);
+                              toolTargets.delete(summary);
+                            };
+                          });
+                          const captureSummary = (element: HTMLElement) => {
+                            summary = element;
+                            toolTargets.set(summary, { anchorId, details, summary, group });
                           };
-                        });
-                        const anchorId = () => toToolAnchorId(tool().id);
-                        const resolved = createMemo(() => resolveAllowed(tool().id));
-                        const activeEntry = createMemo(
-                          () => activeToolMap().get(normalizeToolPolicyName(tool().id)) ?? null,
-                        );
-                        const defaultProfiles = () => tool().defaultProfiles ?? [];
-                        const presentation = createMemo(() =>
-                          buildToolPresentation(section(), tool(), activeEntry()),
-                        );
-                        const policyLabels = createMemo(() => formatToolPolicyLabels(resolved()));
-                        const diagnostic = createMemo(
-                          () => diagnosticMap().get(normalizeToolPolicyName(tool().id)) ?? null,
-                        );
-                        const availability = createMemo(() =>
-                          resolveToolAvailability(
-                            diagnostic(),
-                            activeEntry(),
-                            unverifiedReason(),
-                            previewStatus(),
-                          ),
-                        );
-                        const previewLabel = () => {
-                          const reason = unverifiedReason();
-                          if (reason) {
-                            return reason;
+                          const anchorId = () => toToolAnchorId(tool().id);
+                          const resolved = createMemo(() => resolveAllowed(tool().id));
+                          const defaultProfiles = () => tool().defaultProfiles ?? [];
+                          const sourceLabel = () =>
+                            buildToolPresentation(section(), tool()).sourceLabel;
+                          const policyState = createMemo(() => {
+                            const policy = resolved();
+                            return t(
+                              policy.denied
+                                ? "agentTools.disabledByOverride"
+                                : policy.allowed
+                                  ? policy.baseAllowed
+                                    ? "agentTools.enabledByProfile"
+                                    : "agentTools.enabledByOverride"
+                                  : "agentTools.notIncluded",
+                            );
+                          });
+                          function PreviewPart(partProps: { part: "details" | "policy" }) {
+                            return (
+                              <EffectiveBoundary>
+                                {(preview) => (
+                                  <ToolPreview
+                                    preview={preview}
+                                    tool={tool()}
+                                    configDirty={params.configDirty}
+                                    part={partProps.part}
+                                  />
+                                )}
+                              </EffectiveBoundary>
+                            );
                           }
-                          const entry = activeEntry();
-                          return entry?.deniedBySession
-                            ? t("agentTools.sessionRestricted")
-                            : entry
-                              ? t("agentTools.previewVia", {
-                                  source: renderEffectiveToolBadge(entry),
-                                })
-                              : availability().reason || availability().summary;
-                        };
-                        return (
-                          <details
-                            ref={(element) => (details = element)}
-                            class="agent-tool-card"
-                            id={anchorId()}
-                          >
-                            <summary
-                              ref={(element) => (summary = element)}
-                              class="agent-tool-summary"
+                          return (
+                            <details
+                              ref={(element) => (details = element)}
+                              class="agent-tool-card"
+                              id={anchorId()}
                             >
-                              <div class="agent-tool-summary__main">
-                                <div class="agent-tool-summary__title-row">
+                              <summary ref={captureSummary} class="agent-tool-summary">
+                                <Icon name="chevronRight" class="agent-tools-chevron" />
+                                <div class="agent-tool-summary__main">
                                   <span class="agent-tool-title mono" translate="no">
                                     {tool().label}
                                   </span>
-                                </div>
-                                <div class="agent-tool-sub">{tool().description}</div>
-                              </div>
-                              <dl class="agent-tool-summary__facts">
-                                <div class="agent-tool-summary__fact">
-                                  <dt class="label">{t("agentTools.access")}</dt>
-                                  <dd>{policyLabels().summary}</dd>
-                                </div>
-                                <div class="agent-tool-summary__fact">
-                                  <dt class="label">{t("agentTools.previewTitle")}</dt>
-                                  <dd>
-                                    {availability().summary}
-                                    {availability().reason ? (
-                                      <div class="muted">{availability().reason}</div>
-                                    ) : undefined}
-                                  </dd>
-                                </div>
-                              </dl>
-                              <div class="agent-tool-summary__badges">
-                                {renderToolMetaBadges(presentation().badges)}
-                              </div>
-                              <span
-                                class="agent-tool-toggle"
-                                onClick={(event: Event) => event.stopPropagation()}
-                                onKeyDown={(event: KeyboardEvent) => event.stopPropagation()}
-                              >
-                                <SettingsToggle
-                                  checked={resolved().allowed}
-                                  disabled={!editable()}
-                                  ariaLabel={t(
-                                    resolved().allowed
-                                      ? "agentTools.disableNamed"
-                                      : "agentTools.enableNamed",
-                                    { name: tool().label },
-                                  )}
-                                  onChange={(checked) => handleToolsUpdate([tool().id], checked)}
-                                />
-                              </span>
-                            </summary>
-                            <div class="agent-tool-details">
-                              <div class="agent-tool-details-strip">
-                                <div class="agent-tool-detail agent-tool-detail--inline">
-                                  <div class="label">{t("agentTools.access")}</div>
-                                  <div>{policyLabels().state}</div>
-                                </div>
-                                <div class="agent-tool-detail agent-tool-detail--inline">
-                                  <div class="label">{t("agentTools.source")}</div>
-                                  <div>{presentation().sourceLabel}</div>
-                                </div>
-                                {defaultProfiles().length > 0 ? (
-                                  <div class="agent-tool-detail agent-tool-detail--inline">
-                                    <div class="label">{t("agentTools.defaultPresets")}</div>
-                                    {renderToolMetaBadges(defaultProfiles())}
+                                  <div class="agent-tool-sub" title={tool().description}>
+                                    {tool().description}
                                   </div>
-                                ) : undefined}
-                                <div class="agent-tool-detail agent-tool-detail--inline">
-                                  <div class="label">{t("agentTools.previewTitle")}</div>
-                                  <div>{previewLabel()}</div>
                                 </div>
+                                <span
+                                  class="agent-tool-toggle"
+                                  onClick={(event: Event) => event.stopPropagation()}
+                                  onKeyDown={(event: KeyboardEvent) => event.stopPropagation()}
+                                >
+                                  <SettingsToggle
+                                    checked={resolved().allowed}
+                                    disabled={!editable()}
+                                    ariaLabel={t(
+                                      resolved().allowed
+                                        ? "agentTools.disableNamed"
+                                        : "agentTools.enableNamed",
+                                      { name: tool().label },
+                                    )}
+                                    onChange={(checked) => handleToolsUpdate([tool().id], checked)}
+                                  />
+                                </span>
+                              </summary>
+                              <div class="agent-tool-details">
+                                {renderAgentPanelFacts([
+                                  ["agentTools.access", policyState()],
+                                  [
+                                    "agentTools.source",
+                                    tool().optional
+                                      ? `${sourceLabel()} · ${t("agentTools.optional")}`
+                                      : sourceLabel(),
+                                  ],
+                                  defaultProfiles().length > 0
+                                    ? [
+                                        "agentTools.defaultPresets",
+                                        renderToolMetaBadges(defaultProfiles()),
+                                      ]
+                                    : null,
+                                  ["agentTools.previewTitle", <PreviewPart part="details" />],
+                                ])}
+                                <PreviewPart part="policy" />
                                 <a class="agent-tool-jump" href={`#${anchorId()}`}>
                                   {t("agentTools.linkTool")}
                                 </a>
                               </div>
-                              {renderToolPolicyDetails(diagnostic(), toolAccess())}
-                            </div>
-                          </details>
-                        );
-                      }}
-                    </For>
-                  </div>
+                            </details>
+                          );
+                        }}
+                      </For>
+                    </div>
+                  </Show>
                 </details>
               );
             }}
           </For>
         </div>
       </SettingsSection>
+    );
+  }
+
+  return (
+    <>
+      <Show when={params.catalogRequest ?? params.agentId} keyed>
+        <Errored fallback={(_error) => <Configuration catalog={null} failed />}>
+          <Loading fallback={<Configuration catalog={null} pending />}>
+            <Configuration catalog={params.readCatalog()} />
+          </Loading>
+        </Errored>
+      </Show>
+      <EffectiveBoundary>
+        {(preview) => (
+          <ToolRuntime
+            preview={preview}
+            sessionKey={params.runtimeSessionKey}
+            onJump={jumpToTool}
+          />
+        )}
+      </EffectiveBoundary>
+      <GitHubIdentity
+        identity={params.githubIdentity}
+        onOpenConnections={params.onOpenGitHubConnections}
+      />
+      <Show when={params.catalogRequest ?? params.agentId} keyed>
+        <Errored fallback={(_error) => <Catalog catalog={null} />}>
+          <Loading
+            fallback={
+              <SettingsSection title={t("agentTools.catalogTitle")}>
+                <SettingsLoadingSkeleton label={t("agentTools.loadingCatalog")} />
+              </SettingsSection>
+            }
+          >
+            <Catalog catalog={params.readCatalog()} />
+          </Loading>
+        </Errored>
+      </Show>
     </>
   );
 }

@@ -4,62 +4,9 @@
   gap: 22px;
 }
 
-.lobsterdex-page__header {
-  position: relative;
-  display: flex;
-  gap: 20px;
-  align-items: flex-end;
-  justify-content: space-between;
-  padding: 18px 20px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background:
-    radial-gradient(
-      circle at 12% 0%,
-      color-mix(in srgb, var(--accent) 13%, transparent),
-      transparent 42%
-    ),
-    var(--card);
-}
-
-.lobsterdex-page__header::after {
-  position: absolute;
-  right: 18px;
-  bottom: 0;
-  left: 18px;
-  height: 2px;
-  content: "";
-  background: transparent;
-}
-
-.lobsterdex-page__header--complete::after {
-  background: linear-gradient(
-    90deg,
-    transparent,
-    #f4b840 30%,
-    #f9d47a 50%,
-    #f4b840 70%,
-    transparent
-  );
-  opacity: 0.7;
-}
-
-.lobsterdex-page__header h2,
 .lobsterdex-page__card h3,
-.lobsterdex-page__header p,
 .lobsterdex-page__card p {
   margin: 0;
-}
-
-.lobsterdex-page__header h2 {
-  font-size: 24px;
-  letter-spacing: -0.025em;
-}
-
-.lobsterdex-page__header p {
-  margin-top: 4px;
-  color: var(--muted);
 }
 
 .lobsterdex-page__count {
@@ -69,11 +16,11 @@
   border-radius: 999px;
   color: var(--muted);
   background: color-mix(in srgb, var(--card) 75%, transparent);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 650;
 }
 
-.lobsterdex-page__header--complete .lobsterdex-page__count {
+.lobsterdex-page__count--complete {
   border-color: color-mix(in srgb, #f4b840 55%, var(--border));
   color: color-mix(in srgb, #f4b840 75%, var(--text));
 }
@@ -136,19 +83,19 @@
 
 .lobsterdex-page__card h3 {
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 700;
 }
 
 .lobsterdex-page__lore {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
 }
 
 .lobsterdex-page__date {
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .lobsterdex-page__dates {
@@ -164,7 +111,7 @@
   height: 26px;
   padding: 5px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   place-items: center;
   color: var(--muted);
   background: color-mix(in srgb, var(--card) 82%, transparent);
@@ -211,12 +158,6 @@
 }
 
 @media (max-width: 560px) {
-  .lobsterdex-page__header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 12px;
-  }
-
   .lobsterdex-page__grid {
     grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   }

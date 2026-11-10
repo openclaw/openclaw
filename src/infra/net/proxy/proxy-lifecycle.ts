@@ -9,6 +9,7 @@ import type {
 } from "@openclaw/proxyline";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
+import { applyProcessEnvKeys } from "../../process-env.js";
 import { loadProxyline } from "../proxyline-runtime.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
@@ -88,17 +89,6 @@ function applyProxyEnv(
   }
 }
 
-function restoreProxyEnv(snapshot: ProxyEnvSnapshot): void {
-  for (const key of ALL_PROXY_ENV_KEYS) {
-    const value = snapshot[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
 function restoreInactiveProxyRuntime(snapshot: ProxyEnvSnapshot): void {
   try {
     proxylineHandle?.stop();
@@ -106,7 +96,7 @@ function restoreInactiveProxyRuntime(snapshot: ProxyEnvSnapshot): void {
     logWarn(`proxy: failed to stop Proxyline: ${String(err)}`);
   }
   proxylineHandle = null;
-  restoreProxyEnv(snapshot);
+  applyProcessEnvKeys(ALL_PROXY_ENV_KEYS, snapshot);
   forceResetGlobalDispatcher();
   // If this process itself is a child of an active managed proxy, restoring the
   // local lifecycle should keep inherited proxy routing active.

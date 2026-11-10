@@ -48,7 +48,7 @@ const { cleanup, makeTempDir } = createTempDirHarness();
 function callMcp(toolName = "plugin.echo", args = {}, root = "/repo/openclaw") {
   return callPluginToolsMcp({
     env: {
-      gateway: { tempRoot: "/tmp/openclaw-qa-runtime", runtimeEnv: { PATH: "/usr/bin" } },
+      gateway: { runtimeEnv: { PATH: "/usr/bin" } },
       repoRoot: root,
     } as never,
     toolName,
@@ -189,5 +189,16 @@ it.each([
     }
     expect(message).not.toContain("old stderr");
     expect(closeMock).toHaveBeenCalled();
+    expect(connectMock).toHaveBeenCalledWith(expect.anything(), { timeout: 180_000 });
+    if (phase === "call") {
+      expect(listToolsMock).toHaveBeenCalledWith(
+        { method: "tools/list", params: {} },
+        { timeout: 180_000 },
+      );
+      expect(callToolMock).toHaveBeenCalledWith(
+        { name: "plugin.echo", arguments: { text: "hello" } },
+        { timeout: 180_000, toolDefinition: { name: "plugin.echo" } },
+      );
+    }
   },
 );

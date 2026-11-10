@@ -6,7 +6,7 @@ import type { Duplex } from "node:stream";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "../../../packages/gateway-client/src/websocket.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { openProviderWebSocket } from "./provider-websocket.js";
 import * as ssrf from "./ssrf.js";
@@ -155,16 +155,16 @@ describe("openProviderWebSocket", () => {
     expect(proxy.connectionCount()).toBe(0);
   });
 
-  it.each([false, true])("delegates target DNS to ambient proxy (managed=%s)", async (managed) => {
+  it.for([false, true])("delegates target DNS to ambient proxy (managed=%s)", async (active, t) => {
     const proxy = await prepareProxy();
-    if (managed) {
+    if (active) {
       vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
     }
     const socket = await openSocket(providerUrl, {
-      dispatcherPolicy: managed ? { mode: "env-proxy" } : undefined,
+      dispatcherPolicy: active ? { mode: "env-proxy" } : undefined,
     });
     socket.on("error", ignoredError);
-    const peer = await withTestTimeout(proxy.received, 2000, "Proxy did not receive CONNECT");
+    const peer = await withinTest(proxy.received, t.signal);
     const closed = once(peer, "close", { signal: AbortSignal.timeout(2000) });
     socket.terminate();
     await closed;

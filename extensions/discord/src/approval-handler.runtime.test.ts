@@ -79,6 +79,56 @@ async function buildPluginApprovalPayloadText(params?: {
 }
 
 describe("discordApprovalNativeRuntime", () => {
+  it.each([
+    { phase: "resolved", cleanup: true, deleteStatus: 204, editStatus: 200, methods: ["DELETE"] },
+    {
+      phase: "resolved",
+      cleanup: true,
+      deleteStatus: 404,
+      editStatus: 200,
+      methods: ["DELETE", "PATCH"],
+    },
+    { phase: "expired", cleanup: true, deleteStatus: 204, editStatus: 200, methods: ["PATCH"] },
+    { phase: "resolved", cleanup: false, deleteStatus: 204, editStatus: 403, methods: ["PATCH"] },
+  ] as const)(
+    "finalizes $phase approvals with cleanup=$cleanup and DELETE=$deleteStatus/PATCH=$editStatus",
+    async ({ phase, cleanup, deleteStatus, editStatus, methods }) => {
+      const container = { type: 17, components: [{ type: 10, content: "Approved" }] };
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+        const status = init?.method === "DELETE" ? deleteStatus : editStatus;
+        return status === 204
+          ? new Response(null, { status })
+          : Response.json(status === 200 ? { id: "456" } : { message: "Unavailable" }, { status });
+      });
+      try {
+        await expect(
+          discordApprovalNativeRuntime.transport.updateEntry?.({
+            ...handlerContext,
+            context: { token: "discord-token", config: { cleanupAfterResolve: cleanup } },
+            request: request("approval-1", { command: "hostname" }),
+            approvalKind: "exec",
+            entry: { discordChannelId: "123", discordMessageId: "456" },
+            payload: container,
+            phase,
+          }),
+        ).resolves.toBeUndefined();
+        expect(fetch.mock.calls.map(([, init]) => init?.method)).toEqual(methods);
+        for (const [url, init] of fetch.mock.calls) {
+          expect(url).toBe("https://discord.com/api/v10/channels/123/messages/456");
+          if (init?.method === "PATCH") {
+            expect(typeof init.body).toBe("string");
+            expect(JSON.parse(typeof init.body === "string" ? init.body : "{}")).toMatchObject({
+              components: [container],
+              allowed_mentions: { parse: [] },
+            });
+          }
+        }
+      } finally {
+        fetch.mockRestore();
+      }
+    },
+  );
+
   it("encodes the explicit owner kind in exec and plugin approval buttons", async () => {
     const execPayload = await buildExecApprovalPayloadText("hostname");
     expect(execPayload).toContain("execapproval:kind=exec;id=approval-1;action=allow-once");

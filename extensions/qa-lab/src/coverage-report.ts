@@ -9,10 +9,7 @@ import {
   resolveQaScenarioRequiredProviderMode,
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
-import {
-  readQaScorecardTaxonomyReport,
-  type QaScorecardTaxonomyReport,
-} from "./scorecard-taxonomy.js";
+import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 type QaCoverageScenarioSummary = ReturnType<typeof summarizeScenario>;
 type QaScenarioSearchMatch = ReturnType<typeof summarizeScenarioSearchMatch>;
@@ -39,37 +36,6 @@ function summarizeScenario(scenario: QaSeedScenarioWithSource) {
     surfaces: scenario.surfaces?.length ? scenario.surfaces : [scenario.surface],
     risk: scenario.risk ?? scenario.riskLevel ?? "unassigned",
   };
-}
-
-function scenarioSearchText(scenario: QaSeedScenarioWithSource) {
-  const config = scenario.execution.config ?? {};
-  return [
-    scenario.id,
-    scenario.title,
-    scenario.sourcePath,
-    scenario.surface,
-    ...(scenario.surfaces ?? []),
-    scenario.category ?? "",
-    scenario.runtimePairLane ?? "",
-    scenario.risk ?? "",
-    scenario.riskLevel ?? "",
-    scenario.objective,
-    ...scenario.successCriteria,
-    ...(scenario.capabilities ?? []),
-    ...(scenario.plugins ?? []),
-    ...(scenario.execution.channels ?? []),
-    resolveQaScenarioRequiredProviderMode(scenario) ?? "",
-    ...(scenario.docsRefs ?? []),
-    ...(scenario.codeRefs ?? []),
-    ...(scenario.coverage?.primary ?? []),
-    ...(scenario.coverage?.secondary ?? []),
-    ...Object.entries(config).flatMap(([key, value]) => [
-      key,
-      typeof value === "string" ? value : "",
-    ]),
-  ]
-    .join("\n")
-    .toLowerCase();
 }
 
 function summarizeScenarioSearchMatch(
@@ -111,7 +77,34 @@ export function findQaScenarioMatches(
   }
   return scenarios
     .filter((scenario) => {
-      const haystack = scenarioSearchText(scenario);
+      const config = scenario.execution.config ?? {};
+      const haystack = [
+        scenario.id,
+        scenario.title,
+        scenario.sourcePath,
+        scenario.surface,
+        ...(scenario.surfaces ?? []),
+        scenario.category ?? "",
+        scenario.runtimePairLane ?? "",
+        scenario.risk ?? "",
+        scenario.riskLevel ?? "",
+        scenario.objective,
+        ...scenario.successCriteria,
+        ...(scenario.capabilities ?? []),
+        ...(scenario.plugins ?? []),
+        ...(scenario.execution.channels ?? []),
+        resolveQaScenarioRequiredProviderMode(scenario) ?? "",
+        ...(scenario.docsRefs ?? []),
+        ...(scenario.codeRefs ?? []),
+        ...(scenario.coverage?.primary ?? []),
+        ...(scenario.coverage?.secondary ?? []),
+        ...Object.entries(config).flatMap(([key, value]) => [
+          key,
+          typeof value === "string" ? value : "",
+        ]),
+      ]
+        .join("\n")
+        .toLowerCase();
       return tokens.every((token) => {
         if (haystack.includes(token)) {
           return true;
@@ -201,7 +194,32 @@ function pushCoverageIdLines(lines: string[], coverageIds: readonly QaCoverageId
   }
 }
 
-function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomyReport) {
+export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): string {
+  const lines: string[] = [
+    "# QA Coverage Inventory",
+    "",
+    `- Scenarios: ${inventory.scenarioCount}`,
+    `- Taxonomy coverage IDs: ${inventory.coverageIdCount}`,
+    `- Primary coverage IDs: ${inventory.primaryCoverageIdCount}`,
+    `- Secondary coverage IDs: ${inventory.secondaryCoverageIdCount}`,
+    `- Overlapping coverage IDs: ${inventory.overlappingCoverage.length}`,
+    `- Missing coverage metadata: ${inventory.missingCoverage.length}`,
+    "",
+  ];
+
+  for (const [title, groups] of [
+    ["Theme", inventory.byTheme],
+    ["Surface", inventory.bySurface],
+  ] as const) {
+    lines.push(`## By ${title}`, "");
+    for (const key of Object.keys(groups).toSorted()) {
+      lines.push(`### ${key}`, "");
+      pushCoverageIdLines(lines, groups[key] ?? []);
+      lines.push("");
+    }
+  }
+
+  const report = inventory.scorecardTaxonomy;
   lines.push("## Scorecard Taxonomy", "");
   lines.push(`- Taxonomy: ${report.taxonomyPath ?? "missing"}`);
   lines.push(`- Categories: ${report.categoryCount}`);
@@ -262,34 +280,6 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
     lines.push(report.unknownCoverageIds.join(", "));
     lines.push("");
   }
-}
-
-export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): string {
-  const lines: string[] = [
-    "# QA Coverage Inventory",
-    "",
-    `- Scenarios: ${inventory.scenarioCount}`,
-    `- Taxonomy coverage IDs: ${inventory.coverageIdCount}`,
-    `- Primary coverage IDs: ${inventory.primaryCoverageIdCount}`,
-    `- Secondary coverage IDs: ${inventory.secondaryCoverageIdCount}`,
-    `- Overlapping coverage IDs: ${inventory.overlappingCoverage.length}`,
-    `- Missing coverage metadata: ${inventory.missingCoverage.length}`,
-    "",
-  ];
-
-  for (const [title, groups] of [
-    ["Theme", inventory.byTheme],
-    ["Surface", inventory.bySurface],
-  ] as const) {
-    lines.push(`## By ${title}`, "");
-    for (const key of Object.keys(groups).toSorted()) {
-      lines.push(`### ${key}`, "");
-      pushCoverageIdLines(lines, groups[key] ?? []);
-      lines.push("");
-    }
-  }
-
-  pushScorecardTaxonomyLines(lines, inventory.scorecardTaxonomy);
 
   if (inventory.overlappingCoverage.length > 0) {
     lines.push("## Overlap", "");
@@ -310,16 +300,6 @@ export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): 
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
-  const metadata = [
-    match.runtimePairLane ? `runtimePairLane=${match.runtimePairLane}` : "",
-    match.requiredProviderMode ? `providerMode=${match.requiredProviderMode}` : "",
-    match.requiredProvider ? `provider=${match.requiredProvider}` : "",
-    match.requiredModel ? `model=${match.requiredModel}` : "",
-  ].filter(Boolean);
-  return metadata.length > 0 ? metadata.join("; ") : "none";
-}
-
 function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
   const scenarioArgs = matches.map((match) => `--scenario ${match.id}`).join(" ");
   const { channel, requiredChannelDriver, requiredProviderMode } = matches[0]!;
@@ -336,9 +316,12 @@ function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
   return `pnpm openclaw qa suite${driverArg}${channelArg}${providerModeArg} ${scenarioArgs}`;
 }
 
-function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
+export function renderQaScenarioMatchesMarkdownReport(params: {
+  query: string;
+  matches: readonly QaScenarioSearchMatch[];
+}) {
   const groups = new Map<string, QaScenarioSearchMatch[]>();
-  for (const match of matches) {
+  for (const match of params.matches) {
     const key = JSON.stringify([
       match.executionKind,
       match.channel,
@@ -355,20 +338,13 @@ function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
     "vitest",
     "playwright",
   ];
-  return [...groups.values()]
+  const commandGroups = [...groups.values()]
     .toSorted(
       (left, right) =>
         executionOrder.indexOf(left[0]!.executionKind) -
         executionOrder.indexOf(right[0]!.executionKind),
     )
     .map((group) => ({ executionKind: group[0]!.executionKind, matches: group }));
-}
-
-export function renderQaScenarioMatchesMarkdownReport(params: {
-  query: string;
-  matches: readonly QaScenarioSearchMatch[];
-}) {
-  const commandGroups = scenarioMatchCommandGroups(params.matches);
   const lines = [
     "# QA Scenario Matches",
     "",
@@ -404,7 +380,13 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
         : `  - execution: ${match.executionKind} ${match.executionPath ?? "missing"}`,
     );
     lines.push(`  - coverage IDs: ${match.coverageIds.join(", ") || "none"}`);
-    lines.push(`  - live requirements: ${formatOptionalScenarioMetadata(match)}`);
+    const metadata = [
+      match.runtimePairLane ? `runtimePairLane=${match.runtimePairLane}` : "",
+      match.requiredProviderMode ? `providerMode=${match.requiredProviderMode}` : "",
+      match.requiredProvider ? `provider=${match.requiredProvider}` : "",
+      match.requiredModel ? `model=${match.requiredModel}` : "",
+    ].filter(Boolean);
+    lines.push(`  - live requirements: ${metadata.length > 0 ? metadata.join("; ") : "none"}`);
     if (match.codeRefs.length > 0) {
       lines.push(`  - code refs: ${match.codeRefs.join(", ")}`);
     }

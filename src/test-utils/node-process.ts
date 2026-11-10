@@ -3,6 +3,7 @@ import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_proce
 import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 
 type NodeEvalArgsOptions = {
+  execArgv?: readonly string[];
   evalFlag?: "--eval" | "-e";
   imports?: readonly string[];
 };
@@ -27,16 +28,19 @@ export function resolveTestNodeExecPath(): string {
 
 /** Builds node args for ESM eval snippets used by subprocess boundary tests. */
 export function createNodeEvalArgs(source: string, options: NodeEvalArgsOptions = {}): string[] {
-  const args = (options.imports ?? []).flatMap((specifier) => ["--import", specifier]);
+  const args = [
+    ...(options.execArgv ?? []),
+    ...(options.imports ?? []).flatMap((specifier) => ["--import", specifier]),
+  ];
   args.push("--input-type=module", options.evalFlag ?? "--eval", source);
   return args;
 }
 
 export function execNodeEvalSync(source: string, options: ExecNodeEvalOptions = {}): string {
-  const { evalFlag, imports, ...execOptions } = options;
+  const { execArgv, evalFlag, imports, ...execOptions } = options;
   return execFileSync(
     resolveTestNodeExecPath(),
-    createNodeEvalArgs(source, { evalFlag, imports }),
+    createNodeEvalArgs(source, { execArgv, evalFlag, imports }),
     {
       cwd: process.cwd(),
       encoding: "utf8",
@@ -49,10 +53,14 @@ export function spawnNodeEvalSync(
   source: string,
   options: SpawnNodeEvalOptions = {},
 ): SpawnSyncReturns<string> {
-  const { evalFlag, imports, ...spawnOptions } = options;
-  return spawnSync(resolveTestNodeExecPath(), createNodeEvalArgs(source, { evalFlag, imports }), {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    ...spawnOptions,
-  });
+  const { execArgv, evalFlag, imports, ...spawnOptions } = options;
+  return spawnSync(
+    resolveTestNodeExecPath(),
+    createNodeEvalArgs(source, { execArgv, evalFlag, imports }),
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      ...spawnOptions,
+    },
+  );
 }

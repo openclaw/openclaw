@@ -12,6 +12,7 @@ import {
   recordTelegramMessageProcessingResult,
   resolveTelegramUpdateReceivedAtSeconds,
   runWithTelegramUpdateProcessingFrame,
+  type TelegramMessageProcessingResult,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
@@ -99,6 +100,10 @@ function telegramSendError(errorCode: number, description: string): GrammyError 
   );
 }
 
+function forumFlag(chatId: number, isForum: boolean) {
+  return resolveTelegramForumFlag({ chatId, chatType: "supergroup", isGroup: true, isForum });
+}
+
 async function createTelegramMessageDispatchReplayForgetError(): Promise<unknown> {
   type ReplayGuard = Parameters<typeof commitTelegramMessageDispatchReplay>[0]["guard"];
   type ReplayClaim = import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle;
@@ -126,13 +131,7 @@ async function createTelegramMessageDispatchReplayForgetError(): Promise<unknown
   throw new Error("expected Telegram dispatch rollback failure");
 }
 
-function deferred<T = void>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
+const deferred = <T = void>() => Promise.withResolvers<T>();
 
 async function startDeferred(makeMonitor: MakeMonitor, name: string) {
   const participant: { current?: TelegramSpooledReplayDeferredParticipant } = {};
@@ -254,82 +253,61 @@ describe("createTelegramIngressMonitor", () => {
   });
 
   it("keeps a fresh admission lane when the forum cache changes during ACK", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-telegram-ingress-drain-", applyEnv: false },
-      async ({ stateDir }) => {
-        const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-          channelId: "telegram",
-          accountId: "default",
-          stateDir,
-        });
-        const update = {
-          update_id: 17,
-          message: {
-            text: "hello",
-            from: { id: 111 },
-            chat: { id: -9017, type: "supergroup" },
-          },
-        };
-        await resolveTelegramForumFlag({
-          chatId: -9017,
-          chatType: "supergroup",
-          isGroup: true,
-          isForum: false,
-        });
-        const ackEntered = deferred();
-        const ackRelease = deferred();
-        const receivedAt = 1_700_000_000_000;
-        const delivered: Array<{ laneKey: string | undefined; receivedAt: number }> = [];
-        const monitor = createTelegramIngressMonitor({
-          queue,
-          getConfig: () => cfg,
-          accountId: "default",
-          botInfo: telegramBotInfoForTest,
-          onDurableAdmission: async () => {
-            ackEntered.resolve();
-            await ackRelease.promise;
-          },
-          dispatch: async (raw, lifecycle) => {
-            const [claim] = await queue.listClaims();
-            delivered.push({
-              laneKey: claim?.laneKey,
-              receivedAt: resolveTelegramUpdateReceivedAtSeconds(raw),
-            });
-            await lifecycle.onAdopted();
-            return { kind: "completed" };
-          },
-        });
-        monitor.start();
+    await withTempState(async ({ queue, monitor: makeMonitor }) => {
+      const update = {
+        update_id: 17,
+        message: {
+          text: "hello",
+          from: { id: 111 },
+          chat: { id: -9017, type: "supergroup" },
+        },
+      };
+      await forumFlag(-9017, false);
+      const ackEntered = deferred();
+      const ackRelease = deferred();
+      const receivedAt = 1_700_000_000_000;
+      const delivered: Array<{ laneKey: string | undefined; receivedAt: number }> = [];
+      const monitor = makeMonitor({
+        botInfo: telegramBotInfoForTest,
+        onDurableAdmission: async () => {
+          ackEntered.resolve();
+          await ackRelease.promise;
+        },
+        dispatch: async (raw, lifecycle) => {
+          const [claim] = await queue.listClaims();
+          delivered.push({
+            laneKey: claim?.laneKey,
+            receivedAt: resolveTelegramUpdateReceivedAtSeconds(raw),
+          });
+          await lifecycle.onAdopted();
+          return { kind: "completed" };
+        },
+      });
+      monitor.start();
+      await monitor.waitForIdle();
+      const admission = monitor.admit(update, { receivedAt });
+      try {
+        await ackEntered.promise;
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({ laneKey: "telegram:-9017", attempts: 0 }),
+        ]);
+        expect(delivered).toEqual([]);
+        await forumFlag(-9017, true);
+        ackRelease.resolve();
+        await admission;
         await monitor.waitForIdle();
-        const admission = monitor.admit(update, { receivedAt });
-        try {
-          await ackEntered.promise;
-          expect(await queue.listClaims()).toEqual([
-            expect.objectContaining({ laneKey: "telegram:-9017", attempts: 0 }),
-          ]);
-          expect(delivered).toEqual([]);
-          await resolveTelegramForumFlag({
-            chatId: -9017,
-            chatType: "supergroup",
-            isGroup: true,
-            isForum: true,
-          });
-          ackRelease.resolve();
-          await admission;
-          await monitor.waitForIdle();
-          expect(delivered).toEqual([{ laneKey: "telegram:-9017", receivedAt: 1_700_000_000 }]);
-          expect(await monitor.admit(update)).toMatchObject({
-            kind: "durable",
-            queueResult: { kind: "completed" },
-          });
-          expect(delivered).toHaveLength(1);
-        } finally {
-          ackRelease.resolve();
-          await admission;
-          await monitor.stop();
-        }
-      },
-    );
+        expect(delivered).toEqual([{ laneKey: "telegram:-9017", receivedAt: 1_700_000_000 }]);
+        expect(await monitor.admit(update)).toMatchObject({
+          kind: "durable",
+          queueResult: { kind: "completed" },
+        });
+        expect(delivered).toHaveLength(1);
+      } finally {
+        ackRelease.resolve();
+        await admission;
+        await monitor.stop();
+      }
+    });
   });
 
   it("reconciles a cached General topic when private bot topics are disabled", async () => {
@@ -337,12 +315,7 @@ describe("createTelegramIngressMonitor", () => {
       const eventId = "9".padStart(16, "0");
       const payload = updatePayload(9);
       payload.update.message.chat = { id: -9003, type: "supergroup" };
-      await resolveTelegramForumFlag({
-        chatId: -9003,
-        chatType: "supergroup",
-        isGroup: true,
-        isForum: true,
-      });
+      await forumFlag(-9003, true);
       await queue.enqueue(eventId, payload, { laneKey: "telegram:-9003" });
 
       const dispatch = vi.fn(async (_update, lifecycle) => {
@@ -471,32 +444,63 @@ describe("createTelegramIngressMonitor", () => {
     });
   });
 
-  it("dead-letters a late deferred dispatch dedupe rollback failure", async () => {
-    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
-      const { eventId } = await enqueue(5);
-      const { monitor, participant, dispatch } = await startDeferred(
-        makeMonitor,
-        "test:late-fatal",
-      );
-      participant.current?.settle({
-        kind: "failed-retryable",
-        error: await createTelegramMessageDispatchReplayForgetError(),
+  it.each([
+    ...(["queue-cap-old", "queue-cap-new"] as const).flatMap((reason) =>
+      [false, true].map((isDeferred) => ({ reason, deferred: isDeferred })),
+    ),
+    { reason: "dispatch-dedupe-rollback-failed" as const, deferred: true },
+  ])(
+    "retains $reason across restart (deferred=$deferred)",
+    async ({ reason, deferred: isDeferred }) => {
+      await withTempState(async ({ stateDir, queue, monitor: makeMonitor, enqueue }) => {
+        const { eventId, payload, laneKey } = await enqueue(5);
+        const outcome: TelegramMessageProcessingResult =
+          reason === "dispatch-dedupe-rollback-failed"
+            ? {
+                kind: "failed-retryable",
+                error: await createTelegramMessageDispatchReplayForgetError(),
+              }
+            : { kind: "dropped", reason };
+        const held = isDeferred ? await startDeferred(makeMonitor, "test:terminal") : undefined;
+        const dispatch = held?.dispatch ?? vi.fn(async () => outcome);
+        const monitor = held?.monitor ?? makeMonitor({ dispatch });
+        if (held) {
+          held.participant.current?.settle(outcome);
+        } else {
+          monitor.start();
+        }
+        await vi.waitFor(async () =>
+          expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+            { id: eventId, reason },
+          ]),
+        );
+        await monitor.waitForIdle();
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(await queue.listClaims()).toEqual([]);
+        expect(dispatch).toHaveBeenCalledOnce();
+        await monitor.stop();
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        const restarted = createFixture(stateDir);
+        expect((await restarted.queue.enqueue(eventId, payload, { laneKey })).kind).toBe("failed");
+        expect(await restarted.queue.listFailed?.({ limit: "all" })).toMatchObject([
+          { id: eventId, reason },
+        ]);
+        const replay = vi.fn(async () => ({ kind: "completed" as const }));
+        const restartedMonitor = restarted.monitor({ dispatch: replay });
+        restartedMonitor.start();
+        await restartedMonitor.waitForIdle();
+        expect(replay).not.toHaveBeenCalled();
+        await restartedMonitor.stop();
       });
+    },
+  );
 
-      await vi.waitFor(async () =>
-        expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
-          { id: eventId, reason: "dispatch-dedupe-rollback-failed" },
-        ]),
-      );
-      await monitor.waitForIdle();
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-      expect(await queue.listClaims()).toEqual([]);
-      expect(dispatch).toHaveBeenCalledOnce();
-      await monitor.stop();
-    });
-  });
-
-  it("releases an aborted deferred claim after a late completed settlement", async () => {
+  it.each([
+    { kind: "completed" },
+    { kind: "dropped", reason: "queue-cap-old" },
+    { kind: "dropped", reason: "queue-cap-new" },
+  ] as const)("releases an aborted deferred claim after late $kind settlement", async (outcome) => {
     await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
       const { eventId, payload, laneKey } = await enqueue(6);
       const { monitor, participant } = await startDeferred(makeMonitor, "test:late-completed");
@@ -504,7 +508,7 @@ describe("createTelegramIngressMonitor", () => {
       expect(await queue.listClaims()).toEqual([]);
       await expectPending(queue, [{ id: eventId, attempts: 0 }]);
 
-      participant.current?.settle({ kind: "completed" });
+      participant.current?.settle(outcome);
       await waitPending(queue, [{ id: eventId, attempts: 0 }]);
       expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
       expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");

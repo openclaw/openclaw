@@ -24,9 +24,10 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../../agents/model-selection-shared.js";
+import { resolveProviderModelRouteAuthRequirement } from "../../../agents/provider-model-route-auth.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveHeartbeatAgents } from "../../../infra/heartbeat-config.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveLegacyHeartbeatAgents } from "../../doctor-heartbeat-legacy.js";
 import { sanitizeDoctorNote } from "../emit-notes.js";
 
 type AuthStores = Map<string | undefined, ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>>;
@@ -38,7 +39,9 @@ function collectModelConsumers(cfg: OpenClawConfig): ModelConsumer[] {
     ({ path, value }) => !path.startsWith("agents.") && !path.endsWith(`.models.${value}`),
   );
   const heartbeatAgents = new Map(
-    resolveHeartbeatAgents(cfg).map((entry) => [entry.agentId, entry.heartbeat]),
+    resolveLegacyHeartbeatAgents(cfg)
+      .filter((entry) => entry.heartbeat !== undefined)
+      .map((entry) => [entry.agentId, entry.heartbeat]),
   );
   for (const agentId of listAgentIds(cfg)) {
     const entry = agents.find((agent) => agent.id === agentId);
@@ -108,10 +111,35 @@ function collectModelConsumers(cfg: OpenClawConfig): ModelConsumer[] {
 
 type BillingRoute = {
   modelRef: string;
-  requirement: "api-key" | "subscription";
+  requirement: "api-key" | "subscription" | "native";
   profileId?: string;
+  runtime?: string;
   consumer: string;
 };
+
+type RuntimeModelAuth = ReturnType<
+  ReturnType<typeof createModelAuthAvailabilityResolver>["evaluateRuntimeModelAuth"]
+>;
+
+/** Only providers with catalog routes report `selectedRoute`; others bill by credential kind. */
+function resolveBillingRequirement(
+  auth: RuntimeModelAuth,
+): BillingRoute["requirement"] | undefined {
+  // The configured runtime decides this route even when Doctor cannot probe its credentials.
+  // Those credentials may be a subscription login or an environment key the CLI reads itself,
+  // so warnings name them as the runtime's own credentials, not as a subscription.
+  if (auth.runtimeAuth?.source === "native" && !auth.selectedProfileId) {
+    return "native";
+  }
+  if (auth.availability !== true) {
+    return undefined;
+  }
+  // The route owner classifies credential kinds, including AWS SDK credentials as metered.
+  return resolveProviderModelRouteAuthRequirement(
+    auth.selectedAuthMode,
+    auth.selectedRoute?.authRequirement,
+  );
+}
 
 function collectBillingRoutes(params: {
   cfg: OpenClawConfig;
@@ -177,14 +205,16 @@ function collectBillingRoutes(params: {
       modelId: model.model,
       pinnedProfileId: parsed.profile,
     });
-    if (auth.availability !== true || !auth.selectedRoute) {
+    const requirement = resolveBillingRequirement(auth);
+    if (!requirement) {
       continue;
     }
     routes.set(path, {
       consumer: consumer ?? path,
       modelRef: `${model.provider}/${model.model}`,
-      requirement: auth.selectedRoute.authRequirement,
+      requirement,
       profileId: auth.selectedProfileId,
+      runtime: auth.runtimeAuth?.id,
     });
   }
   return routes;
@@ -194,19 +224,24 @@ function collectBillingRoutes(params: {
 export function collectModelBillingRouteMigrationWarnings(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): string[] {
   const authStores: AuthStores = new Map();
   const options = {
-    env: params.env ?? process.env,
+    env: process.env,
     metadataSnapshot: params.metadataSnapshot,
     authStores,
   };
   const before = collectBillingRoutes({ ...options, cfg: params.before });
   const after = collectBillingRoutes({ ...options, cfg: params.after });
   const describe = (route: BillingRoute) =>
-    `${route.modelRef} via ${route.requirement === "api-key" ? "metered API-key" : "subscription/OAuth"}${route.profileId ? ` profile ${route.profileId}` : ""}`;
+    `${route.modelRef} via ${
+      route.requirement === "native"
+        ? `${route.runtime ?? "runtime"} own credentials`
+        : route.requirement === "api-key"
+          ? "metered API-key"
+          : "subscription/OAuth"
+    }${route.profileId ? ` profile ${route.profileId}` : ""}`;
   const warnings: string[] = [];
   for (const [consumer, previous] of before) {
     const current = after.get(consumer);

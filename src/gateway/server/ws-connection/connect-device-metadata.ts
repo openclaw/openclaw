@@ -12,6 +12,7 @@ import {
   isMobilePairingSetupBootstrapProfile,
   isNodePairingSetupBootstrapProfile,
   isVoiceNodePairingSetupBootstrapProfile,
+  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
@@ -63,7 +64,10 @@ export function isSetupCodeHandoffBootstrapClient(params: {
     (isMobilePairingSetupBootstrapProfile(params.profile) &&
       isSetupCodeMobileBootstrapClient(params.client)) ||
     (isNodePairingSetupBootstrapProfile(params.profile) &&
-      params.client.id === GATEWAY_CLIENT_IDS.NODE_HOST) ||
+      (params.client.id === GATEWAY_CLIENT_IDS.NODE_HOST ||
+        (params.client.id === GATEWAY_CLIENT_IDS.IOS_APP &&
+          deviceBootstrapProfilesEqual(params.profile, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE) &&
+          isSetupCodeMobileBootstrapClient(params.client)))) ||
     (isVoiceNodePairingSetupBootstrapProfile(params.profile) &&
       isSetupCodeVoiceNodeBootstrapClient(params.client))
   );
@@ -218,9 +222,12 @@ export function resolvePinnedClientMetadata(params: {
       pairedRuntimeIdentity.platform !== pairedPlatform &&
       claimedPlatform === pairedRuntimeIdentity.platform &&
       claimedDeviceFamily === normalizeDeviceMetadataForAuth(pairedRuntimeIdentity.deviceFamily));
-  const isNodeHostUsingMacAppPlatformPin =
-    params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
-    params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+  const isRuntimeUsingMacAppPlatformPin =
+    ((params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+      params.clientMode === GATEWAY_CLIENT_MODES.NODE) ||
+      (params.clientId === GATEWAY_CLIENT_IDS.CLI &&
+        (params.clientMode === GATEWAY_CLIENT_MODES.CLI ||
+          params.clientMode === GATEWAY_CLIENT_MODES.PROBE))) &&
     (claimedPlatform === "darwin" || claimedPlatform === "macos") &&
     /^macos \d+(?:\.\d+){0,2}$/.test(pairedPlatform);
   const claimedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
@@ -244,12 +251,12 @@ export function resolvePinnedClientMetadata(params: {
     hasPinnedPlatform &&
     claimedPlatform !== pairedPlatform &&
     !isRuntimePlatformPin &&
-    !isNodeHostUsingMacAppPlatformPin &&
+    !isRuntimeUsingMacAppPlatformPin &&
     !isNativeAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
   const pinnedPlatform = isRuntimePlatformPin
     ? pairedRuntimeIdentity.platform
-    : claimedPlatform === pairedPlatform || isNodeHostUsingMacAppPlatformPin
+    : claimedPlatform === pairedPlatform || isRuntimeUsingMacAppPlatformPin
       ? params.pairedPlatform
       : isNativeAppPlatformVersionRefresh
         ? params.claimedPlatform

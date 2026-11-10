@@ -5,7 +5,7 @@ import {
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentNativeModelPrimary,
@@ -56,15 +56,17 @@ import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
-import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
+import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
-import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
+import {
+  modelPolicyWildcardMatches,
+  parseModelPolicyWildcardRef,
+} from "../../config/model-policy-ref.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
@@ -78,13 +80,14 @@ import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
-import { readModelCatalogWarnings } from "./catalog-warnings.js";
+import { getModelCatalogWarnings, readModelCatalog } from "./catalog-warnings.js";
 import {
   formatProviderAuthProfileCounts,
   resolveProviderAuthOverview,
 } from "./list.auth-overview.js";
 import { groupByProvider, isRich } from "./list.format.js";
-import type { AuthProbeSummary } from "./list.probe.js";
+import type { runAuthProbes } from "./list.probe.js";
+import { resolveStatusUtilityModel } from "./list.status-utility.js";
 import type { ProviderAuthOverview, StatusRuntimeAuthRoute } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -158,7 +161,7 @@ function parseProbeOption(
   const parsed =
     kind === "integer" ? parseStrictPositiveInteger(raw) : parseStrictFiniteNumber(raw);
   if (parsed === undefined || parsed <= 0) {
-    throw new Error(`${label} must be a positive ${kind}.`);
+    throwExpectedCliError(`${label} must be a positive ${kind}.`);
   }
   return parsed;
 }
@@ -217,7 +220,7 @@ export async function modelsStatusCommand(
 ) {
   ensureFlagCompatibility(opts);
   if (opts.plain && opts.probe) {
-    throw new Error("--probe cannot be used with --plain output.");
+    throwExpectedCliError("--probe cannot be used with --plain output.");
   }
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({
@@ -225,9 +228,6 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
-  for (const warning of await readModelCatalogWarnings(cfg, opts.agent?.trim())) {
-    runtime.error(sanitizeTerminalText(`${warning.message} ${warning.fixHint}`));
-  }
   const explicitAgentId = opts.agent?.trim();
   const envAgentDir =
     process.env.OPENCLAW_AGENT_DIR?.trim() || process.env.PI_CODING_AGENT_DIR?.trim();
@@ -235,6 +235,10 @@ export async function modelsStatusCommand(
     agentDirOverride: !explicitAgentId && envAgentDir ? resolveUserPath(envAgentDir) : undefined,
     kind: "read",
   });
+  const gatewayCatalog = await readModelCatalog(cfg, workspaceAgentId);
+  for (const warning of getModelCatalogWarnings(gatewayCatalog)) {
+    runtime.error(terminalText`${warning.message} ${warning.fixHint}`);
+  }
   // Only an explicit --agent narrows the reported model/fallback overrides; an inferred
   // system-agent target still reports unscoped defaults, matching this command's shipped output.
   const agentId = explicitAgentId ? workspaceAgentId : undefined;
@@ -314,21 +318,11 @@ export async function modelsStatusCommand(
       const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
       const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
       const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
-      // Narration/titles ride the utility model on a plain API auth path that can
-      // differ from the primary's (e.g. OAuth primary, api_key utility); show the
-      // resolved ref so a broken utility credential is inspectable here.
-      const utilitySetting = readUtilityModelSetting(cfg, workspaceAgentId);
-      const utilityModelRef = resolveUtilityModelRefForAgent({ cfg, agentId: workspaceAgentId });
-      const utilityFallbacks = utilitySetting.kind === "disabled" ? [] : utilitySetting.fallbacks;
-      const utilityModelSource =
-        utilitySetting.kind === "explicit" ||
-        utilityFallbacks.some((ref) => ref.trim() === utilityModelRef)
-          ? "config"
-          : utilitySetting.kind === "disabled"
-            ? "disabled"
-            : utilityModelRef
-              ? "provider-default"
-              : "none";
+      const {
+        ref: utilityModelRef,
+        fallbacks: utilityFallbacks,
+        source: utilityModelSource,
+      } = resolveStatusUtilityModel({ cfg, agentId: workspaceAgentId, gatewayCatalog });
       const configuredAllowRefs = [
         ...resolveConfiguredModelPolicyAllow({ cfg, agentId: workspaceAgentId }).refs,
       ];
@@ -508,15 +502,9 @@ export async function modelsStatusCommand(
             ...new Set([
               ...visibilityPolicy.allowedCatalog.map((entry) => modelKey(entry.provider, entry.id)),
               ...configuredAllowRefs.flatMap((raw) => {
-                const wildcard = parseModelPolicyWildcardRef(raw);
-                if (!wildcard) {
-                  return [];
-                }
-                const prefix = wildcard.key.slice(0, -1);
-                const hasCatalogMatch = catalog.entries.some((entry) =>
-                  modelKey(entry.provider, entry.id).startsWith(prefix),
-                );
-                return hasCatalogMatch ? [] : [wildcard.key];
+                const key = parseModelPolicyWildcardRef(raw)?.key;
+                const keys = catalog.entries.map((entry) => modelKey(entry.provider, entry.id));
+                return key && !keys.some((k) => modelPolicyWildcardMatches(key, k)) ? [key] : [];
               }),
             ]),
           ].toSorted();
@@ -973,14 +961,13 @@ export async function modelsStatusCommand(
         2,
         "integer",
       );
-      const probeMaxTokens = parseProbeOption(
-        opts.probeMaxTokens,
-        "--probe-max-tokens",
-        8,
-        "integer",
-      );
+      // No default cap: a small cap leaves reasoning models with no visible reply.
+      const probeMaxTokens =
+        opts.probeMaxTokens === undefined || opts.probeMaxTokens === null
+          ? undefined
+          : parseProbeOption(opts.probeMaxTokens, "--probe-max-tokens", 1, "integer");
 
-      let probeSummary: AuthProbeSummary | undefined;
+      let probeSummary: Awaited<ReturnType<typeof runAuthProbes>> | undefined;
       if (opts.probe) {
         const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
           import("../../cli/progress.js"),
@@ -1135,7 +1122,7 @@ export async function modelsStatusCommand(
       }
 
       if (opts.plain) {
-        writeRuntimeStdout(runtime, sanitizeTerminalText(resolvedLabel));
+        writeRuntimeStdout(runtime, terminalText`${resolvedLabel}`);
         finishModelsStatusOutput(runtime, opts.check, checkStatus);
         return;
       }
@@ -1152,7 +1139,7 @@ export async function modelsStatusCommand(
         value: string,
         style: (value: string) => string,
         source?: ModelConfigSource,
-      ) => logRow(name, colorize(rich, style, sanitizeTerminalText(value)), source);
+      ) => logRow(name, colorize(rich, style, terminalText`${value}`), source);
       const logList = (
         name: string,
         values: string[],
@@ -1211,12 +1198,10 @@ export async function modelsStatusCommand(
         theme.accentBright,
         agentId ? "defaults" : undefined,
       );
-      // Sanitize each part before styling; logField would strip the per-part colors.
       const aliasEntries = Object.entries(aliases).map(([alias, target]) => {
-        const [safeAlias, safeTarget] = [alias, target].map(sanitizeTerminalText);
         return rich
-          ? `${theme.accentDim(safeAlias)} ${theme.muted("->")} ${theme.info(safeTarget)}`
-          : `${safeAlias} -> ${safeTarget}`;
+          ? `${theme.accentDim(terminalText`${alias}`)} ${theme.muted("->")} ${theme.info(terminalText`${target}`)}`
+          : terminalText`${alias} -> ${target}`;
       });
       logRow(
         `Aliases (${aliasEntries.length})`,
@@ -1233,19 +1218,20 @@ export async function modelsStatusCommand(
           rich,
           shellFallbackEnabled ? theme.success : theme.muted,
           shellFallbackEnabled ? "on" : "off",
-        )}${applied.length ? colorize(rich, theme.muted, ` (applied: ${applied.join(", ")})`) : ""}`,
+        )}${applied.length ? colorize(rich, theme.muted, terminalText` (applied: ${applied.join(", ")})`) : ""}`,
       );
       logList("Providers w/ OAuth/tokens", providersWithOauth, theme.info);
 
-      const formatKey = (key: string) => colorize(rich, theme.warn, key);
+      const formatKey = (key: string) => colorize(rich, theme.warn, terminalText`${key}`);
       const formatKeyValue = (key: string, value: string) =>
-        `${formatKey(key)}=${colorize(rich, theme.info, value)}`;
+        `${formatKey(key)}=${colorize(rich, theme.info, terminalText`${value}`)}`;
       const formatSeparator = () => colorize(rich, theme.muted, " | ");
       const formatEffective = (effective: ProviderAuthOverview["effective"]) =>
-        formatKeyValue(
-          "effective",
-          `${colorize(rich, theme.accentBright, effective.kind)}:${colorize(rich, theme.muted, effective.detail)}`,
-        );
+        `${formatKey("effective")}=${colorize(
+          rich,
+          theme.info,
+          `${colorize(rich, theme.accentBright, terminalText`${effective.kind}`)}:${colorize(rich, theme.muted, terminalText`${effective.detail}`)}`,
+        )}`;
 
       for (const entry of providerAuth) {
         const separator = formatSeparator();
@@ -1253,7 +1239,9 @@ export async function modelsStatusCommand(
         if (entry.profiles.count > 0) {
           bits.push(formatKeyValue("profiles", formatProviderAuthProfileCounts(entry.profiles)));
           if (entry.profiles.labels.length > 0) {
-            bits.push(colorize(rich, theme.info, entry.profiles.labels.join(", ")));
+            bits.push(
+              colorize(rich, theme.info, terminalText`${entry.profiles.labels.join(", ")}`),
+            );
           }
         }
         for (const [key, auth] of [
@@ -1263,14 +1251,11 @@ export async function modelsStatusCommand(
         ] as const) {
           if (auth) {
             bits.push(
-              formatKeyValue(
-                key,
-                `${auth.value}${separator}${formatKeyValue("source", auth.source)}`,
-              ),
+              `${formatKeyValue(key, auth.value)}${separator}${formatKeyValue("source", auth.source)}`,
             );
           }
         }
-        runtime.log(`- ${theme.heading(entry.provider)} ${bits.join(separator)}`);
+        runtime.log(`- ${theme.heading(terminalText`${entry.provider}`)} ${bits.join(separator)}`);
       }
 
       if (runtimeAuthRoutes.length > 0) {
@@ -1283,16 +1268,16 @@ export async function modelsStatusCommand(
                   route.authStatus,
                 )}${formatSeparator()}${formatKeyValue("runtime", route.runtimeStatus)}${
                   route.runtimeDetail
-                    ? `${formatSeparator()}${colorize(rich, theme.muted, route.runtimeDetail)}`
+                    ? `${formatSeparator()}${colorize(rich, theme.muted, terminalText`${route.runtimeDetail}`)}`
                     : ""
                 }`
               : "";
           runtime.log(
-            `- ${theme.heading(route.provider)} via ${colorize(
+            `- ${theme.heading(terminalText`${route.provider}`)} via ${colorize(
               rich,
               theme.accentBright,
-              route.runtime,
-            )} uses ${theme.heading(route.authProvider)} ${formatEffective(route.effective)}${formatSeparator()}${formatKeyValue("status", route.status)}${runtimeAvailability}`,
+              terminalText`${route.runtime}`,
+            )} uses ${theme.heading(terminalText`${route.authProvider}`)} ${formatEffective(route.effective)}${formatSeparator()}${formatKeyValue("status", route.status)}${runtimeAvailability}`,
           );
         }
       }
@@ -1306,7 +1291,8 @@ export async function modelsStatusCommand(
               ? `requires ${issue.authRequirement} auth:`
               : `[${issue.kind === "incompatible" ? issue.code : "indeterminate"}]`;
           runtime.log(
-            `- ${theme.heading(sanitizeTerminalText(modelRef))} ${requirement} ${sanitizeTerminalText(issue.message)}`,
+            `- ${theme.heading(terminalText`${modelRef}`)}` +
+              terminalText` ${requirement} ${issue.message}`,
           );
         }
       }
@@ -1327,9 +1313,7 @@ export async function modelsStatusCommand(
             config: cfg,
             includeEnvVar: !requiresSubscription,
           });
-          runtime.log(
-            `- ${theme.heading(sanitizeTerminalText(provider))} ${sanitizeTerminalText(hint)}`,
-          );
+          runtime.log(`- ${theme.heading(terminalText`${provider}`)}` + terminalText` ${hint}`);
         }
       }
 
@@ -1340,7 +1324,8 @@ export async function modelsStatusCommand(
           const reason = diagnostic ? `:${diagnostic}` : "";
           const provider = profile.provider ? ` (${profile.provider})` : "";
           runtime.log(
-            `- ${theme.heading(profile.profileId)}${provider} ${profile.kind}${reason} (${formatRemainingShort(profile.remainingMs)}) — ${profile.recoveryHint}`,
+            `- ${theme.heading(terminalText`${profile.profileId}`)}` +
+              terminalText`${provider} ${profile.kind}${reason} (${formatRemainingShort(profile.remainingMs)}) — ${profile.recoveryHint}`,
           );
         }
       }
@@ -1391,11 +1376,15 @@ export async function modelsStatusCommand(
             credentialType: profiles[0]?.type,
           });
           const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
-          const usageSuffix = usage ? colorize(rich, theme.muted, ` usage: ${usage}`) : "";
-          runtime.log(`- ${colorize(rich, theme.heading, provider)}${usageSuffix}`);
+          const usageSuffix = usage
+            ? colorize(rich, theme.muted, terminalText` usage: ${usage}`)
+            : "";
+          runtime.log(
+            `- ${colorize(rich, theme.heading, terminalText`${provider}`)}${usageSuffix}`,
+          );
           for (const profile of profiles) {
             const labelText = profile.label || profile.profileId;
-            const labelLocal = colorize(rich, theme.accent, labelText);
+            const labelLocal = colorize(rich, theme.accent, terminalText`${labelText}`);
             const status =
               statusLabels.get(profile.status) ?? colorize(rich, theme.error, "expired");
             const expiry =
@@ -1438,14 +1427,16 @@ export async function modelsStatusCommand(
             const latency = formatMs(result.latencyMs);
             const modelLabel = result.model ?? `${result.provider}/-`;
             const modeLabel = result.mode
-              ? ` ${colorize(rich, theme.muted, `(${result.mode})`)}`
+              ? ` ${colorize(rich, theme.muted, terminalText`(${result.mode})`)}`
               : "";
-            const profile = `${colorize(rich, theme.accent, result.label)}${modeLabel}`;
+            const profile = `${colorize(rich, theme.accent, terminalText`${result.label}`)}${modeLabel}`;
             const detail = result.error?.trim();
-            const detailLabel = detail ? `\n${colorize(rich, theme.muted, `↳ ${detail}`)}` : "";
+            const detailLabel = detail
+              ? `\n${colorize(rich, theme.muted, terminalText`↳ ${detail}`)}`
+              : "";
             const statusLabel = `${status}${colorize(rich, theme.muted, ` · ${latency}`)}${detailLabel}`;
             return {
-              Model: colorize(rich, theme.heading, modelLabel),
+              Model: colorize(rich, theme.heading, terminalText`${modelLabel}`),
               Profile: profile,
               Status: statusLabel,
             };

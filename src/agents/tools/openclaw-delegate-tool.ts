@@ -116,6 +116,7 @@ export function createOpenClawDelegateToolsForRun(
       "Delegate system setup or repair to a separate model turn. " +
       "Prefer your available tools for routine status and session/workspace checks. " +
       "Gateway restart, config, channels, plugins, agents, models/providers, API keys. " +
+      "Supports multiple named custom/local model endpoints; provider IDs can be user-defined, while api selects the protocol. " +
       "Setup flows use masked entry, which keeps keys out of model context; if the user already gave a key or token in chat, pass it along and OpenClaw stores it without echoing it. " +
       (fullPermission
         ? "Full Access applies permitted changes without asking for approval."
@@ -140,18 +141,24 @@ export function createOpenClawDelegateToolsForRun(
       const result = await withGatewayToolCallerIdentity(caller, () =>
         runOutsidePreparedModelRuntimePluginGenerationScope(() =>
           runOutsidePluginRuntimeGenerationScope(() =>
-            callInProcessGatewayTool<OpenClawDelegateResult>("openclaw.chat", {
-              sessionId,
-              message,
-              delegation: {
-                agentId: options.sessionAgentId,
-                ...(sessionKey ? { sessionKey } : {}),
-                ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
-                ...(turnSourceTo ? { turnSourceTo } : {}),
-                ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
-                ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+            callInProcessGatewayTool<OpenClawDelegateResult>(
+              "openclaw.chat",
+              {
+                sessionId,
+                message,
+                delegation: {
+                  agentId: options.sessionAgentId,
+                  ...(sessionKey ? { sessionKey } : {}),
+                  ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
+                  ...(turnSourceTo ? { turnSourceTo } : {}),
+                  ...(options.agentAccountId
+                    ? { turnSourceAccountId: options.agentAccountId }
+                    : {}),
+                  ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+                },
               },
-            }),
+              { signal },
+            ),
           ),
         ),
       );

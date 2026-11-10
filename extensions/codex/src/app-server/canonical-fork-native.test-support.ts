@@ -10,7 +10,15 @@ import { createCodexDesktopGenerationOwner } from "./desktop-generation-owner.js
 import * as desktopGenerationRuntime from "./desktop-generation.js";
 import * as managedBinary from "./managed-binary.js";
 import {
+  appInfo,
+  appSummary,
+  pluginDetail,
+  pluginInstalled,
+  pluginSummary,
+} from "./plugin-inventory.test-helpers.js";
+import {
   isJsonObject,
+  type CodexAppServerRequestParams,
   type CodexThread,
   type CodexTurn,
   type JsonObject,
@@ -40,6 +48,8 @@ export async function createCanonicalForkNativeFixture(
   const calls: Array<{ client: number; method: string; params: Record<string, unknown> }> = [];
   const clients: CodexAppServerClient[] = [];
   const subscriptions = new Set<string>();
+  // Codex rollout/src/writer_lock.rs: one loaded writer per thread across processes on a home.
+  const writers = new Map<string, number>();
   let ignoreCut = false;
   let competingSubscriber = false;
   let failUnsubscribe = false;
@@ -133,6 +143,23 @@ export async function createCanonicalForkNativeFixture(
     const stderr = new PassThrough();
     const process = new EventEmitter();
     const send = (value: unknown) => stdout.write(JSON.stringify(value) + "\n");
+    const closedAfterUnsubscribe = new Set<string>();
+    const load = (id: string) => {
+      const writer = writers.get(id);
+      if (writer !== undefined && writer !== clientIndex) {
+        throw Object.assign(new Error(`thread ${id} already has an active writer`), {
+          code: -32600,
+        });
+      }
+      writers.set(id, clientIndex);
+      loaded.add(id);
+    };
+    const unload = (id: string) => {
+      loaded.delete(id);
+      if (writers.get(id) === clientIndex) {
+        writers.delete(id);
+      }
+    };
     const response = (value: NativeThread) => ({
       ...forkResponse(value.thread.id),
       model: value.model,
@@ -153,7 +180,7 @@ export async function createCanonicalForkNativeFixture(
       },
     });
     const subscribe = (value: NativeThread) => {
-      loaded.add(value.thread.id);
+      load(value.thread.id);
       subscriptions.add(`${clientIndex}:${value.thread.id}`);
     };
     const request = async (method: string, params: Record<string, unknown>): Promise<unknown> => {
@@ -169,6 +196,29 @@ export async function createCanonicalForkNativeFixture(
           return { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`, codexHome: home };
         case "initialized":
           return {};
+        case "plugin/installed":
+          return pluginInstalled([pluginSummary("synthetic", { installed: true, enabled: true })]);
+        case "plugin/read":
+          return pluginDetail("synthetic", [appSummary("synthetic-app")]);
+        case "mcpServerStatus/list":
+          return {
+            data: [
+              {
+                name: "codex_apps",
+                tools: {
+                  "synthetic.lookup": {
+                    title: "lookup",
+                    annotations: { readOnlyHint: true },
+                    _meta: {
+                      connector_id: "synthetic-app",
+                      _codex_apps: { resource_uri: "/synthetic-app/link/lookup" },
+                    },
+                  },
+                },
+              },
+            ],
+            nextCursor: null,
+          };
         case "skills/list":
           return { data: [] };
         case "configRequirements/read":
@@ -184,23 +234,26 @@ export async function createCanonicalForkNativeFixture(
         }
         const apps = threads.get(String(params.threadId))?.config?.apps;
         const app = isJsonObject(apps) ? apps["synthetic-app"] : undefined;
-        return codexAppInventoryResponse(method, [
-          {
-            id: "synthetic-app",
-            name: "Synthetic App",
-            description: null,
-            logoUrl: null,
-            logoUrlDark: null,
-            distributionChannel: null,
-            branding: null,
-            appMetadata: null,
-            labels: null,
-            installUrl: null,
-            isAccessible: true,
-            isEnabled: isJsonObject(app) && app.enabled === true,
-            pluginDisplayNames: [],
-          },
-        ]);
+        return codexAppInventoryResponse(
+          method,
+          [
+            {
+              ...appInfo("synthetic-app", true, isJsonObject(app) && app.enabled === true),
+              name: "Synthetic App",
+              toolSummaries: [
+                {
+                  name: "lookup",
+                  title: null,
+                  description: "",
+                  isReadOnly: true,
+                  isEnabled: true,
+                  disabledReason: null,
+                },
+              ],
+            },
+          ],
+          params as CodexAppServerRequestParams<typeof method>,
+        );
       }
       if (method === "thread/list") {
         return {
@@ -246,16 +299,17 @@ export async function createCanonicalForkNativeFixture(
       }
       if (method === "thread/resume") {
         if (loaded.has(id) && !subscriptions.has(`${clientIndex}:${id}`) && !competingSubscriber) {
-          loaded.delete(id);
+          unload(id);
           send({
             method: "thread/status/changed",
             params: { threadId: id, status: { type: "notLoaded" } },
           });
         }
         if (!loaded.has(id)) {
+          load(id);
           configure(value, params);
         }
-        subscribe(value);
+        subscriptions.add(`${clientIndex}:${id}`);
         return response(value);
       }
       if (method === "thread/fork") {
@@ -313,12 +367,17 @@ export async function createCanonicalForkNativeFixture(
           throw new Error("Native unsubscribe fault");
         }
         subscriptions.delete(`${clientIndex}:${id}`);
+        // Unsubscribe keeps the thread loaded until its idle unload delay (default 60s) elapses.
+        if (value.config?.thread_unload_delay_secs === 0) {
+          unload(id);
+          closedAfterUnsubscribe.add(id);
+        }
         return { status: "unsubscribed" };
       }
       if (method === "thread/archive") {
         threads.delete(id);
         subscriptions.delete(`${clientIndex}:${id}`);
-        loaded.delete(id);
+        unload(id);
         return {};
       }
       if (method === "turn/start") {
@@ -341,6 +400,13 @@ export async function createCanonicalForkNativeFixture(
           (result) => {
             if (message.id !== undefined) {
               send({ id: message.id, result });
+              const threadId = message.params?.threadId;
+              if (
+                message.method === "thread/unsubscribe" &&
+                closedAfterUnsubscribe.delete(threadId)
+              ) {
+                send({ method: "thread/closed", params: { threadId } });
+              }
               if (message.method === "thread/archive") {
                 const notify = () =>
                   send({
@@ -376,6 +442,12 @@ export async function createCanonicalForkNativeFixture(
       exitCode: null as number | null,
       kill: () => {},
     });
+    // Process exit drops every writer lock it held.
+    process.on("exit", () => {
+      for (const id of loaded) {
+        unload(id);
+      }
+    });
     stdin.on("close", () => {
       transport.exitCode = 0;
       for (const key of subscriptions) {
@@ -385,7 +457,7 @@ export async function createCanonicalForkNativeFixture(
       }
       process.emit("exit", 0, null);
     });
-    const client = CodexAppServerClient.fromTransportForTests(transport);
+    const client = CodexAppServerClient.fromTransport(transport);
     clients.push(client);
     return Promise.resolve(client);
   });

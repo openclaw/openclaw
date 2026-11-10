@@ -21,7 +21,7 @@ Channel implementations can obtain the existing host-owned hook runner from
 `openclaw/plugin-sdk/plugin-hook-runtime`. This focused subpath avoids the deprecated
 `plugin-runtime` barrel and does not create or expose another registry.
 
-`before_channel_ingress` prepares an admitted durable transport update before
+`before_channel_attachment_load` prepares an admitted durable transport update before
 native attachment downloads or transcription. Telegram currently supplies it
 for ordinary singleton `message` and `edited_message` updates after the native
 spool commits and claims the update and the native sender/group/topic gate accepts
@@ -129,6 +129,11 @@ whether a hook prevents durable chat admission. An ACP-only hook therefore
 does not block ordinary agent sessions. Omitted, empty, malformed, or partly
 unknown eligibility lists remain unrestricted. Missing or unknown dispatch
 context also keeps the hook eligible.
+
+For ACP dispatch, a thrown `reply_dispatch` error or timeout ends the turn as a
+task error. The host does not try another handler or the ordinary agent runtime:
+the invoked handler may already have started work. Missing handlers and explicit
+declines retain their fallback behavior.
 
 Use message hooks for channel-level routing and delivery policy:
 

@@ -114,8 +114,10 @@ function activate(
 ): void {
   activateSlashCommands({
     account: createResolvedMattermostAccount(accountId),
-    commandTokens: tokens,
-    registeredCommands: commands,
+    registeredCommands:
+      commands.length > 0
+        ? commands
+        : tokens.map((token, index) => createRegisteredCommand({ id: `cmd-${index}`, token })),
     api: slashApi,
   });
   if (stubHandler) {
@@ -233,7 +235,7 @@ describe("slash-state", () => {
     activate(
       "a2",
       ["token-2"],
-      [createRegisteredCommand({ id: "cmd-2", teamId: "team-2" })],
+      [createRegisteredCommand({ id: "cmd-2", teamId: "team-2", token: "token-2" })],
       false,
     );
     const route = createSlashRoute();

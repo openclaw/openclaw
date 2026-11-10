@@ -7,9 +7,10 @@ records the exact merged closeout commit. Publication from the release branch
 and closeout on `main` are separate state transitions; never imply that
 publishing stable also advanced `main`.
 
-Closeout requires the original strict stable/full publication evidence with
-soak, blocking performance, and successful selected validation lanes. Historical
-waiver-bearing receipt replay and repair are unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
+Closeout requires the original successful stable/full FRV with soak and blocking
+performance, including any recorded [release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers)
+decisions. Closeout cannot grant a waiver to a failed FRV. Historical candidate-side
+skip-waiver receipt replay and repair remain unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
 replay an eligible strict-evidence closeout to regenerate identical bytes; do not manufacture
 new evidence. Invalid or mismatched assets remain blocking.
 
@@ -96,19 +97,17 @@ new evidence. Invalid or mismatched assets remain blocking.
    when repository drill variables are configured. Replay requires successful
    stable/full evidence with soak and blocking performance. Complete
    manifest/checksum pairs remain recorded without rewriting. Historical
-   waiver-bearing receipt replay and repair are unsupported: the original
+   candidate-side skip-waiver receipt replay and repair remain unsupported: the original
    postpublish evidence binds its validation run, which a fresh run cannot
    replace. Preserve those artifacts and stop instead of overwriting them or
    publishing again to repair a receipt.
    Push runs are never cancelled by later `main` pushes; verification serializes
    per resolved stable tag.
-7. Verify the public website through its existing read-only
-   `companion-downloads-deployed.yml` workflow on `openclaw/openclaw.ai` main.
-   Require success for that exact run: stable download routes resolve current
-   assets at request time, and the verifier follows every homepage/install button
-   to its current stable artifact. New app releases need no website rebuild or
-   source change. The website cache expires within five minutes of resolution;
-   a check during propagation can fail and be resumed after expiry.
+7. Follow the [website publication owner](platform-publication.md#website) to
+   verify public downloads. Its workflow can request a production rebuild and
+   requires release/deployment authority; it is not a read-only check. Require
+   success for that exact run and follow the owner's outcome reconciliation
+   before retrying an uncertain dispatch.
    The orchestrator performs this gate even when immutable closeout assets
    already exist; those assets are not evidence of current website downloads.
    Record failed runs and permit a fresh verification on resume. Permit
@@ -126,6 +125,10 @@ new evidence. Invalid or mismatched assets remain blocking.
    replay preserves those fields byte-for-byte. Any other feed mismatch still
    fails. The later hotfix release (for example `2026.9.7`) verifies its own
    appcast at its own closeout; the withdrawn record is never rewritten.
+9. Finish with the [release retrospective](retrospective.md): once publication,
+   platform assets, and this closeout are terminal, write the report and open
+   its `openclaw/maintainers` PR with the shared issue-ledger update. The stable
+   release is not done until that PR is open and its ledger check passes.
 
 ## Recover a failed publication parent
 

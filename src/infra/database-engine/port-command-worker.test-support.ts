@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import "./port-command.entry.worker.js";
 
 const worker = vi.hoisted(
   (): {
@@ -8,11 +9,6 @@ const worker = vi.hoisted(
 
 // Keep the command's real handler and SQL while avoiding a fresh isolate for each phase.
 // Backup, snapshot, proxy, and foreign-owner workers retain their native transports.
-vi.mock("node:worker_threads", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:worker_threads")>()),
-  parentPort: {},
-  workerData: { openclawPortCommand: true },
-}));
 vi.mock("../worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../worker-task-server.js")>()),
   serveWorkerTasks: (handle: NonNullable<typeof worker.handle>) => {
@@ -28,7 +24,7 @@ vi.mock("../worker-task-pool.js", async (importOriginal) => {
     ...actual,
     WorkerTaskPool: new Proxy(actual.WorkerTaskPool, {
       construct(Target, args: ConstructorParameters<typeof actual.WorkerTaskPool>) {
-        if (!/\/port-command\.worker\.[jt]s$/.test(args[0].workerUrl.pathname)) {
+        if (!/\/port-command\.entry\.worker\.[jt]s$/.test(args[0].workerUrl.pathname)) {
           return new Target(resolveBackupNativeWorkerTestOptions(args[0]));
         }
         let pending: Promise<unknown> | undefined;

@@ -14,7 +14,8 @@ openclaw-mermaid > .actions {
   position: absolute;
   inset-block-start: 6px;
   inset-inline-end: 6px;
-  z-index: 1;
+  /* Chat lifts content buttons above touch targets; keep the toolbar above the preview. */
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -72,12 +73,24 @@ openclaw-mermaid > .actions .oc-menu {
 openclaw-mermaid > .actions .oc-menu-item {
   min-height: var(--menu-item-height);
   padding: 0 8px;
-  font: 12px var(--font-body);
+  font: var(--control-ui-text-sm) var(--font-body);
   cursor: default;
 }
 openclaw-mermaid > .preview {
+  display: block;
+  width: 100%;
   padding: 36px 16px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: default;
   overflow: auto;
+}
+openclaw-mermaid > .preview:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 openclaw-mermaid > .preview img {
   display: block;
@@ -93,7 +106,7 @@ openclaw-mermaid > .source {
   background: transparent;
   overflow: auto;
   max-height: 480px;
-  font: 12px/1.6 var(--mono);
+  font: var(--control-ui-text-sm)/1.6 var(--mono);
   tab-size: 2;
 }
 openclaw-mermaid > .source > code {
@@ -103,7 +116,7 @@ openclaw-mermaid > .source > code {
 openclaw-mermaid > .status {
   margin: 0;
   padding: 36px 16px 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 @media (hover: none), (pointer: coarse) {

@@ -1,10 +1,10 @@
 ---
-summary: "Channels that connect but do not deliver, cron and heartbeat delivery, and node or browser tool failures"
+summary: "Channels that connect but do not deliver, automation delivery, and node or browser tool failures"
 title: "Channel delivery and tools"
 sidebarTitle: "Channel delivery and tools"
 read_when:
   - A channel is connected but messages are not flowing
-  - Cron or heartbeat deliveries do not arrive
+  - Automation deliveries do not arrive
   - A paired node fails on tool calls, or the browser tool fails
 ---
 
@@ -39,43 +39,49 @@ Related:
 - [Telegram](/channels/telegram)
 - [WhatsApp](/channels/whatsapp)
 
-## Cron and heartbeat delivery
+<a id="cron-and-heartbeat-delivery" />
 
-If cron or heartbeat did not run or did not deliver, verify scheduler state first, then delivery target.
+## Automation delivery
+
+If a scheduled job did not run or deliver, inspect its state and run history,
+then its delivery destination:
 
 ```bash
 openclaw automations status
-openclaw automations list
+openclaw automations list --all
+openclaw automations show <jobId>
 openclaw automations runs <jobId> --limit 20
-openclaw system heartbeat last
 openclaw logs --follow
 ```
 
-Look for:
+Check that scheduling is enabled and the job has a next run. Its own
+`activeHours`, `idleOnly`, and `payload.skipIfScratchEmpty` policies can prevent
+an immediate start. Empty scratch means an explicitly stored checklist containing
+only blank lines, comments, headings, fence markers, or empty checklist stubs;
+missing scratch does not skip the run.
 
-- Cron enabled and next wake present.
-- Job run history status (`ok`, `skipped`, `error`).
-- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `alerts-disabled`, `empty-heartbeat-file`).
+`cron: scheduler disabled; jobs will not run automatically` means the scheduler
+is disabled. `Automation migration is incomplete; run openclaw doctor --fix`
+means Doctor still has work to finish before the converted job can run. A
+`cron: timer tick failed` error needs inspection of the accompanying runtime or
+storage error.
 
-<AccordionGroup>
-  <Accordion title="Common signatures">
-    - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
-    - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
-    - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
-    - `heartbeat skipped` with `reason=empty-heartbeat-file` → heartbeat monitor scratch only contains blank lines, comments, headings, code fences, or empty checklists, so OpenClaw skips the model call.
-    - `heartbeat skipped` with `reason=no-route` → the default `owner` target has no concrete owner in `commands.ownerAllowFrom` or channel `allowFrom`, the owner cannot resolve to a DM, or no channel is configured. Explicit `last` also needs a session conversation route.
-    - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
-    - `session event wake failed; no wake retry scheduled` → a wake ended with a failure. The error log records its source, intent, agent/session target, wake reason, and error. Inspect that session and fix the reported cause before requesting another wake; the wake scheduler does not replay failed turns, which may already have performed work. Outbound messages already held by the durable delivery queue keep their separate recovery policy.
-    - `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
+A missing owner DM no longer skips execution: ordinary automation delivery
+records the unavailable route. Review the job's channel, account, and owner or
+explicit recipient. `delivery.directPolicy: "block"` intentionally suppresses
+DM delivery; a successful quiet result is also distinct from a delivery failure.
+Do not restore retired `agents.defaults.heartbeat` settings to repair the job.
 
-  </Accordion>
-</AccordionGroup>
+A session event rejected by ordinary admission reports the reason. Resolve it
+before submitting another event, since a failed turn may already have performed
+work. Outbound messages already held by the durable delivery queue retain their
+own recovery policy.
 
 Related:
 
-- [Heartbeat](/gateway/heartbeat)
-- [Scheduled tasks](/automation/cron-jobs)
-- [Scheduled tasks: troubleshooting](/automation/cron-jobs#troubleshooting)
+- [Heartbeat migration](/gateway/heartbeat)
+- [Automations](/automation/cron-jobs)
+- [Automation troubleshooting](/automation/cron-jobs#troubleshooting)
 
 ## Node paired, tool fails
 

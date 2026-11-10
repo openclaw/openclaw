@@ -20,8 +20,16 @@ export function sqliteDatabaseSealSchemaFor(kind: "agent" | "state" | "other") {
   if (!native || !storageIdentity) {
     return undefined;
   }
+  const runtime = [native.runtime.nodeVersion, native.runtime.bunVersion ?? null];
+  // Keep the exact old tuple for seals that predate decomposed library identity.
+  const legacyStorageIdentity = JSON.stringify([
+    native.version,
+    storageIdentity.sourceId,
+    storageIdentity.compileOptions,
+    ...runtime,
+  ]);
   const hash = createHash("sha256").update(
-    JSON.stringify([integrityPolicyRevision, storageIdentity, kind]),
+    JSON.stringify([integrityPolicyRevision, legacyStorageIdentity, kind]),
   );
   const schema = createHash("sha256").update(kind);
   if (kind !== "state") {
@@ -39,8 +47,16 @@ export function sqliteDatabaseSealSchemaFor(kind: "agent" | "state" | "other") {
   return {
     schemaIdentity: hash.digest("hex"),
     identity: {
-      runtime: JSON.stringify([native.runtime.nodeVersion, native.runtime.bunVersion ?? null]),
-      sqlite: createHash("sha256").update(storageIdentity).digest("hex"),
+      runtime: JSON.stringify(runtime),
+      sqlite: {
+        version: native.version,
+        sourceId: storageIdentity.sourceId,
+        // SQLite's COMPILER entry reports toolchain identity, not a feature.
+        compileOptions: storageIdentity.compileOptions
+          .split(",")
+          .filter((option) => !option.startsWith("COMPILER="))
+          .join(","),
+      },
       schema: schema.digest("hex"),
       policy: integrityPolicyRevision,
     },

@@ -95,19 +95,21 @@ describe("anthropic-vertex provider plugin", () => {
   });
 
   describe.each([
-    {
-      region: "global",
-      baseUrl: globalUrl,
-      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-      retiredCost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-    },
-    {
-      region: "us",
-      baseUrl: usUrl,
-      cost: { input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 },
-      retiredCost: { input: 3.3, output: 16.5, cacheRead: 0.33, cacheWrite: 4.125 },
-    },
-  ])("Sonnet 5 pricing for $region", ({ region, baseUrl, cost, retiredCost }) => {
+    ["global", globalUrl, [2, 10, 0.2, 2.5], [3, 15, 0.3, 3.75]],
+    ["us", usUrl, [2.2, 11, 0.22, 2.75], [3.3, 16.5, 0.33, 4.125]],
+  ] as const)("Sonnet 5 pricing for %s", (region, baseUrl, current, retired) => {
+    const pricing = ([input, output, cacheRead, cacheWrite]: readonly [
+      number,
+      number,
+      number,
+      number,
+    ]) => ({
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+    });
+    const cost = pricing(current);
     const nowMs = Date.UTC(2026, 8, 1);
     beforeEach(() => vi.useFakeTimers({ now: nowMs }));
 
@@ -126,35 +128,17 @@ describe("anthropic-vertex provider plugin", () => {
       }
     });
 
-    it("repairs missing or retired pricing and leaves current pricing unchanged", async () => {
-      const model = {
-        id: "claude-sonnet-5",
+    it("repairs missing or retired pricing and leaves current pricing unchanged", () => {
+      const model = staleModel("claude-sonnet-5", {
         name: "Claude Sonnet 5",
-        api: "anthropic-messages",
-        provider: "anthropic-vertex",
         baseUrl,
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 1_000_000,
-        contextTokens: 1_000_000,
-        maxTokens: 128_000,
-        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      };
-      for (const staleCost of [undefined, retiredCost]) {
-        const normalized = provider.normalizeResolvedModel?.({
-          provider: "anthropic-vertex",
-          modelId: model.id,
-          model: { ...model, cost: staleCost },
-        } as never);
-        expect(normalized?.cost).toEqual(cost);
+        ...currentMetadata,
+        thinkingLevelMap: opusThinking,
+      });
+      for (const staleCost of [undefined, pricing(retired)]) {
+        expect(normalize(staleModel(model.id, { ...model, cost: staleCost }))?.cost).toEqual(cost);
       }
-      expect(
-        provider.normalizeResolvedModel?.({
-          provider: "anthropic-vertex",
-          modelId: model.id,
-          model: { ...model, cost },
-        } as never),
-      ).toBeUndefined();
+      expect(normalize({ ...model, cost })).toBeUndefined();
     });
   });
 
@@ -171,41 +155,33 @@ describe("anthropic-vertex provider plugin", () => {
     expect(profile?.levels.map((level) => level.id)).toContain("max");
   });
 
-  it.each([
-    { id: "claude-fable-5", thinkingLevelMap: fableThinking },
-    { id: "claude-mythos-5", thinkingLevelMap: fableThinking },
-    {
-      id: "claude-opus-5",
-      thinkingLevelMap: opusThinking,
-      overrides: { cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 } },
-    },
-    {
-      id: "production-claude",
-      overrides: {
-        params: { canonicalModelId: "claude-fable-5" },
-        thinkingLevelMap: { max: null },
-      },
-      thinkingLevelMap: { ...fableThinking, max: null },
-    },
-    {
-      id: "prod-opus",
-      overrides: {
+  const opusCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+  it.each<[string, Partial<ProviderRuntimeModel>, Partial<ProviderRuntimeModel>]>([
+    ["claude-fable-5", {}, { thinkingLevelMap: fableThinking }],
+    ["claude-mythos-5", {}, { thinkingLevelMap: fableThinking }],
+    ["claude-opus-5", { cost: opusCost }, { thinkingLevelMap: opusThinking }],
+    [
+      "production-claude",
+      { params: { canonicalModelId: "claude-fable-5" }, thinkingLevelMap: { max: null } },
+      { thinkingLevelMap: { ...fableThinking, max: null } },
+    ],
+    [
+      "prod-opus",
+      {
         baseUrl: usUrl,
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        cost: opusCost,
         contextTokens: 200_000,
         maxTokens: 64_000,
         params: { canonicalModelId: "claude-opus-5" },
       },
-      thinkingLevelMap: opusThinking,
-      cost: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
-    },
-  ])("restores $id metadata and authored levels", ({ id, overrides, thinkingLevelMap, cost }) => {
+      {
+        thinkingLevelMap: opusThinking,
+        cost: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
+      },
+    ],
+  ])("restores %s metadata and authored levels", (id, overrides, expected) => {
     expect(normalize(staleModel(id, overrides))).toEqual(
-      expect.objectContaining({
-        ...currentMetadata,
-        ...(cost ? { cost } : {}),
-        thinkingLevelMap,
-      }),
+      expect.objectContaining({ ...currentMetadata, ...expected }),
     );
   });
 

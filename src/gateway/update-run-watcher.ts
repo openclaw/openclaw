@@ -67,6 +67,16 @@ export function startUpdateRunWatcher(params: {
     }
   };
 
+  const schedulePoll = () => {
+    // The detached orchestrator writes the shared ledger. Keep observing the
+    // admitted run until terminal or teardown, including across failed reads.
+    timer = scheduler.schedule({
+      id: "update.run-poll",
+      delayMs: UPDATE_RUN_POLL_MS,
+      run: poll,
+    });
+  };
+
   const scanOnce = async (reconcileAll: boolean): Promise<void> => {
     if (work.isClosing) {
       return;
@@ -175,18 +185,15 @@ export function startUpdateRunWatcher(params: {
         void scan(reconcileAll);
         return;
       }
-      // Named freshness-poll exception: the detached orchestrator writes the
-      // shared ledger. Observe one active run until terminal or teardown so a
-      // late repair still clears the clients' update-in-progress state.
-      timer = scheduler.schedule({
-        id: "update.run-poll",
-        delayMs: UPDATE_RUN_POLL_MS,
-        run: poll,
-      });
+      schedulePoll();
     } catch (error) {
       if (!work.isClosing) {
-        watched = undefined;
-        params.log.warn(`update run watcher stopped: ${formatErrorMessage(error)}`);
+        params.log.warn(
+          `update run watcher ${watched ? "deferred" : "stopped"}: ${formatErrorMessage(error)}`,
+        );
+        if (watched) {
+          schedulePoll();
+        }
       }
     }
   };

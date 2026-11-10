@@ -1,6 +1,30 @@
 // Synology Chat helper module supports test http utils behavior.
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ResolvedSynologyChatAccount } from "./types.js";
+
+export function makeAccount(
+  overrides: Partial<ResolvedSynologyChatAccount> = {},
+): ResolvedSynologyChatAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    token: "valid-token",
+    incomingUrl: "https://nas.example.com/incoming",
+    webhookUrl: "https://gateway.example.com/webhook/synology",
+    nasHost: "nas.example.com",
+    webhookPath: "/webhook/synology",
+    webhookPathSource: "default",
+    dangerouslyAllowNameMatching: false,
+    dangerouslyAllowInheritedWebhookPath: false,
+    dmPolicy: "open",
+    allowedUserIds: ["*"],
+    rateLimitPerMinute: 30,
+    botName: "TestBot",
+    allowInsecureSsl: true,
+    ...overrides,
+  };
+}
 
 function makeBaseReq(
   method: string,
@@ -53,11 +77,16 @@ export function makeRes(options: { finishOnEnd?: boolean } = {}): ServerResponse
   emit: (eventName: string) => boolean;
 } {
   let headersSent = false;
+  const chunks: Buffer[] = [];
   const res = Object.assign(new EventEmitter(), {
     status: 0,
     body: "" as string | Buffer,
     headers: {} as Record<string, string>,
     destroyed: false,
+    write(chunk: Uint8Array | string) {
+      chunks.push(Buffer.from(chunk));
+      return true;
+    },
     setHeader(name: string, value: string) {
       res.headers[name.toLowerCase()] = value;
     },
@@ -65,11 +94,14 @@ export function makeRes(options: { finishOnEnd?: boolean } = {}): ServerResponse
       res.status = statusCode;
     },
     end(body?: string | Buffer) {
-      res.body = body ?? "";
+      res.body = chunks.length
+        ? Buffer.concat([...chunks, ...(body === undefined ? [] : [Buffer.from(body)])])
+        : (body ?? "");
       headersSent = true;
       if (options.finishOnEnd !== false) {
         queueMicrotask(() => res.emit("finish"));
       }
+      return res;
     },
     destroy() {
       res.destroyed = true;

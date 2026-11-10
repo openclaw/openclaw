@@ -155,7 +155,7 @@ export async function repairDoctorAgentDeletionJournal(params: {
     }),
     ...(missing && !params.shouldRepair
       ? [
-          `Run ${formatCliCommand("openclaw doctor --fix", params.env)} to reconstruct the journal and restore qualifying stores from affected published builds automatically after verified backups. Other stores remain held.`,
+          `Run ${formatCliCommand("openclaw doctor --fix", params.env)} to reconstruct the journal and restore verified configured stores automatically after verified backups. Other stores remain held.`,
         ]
       : []),
   ];

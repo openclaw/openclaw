@@ -37,23 +37,6 @@ function normalizeChatId(value: unknown): number | null {
   return asPositiveFiniteNumber(value) ?? null;
 }
 
-function listTargetChatIds(
-  targets: readonly PendingIMessageApprovalReactionPollTarget[],
-): number[] {
-  const chatIds = new Set<number>();
-  for (const target of targets) {
-    const chatId = normalizeChatId(target.conversation.chatId);
-    if (chatId !== null) {
-      chatIds.add(chatId);
-    }
-  }
-  return [...chatIds];
-}
-
-function hasUnscopedTarget(targets: readonly PendingIMessageApprovalReactionPollTarget[]): boolean {
-  return targets.some((target) => normalizeChatId(target.conversation.chatId) === null);
-}
-
 function enumerateMessageGuidCandidates(value: string): string[] {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -66,18 +49,6 @@ function enumerateMessageGuidCandidates(value: string): string[] {
   );
 }
 
-function buildPendingTargetsByMessageId(
-  targets: readonly PendingIMessageApprovalReactionPollTarget[],
-): Map<string, PendingIMessageApprovalReactionPollTarget> {
-  const pendingByMessageId = new Map<string, PendingIMessageApprovalReactionPollTarget>();
-  for (const target of targets) {
-    for (const candidate of enumerateMessageGuidCandidates(target.messageId)) {
-      pendingByMessageId.set(candidate, target);
-    }
-  }
-  return pendingByMessageId;
-}
-
 async function listRecentChatIds(client: IMessageRpcClient): Promise<number[]> {
   const result = await client.request<{ chats?: ChatListEntry[] }>(
     "chats.list",
@@ -87,97 +58,6 @@ async function listRecentChatIds(client: IMessageRpcClient): Promise<number[]> {
   return (result.chats ?? [])
     .map((chat) => normalizeChatId(chat.id))
     .filter((chatId): chatId is number => chatId !== null);
-}
-
-async function fetchRecentHistory(params: {
-  client: IMessageRpcClient;
-  chatId: number;
-}): Promise<HistoryMessage[]> {
-  const result = await params.client.request<{ messages?: unknown[] }>(
-    "messages.history",
-    {
-      chat_id: params.chatId,
-      limit: PER_CHAT_HISTORY_LIMIT,
-    },
-    { timeoutMs: 10_000 },
-  );
-  return (result.messages ?? []).filter((message): message is HistoryMessage =>
-    Boolean(message && typeof message === "object"),
-  );
-}
-
-function buildReactionPayload(params: {
-  targetMessage: HistoryMessage;
-  reaction: NonNullable<HistoryMessage["reactions"]>[number];
-}): IMessagePayload | null {
-  const emoji = params.reaction.emoji?.trim();
-  const sender = params.reaction.sender?.trim();
-  const targetGuid = params.targetMessage.guid?.trim();
-  if (!emoji || !sender || !targetGuid) {
-    return null;
-  }
-  const reactionId = normalizeChatId(params.reaction.id);
-  return {
-    ...(reactionId !== null ? { id: reactionId } : {}),
-    guid: `reaction:${targetGuid}:${sender}:${emoji}:${params.reaction.created_at ?? ""}`,
-    chat_id: params.targetMessage.chat_id,
-    chat_guid: params.targetMessage.chat_guid,
-    chat_identifier: params.targetMessage.chat_identifier,
-    chat_name: params.targetMessage.chat_name,
-    participants: params.targetMessage.participants,
-    is_group: params.targetMessage.is_group,
-    sender,
-    destination_caller_id: params.targetMessage.destination_caller_id,
-    is_from_me: params.reaction.is_from_me,
-    text: `${params.reaction.type ?? "reaction"} "${params.targetMessage.text ?? ""}"`,
-    created_at: params.reaction.created_at,
-    is_reaction: true,
-    is_tapback: true,
-    associated_message_guid: targetGuid,
-    associated_message_type: 2000,
-    reaction_type: params.reaction.type ?? undefined,
-    reaction_emoji: emoji,
-    is_reaction_add: true,
-    reacted_to_guid: targetGuid,
-  };
-}
-
-function buildConversationKeyFromMessage(message: HistoryMessage): IMessageApprovalConversationKey {
-  return {
-    ...(message.chat_guid?.trim() ? { chatGuid: message.chat_guid.trim() } : {}),
-    ...(message.chat_identifier?.trim() ? { chatIdentifier: message.chat_identifier.trim() } : {}),
-    ...(normalizeChatId(message.chat_id) !== null ? { chatId: message.chat_id as number } : {}),
-  };
-}
-
-async function bindObservedConversation(params: {
-  target: PendingIMessageApprovalReactionPollTarget;
-  message: HistoryMessage;
-}): Promise<void> {
-  const nowMs = asDateTimestampMs(Date.now());
-  const expiresAtMs = asDateTimestampMs(params.target.expiresAtMs);
-  if (nowMs === undefined || expiresAtMs === undefined || expiresAtMs <= nowMs) {
-    return;
-  }
-  const ttlMs = expiresAtMs - nowMs;
-  const conversation = buildConversationKeyFromMessage(params.message);
-  const messageIds = new Set([
-    ...enumerateMessageGuidCandidates(params.target.messageId),
-    ...enumerateMessageGuidCandidates(params.message.guid ?? ""),
-  ]);
-  await Promise.all(
-    [...messageIds].map((messageId) =>
-      registerIMessageApprovalReactionTarget({
-        accountId: params.target.accountId,
-        conversation,
-        messageId,
-        approvalId: params.target.approvalId,
-        approvalKind: params.target.approvalKind,
-        allowedDecisions: params.target.allowedDecisions,
-        ttlMs,
-      }),
-    ),
-  );
 }
 
 export async function pollPendingIMessageApprovalReactions(params: {
@@ -194,12 +74,25 @@ export async function pollPendingIMessageApprovalReactions(params: {
   if (params.signal?.aborted || targets.length === 0) {
     return;
   }
-  const pendingByMessageId = buildPendingTargetsByMessageId(targets);
-  const explicitChatIds = listTargetChatIds(targets);
+  const pendingByMessageId = new Map<string, PendingIMessageApprovalReactionPollTarget>();
+  for (const target of targets) {
+    for (const candidate of enumerateMessageGuidCandidates(target.messageId)) {
+      pendingByMessageId.set(candidate, target);
+    }
+  }
+  const targetChatIds = new Set<number>();
+  for (const target of targets) {
+    const chatId = normalizeChatId(target.conversation.chatId);
+    if (chatId !== null) {
+      targetChatIds.add(chatId);
+    }
+  }
+  const explicitChatIds = [...targetChatIds];
   // Send-side DM registration may know only a handle, not a chat id. Scan recent chats
   // for those typed GUID targets or a watch-missed tapback would silently resolve nothing.
   const shouldDiscoverRecentChats =
-    params.allowRecentChatDiscovery === true && hasUnscopedTarget(targets);
+    params.allowRecentChatDiscovery === true &&
+    targets.some((target) => normalizeChatId(target.conversation.chatId) === null);
   const chatIds = shouldDiscoverRecentChats
     ? [...new Set([...explicitChatIds, ...(await listRecentChatIds(params.client))])]
     : explicitChatIds;
@@ -209,7 +102,15 @@ export async function pollPendingIMessageApprovalReactions(params: {
     }
     let messages: HistoryMessage[];
     try {
-      messages = await fetchRecentHistory({ client: params.client, chatId });
+      const client = params.client;
+      const result = await client.request<{ messages?: unknown[] }>(
+        "messages.history",
+        { chat_id: chatId, limit: PER_CHAT_HISTORY_LIMIT },
+        { timeoutMs: 10_000 },
+      );
+      messages = (result.messages ?? []).filter((message): message is HistoryMessage =>
+        Boolean(message && typeof message === "object"),
+      );
     } catch (err) {
       logVerbose(`imessage: approval reaction poll skipped chat_id=${chatId}: ${String(err)}`);
       continue;
@@ -228,12 +129,76 @@ export async function pollPendingIMessageApprovalReactions(params: {
       if (!target) {
         continue;
       }
-      await bindObservedConversation({ target, message });
+      await (async () => {
+        const nowMs = asDateTimestampMs(Date.now());
+        const expiresAtMs = asDateTimestampMs(target.expiresAtMs);
+        if (nowMs === undefined || expiresAtMs === undefined || expiresAtMs <= nowMs) {
+          return;
+        }
+        const ttlMs = expiresAtMs - nowMs;
+        const conversation: IMessageApprovalConversationKey = {
+          ...(message.chat_guid?.trim() ? { chatGuid: message.chat_guid.trim() } : {}),
+          ...(message.chat_identifier?.trim()
+            ? { chatIdentifier: message.chat_identifier.trim() }
+            : {}),
+          ...(normalizeChatId(message.chat_id) !== null
+            ? { chatId: message.chat_id as number }
+            : {}),
+        };
+        const messageIds = new Set([
+          ...enumerateMessageGuidCandidates(target.messageId),
+          ...enumerateMessageGuidCandidates(message.guid ?? ""),
+        ]);
+        await Promise.all(
+          [...messageIds].map((messageId) =>
+            registerIMessageApprovalReactionTarget({
+              accountId: target.accountId,
+              conversation,
+              messageId,
+              approvalId: target.approvalId,
+              approvalKind: target.approvalKind,
+              allowedDecisions: target.allowedDecisions,
+              ttlMs,
+            }),
+          ),
+        );
+      })();
       for (const reaction of message.reactions ?? []) {
         if (params.signal?.aborted) {
           return;
         }
-        const reactionPayload = buildReactionPayload({ targetMessage: message, reaction });
+        const reactionPayload = ((): IMessagePayload | null => {
+          const emoji = reaction.emoji?.trim();
+          const sender = reaction.sender?.trim();
+          const reactionTargetGuid = message.guid?.trim();
+          if (!emoji || !sender || !reactionTargetGuid) {
+            return null;
+          }
+          const reactionId = normalizeChatId(reaction.id);
+          return {
+            ...(reactionId !== null ? { id: reactionId } : {}),
+            guid: `reaction:${reactionTargetGuid}:${sender}:${emoji}:${reaction.created_at ?? ""}`,
+            chat_id: message.chat_id,
+            chat_guid: message.chat_guid,
+            chat_identifier: message.chat_identifier,
+            chat_name: message.chat_name,
+            participants: message.participants,
+            is_group: message.is_group,
+            sender,
+            destination_caller_id: message.destination_caller_id,
+            is_from_me: reaction.is_from_me,
+            text: `${reaction.type ?? "reaction"} "${message.text ?? ""}"`,
+            created_at: reaction.created_at,
+            is_reaction: true,
+            is_tapback: true,
+            associated_message_guid: reactionTargetGuid,
+            associated_message_type: 2000,
+            reaction_type: reaction.type ?? undefined,
+            reaction_emoji: emoji,
+            is_reaction_add: true,
+            reacted_to_guid: reactionTargetGuid,
+          };
+        })();
         if (!reactionPayload) {
           continue;
         }

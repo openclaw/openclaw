@@ -96,14 +96,19 @@ it("clears expired cooldowns and orders active windows after available profiles"
     other: apiKey("openai"),
   });
   store.usageStats = {
-    expired: { cooldownUntil: now - 1000, errorCount: 4, failureCounts: { rate_limit: 4 } },
+    expired: {
+      cooldownUntil: now - 1000,
+      errorCount: 4,
+      failureCounts: { timeout: 4 },
+      lastRateLimitAt: now - 2000,
+    },
     late: { cooldownUntil: now + 120_000, errorCount: 2 },
     early: { disabledUntil: now + 60_000, disabledReason: "billing" },
     other: { cooldownUntil: now - 1000, errorCount: 3 },
   };
   expectOrder(store, ["expired", "early", "late"]);
   expect(store.usageStats).toMatchObject({
-    expired: { errorCount: 0, failureCounts: { rate_limit: 4 } },
+    expired: { errorCount: 0, failureCounts: undefined, lastRateLimitAt: now - 2000 },
     other: { errorCount: 0 },
     late: { cooldownUntil: now + 120_000, errorCount: 2 },
   });

@@ -11,10 +11,11 @@ import {
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
-  beginSessionEffect,
+  runSessionMutation,
   getSessionMutationCount,
 } from "../../sessions/session-controller.lifecycle.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { requestActiveCronJobCancellation } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
@@ -155,7 +156,6 @@ it.each([
         isAgentAvailable: () => available,
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob,
       });
       try {
@@ -288,29 +288,77 @@ it("blocks workspace-only images beside the session store", () =>
     expect(await fixture.records()).toHaveLength(0);
   }));
 
+it.each(["sessionRoot", "spawnedWorkspaceDir"] as const)(
+  "delivers current-session media from its %s without admitting sibling workspaces",
+  (workspaceField) =>
+    withCompletionFixture(async (fixture, state) => {
+      const workspace = state.statePath("worktrees", "selected");
+      const image = path.join(workspace, "selected.png");
+      const sibling = state.statePath("worktrees", "sibling", "private.png");
+      for (const source of [image, sibling]) {
+        await fs.mkdir(path.dirname(source), { recursive: true });
+        await fs.writeFile(source, PNG);
+      }
+      await replaceSessionEntry(fixture.scope, {
+        sessionId: fixture.scope.sessionId,
+        lifecycleRevision: "report-generation",
+        updatedAt: 1,
+        permissionMode: "workspace",
+        [workspaceField]: workspace,
+      });
+      fixture.params.cfgWithAgentDefaults.tools = { fs: { workspaceOnly: true } };
+      fixture.params.deliveryPayloads = [
+        { text: "After", mediaUrls: [image, sibling, fixture.payload.mediaUrl!] },
+      ];
+      await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
+        delivered: true,
+      });
+      const messages = await fixture.messages();
+      expect(messages).toHaveLength(1);
+      expect(readAssistantDisplayContent(readTranscriptEventMessage(messages[0]))).toEqual([
+        { type: "text", text: "After" },
+        expect.objectContaining({ type: "image", alt: "selected.png" }),
+        expect.objectContaining({ type: "attachment_error" }),
+        expect.objectContaining({ type: "attachment_error" }),
+      ]);
+      const records = await fixture.records();
+      expect(records).toHaveLength(1);
+      expect(await fixture.downloadAttachment(records[0]!.record.attachmentId)).toMatchObject({
+        type: "image",
+      });
+    }),
+);
+
 it("does not prepare media when the source generation changes while waiting", () =>
   withCompletionFixture(async (fixture) => {
-    const admission = await beginSessionEffect({
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    const mutation = runSessionMutation({
       scope: fixture.scope.storePath,
       identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
-      assertAllowed: () => {},
+      run: async () => {
+        entered.resolve();
+        await finish.promise;
+        await replaceSessionEntry(fixture.scope, {
+          sessionId: "replacement-session",
+          lifecycleRevision: "replacement-generation",
+          updatedAt: 3000,
+        });
+      },
     });
+    await entered.promise;
     const commit = fixture.commit();
     try {
       await vi.waitFor(() => expect(getSessionMutationCount()).toBe(1));
       expect(await fixture.records()).toEqual([]);
-      await replaceSessionEntry(fixture.scope, {
-        sessionId: "replacement-session",
-        lifecycleRevision: "replacement-generation",
-        updatedAt: 3000,
-      });
-      admission.release();
+      finish.resolve();
+      await mutation;
       await expect(commit).resolves.toMatchObject({ ok: false });
       expect(await fixture.records()).toEqual([]);
       expect(await fixture.messages()).toEqual([]);
       expect(fixture.updates()).toBe(0);
     } finally {
-      admission.release();
-      await commit;
+      finish.resolve();
+      await Promise.all([mutation, commit]);
     }
   }));

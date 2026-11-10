@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { deserialize, serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectSynchronousErrors,
+  materializeErrorStack,
+} from "../../infra/error-graph-internal.js";
 import { decodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { MAX_PENDING_BYTES, MAX_PENDING_MESSAGES } from "./ipc.js";
@@ -287,11 +291,17 @@ export class BrokerResourceClaims {
       return this.sealPromise;
     }
     this.sealed = true;
-    this.sealPromise = this.host.transmit({ type: "resource-seal" }).then(() => {
-      for (const claim of this.claims.values()) {
-        claim.attached.resolve();
-      }
-    });
+    this.sealPromise = this.host.transmit({ type: "resource-seal" }).then(
+      () => {
+        for (const claim of this.claims.values()) {
+          claim.attached.resolve();
+        }
+      },
+      (error: unknown) => {
+        materializeErrorStack(error);
+        throw error;
+      },
+    );
     return this.sealPromise;
   }
 
@@ -303,16 +313,12 @@ export class BrokerResourceClaims {
   }
 
   fail(error: Error): void {
+    materializeErrorStack(error);
     this.failure ??= error;
     const failed = [...this.claims.values()].filter((claim) => this.rejectClaim(claim, error));
-    const callbackErrors: unknown[] = [];
-    for (const claim of failed) {
-      try {
-        claim.inContext(() => claim.callbacks.failed(error));
-      } catch (callbackError) {
-        callbackErrors.push(callbackError);
-      }
-    }
+    const callbackErrors = collectSynchronousErrors(failed, (claim) =>
+      claim.inContext(() => claim.callbacks.failed(error)),
+    );
     if (callbackErrors.length) {
       throw new AggregateError(callbackErrors, "Native resource failure callback failed");
     }

@@ -251,10 +251,7 @@ describe("scheduled message actions", () => {
         : {
             ok: true,
             channel: {
-              id: channelId,
-              guild_id: guildId,
-              type: 0,
-              name: "scheduled-read",
+              ...channelInfo,
               ...(action === "channel-edit" ? { topic: expectedTopic } : {}),
             },
           };
@@ -574,7 +571,7 @@ describe("scheduled message actions", () => {
         }
 
         vi.stubEnv("DISCORD_API_URL", `${providerOrigin}/api/v10`);
-        await ensureMcpLoopbackServer(0);
+        await ensureMcpLoopbackServer();
         cleanup.push(() => closeMcpLoopbackServer());
         const mcpRuntime = expectDefined(getActiveMcpLoopbackRuntime(), "task-owned MCP runtime");
         const mcpOrigin = `http://127.0.0.1:${mcpRuntime.port}`;
@@ -812,7 +809,7 @@ describe("scheduled message actions", () => {
         }
         const completion = await waitFor(finished.promise);
         if (!disableBeforeResponse) {
-          expect(completion).toMatchObject({ status: "ok" });
+          expect(completion, JSON.stringify(completion)).toMatchObject({ status: "ok" });
         }
         let text: string | undefined;
         if (runtime === "claude-cli") {

@@ -1,4 +1,3 @@
-import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
@@ -7,9 +6,9 @@ import {
 } from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { inspectDecisionProviders } from "../decisions/runtime.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
-import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
+import { resetPluginLoaderTestStateForTest, writePlugin } from "../plugins/loader.test-fixtures.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -25,37 +24,36 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
     prefix: "decisions-prepared-registry-",
     env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
   });
-  const pluginDir = state.statePath("fixture");
-  await state.writeText(
-    "fixture/index.cjs",
-    `module.exports = {
-    id: "fixture",
-    register(api) {
+  const { workspaceDir } = state;
+  function createPlugin(id: string, registration: string, manifest: Record<string, unknown>) {
+    const entry = writePlugin({ id, dir: state.statePath(id), registration });
+    writeFixtureJson(entry.dir, "openclaw.plugin.json", { id, ...manifest });
+    return entry.file;
+  }
+  const provider = createPlugin(
+    "fixture",
+    `
       api.registerDecisionProvider({
         id: "fixture", contractVersion: 1,
         isReady: () => typeof api.pluginConfig.apiKey === "string",
         async evaluate() { return { status: "ok", result: { model: "synthetic", answers: { check: { type: "boolean", probabilityTrue: 1 } } } }; }
       });
-    }
-  };`,
+`,
+    {
+      contracts: { decisionProviders: ["fixture"] },
+      configContracts: {
+        secretInputs: { paths: [{ path: "apiKey", expected: "string", ownerKind: "capability" }] },
+      },
+      configSchema: {
+        type: "object",
+        required: ["apiKey"],
+        properties: { apiKey: { type: "object", required: ["source", "provider", "id"] } },
+      },
+    },
   );
-  await state.writeJson("fixture/openclaw.plugin.json", {
-    id: "fixture",
-    contracts: { decisionProviders: ["fixture"] },
-    configContracts: {
-      secretInputs: { paths: [{ path: "apiKey", expected: "string", ownerKind: "capability" }] },
-    },
-    configSchema: {
-      type: "object",
-      required: ["apiKey"],
-      properties: { apiKey: { type: "object", required: ["source", "provider", "id"] } },
-    },
-  });
-  await state.writeText(
-    "consumer/index.cjs",
-    `module.exports = {
-    id: "consumer",
-    register(api) {
+  const consumer = createPlugin(
+    "consumer",
+    `
       if (Object.keys(api.pluginConfig ?? {}).length) throw new Error("Consumer must not require credentials");
       api.registerTool({
         name: "fixture_decision", label: "Fixture", description: "Fixture", parameters: { type: "object" },
@@ -67,20 +65,18 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
           return { content: [], details };
         }
       });
-    }
-  };`,
+`,
+    {
+      contracts: { tools: ["fixture_decision"] },
+      configSchema: { type: "object", additionalProperties: false },
+    },
   );
-  await state.writeJson("consumer/openclaw.plugin.json", {
-    id: "consumer",
-    contracts: { tools: ["fixture_decision"] },
-    configSchema: { type: "object", additionalProperties: false },
-  });
   const source: OpenClawConfig = {
     agents: { defaults: { decisionModel: "fixture/synthetic" } },
     plugins: {
       allow: ["fixture", "consumer"],
       slots: { memory: "none" },
-      load: { paths: [path.join(pluginDir, "index.cjs"), state.statePath("consumer/index.cjs")] },
+      load: { paths: [provider, consumer] },
       entries: {
         consumer: { enabled: true },
         fixture: {
@@ -93,7 +89,7 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
     config: source,
     manifestRegistry: loadPluginManifestRegistryCore({
       config: source,
-      workspaceDir: state.workspaceDir,
+      workspaceDir,
     }),
   });
   expect(activated.autoEnabledReasons.fixture).toEqual(["fixture decision provider selected"]);
@@ -104,7 +100,7 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
     config: runtime,
     activationSourceConfig: source,
     autoEnabledReasons: activated.autoEnabledReasons,
-    workspaceDir: state.workspaceDir,
+    workspaceDir,
     cache: false,
   });
   let scoped: ReturnType<typeof loadAgentRuntimePluginRegistryHandle> | undefined;
@@ -112,7 +108,7 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
     expect(root.plugins.find((plugin) => plugin.id === "fixture")?.status).toBe("loaded");
     scoped = loadAgentRuntimePluginRegistryHandle({
       config: captureRuntimeConfig(runtime),
-      workspaceDir: state.workspaceDir,
+      workspaceDir,
       allowGatewaySubagentBinding: true,
       basePluginIds: ["fixture", "consumer"],
     });
@@ -127,7 +123,7 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
     expect(
       await getPluginInstance(record)!.runInRegistry(scoped, () => tool.execute("probe", {})),
     ).toMatchObject({ details: { status: "ok" } });
-    expect(inspectDecisionProviders(runtime, root)[0]).toMatchObject({
+    expect(root.decisionProviders[0]!.host.inspect(runtime)).toMatchObject({
       successCount: 1,
       activeRequests: 0,
     });

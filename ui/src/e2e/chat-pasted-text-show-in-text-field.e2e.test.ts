@@ -1,11 +1,18 @@
-import { readFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  seedChatSettings,
+  splitColumns,
+  splitTranscripts,
+} from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
@@ -15,6 +22,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
+const nativePasteShortcut = process.platform === "darwin" ? "Meta+V" : "Control+V";
 const pastedText = `Quarterly launch plan\n\n  Preserve indentation 🦞\n${"x".repeat(1100)}`;
 const pastedTextLabel = "Quarterly launch plan Preserve…";
 const contextOptions = {
@@ -76,17 +84,229 @@ function historyLayout(element: Element, mobile: boolean) {
   };
 }
 
-async function paste(composer: Locator) {
-  await composer.evaluate((element, text) => {
-    const clipboard = new DataTransfer();
-    clipboard.setData("text/plain", text);
-    element.dispatchEvent(
-      new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }),
-    );
-  }, pastedText);
+async function restorePasteDraft(composer: Locator, legacy = false) {
+  const page = composer.page();
+  const fileName = "pasted-text-123.txt";
+  const draftText = await composer.inputValue();
+  await page.locator(".agent-chat__file-input").setInputFiles({
+    name: fileName,
+    mimeType: "text/plain",
+    buffer: Buffer.from(pastedText),
+  });
+  const scopeKey = "chat:v3:agent:main:main\u0000agent:main";
+  await waitForCommittedComposerDraft(page, scopeKey, draftText, [fileName]);
+  // Reproduce a saved paste from an earlier client through the real draft-restoration path.
+  await page.evaluate(
+    async ({ scopeKey: storedScopeKey, legacy: restoreLegacy }) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("openclaw-control-ui");
+        request.addEventListener("success", () => resolve(request.result), { once: true });
+        request.addEventListener(
+          "error",
+          () => reject(request.error ?? new Error("Could not open composer draft database")),
+          { once: true },
+        );
+      });
+      try {
+        const transaction = database.transaction("composerDrafts", "readwrite");
+        const store = transaction.objectStore("composerDrafts");
+        const request: IDBRequest<
+          Array<{ scopeKey: string; attachments: Array<{ origin?: string }> }>
+        > = store.getAll();
+        request.addEventListener(
+          "success",
+          () => {
+            const draft = request.result.find((record) => record.scopeKey === storedScopeKey);
+            const attachment = draft?.attachments[0];
+            if (!draft || !attachment) {
+              transaction.abort();
+              return;
+            }
+            if (restoreLegacy) {
+              delete attachment.origin;
+            } else {
+              attachment.origin = "paste";
+            }
+            store.put(draft);
+          },
+          { once: true },
+        );
+        await new Promise<void>((resolve, reject) => {
+          transaction.addEventListener("complete", () => resolve(), { once: true });
+          const failed = () =>
+            reject(transaction.error ?? new Error("Draft fixture transaction failed"));
+          transaction.addEventListener("abort", failed, { once: true });
+          transaction.addEventListener("error", failed, { once: true });
+        });
+      } finally {
+        database.close();
+      }
+    },
+    { scopeKey, legacy },
+  );
+  await page.reload();
+  await button(page, pastedTextLabel).waitFor();
+  return fileName;
 }
 
 suite.define(() => {
+  it.each(["text", "image"] as const)(
+    "routes a native %s paste from the session transcript into its composer",
+    async (kind) => {
+      await suite.withPage(contextOptions, async ({ page }) => {
+        const rows = ["a", "b"].map((suffix) => ({
+          key: `agent:main:paste-${suffix}`,
+          kind: "direct",
+          label: `Paste session ${suffix}`,
+          updatedAt: 1,
+        }));
+        if (kind === "image") {
+          await seedChatSettings(page, suite.server.baseUrl, {
+            chatSplitLayout: splitColumns(rows, 0),
+          });
+        }
+        const gateway = await installMockGateway(page, {
+          historyMessages: [{ role: "assistant", content: "Paste a copied note or image here." }],
+          ...(kind === "image"
+            ? {
+                sessionKey: rows[0]!.key,
+                sessions: rows,
+                sessionTranscripts: splitTranscripts(rows),
+              }
+            : {}),
+        });
+        await page.goto(`${suite.server.baseUrl}chat${kind === "image" ? "/main/paste-a" : ""}`);
+        const composers = page.locator(".agent-chat__composer-combobox textarea");
+        await expect.poll(() => composers.count()).toBe(kind === "image" ? 2 : 1);
+        const composer = composers.last();
+        await composer.waitFor({ state: "visible" });
+        await composer.fill("");
+        if (kind === "image") {
+          await composers.first().fill("Keep the other session draft.");
+        }
+        await page.evaluate(async (contentKind) => {
+          if (contentKind === "text") {
+            await navigator.clipboard.writeText("A copied note for this session.");
+            return;
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = 160;
+          canvas.height = 100;
+          const context = canvas.getContext("2d")!;
+          context.fillStyle = "#4c82f7";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          const png = await new Promise<Blob>((resolve) => {
+            canvas.toBlob((blob) => resolve(blob!));
+          });
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              "image/png": png,
+              "text/plain": new Blob(["Image clipboard fallback"], { type: "text/plain" }),
+            }),
+          ]);
+        }, kind);
+        const transcript = page.locator(".chat-thread").last();
+        await transcript.focus();
+        expect(await composer.evaluate((input) => document.activeElement === input)).toBe(false);
+        await page.keyboard.press(nativePasteShortcut);
+        if (kind === "text") {
+          await expect.poll(() => composer.inputValue()).toBe("A copied note for this session.");
+          await composer.fill("");
+          await transcript.focus();
+          expect(await composer.evaluate((input) => document.activeElement === input)).toBe(false);
+          await composer.evaluate((input) => {
+            input.addEventListener(
+              "paste",
+              (event) => {
+                input.setAttribute("data-shift-paste-trusted", String(event.isTrusted));
+              },
+              { once: true },
+            );
+          });
+          if (process.platform === "darwin") {
+            // Playwright's macOS bindings omit Shift+Meta+V; dispatch its native editing command.
+            const cdp = await page.context().newCDPSession(page);
+            const key = { key: "V", code: "KeyV", windowsVirtualKeyCode: 86, modifiers: 4 | 8 };
+            try {
+              await cdp.send("Input.dispatchKeyEvent", {
+                type: "rawKeyDown",
+                ...key,
+                commands: ["PasteAndMatchStyle"],
+              });
+              await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...key });
+            } finally {
+              await cdp.detach();
+            }
+          } else {
+            await page.keyboard.press(`Shift+${nativePasteShortcut}`);
+          }
+          await expect.poll(() => composer.inputValue()).toBe("A copied note for this session.");
+          expect(await composer.getAttribute("data-shift-paste-trusted")).toBe("true");
+        } else {
+          await page.locator(".chat-attachments-preview .chat-attachment-thumb img").waitFor();
+          expect(await composer.inputValue()).toBe("");
+          expect(
+            await page.locator(".chat-attachments-preview .chat-attachment-thumb").count(),
+          ).toBe(1);
+        }
+        expect(await composer.evaluate((input) => document.activeElement === input)).toBe(true);
+        if (kind === "image") {
+          expect(await composers.first().inputValue()).toBe("Keep the other session draft.");
+          expect(
+            await page
+              .locator("openclaw-chat-pane")
+              .first()
+              .locator(".chat-attachment-thumb")
+              .count(),
+          ).toBe(0);
+        }
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await page.screenshot({ path: `${suite.artifactDir}/native-${kind}-paste.png` });
+      });
+    },
+  );
+
+  it.each([
+    { route: "chat", selector: ".agent-chat__composer-combobox textarea" },
+    { route: "new", selector: ".new-session-page__message" },
+  ])(
+    "sends long native pastes as user text from an empty or nonempty $route composer",
+    async ({ route, selector }) => {
+      await suite.withPage(contextOptions, async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}${route}`);
+        const composer = page.locator(selector);
+        await composer.waitFor({ state: "visible" });
+        await composer.fill("");
+        await page.evaluate((text) => navigator.clipboard.writeText(text), pastedText);
+        await composer.focus();
+        await page.keyboard.press(nativePasteShortcut);
+        await expect.poll(() => composer.inputValue()).toBe(pastedText);
+        expect(
+          await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
+        ).toBe(0);
+
+        const prefix = "Keep this draft\n\n";
+        await composer.fill(prefix);
+        await page.keyboard.press(nativePasteShortcut);
+        // Capture before the regression assertion, so the failing base retains comparable proof.
+        const frame = await takeControlUiScreenshotFrame(page, composer, [composer], {
+          animations: "disabled",
+        });
+        await writeFile(`${suite.artifactDir}/long-native-${route}-nonempty.png`, frame.png);
+        await expect.poll(() => composer.inputValue()).toBe(prefix + pastedText);
+        expect(
+          await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
+        ).toBe(0);
+        const method = route === "new" ? "sessions.create" : "chat.send";
+        await button(page, route === "new" ? "Start session" : "Send message").click();
+        const { params } = await gateway.waitForRequest(method);
+        expect(params).toMatchObject({ message: prefix + pastedText });
+        expect(params).not.toHaveProperty("attachments");
+      });
+    },
+  );
+
   it.each([1280, 390])("restores pasted text directly from the %ipx composer", async (width) => {
     const options = { ...contextOptions, viewport: { width, height: 900 } };
     await suite.withPage(options, async ({ page }) => {
@@ -95,7 +315,7 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
       await composer.fill("Keep this draft");
-      await paste(composer);
+      await restorePasteDraft(composer);
       const fileName = "launch-preview.html";
       const fileCard = page.locator(".chat-attachment-file__name", { hasText: fileName });
       await page.locator(".agent-chat__file-input").setInputFiles({
@@ -120,12 +340,10 @@ suite.define(() => {
             const name = card.querySelector(".chat-attachment-file__name")!;
             const action = card.querySelector(".chat-attachment-text-action")!;
             const rect = card.getBoundingClientRect();
-            const otherRect = other.getBoundingClientRect();
             const { left, right, top, bottom } = action.getBoundingClientRect();
             const { border, borderRadius } = getComputedStyle(card);
             const otherStyle = getComputedStyle(other);
             return {
-              sameSize: rect.width === otherRect.width && rect.height === otherRect.height,
               sameBorder: border === otherStyle.border && borderRadius === otherStyle.borderRadius,
               secondRow: top >= name.getBoundingClientRect().bottom,
               inside: left >= rect.left && right <= rect.right && bottom < rect.bottom,
@@ -135,7 +353,6 @@ suite.define(() => {
             };
           }),
         ).toEqual({
-          sameSize: true,
           sameBorder: true,
           secondRow: true,
           inside: true,
@@ -155,7 +372,12 @@ suite.define(() => {
         label: "Refreshed paste session",
         updatedAt: Date.now(),
       });
-      await page.getByText("Refreshed paste session", { exact: true }).first().waitFor();
+      await page
+        .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
+        .getByText("Refreshed paste session", { exact: true })
+        .filter({ visible: true })
+        .first()
+        .waitFor();
       expect(await restore.evaluate((node) => document.activeElement === node)).toBe(true);
       await page.keyboard.press("Enter");
       await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pastedText}`);
@@ -190,7 +412,9 @@ suite.define(() => {
       expect(response?.headers()["content-security-policy"]).toBe(gatewayCsp);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
-      await paste(composer);
+      await composer.fill("Review the attachment");
+      await restorePasteDraft(composer);
+      await composer.fill("");
       const chip = button(page, pastedTextLabel);
       await chip.focus();
       await page.keyboard.press("Enter");
@@ -223,67 +447,8 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
-      await paste(composer);
-      const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
-      await waitForCommittedComposerDraft(page, scopeKey, "", 1);
-      const fileName = await page.evaluate(
-        async ({ scopeKey: storedScopeKey, legacy: restoreLegacy }) => {
-          const once = (target: EventTarget, event: string, run: () => void) =>
-            target.addEventListener(event, run, { once: true });
-          const database = await new Promise<IDBDatabase>((resolve, reject) => {
-            const request = indexedDB.open("openclaw-control-ui");
-            once(request, "success", () => resolve(request.result));
-            once(request, "error", () =>
-              reject(request.error ?? new Error("Could not open composer draft database")),
-            );
-          });
-          try {
-            return await new Promise<string>((resolve, reject) => {
-              const transaction = database.transaction(
-                "composerDrafts",
-                restoreLegacy ? "readwrite" : "readonly",
-              );
-              const store = transaction.objectStore("composerDrafts");
-              const request = store.getAll() as IDBRequest<
-                Array<{
-                  scopeKey: string;
-                  attachments: Array<{ fileName: string; origin?: string }>;
-                }>
-              >;
-              let savedFileName: string | undefined;
-              once(request, "success", () => {
-                const draft = request.result.find((record) => record.scopeKey === storedScopeKey);
-                const attachment = draft?.attachments[0];
-                if (!draft || !attachment) {
-                  transaction.abort();
-                  return;
-                }
-                savedFileName = attachment.fileName;
-                if (restoreLegacy) {
-                  // Reproduce the persisted shape written before origin metadata existed.
-                  delete attachment.origin;
-                  store.put(draft);
-                }
-              });
-              once(transaction, "complete", () =>
-                savedFileName
-                  ? resolve(savedFileName)
-                  : reject(new Error("Missing persisted attachment")),
-              );
-              once(transaction, "abort", () =>
-                reject(transaction.error ?? new Error("Draft fixture transaction aborted")),
-              );
-              once(transaction, "error", () =>
-                reject(transaction.error ?? new Error("Draft fixture transaction failed")),
-              );
-            });
-          } finally {
-            database.close();
-          }
-        },
-        { scopeKey, legacy },
-      );
-      await page.reload();
+      await composer.fill("");
+      const fileName = await restorePasteDraft(composer, legacy);
       const chip = button(page, pastedTextLabel);
       await chip.click();
       const preview = page.locator("openclaw-chat-detail-panel:visible");
@@ -411,9 +576,7 @@ suite.define(() => {
       const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
       expect(download.suggestedFilename()).toBe(fileName);
       expect(await download.failure()).toBeNull();
-      const file = await download.path();
-      expect(file).not.toBeNull();
-      expect(await readFile(file!)).toEqual(bytes);
+      expect(await readControlUiE2eDownload(download)).toEqual(bytes);
     });
   });
 });

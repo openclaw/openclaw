@@ -40,8 +40,6 @@ const WHATSAPP_STYLE_MARKERS = {
 const WHATSAPP_INDENT_GUARD = "\u2060";
 const WHATSAPP_MARKERS = ["*", "_", "~", "`"] as const;
 
-type WhatsAppEscapedMarker = { source: string; placeholder: string };
-
 export type WebChannel = "web";
 
 export function assertWebChannel(input: string): asserts input is WebChannel {
@@ -275,10 +273,21 @@ export async function resolveJidToE164(
   }, ` for ${jid}`);
 }
 
-function protectWhatsAppEscapedMarkers(text: string): {
-  text: string;
-  markers: WhatsAppEscapedMarker[];
-} {
+export function markdownToWhatsAppChunks(
+  text: string,
+  limit: number,
+  tableMode: MarkdownTableMode = "bullets",
+  chunkMode: ChunkMode = "length",
+): string[] {
+  if (!text) {
+    return [];
+  }
+  if (!text.trim()) {
+    return chunkMarkdownTextWithMode(text, limit, chunkMode);
+  }
+  // Some outbound callers preserve leading indentation as presentation, while
+  // CommonMark consumes it as block indentation. Guard only the parse.
+  const guardedIndent = /^[\t ]/u.test(text);
   const placeholders: string[] = [];
   for (const [start, end] of [
     [0xe000, 0xf8ff],
@@ -298,48 +307,15 @@ function protectWhatsAppEscapedMarkers(text: string): {
   if (placeholders.length < WHATSAPP_MARKERS.length) {
     throw new Error("Unable to reserve WhatsApp formatting placeholders");
   }
-  const markers = WHATSAPP_MARKERS.map((marker, index) => ({
+  const escapedMarkers = WHATSAPP_MARKERS.map((marker, index) => ({
     source: `\\${marker}`,
     placeholder: placeholders[index] ?? "",
   }));
   let protectedText = text;
-  for (const { source, placeholder } of markers) {
+  for (const { source, placeholder } of escapedMarkers) {
     protectedText = protectedText.replaceAll(source, placeholder);
   }
-  return { text: protectedText, markers };
-}
-
-function restoreWhatsAppEscapedMarkers(
-  text: string,
-  markers: readonly WhatsAppEscapedMarker[],
-): string {
-  let restored = text;
-  for (const { source, placeholder } of markers) {
-    restored = restored.replaceAll(placeholder, source);
-  }
-  return restored;
-}
-
-function renderWhatsAppMarkdownIR(
-  ir: MarkdownIR,
-  escapedMarkers: readonly WhatsAppEscapedMarker[],
-): string {
-  return renderMarkdownWithMarkers(
-    ir,
-    {
-      styleMarkers: WHATSAPP_STYLE_MARKERS,
-      escapeText: (value) => restoreWhatsAppEscapedMarkers(value, escapedMarkers),
-    },
-    WHATSAPP_FORMAT_CAPABILITIES,
-  );
-}
-
-function prepareWhatsAppMarkdown(text: string, tableMode: MarkdownTableMode) {
-  // Some outbound callers preserve leading indentation as presentation, while
-  // CommonMark consumes it as block indentation. Guard only the parse.
-  const guardedIndent = /^[\t ]/u.test(text);
-  const escaped = protectWhatsAppEscapedMarkers(text);
-  const markdown = guardedIndent ? `${WHATSAPP_INDENT_GUARD}${escaped.text}` : escaped.text;
+  const markdown = guardedIndent ? `${WHATSAPP_INDENT_GUARD}${protectedText}` : protectedText;
   const trailingWhitespace = text.match(/\s+$/u)?.[0] ?? "";
   const { ir: parsedIr, hasTables } = markdownToIRWithMeta(markdown, {
     linkify: false,
@@ -348,7 +324,6 @@ function prepareWhatsAppMarkdown(text: string, tableMode: MarkdownTableMode) {
     enableHtmlUnderline: true,
     enableTaskLists: true,
     headingStyle: "rich",
-    blockquotePrefix: "> ",
     tableMode: tableMode === "block" ? "code" : tableMode,
     preserveSourceBlockSpacing: true,
   });
@@ -359,50 +334,45 @@ function prepareWhatsAppMarkdown(text: string, tableMode: MarkdownTableMode) {
   if (!hasTables && trailingWhitespace) {
     ir.text = `${ir.text.trimEnd()}${trailingWhitespace}`;
   }
-  return { ir, escapedMarkers: escaped.markers };
-}
-
-function splitWhatsAppIRForChunkMode(
-  ir: MarkdownIR,
-  limit: number,
-  chunkMode: ChunkMode,
-): MarkdownIR[] {
-  if (chunkMode !== "newline") {
-    return [ir];
-  }
-  const chunkTexts = chunkMarkdownTextWithMode(ir.text, limit, chunkMode);
-  const chunks: MarkdownIR[] = [];
-  let cursor = 0;
-  for (const text of chunkTexts) {
-    const start = ir.text.indexOf(text, cursor);
-    if (start < 0) {
+  const render = (chunk: MarkdownIR) =>
+    renderMarkdownWithMarkers(
+      chunk,
+      {
+        styleMarkers: WHATSAPP_STYLE_MARKERS,
+        blockquotePrefix: "> ",
+        escapeText: (value) => {
+          let restored = value;
+          for (const { source, placeholder } of escapedMarkers) {
+            restored = restored.replaceAll(placeholder, source);
+          }
+          return restored;
+        },
+      },
+      WHATSAPP_FORMAT_CAPABILITIES,
+    );
+  function splitWhatsAppIRForChunkMode(): MarkdownIR[] {
+    if (chunkMode !== "newline") {
       return [ir];
     }
-    const end = start + text.length;
-    chunks.push(sliceMarkdownIR(ir, start, end));
-    cursor = end;
+    const chunkTexts = chunkMarkdownTextWithMode(ir.text, limit, chunkMode);
+    const chunks: MarkdownIR[] = [];
+    let cursor = 0;
+    for (const chunkText of chunkTexts) {
+      const start = ir.text.indexOf(chunkText, cursor);
+      if (start < 0) {
+        return [ir];
+      }
+      const end = start + chunkText.length;
+      chunks.push(sliceMarkdownIR(ir, start, end));
+      cursor = end;
+    }
+    return chunks;
   }
-  return chunks;
-}
 
-export function markdownToWhatsAppChunks(
-  text: string,
-  limit: number,
-  tableMode: MarkdownTableMode = "bullets",
-  chunkMode: ChunkMode = "length",
-): string[] {
-  if (!text) {
-    return [];
-  }
-  if (!text.trim()) {
-    return chunkMarkdownTextWithMode(text, limit, chunkMode);
-  }
-  const { ir, escapedMarkers } = prepareWhatsAppMarkdown(text, tableMode);
-  const render = (chunk: MarkdownIR) => renderWhatsAppMarkdownIR(chunk, escapedMarkers);
   let chunks =
     ir.styles.length === 0 && ir.links.length === 0
       ? chunkMarkdownTextWithMode(render(ir), limit, chunkMode)
-      : splitWhatsAppIRForChunkMode(ir, limit, chunkMode).flatMap((source) =>
+      : splitWhatsAppIRForChunkMode().flatMap((source) =>
           renderMarkdownIRChunksWithinLimit({
             ir: source,
             limit,

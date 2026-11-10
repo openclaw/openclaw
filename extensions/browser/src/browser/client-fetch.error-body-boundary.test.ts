@@ -1,24 +1,7 @@
 import http from "node:http";
+import "./client-fetch.auth.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const authMocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
-  resolveBrowserControlAuth: vi.fn(() => ({})),
-  getBridgeAuthForPort: vi.fn(() => undefined),
-}));
-
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return { ...actual, readRuntimeConfig: authMocks.loadConfig, loadConfig: authMocks.loadConfig };
-});
-vi.mock("./control-auth.js", () => ({
-  resolveBrowserControlAuth: authMocks.resolveBrowserControlAuth,
-}));
-vi.mock("./bridge-auth-registry.js", () => ({
-  getBridgeAuthForPort: authMocks.getBridgeAuthForPort,
-}));
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 
 const { fetchBrowserJson } = await import("./client-fetch.js");
 
@@ -117,14 +100,8 @@ describe("fetchHttpJson error body boundary", () => {
       const success = req.url === "/success-large";
       streamBody(res, success, streams[success ? "success-large" : "large"]);
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback server address");
-    }
-    baseUrl = `http://127.0.0.1:${address.port}`;
+    const port = await listenOnLoopback(server);
+    baseUrl = `http://127.0.0.1:${port}`;
   });
 
   afterEach(async () => {

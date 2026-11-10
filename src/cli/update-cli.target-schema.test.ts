@@ -5,7 +5,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveConfigPath } from "../config/paths.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -217,7 +216,6 @@ describe("update-cli", () => {
         mocks.serviceStart,
         mocks.serviceRestart,
         mocks.managedUpdateHandoff.start,
-        cleanupStaleManagedServiceUpdateHandoffs,
         mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
       );
       expect(packageInstall()).toBeUndefined();
@@ -330,11 +328,7 @@ describe("update-cli", () => {
       await cli.closeOpenClawStateDatabaseAsync();
       expect(await Promise.all(originalPaths.map((file) => fs.readFile(file)))).toEqual(originals);
       expect(packageInstall()).toBeUndefined();
-      check.expectNoSideEffects(
-        mocks.serviceStop,
-        cli.replaceConfigFile,
-        cleanupStaleManagedServiceUpdateHandoffs,
-      );
+      check.expectNoSideEffects(mocks.serviceStop, cli.replaceConfigFile);
     } finally {
       release.resolve();
       await update;
@@ -408,13 +402,15 @@ describe("update-cli", () => {
     await expect(runUpdate({ yes: true, restart: false })).rejects.toEqual(new cli.ExitError(1));
 
     expect(packageInstall()?.[0]).toBeUndefined();
-    expect(cli.listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
+    expect(cli.listUpdateRuns({ limit: 1 })[0]?.reason).toBe("preflight-node-runtime-incompatible");
     expect(runtime.log).toHaveBeenCalledWith(
       `Failing check node-runtime (node-runtime-preflight); key engines.node: Required: openclaw@9999.0.0 Node >=999.0.0; detected: Node ${process.versions.node} at ${process.execPath}
 Failing check node-runtime (node-runtime-preflight); key engines.node: Update install root: ${await fs.realpath(root)}
 Failing check node-runtime (node-runtime-preflight); key engines.node: Update binary: ${path.join(root, "openclaw.mjs")}
 Failing check node-runtime (node-runtime-preflight); key engines.node: Gateway install root: unresolved
-Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}`,
+Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}
+Updater Node ${process.versions.node} at ${process.execPath}.
+PATH Node: not found.`,
     );
     expect(cli.fetchNpmPackageTargetStatus).toHaveBeenCalledOnce();
   });
@@ -433,7 +429,6 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
       ]),
     });
     expect(packageInstall()?.[0]).toBeUndefined();
-    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
   });
 
   it("previews a same-version package override as an explicit artifact update", async () => {
@@ -461,7 +456,7 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
     expect(check.lastWriteJsonCall()).not.toHaveProperty("targetVersionReason");
   });
 
-  it("does not clean handoffs before rejecting an unknown package owner", async () => {
+  it("reports an unknown package owner without installing", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-unknown-owner"));
     const refusal =
       "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.";
@@ -474,7 +469,6 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
       refusal.split(", then retry.")[0],
     );
 
-    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
     expect(packageInstall()?.[0]).toBeUndefined();
     expect(cli.listUpdateRuns({ limit: 1 })[0]).toMatchObject({
       status: "skipped",
@@ -502,7 +496,7 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
     });
 
     expect(sentinel).toBeNull();
-    check.expectNoSideEffects(cleanupStaleManagedServiceUpdateHandoffs, runtime.exit);
+    check.expectNoSideEffects(runtime.exit);
   });
 
   it.each([false, true])(
@@ -535,7 +529,6 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
           mocks.serviceRestart,
           cli.replaceConfigFile,
         );
-        expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
         expect(packageInstall()?.[0]).toBeUndefined();
         expect(sentinel).toBeNull();
       } else {

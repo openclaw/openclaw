@@ -9,7 +9,7 @@ import {
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { positiveDurationError } from "../../shared/positive-duration.js";
 import { registerMediaUnderstandingCommand } from "./media-understanding-command.js";
@@ -21,55 +21,6 @@ const GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS = 120_000;
 
 const parseVideoOption = createEnumOptionParser();
 const VIDEO_RESOLUTIONS = ["360P", "480P", "540P", "720P", "768P", "1080P"] as const;
-
-async function fetchGeneratedVideoDownload(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  url: string;
-}) {
-  const { assertOkOrThrowHttpError, assertProviderBinaryResponseContent } =
-    await import("../../agents/provider-http-errors.js");
-  const {
-    fetchWithTimeoutGuarded,
-    resolveProviderHttpRequestConfig,
-    sanitizeConfiguredModelProviderRequest,
-  } = await import("../../plugin-sdk/provider-http.js");
-  const providerConfig = params.cfg.models?.providers?.[params.provider];
-  const { allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
-    baseUrl: params.url,
-    defaultBaseUrl: params.url,
-    request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-    provider: params.provider,
-    capability: "video",
-    transport: "http",
-  });
-  const result = await fetchWithTimeoutGuarded(
-    params.url,
-    { method: "GET" },
-    GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS,
-    fetch,
-    {
-      ...(allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-      ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
-      auditContext: `${params.provider}-generated-video-download`,
-    },
-  );
-  try {
-    await assertOkOrThrowHttpError(
-      result.response,
-      `${params.provider} generated video download failed`,
-    );
-    assertProviderBinaryResponseContent(
-      result.response,
-      `${params.provider} generated video download`,
-      "video",
-    );
-    return result;
-  } catch (error) {
-    await result.release();
-    throw error;
-  }
-}
 
 export function registerVideoCapabilityCommands(capability: Command): void {
   const videoCommand = capability
@@ -143,21 +94,59 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           watermark: opts.watermark === true ? true : undefined,
           timeoutMs,
         });
+        // An accepted interrupt owns the exit status: stop before resolving a download
+        // or publishing instead of finishing the work late.
+        const signal = getAsyncWorkSignal();
         const outputs = await Promise.all(
           result.videos.map(async (video, index) => {
             if (!video.buffer && !video.url) {
               throw new Error(`Video asset at index ${index} has neither buffer nor url`);
             }
 
+            signal?.throwIfAborted();
+
             let videoBuffer = video.buffer;
             if (!videoBuffer && video.url) {
-              const download = await fetchGeneratedVideoDownload({
-                cfg,
-                provider: result.provider,
-                url: video.url,
+              const downloadProvider = result.provider;
+              const downloadUrl = video.url;
+              const { assertOkOrThrowHttpError, assertProviderBinaryResponseContent } =
+                await import("../../agents/provider-http-errors.js");
+              const {
+                fetchWithTimeoutGuarded,
+                resolveProviderHttpRequestConfig,
+                sanitizeConfiguredModelProviderRequest,
+              } = await import("../../plugin-sdk/provider-http.js");
+              const providerConfig = cfg.models?.providers?.[downloadProvider];
+              const { allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+                baseUrl: downloadUrl,
+                defaultBaseUrl: downloadUrl,
+                request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+                provider: downloadProvider,
+                capability: "video",
+                transport: "http",
               });
-              const response = download.response;
+              const download = await fetchWithTimeoutGuarded(
+                downloadUrl,
+                { method: "GET", signal },
+                GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS,
+                fetch,
+                {
+                  ...(allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+                  ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
+                  auditContext: `${downloadProvider}-generated-video-download`,
+                },
+              );
               try {
+                await assertOkOrThrowHttpError(
+                  download.response,
+                  `${downloadProvider} generated video download failed`,
+                );
+                assertProviderBinaryResponseContent(
+                  download.response,
+                  `${downloadProvider} generated video download`,
+                  "video",
+                );
+                const response = download.response;
                 if (output && response.body) {
                   const mimeType = normalizeMimeType(video.mimeType);
                   const ext =
@@ -178,11 +167,13 @@ export function registerVideoCapabilityCommands(capability: Command): void {
                           response.body as import("node:stream/web").ReadableStream<Uint8Array>,
                         ),
                         createWriteStream(tempPath, { flags: "wx" }),
+                        { signal },
                       );
                       const writtenSize = (await fs.stat(tempPath)).size;
                       if (writtenSize === 0) {
                         throw new Error("Generated media output is empty.");
                       }
+                      signal?.throwIfAborted();
                       return writtenSize;
                     },
                   });
@@ -205,6 +196,9 @@ export function registerVideoCapabilityCommands(capability: Command): void {
               }
             }
 
+            // A buffered asset is written by an owner that is not signal-aware, so this
+            // only stops an interrupt from starting that write.
+            signal?.throwIfAborted();
             return await writeOutputAsset({
               buffer: videoBuffer!,
               mimeType: video.mimeType,

@@ -1,7 +1,10 @@
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { UserFacingError } from "../../../lib/format-error.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+
+registerChatComposerEnglish();
 
 export type RealtimeTalkInputDevice = {
   deviceId: string;
@@ -97,6 +100,13 @@ export function realtimeTalkDeviceIssueMessage(
   return t(kind === "audioinput" ? microphoneKey : cameraKey);
 }
 
+/** Browser microphone access problems are recoverable in place, so they warn rather than fail. */
+export function isRealtimeTalkMicrophoneIssueMessage(detail: string): boolean {
+  return Object.values(deviceIssueMessageKeys).some(
+    ([microphoneKey]) => t(microphoneKey) === detail,
+  );
+}
+
 // The picker owns the subscription and releases it when its surface closes.
 export function observeRealtimeTalkDevices(onChange: () => void): () => void {
   const devices = globalThis.navigator?.mediaDevices;
@@ -175,30 +185,6 @@ function realtimeTalkAbortReason(signal: AbortSignal): Error {
     : new DOMException("Realtime Talk input cancelled", "AbortError");
 }
 
-async function awaitRealtimeTalkMediaRequest(
-  startRequest: () => Promise<MediaStream>,
-  signal: AbortSignal | undefined,
-): Promise<MediaStream> {
-  if (signal?.aborted) {
-    throw realtimeTalkAbortReason(signal);
-  }
-  const request = startRequest();
-  try {
-    return await racePromiseWithAbortSignal(request, signal, realtimeTalkAbortReason);
-  } catch (error) {
-    if (signal?.aborted) {
-      // Browser permission prompts are not cancellable. Release any stream that
-      // arrives after the lifecycle owner has already moved on.
-      void request.then(
-        (stream) => stream.getTracks().forEach((track) => track.stop()),
-        () => undefined,
-      );
-      throw realtimeTalkAbortReason(signal);
-    }
-    throw error;
-  }
-}
-
 export class RealtimeTalkSelectedMicrophoneError extends Error {
   constructor() {
     super(t("chat.composer.selectedMicrophoneUnavailable"));
@@ -224,22 +210,35 @@ async function openRealtimeTalkMedia(
   const deviceId = selectedDeviceId?.trim();
   let acquisition: MediaStream;
   try {
-    acquisition = await awaitRealtimeTalkMediaRequest(
-      () =>
-        devices.getUserMedia(
-          kind === "audioinput"
-            ? {
-                audio: {
-                  autoGainControl: true,
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-                },
-              }
-            : { video: deviceId ? { deviceId: { exact: deviceId } } : true },
-        ),
-      signal,
+    if (signal?.aborted) {
+      throw realtimeTalkAbortReason(signal);
+    }
+    const request = devices.getUserMedia(
+      kind === "audioinput"
+        ? {
+            audio: {
+              autoGainControl: true,
+              echoCancellation: true,
+              noiseSuppression: true,
+              ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+            },
+          }
+        : { video: deviceId ? { deviceId: { exact: deviceId } } : true },
     );
+    try {
+      acquisition = await racePromiseWithAbortSignal(request, signal, realtimeTalkAbortReason);
+    } catch (error) {
+      if (signal?.aborted) {
+        // Browser permission prompts are not cancellable. Release any stream that
+        // arrives after the lifecycle owner has already moved on.
+        void request.then(
+          (stream) => stream.getTracks().forEach((track) => track.stop()),
+          () => undefined,
+        );
+        throw realtimeTalkAbortReason(signal);
+      }
+      throw error;
+    }
   } catch (error) {
     if (signal?.aborted) {
       throw realtimeTalkAbortReason(signal);
@@ -316,7 +315,7 @@ export class RealtimeTalkInputOwner {
         this.onEnded(t("chat.composer.microphoneStopped"));
       };
       for (const track of media.getTracks()) {
-        track.addEventListener("ended", onEnded, { signal: controller.signal });
+        listen(track, "ended", onEnded, { signal: controller.signal });
       }
       // Only the current, successful acquisition advances the visible startup phase.
       // Cancellation must not overwrite idle or a replacement's microphone prompt.

@@ -1,17 +1,20 @@
 import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as logger from "../logging/logger.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   readMigrationArtifactIdentity,
   type MigrationArtifactVerification,
 } from "./session-sqlite-migration-artifact.js";
-import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
+import * as retirement from "./sqlite-snapshot-retirement.js";
 import {
   exclusiveCopyPublication,
   snapshotContent,
+  useSnapshotFixture,
   type PublicationFixture,
 } from "./sqlite-snapshot.test-support.js";
 
@@ -41,50 +44,23 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
   };
 });
 
-import { createVerifiedSqliteSnapshot, publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
+import { publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let sourcePath: string;
 let targetPath: string;
 let tempDir: string;
-
-beforeEach(async () => {
-  tempDir = tempDirs.make("openclaw-sqlite-transfer-");
-  if (process.platform === "win32") {
-    tempDir = path.join(tempDir, "private");
-    await createPrivateSqliteDirectory(tempDir);
-  }
-  sourcePath = path.join(tempDir, "source.sqlite");
-  targetPath = path.join(tempDir, "snapshot.sqlite");
-  execSource("VACUUM;");
+const fixture = useSnapshotFixture({ preserveRowIds: true });
+const { execSource, query, snapshot, expectSnapshotFailureWithoutTarget } = fixture;
+beforeEach(() => {
+  ({ tempDir, sourcePath, targetPath } = fixture);
 });
 
-afterEach(() => {
+afterEach(async () => {
   durabilityTestState.transfer = undefined;
   durabilityTestState.hashedBytes = 0;
   vi.restoreAllMocks();
+  await cleanupSnapshotOperations();
 });
-
-type SnapshotOptions = Parameters<typeof createVerifiedSqliteSnapshot>[0];
-
-async function expectSnapshotFailureWithoutTarget(pattern: RegExp): Promise<void> {
-  await expect(snapshot()).rejects.toThrow(pattern);
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-}
-
-function execSource(sql: string) {
-  using source = new (requireNodeSqlite().DatabaseSync)(sourcePath);
-  source.exec(sql);
-}
-
-function query(sql: string, file = targetPath) {
-  using database = new (requireNodeSqlite().DatabaseSync)(file, { readOnly: true });
-  return database.prepare(sql).all();
-}
-
-function snapshot(options: Partial<SnapshotOptions> = {}) {
-  return createVerifiedSqliteSnapshot({ sourcePath, targetPath, preserveRowIds: true, ...options });
-}
 
 function mockExclusiveCopyTransfer() {
   const transfer = exclusiveCopyPublication();
@@ -118,6 +94,135 @@ function mockUnavailableBirthtime(
       : substituteBirthtime(await lstat(args[0])),
   );
 }
+
+it("closes the published image before removing its NFS staging directory", async () => {
+  const open = fs.open;
+  let targetOpen = false;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (String(args[0]) === targetPath && args[1] === "r") {
+      targetOpen = true;
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, "close").mockImplementation(async () => {
+        await close();
+        targetOpen = false;
+      });
+    }
+    return handle;
+  });
+  const rmdir = fs.rmdir;
+  vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+    if (path.basename(String(args[0])).startsWith(".sqlite-publish-") && targetOpen) {
+      throw Object.assign(new Error("NFS silly rename keeps the directory nonempty"), {
+        code: "ENOTEMPTY",
+      });
+    }
+    return rmdir(...args);
+  });
+  await fixture.expectSnapshotSuccess();
+  expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
+});
+
+it.each(["ENOTEMPTY", "EBUSY"])(
+  "keeps a verified snapshot when NFS staging cleanup returns %s",
+  async (code) => {
+    const warn = vi.fn();
+    const childLogger = logger.getChildLogger;
+    vi.spyOn(logger, "getChildLogger").mockImplementation((bindings, options) =>
+      bindings?.subsystem === "infra/sqlite-snapshot"
+        ? ({ warn } as unknown as ReturnType<typeof childLogger>)
+        : childLogger(bindings, options),
+    );
+    const unlink = fs.unlink;
+    vi.spyOn(fs, "unlink").mockImplementation(async (...args) => {
+      await unlink(...args);
+      const directory = path.dirname(String(args[0]));
+      if (path.basename(directory).startsWith(".sqlite-publish-")) {
+        await fs.writeFile(path.join(directory, ".nfs00000001"), "");
+      }
+    });
+    const rmdir = fs.rmdir;
+    let deferredDirectory = "";
+    vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+      if (path.basename(String(args[0])).startsWith(".sqlite-publish-")) {
+        deferredDirectory = String(args[0]);
+        throw Object.assign(new Error("NFS open file pending release"), { code });
+      }
+      return rmdir(...args);
+    });
+    await fixture.expectSnapshotSuccess();
+    expect(await fs.readdir(deferredDirectory)).toEqual([".nfs00000001"]);
+    expect(warn).toHaveBeenCalledWith(
+      { path: deferredDirectory, errorCode: code },
+      expect.stringContaining("cleanup deferred"),
+    );
+    expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+  },
+);
+
+it.each([
+  { phase: "directory", code: "EBUSY", succeeds: true },
+  { phase: "directory", code: "ENOTEMPTY", succeeds: true },
+  { phase: "directory", code: "EACCES", succeeds: false },
+  { phase: "directory", code: "EPERM", succeeds: false },
+  { phase: "directory", code: "EIO", succeeds: false },
+  { phase: "payload", code: "EBUSY", succeeds: false },
+  { phase: "retirement", code: "EBUSY", succeeds: false },
+] as const)(
+  "settles a verified backup after $phase cleanup returns $code",
+  async ({ phase, code, succeeds }) => {
+    const original = await fs.readFile(sourcePath);
+    let injected = false;
+    const failure = Object.assign(new Error(`${phase} cleanup refused: ${code}`), {
+      code,
+      syscall: phase === "payload" ? "unlink" : "rmdir",
+    });
+    if (phase === "retirement") {
+      vi.spyOn(retirement, "beginSqliteSnapshotRetirement").mockImplementation(() => {
+        injected = true;
+        throw failure;
+      });
+    }
+    const remove = fs.rm;
+    vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+      const target = String(args[0]);
+      if (
+        phase !== "retirement" &&
+        target.includes("openclaw-sqlite-readonly-v2-") &&
+        (phase === "directory"
+          ? path.basename(target).startsWith("openclaw-sqlite-readonly-v2-")
+          : path.basename(target) === "database.sqlite.partial")
+      ) {
+        injected = true;
+        throw failure;
+      }
+      return remove(...args);
+    });
+    const capture = snapshot({
+      sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
+      afterPublish: () => {
+        if (phase === "payload") {
+          const directory = fsSync
+            .readdirSync(tempDir)
+            .find((name) => name.startsWith("openclaw-sqlite-readonly-v2-"));
+          assert(directory);
+          fsSync.writeFileSync(
+            path.join(tempDir, directory, "database.sqlite.partial"),
+            "retained private payload",
+          );
+        }
+      },
+    });
+    if (succeeds) {
+      await expect(capture).resolves.toMatchObject({ path: targetPath });
+    } else {
+      await expect(capture).rejects.toMatchObject({ cause: failure });
+    }
+    expect(injected).toBe(true);
+    expect(await fs.readFile(sourcePath)).toEqual(original);
+    expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+  },
+);
 
 it("publishes a snapshot in a deeply nested destination", async () => {
   let directory = tempDir;
@@ -161,7 +266,9 @@ it.each(["native", "isolated", "copy", "zero", "ctime"] as const)(
         mode === "isolated" ? { mode: "isolated-process", stagingRoot: tempDir } : undefined,
       beforePublish: async () => {
         const images: string[] = [];
-        for (const entry of await fs.readdir(tempDir, { recursive: true, withFileTypes: true })) {
+        for (const entry of (await listDirectoryTreeStrict(tempDir)).map(
+          (walkEntry) => walkEntry.dirent,
+        )) {
           const file = path.join(entry.parentPath, entry.name);
           if (
             entry.isFile() &&
@@ -187,8 +294,8 @@ it.each(["native", "isolated", "copy", "zero", "ctime"] as const)(
       expect(copy).toHaveBeenCalledOnce();
     }
     expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
-    expect(await fs.readFile(targetPath)).toEqual(preparedBytes);
-    expect(await fs.readFile(sourcePath)).toEqual(original);
+    assert(preparedBytes?.equals(await fs.readFile(targetPath)), targetPath);
+    assert(original.equals(await fs.readFile(sourcePath)), sourcePath);
     expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(query("SELECT rowid,value,length(payload) AS bytes FROM records")).toEqual([
       { rowid: 71, value: "retained", bytes: 131072 },

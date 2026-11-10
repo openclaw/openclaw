@@ -2,7 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { For, createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
-import { TerminalPanelHost } from "../../components/terminal/terminal-panel-registration.ts";
+import { TerminalPanelHost } from "../../components/terminal/terminal-panel-registration.tsx";
 import {
   projectAgentSelection,
   projectApplicationConfig,

@@ -51,6 +51,7 @@ export const streamAzureOpenAIResponses: StreamFunction<
     stream,
     model,
     output,
+    context,
     options,
     resolveRequestModel: (requestModel) => {
       const { baseUrl } = resolveAzureConfig(requestModel, options);
@@ -97,6 +98,7 @@ export const streamAzureOpenAIResponses: StreamFunction<
       const messages = convertResponsesMessages(requestModel, context, AZURE_TOOL_CALL_PROVIDERS, {
         sessionId: options?.sessionId,
         authProfileId: options?.authProfileId,
+        mutableInput: Boolean(options?.onPayload),
         replayMode,
       });
 
@@ -104,7 +106,10 @@ export const streamAzureOpenAIResponses: StreamFunction<
         model: deploymentName,
         input: messages,
         stream: true,
-        prompt_cache_key: resolvePromptCacheKey(options, options?.cacheRetention ?? "short"),
+        prompt_cache_key: resolvePromptCacheKey(
+          requestModel.compat?.supportsPromptCacheKey === false ? undefined : options,
+          options?.cacheRetention ?? "short",
+        ),
         store: false,
       };
 

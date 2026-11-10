@@ -5,7 +5,6 @@ import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js"
 import { deliverFollowupDecision } from "../../auto-reply/reply/followup-delivery.js";
 import type { AdmittedFollowupTurn } from "../../auto-reply/reply/reply-agent-turn-preparation.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -18,6 +17,7 @@ import {
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { matrixDeliveryResult as textReceipt } from "./deliver.custody.test-support.js";
 import { drainMatrixReconnect } from "./deliver.queue-integration.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import * as queueStorage from "./delivery-queue-storage.js";
@@ -56,16 +56,6 @@ function installMatrixSend(
   );
 }
 
-function textReceipt(messageId: string) {
-  return {
-    messageId,
-    receipt: createMessageReceiptFromOutboundResults({
-      results: [{ channel: "matrix", messageId }],
-      kind: "text",
-    }),
-  };
-}
-
 function startRetiringDelivery(
   text: string,
   options: Partial<Parameters<typeof deliverOutboundPayloads>[0]>,
@@ -98,17 +88,37 @@ function watchTerminals() {
   return { terminals, unsubscribe };
 }
 
-describe("follow-up delivery custody", () => {
+function useCustodyFixture(cleanup?: () => void) {
   const fixtures = installDeliveryQueueTmpDirHooks();
-
   beforeAll(async () => {
     ({ deliverOutboundPayloads } = await import("./deliver.js"));
   });
-
   afterEach(() => {
+    cleanup?.();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
+  return fixtures;
+}
+
+function expectQueueStatus(stateDir: string, queueId: string, status: string) {
+  expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir)).toBe(status);
+}
+
+async function finishRetiringDelivery(
+  caller: AbortController,
+  release: () => void,
+  outcome: Promise<unknown>,
+  unsubscribe?: () => void,
+) {
+  caller.abort();
+  release();
+  await outcome;
+  unsubscribe?.();
+}
+
+describe("follow-up delivery custody", () => {
+  const fixtures = useCustodyFixture();
 
   it("keeps a committed retire released when a later observer throws", async () => {
     const stateDir = fixtures.tmpDir();
@@ -132,9 +142,7 @@ describe("follow-up delivery custody", () => {
       queueCustody: "released",
     });
     expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-    expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir)).toBe(
-      "failed",
-    );
+    expectQueueStatus(stateDir, queueId, "failed");
   });
 
   it.each(["AbortError"])(
@@ -227,18 +235,10 @@ describe("follow-up delivery custody", () => {
 });
 
 describe("retired caller delivery settlement", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
-
-  beforeAll(async () => {
-    ({ deliverOutboundPayloads } = await import("./deliver.js"));
-  });
-
-  afterEach(() => {
+  const fixtures = useCustodyFixture(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   function installHeldAdapter(failPreparationOnce = false) {
@@ -305,10 +305,7 @@ describe("retired caller delivery settlement", () => {
       expect(adapter.send).not.toHaveBeenCalled();
       expect(terminals).toEqual(["failed"]);
     } finally {
-      caller.abort();
-      adapter.release();
-      await outcome;
-      unsubscribe();
+      await finishRetiringDelivery(caller, adapter.release, outcome, unsubscribe);
     }
   });
 
@@ -377,16 +374,11 @@ describe("retired caller delivery settlement", () => {
       vi.setSystemTime(Date.now() + 60_001);
       await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
       expect(adapter.send).not.toHaveBeenCalled();
-      expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir)).toBe(
-        "failed",
-      );
+      expectQueueStatus(stateDir, queueId, "failed");
       expect(await queueStorage.loadUnfinishedDelivery(queueId, stateDir)).toBeNull();
       expect(terminals).toEqual(["failed"]);
     } finally {
-      caller.abort();
-      adapter.release();
-      await outcome;
-      unsubscribe();
+      await finishRetiringDelivery(caller, adapter.release, outcome, unsubscribe);
     }
   });
 
@@ -428,31 +420,20 @@ describe("retired caller delivery settlement", () => {
       expect(await outcome).toMatchObject({ error: expect.any(Error) });
       expect(settle).not.toHaveBeenCalled();
       expect(adapter.send).not.toHaveBeenCalled();
-      expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir)).toBe(
-        "pending",
-      );
+      expectQueueStatus(stateDir, queueId, "pending");
       expect(readQueuedEntry(stateDir, queueId)).toEqual(replacement);
     } finally {
-      caller.abort();
-      adapter.release();
-      await outcome;
+      await finishRetiringDelivery(caller, adapter.release, outcome);
     }
   });
 });
 
 describe("post-delivery pin authority", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
+  const fixtures = useCustodyFixture(() => vi.unstubAllEnvs());
   let sendDurableMessageBatch: typeof import("../../plugin-sdk/channel-outbound.js").sendDurableMessageBatch;
 
   beforeAll(async () => {
     ({ sendDurableMessageBatch } = await import("../../plugin-sdk/channel-outbound.js"));
-    ({ deliverOutboundPayloads } = await import("./deliver.js"));
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it.each([

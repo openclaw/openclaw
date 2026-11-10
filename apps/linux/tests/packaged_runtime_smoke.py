@@ -91,7 +91,7 @@ GSTREAMER_TOOL_NAMES = (
     "gst-launch-1.0",
 )
 
-BUNDLED_BUN_PATH = Path("usr/lib/OpenClaw/desktop-runtime/bin/bun")
+BUNDLED_RUNTIME_PATH = Path("usr/lib/OpenClaw/desktop-runtime")
 LINUX_RUNTIME_PREFIX = b"OPENCLAW-BUN-RUNTIME-V1\n"
 
 
@@ -215,33 +215,82 @@ def read_abi_requirements(path, source, readelf, architecture):
     )
 
 
-def read_bundled_bun_requirements(path, source, readelf, architecture):
-    manifest_path = path.parent.parent / "manifest.json"
-    for candidate in (path, path.parent, path.parent.parent, manifest_path):
-        if candidate.is_symlink():
-            raise RuntimeError(f"{source} has a redirected runtime resource")
+def collect_bundled_runtime_report(root, readelf, architecture):
+    manifest_path = root / "manifest.json"
     try:
+        if root.is_symlink() or manifest_path.is_symlink():
+            raise ValueError("redirected runtime resource")
         manifest = json.loads(manifest_path.read_text())
-        expected = manifest["files"]["bin/bun"]
-        if manifest["platform"] != "linux" or not re.fullmatch(r"[a-f0-9]{64}", expected):
+        # Current release tooling also verifies tags staged before runtime flavors.
+        runtime = manifest["runtime"] if "runtime" in manifest else {
+            "flavor": "jit", "executable": "bin/bun"
+        }
+        files = manifest["files"]
+        if (manifest["platform"] != "linux" or runtime["flavor"] not in ("jit", "aot")
+                or not isinstance(files, dict) or runtime["executable"] not in files):
             raise ValueError("invalid Linux runtime identity")
     except (OSError, KeyError, TypeError, ValueError) as error:
-        raise RuntimeError(f"{source} has an invalid runtime manifest") from error
-    # Staging envelopes Bun so linuxdeploy cannot rewrite its ELF bytes. Decode
-    # only this owned resource, then apply the ordinary ABI policy to its raw ELF.
-    with tempfile.TemporaryDirectory(prefix="openclaw-bun-abi-") as temporary:
-        decoded = Path(temporary) / "bun"
-        with path.open("rb") as encoded, decoded.open("wb") as output:
-            if encoded.read(len(LINUX_RUNTIME_PREFIX)) != LINUX_RUNTIME_PREFIX:
-                raise RuntimeError(f"{source} has an invalid runtime envelope")
-            shutil.copyfileobj(encoded, output)
-        if sha256(decoded) != expected:
-            raise RuntimeError(f"{source} runtime checksum mismatch")
-        if not is_regular_elf(decoded):
-            raise RuntimeError(f"{source} does not contain an ELF runtime")
-        if read_elf_architecture(decoded, source, readelf) != architecture:
-            raise RuntimeError(f"{source} architecture does not match the AppImage")
-        return read_abi_requirements(decoded, source, readelf, architecture)
+        raise RuntimeError("Bundled runtime has an invalid runtime manifest") from error
+
+    entries = []
+    non_target_resources = []
+    executable_is_elf = False
+    # linuxdeploy must not rewrite embedded ELF bytes. Inspect each decoded
+    # manifest resource, including native addons hidden by the same envelope.
+    with tempfile.TemporaryDirectory(prefix="openclaw-runtime-abi-") as temporary:
+        decoded = Path(temporary) / "resource"
+        for relative, expected in sorted(files.items()):
+            if (not isinstance(relative, str) or not relative
+                    or any(part in ("", ".", "..") for part in relative.split("/"))
+                    or relative.startswith("/") or "\\" in relative or ":" in relative
+                    or not isinstance(expected, str) or not re.fullmatch(r"[a-f0-9]{64}", expected)):
+                raise RuntimeError("Bundled runtime has an invalid resource identity")
+            resource = root / relative
+            source = (BUNDLED_RUNTIME_PATH / relative).as_posix()
+            if any(path.is_symlink() for path in (resource, *resource.parents)
+                   if path == root or root in path.parents):
+                raise RuntimeError(f"{source} has a redirected runtime resource")
+            if not resource.is_file():
+                raise RuntimeError(f"{source} runtime resource is missing")
+            digest = hashlib.sha256()
+            with resource.open("rb") as encoded:
+                if encoded.read(len(LINUX_RUNTIME_PREFIX)) != LINUX_RUNTIME_PREFIX:
+                    raise RuntimeError(f"{source} has an invalid runtime envelope")
+                header = encoded.read(4)
+                digest.update(header)
+                is_elf = header == b"\x7fELF"
+                output = decoded.open("wb") if is_elf else None
+                try:
+                    if output is not None:
+                        output.write(header)
+                    for block in iter(lambda: encoded.read(1024 * 1024), b""):
+                        digest.update(block)
+                        if output is not None:
+                            output.write(block)
+                finally:
+                    if output is not None:
+                        output.close()
+            if digest.hexdigest() != expected:
+                raise RuntimeError(f"{source} runtime checksum mismatch")
+            if not is_elf:
+                continue
+            resource_architecture = read_elf_architecture(decoded, source, readelf)
+            if resource_architecture != architecture:
+                if relative == runtime["executable"]:
+                    raise RuntimeError(f"{source} architecture does not match the AppImage")
+                # Some npm packages carry prebuilds for both Linux architectures.
+                # They cannot load in this process; retain their identity in proof.
+                non_target_resources.append({"path": source, "architecture": resource_architecture})
+                continue
+            executable_is_elf |= relative == runtime["executable"]
+            entries.append({"path": source, "source": "appdir",
+                            "requires": read_abi_requirements(decoded, source, readelf, architecture)})
+        if not executable_is_elf:
+            raise RuntimeError("Bundled runtime executable does not contain an ELF runtime")
+    identity = {"flavor": runtime["flavor"], "executable": runtime["executable"]}
+    if non_target_resources:
+        identity["nonTargetResources"] = non_target_resources
+    return entries, identity
 
 
 def collect_abi_report(appimage, appdir, readelf=None, *, allow_legacy_runtime=False):
@@ -269,7 +318,7 @@ def collect_abi_report(appimage, appdir, readelf=None, *, allow_legacy_runtime=F
             "source": "appimage-runtime",
         }
     ]
-    bundled_bun = appdir / BUNDLED_BUN_PATH
+    runtime_root = appdir / BUNDLED_RUNTIME_PATH
     candidates.extend(
         {
             "path": path,
@@ -277,37 +326,23 @@ def collect_abi_report(appimage, appdir, readelf=None, *, allow_legacy_runtime=F
             "source": "appdir",
         }
         for path in appdir.rglob("*")
-        if path != bundled_bun and is_regular_elf(path)
+        if runtime_root not in path.parents and is_regular_elf(path)
     )
-    if bundled_bun.parent.parent.exists() or bundled_bun.parent.parent.is_symlink():
-        candidates.append({
-            "path": bundled_bun,
-            "reportPath": BUNDLED_BUN_PATH.as_posix(),
-            "source": "appdir",
-        })
-    elif not allow_legacy_runtime:
-        raise RuntimeError(f"Missing required bundled runtime: {BUNDLED_BUN_PATH.as_posix()}")
+    runtime = None
     files = []
-    for candidate in sorted(
-        candidates,
-        key=lambda item: (item["reportPath"], item["source"]),
-    ):
-        files.append(
-            {
-                "path": candidate["reportPath"],
-                "source": candidate["source"],
-                "requires": (
-                    read_bundled_bun_requirements
-                    if candidate["path"] == bundled_bun
-                    else read_abi_requirements
-                )(
-                    candidate["path"],
-                    candidate["reportPath"],
-                    readelf,
-                    architecture,
-                ),
-            }
-        )
+    if runtime_root.exists() or runtime_root.is_symlink():
+        embedded, runtime = collect_bundled_runtime_report(runtime_root, readelf, architecture)
+        files.extend(embedded)
+    elif not allow_legacy_runtime:
+        raise RuntimeError(f"Missing required bundled runtime: {BUNDLED_RUNTIME_PATH.as_posix()}")
+    for candidate in candidates:
+        files.append({
+            "path": candidate["reportPath"],
+            "source": candidate["source"],
+            "requires": read_abi_requirements(candidate["path"], candidate["reportPath"],
+                                              readelf, architecture),
+        })
+    files.sort(key=lambda item: (item["path"], item["source"]))
 
     maximum_required = {}
     for family in ABI_LIMITS:
@@ -322,6 +357,7 @@ def collect_abi_report(appimage, appdir, readelf=None, *, allow_legacy_runtime=F
         )
     return {
         "architecture": architecture,
+        "runtime": runtime,
         "files": files,
         "limits": ABI_LIMITS,
         "maximumRequired": maximum_required,
@@ -888,6 +924,7 @@ def main():
             "artifact": appimage.name,
             "legacyRuntimeAllowed": args.allow_legacy_runtime,
             "sha256": artifact_sha,
+            "runtime": abi_report["runtime"],
             "fuse": fuse,
             "extracted": extracted,
             "shells": shell_results,

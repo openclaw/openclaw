@@ -1,5 +1,3 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,6 +9,7 @@ import {
 import { resolveRunNodeInputSignature } from "../../scripts/lib/run-node-input-state.mts";
 import { resolveBuildRequirement, resolveRunNodePreparation } from "../../scripts/run-node.mts";
 import {
+  createCurrentGitSpawnRecorder,
   setupStampedProject,
   trackProjectWithGit,
 } from "../../test/scripts/run-node.test-support.js";
@@ -27,14 +26,7 @@ describe("build-stamp script", () => {
       const stampPath = writeBuildStamp({
         cwd: tmp,
         now: () => 1_700_000_000_000,
-        spawnSync: (cmd: string, args: string[]) => {
-          if (cmd === "git" && args[0] === "rev-parse") {
-            return { status: 0, stdout: "abc123\n" };
-          }
-          return cmd === "git" && args[0] === "status" && gitStatus !== null
-            ? { status: 0, stdout: gitStatus }
-            : { status: 1, stdout: "" };
-        },
+        spawnSync: createCurrentGitSpawnRecorder({ gitStatus: gitStatus ?? undefined }).spawnSync,
       });
       expect(stampPath.endsWith(`/dist/${BUILD_STAMP_FILE}`)).toBe(true);
       expect(JSON.parse(await fs.readFile(stampPath, "utf8"))).toEqual({
@@ -80,32 +72,9 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
     );
     await write("src/stable.ts", "export const stable = 1;\n");
     await write("pnpm-lock.yaml", "original lockfile\n");
-    for (const args of [
-      ["init", "-q"],
-      ["add", "."],
-      ["commit", "-qm", "fixture"],
-    ]) {
-      execFileSync(
-        "git",
-        [
-          "commit.gpgsign=false",
-          "core.hooksPath=/dev/null",
-          "user.name=Fixture",
-          "user.email=fixture@example.test",
-        ]
-          .flatMap((setting) => ["-c", setting])
-          .concat(args),
-        { cwd },
-      );
-    }
+    const tracked = await trackProjectWithGit(cwd);
     const deps = {
-      cwd,
-      env: {},
-      fs: fsSync,
-      spawnSync,
-      distRoot: path.join(cwd, "dist"),
-      distEntry: path.join(cwd, "dist/entry.js"),
-      buildStampPath: path.join(cwd, "dist/.buildstamp"),
+      ...tracked.deps,
       sourceRoots: [],
       configFiles: [],
     };

@@ -8,10 +8,7 @@ import {
 } from "./scenario-runtime-cli.js";
 import { buildMatrixQaCliE2eeAccountConfig } from "./scenario-runtime-e2ee-cli-config.js";
 import { buildMatrixQaEmptyMatrixCliConfig } from "./scenario-runtime-e2ee-cli-shared.js";
-import {
-  requireMatrixQaCliRuntimeEnv,
-  requireMatrixQaE2eeOutputDir,
-} from "./scenario-runtime-e2ee-shared.js";
+import { requireMatrixQaCliRuntimeEnv } from "./scenario-runtime-e2ee-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 export async function createMatrixQaCliSelfVerificationRuntime(params: {
@@ -46,7 +43,7 @@ export async function createMatrixQaCliE2eeSetupRuntime(params: {
     artifactLabel: params.artifactLabel,
     initialConfig: params.initialConfig ?? buildMatrixQaEmptyMatrixCliConfig(),
     kind: "e2ee-setup",
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
+    outputDir: params.context.outputDir,
     runtimeEnv: () => requireMatrixQaCliRuntimeEnv(params.context),
   });
   return {
@@ -64,26 +61,22 @@ export async function createMatrixQaCliE2eeSetupRuntime(params: {
   };
 }
 
-export async function createMatrixQaCliGatewayRuntime(params: {
-  artifactLabel: string;
-  context: MatrixQaScenarioContext;
-}) {
-  const outputDir = requireMatrixQaE2eeOutputDir(params.context);
+export async function createMatrixQaCliGatewayRuntime(context: MatrixQaScenarioContext) {
   const artifactDir = path.join(
-    outputDir,
-    params.artifactLabel,
+    context.outputDir,
+    "cli-setup-then-gateway-reply",
     randomUUID().replaceAll("-", "").slice(0, 12),
   );
   await mkdir(artifactDir, { mode: 0o700, recursive: true });
   await chmod(artifactDir, 0o700).catch(() => undefined);
   await assertMatrixQaPrivatePathMode(artifactDir, "Matrix QA CLI artifact directory");
   const env = {
-    ...requireMatrixQaCliRuntimeEnv(params.context),
+    ...requireMatrixQaCliRuntimeEnv(context),
     FORCE_COLOR: "0",
     NO_COLOR: "1",
     OPENCLAW_NO_AUTO_UPDATE: "1",
   };
-  const run = async (args: string[], timeoutMs = params.context.timeoutMs) =>
+  const run = async (args: string[], timeoutMs = context.timeoutMs) =>
     await runMatrixQaOpenClawCli({
       args,
       env,

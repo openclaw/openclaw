@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  parseOptionalPositiveInteger,
-  parseOptionalTimeoutMs,
-  requireProviderModelOverride,
-} from "./shared.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
+import { parseOptionalTimeoutMs, requireProviderModelOverride } from "./shared.js";
 
 describe("capability CLI model overrides", () => {
   it.each([undefined, "", " \t"])("keeps a blank override %j absent", (raw) => {
@@ -33,11 +31,10 @@ describe("capability CLI numeric option parsing", () => {
     expect(parseOptionalTimeoutMs("1200")).toBe(1200);
   });
 
-  it.each([
-    ["--limit", () => parseOptionalPositiveInteger("", "--limit")],
-    ["--limit", () => parseOptionalPositiveInteger("  ", "--limit")],
-  ])("rejects explicit blank %s values", (label, parse) => {
-    expect(parse).toThrow(`${label} must be`);
+  it.each(["", "  ", "abc", 0, 1.5])("rejects invalid --limit %j", (raw) => {
+    const parse = () => parseOptionalPositiveInteger(raw, "--limit");
+    expect(parse).toThrow(ExpectedCliError);
+    expect(parse).toThrow("--limit must be a positive integer");
   });
 
   it.each(["", "  ", "1000ms"])("rejects invalid --timeout-ms value %j", (raw) => {

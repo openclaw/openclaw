@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
+import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import {
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
@@ -23,7 +24,7 @@ describe("Gateway presentation retention", () => {
     stubGatewayStoreTestGlobals();
     store = createGatewayStoreTestStore();
     store.gateway.start();
-    store.current().opts.onHello?.(hello());
+    store.current().testOptions.onHello?.(hello());
   });
 
   afterEach(() => {
@@ -36,11 +37,14 @@ describe("Gateway presentation retention", () => {
     const accepted = store.gateway.snapshot.hello;
     const capabilities = store.gateway.snapshot.pluginCapabilities;
     expect(capabilities).not.toBeNull();
-    store.current().opts.onClose?.({ code: 1006, reason: "network lost", willRetry });
+    store.current().testOptions.onClose?.({ code: 1006, reason: "network lost", willRetry });
     expect(store.gateway.snapshot.phase).toBe(willRetry ? "reconnecting" : "offline");
     expect(store.gateway.snapshot.hello).toBe(accepted);
     expect(store.gateway.snapshot.pluginCapabilities).toBe(capabilities);
     expect(isHomePanelAvailable(store.gateway)).toBe(true);
+    expect(resolveGatewayStatus(store.gateway.snapshot)).toBe(
+      willRetry ? "reconnecting" : "offline",
+    );
     vi.advanceTimersByTime(2_000);
     expect(store.gateway.snapshot.offlineStable).toBe(true);
     expect(store.gateway.snapshot.hello).toBe(accepted);
@@ -49,11 +53,36 @@ describe("Gateway presentation retention", () => {
     const replacement = hello();
     replacement.features = { methods: ["plugin.notes.read"] };
     replacement.controlUiTabs = [];
-    store.current().opts.onHello?.(replacement);
+    store.current().testOptions.onHello?.(replacement);
     expect(store.gateway.snapshot.phase).toBe("connected");
     expect(store.gateway.snapshot.hello).toBe(replacement);
     expect(store.gateway.snapshot.pluginCapabilities?.methods).toEqual(["plugin.notes.read"]);
     expect(store.gateway.snapshot.hello?.controlUiTabs).toEqual([]);
+  });
+
+  it.each(["normal", "slow", "failed"])("gives an initial connection grace (%s)", (connection) => {
+    store.gateway.stop();
+    store = createGatewayStoreTestStore();
+    store.gateway.start();
+    const status = () => resolveGatewayStatus(store.gateway.snapshot);
+    expect(status()).toBeNull();
+    vi.advanceTimersByTime(connection === "slow" ? 1_999 : 800);
+    expect(status()).toBeNull();
+    if (connection === "slow") {
+      vi.advanceTimersByTime(1);
+      expect(status()).toBe("connecting");
+      store.current().testOptions.onConnecting?.();
+      expect(status()).toBe("connecting");
+    } else if (connection === "failed") {
+      store
+        .current()
+        .testOptions.onClose?.({ code: 1006, reason: "network lost", willRetry: true });
+      expect(status()).toBe("connecting");
+    }
+    store.current().testOptions.onHello?.(hello());
+    expect(status()).toBeNull();
+    vi.advanceTimersByTime(2_000);
+    expect(status()).toBeNull();
   });
 
   it.each([
@@ -78,7 +107,7 @@ describe("Gateway presentation retention", () => {
       },
     },
   ])("clears display facts on $name", ({ code, details }) => {
-    store.current().opts.onClose?.({
+    store.current().testOptions.onClose?.({
       code: 1008,
       reason: "admission rejected",
       willRetry: false,

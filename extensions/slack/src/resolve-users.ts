@@ -32,9 +32,6 @@ export type SlackUserResolution = {
 
 function parseSlackUserInput(raw: string): { id?: string; name?: string; email?: string } {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return {};
-  }
   const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
   if (mention) {
     return { id: mention[1]?.toUpperCase() };
@@ -46,7 +43,7 @@ function parseSlackUserInput(raw: string): { id?: string; name?: string; email?:
   if (trimmed.includes("@") && !trimmed.startsWith("@")) {
     return { email: normalizeLowercaseStringOrEmpty(trimmed) };
   }
-  const name = trimmed.replace(/^@/, "").trim();
+  const name = normalizeLowercaseStringOrEmpty(trimmed.replace(/^@/, ""));
   return name ? { name } : {};
 }
 
@@ -83,14 +80,6 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
   });
 }
 
-function matchesSlackUserName(user: SlackUserLookup, name: string): boolean {
-  const target = normalizeLowercaseStringOrEmpty(name);
-  return [user.name, user.displayName, user.realName].some((value) => {
-    const candidate = normalizeLowercaseStringOrEmpty(value);
-    return Boolean(candidate) && candidate === target;
-  });
-}
-
 function scoreSlackUser(user: SlackUserLookup): number {
   return (user.deleted ? 0 : 3) + (user.isBot || user.isAppUser ? 0 : 2);
 }
@@ -118,7 +107,9 @@ export async function resolveSlackUserAllowlist(params: {
         : parsed.email
           ? user.email === parsed.email
           : parsed.name
-            ? matchesSlackUserName(user, parsed.name)
+            ? [user.name, user.displayName, user.realName].some(
+                (value) => normalizeLowercaseStringOrEmpty(value) === parsed.name,
+              )
             : false,
     );
     // Every candidate already matches the same id, email, or name. Only account

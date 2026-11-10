@@ -6,10 +6,6 @@
   display: grid;
   max-height: min(720px, calc(100dvh - 48px));
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  background: var(--bg);
-  box-shadow: var(--shadow-xl);
 }
 
 .onboarding-memory-import > header,
@@ -23,7 +19,7 @@
 
 .onboarding-memory-import h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: calc(20px * var(--control-ui-text-scale));
 }
 
 .onboarding-memory-import header p {
@@ -44,7 +40,7 @@
 .onboarding-memory-import__provider {
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--bg-muted);
 }
 
@@ -68,7 +64,7 @@
 .onboarding-memory-import__provider-copy code {
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -93,7 +89,7 @@
   min-height: 18px;
   margin: 8px 0 0 28px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .onboarding-memory-import__actions {

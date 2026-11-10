@@ -8,6 +8,7 @@ export const PUBLIC_SESSION_COPY = {
   checkingAccess: "Checking access…",
   accessFailed: "Could not check access",
   accessRetry: "Check your connection, then reload or log in to try again.",
+  reload: "Reload",
   checkingUpdates: "Checking for updates…",
   updatesDelayed: "Updates delayed · Retrying automatically",
   upToDate: "Up to date",
@@ -40,9 +41,9 @@ export const PUBLIC_SESSION_COPY = {
     "This conversation is not publicly available. Log in to open conversations you have access to.",
   sharedEveryone: "Shared with everyone, no login required.",
   liveDescription:
-    "This live view includes conversation text, tool steps, and shared images. Tool result text, reasoning, and interactive content are omitted.",
+    "This live view includes conversation text, tool steps, shared images, and interactive widgets. Tool result text and reasoning are omitted.",
   pageDescription:
-    "This page includes conversation text, tool steps, and shared images. Tool result text, reasoning, and interactive content are omitted.",
+    "This page includes conversation text, tool steps, shared images, and interactive widgets. Tool result text and reasoning are omitted.",
   logInFull: "Log in to open the full conversation if you have access.",
   omittedHistory:
     "Some messages or long text are omitted to keep this public page within its size limit.",

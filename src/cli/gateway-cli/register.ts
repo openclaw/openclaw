@@ -5,8 +5,8 @@ import { colorize, isRich, theme } from "../../../packages/terminal-core/src/the
 import type { HealthSummary } from "../../commands/health.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
-import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
@@ -17,6 +17,7 @@ import {
   resolveGatewayRpcOptionsWithLocalPort,
 } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
@@ -48,10 +49,16 @@ function gatewayCallOpts(cmd: Command): Command {
   );
 }
 
-async function callGatewayReadOnlyCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
+async function callGatewayReadOnlyCli(
+  method: string,
+  opts: GatewayRpcOpts,
+  params?: unknown,
+  signal?: AbortSignal,
+) {
   return await callGatewayFromCliWithTransport(method, opts, params, {
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
     sharedStateMode: "read-only",
+    signal,
   });
 }
 
@@ -145,30 +152,6 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   return lines;
 }
 
-function renderSupportExportResult(
-  result: WriteDiagnosticSupportExportResult,
-  rich: boolean,
-): string[] {
-  return [
-    colorize(rich, theme.heading, "Diagnostics export"),
-    `${colorize(rich, theme.muted, "Path:")} ${result.path}`,
-    `${colorize(rich, theme.muted, "Size:")} ${formatStabilityBytes(result.bytes)}`,
-    `${colorize(rich, theme.muted, "Files:")} ${result.manifest.contents.length}`,
-    `${colorize(rich, theme.muted, "Privacy:")} payload-free stability, sanitized logs/status/health/config`,
-  ];
-}
-
-function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const parsed = parseStrictPositiveInteger(raw);
-  if (parsed === undefined) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
-  return parsed;
-}
-
 async function writeSupportExportFromCli(opts: {
   json?: boolean;
   output?: string;
@@ -188,8 +171,8 @@ async function writeSupportExportFromCli(opts: {
   };
   const result = await writeDiagnosticSupportExport({
     outputPath: opts.output,
-    logLimit: parseOptionalPositiveIntegerOption(opts.logLines, "--log-lines"),
-    logMaxBytes: parseOptionalPositiveIntegerOption(opts.logBytes, "--log-bytes"),
+    logLimit: parseOptionalPositiveInteger(opts.logLines, "--log-lines", "."),
+    logMaxBytes: parseOptionalPositiveInteger(opts.logBytes, "--log-bytes", "."),
     stabilityBundle: opts.stabilityBundle,
     readStatusSnapshot: async () => {
       const { gatherDaemonStatus } = await import("../daemon-cli/status.gather.js");
@@ -201,8 +184,16 @@ async function writeSupportExportFromCli(opts: {
       });
     },
     readHealthSnapshot: async () => await callGatewayReadOnlyCli("health", rpc),
+    readGatewayCapabilities: async () =>
+      await callGatewayReadOnlyCli("diagnostics.capabilities", rpc),
   });
-  await printGatewayResult(opts.json, result, (rich) => renderSupportExportResult(result, rich));
+  await printGatewayResult(opts.json, result, (rich) => [
+    colorize(rich, theme.heading, "Diagnostics export"),
+    `${colorize(rich, theme.muted, "Path:")} ${result.path}`,
+    `${colorize(rich, theme.muted, "Size:")} ${formatStabilityBytes(result.bytes)}`,
+    `${colorize(rich, theme.muted, "Files:")} ${result.manifest.contents.length}`,
+    `${colorize(rich, theme.muted, "Privacy:")} payload-free stability, sanitized logs/status/health/config`,
+  ]);
 }
 
 export function registerGatewayCli(program: Command) {
@@ -359,11 +350,15 @@ export function registerGatewayCli(program: Command) {
       .description("Fetch Gateway health")
       .action(
         gatewayAction(async (opts, command) => {
+          const signal = getAsyncWorkSignal();
           const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
           let result: unknown;
           try {
-            result = await callGatewayReadOnlyCli("health", rpcOpts);
+            result = await callGatewayReadOnlyCli("health", rpcOpts, undefined, signal);
           } catch (error) {
+            if (signal?.aborted) {
+              return;
+            }
             const { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig } =
               await import("../../commands/health.js");
             const handled = await emitReachableGatewayAuthDiagnostic({
@@ -377,11 +372,15 @@ export function registerGatewayCli(program: Command) {
               password: rpcOpts.password,
               localPortOverride: rpcOpts.localPortOverride,
               json: Boolean(rpcOpts.json),
+              signal,
             });
             if (handled) {
               return;
             }
             throw error;
+          }
+          if (signal?.aborted) {
+            return;
           }
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);

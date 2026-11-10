@@ -9,14 +9,17 @@ import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fi
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Sidebar catalog scope" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it("discovers and opens ordinary guest sessions without requesting the external catalog", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("sidebar-catalog-scope");
+    const artifactDir = captureUiProof
+      ? createControlUiE2eArtifactDir("sidebar-catalog-scope")
+      : undefined;
     const viewport = { width: 1440, height: 900 };
     const context = await suite.newBrowserContext({
       viewport,
-      recordVideo: { dir: artifactDir, size: viewport },
+      ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
     });
     const page = await context.newPage();
     try {
@@ -39,7 +42,9 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       const session = sidebar.locator(`[data-session-key="${key}"]`).first();
       await session.waitFor({ state: "visible" });
-      await page.screenshot({ path: path.join(artifactDir, "sidebar.png") });
+      if (artifactDir) {
+        await page.screenshot({ path: path.join(artifactDir, "sidebar.png") });
+      }
       expect((await gateway.getRequests("sessions.list")).length).toBeGreaterThan(0);
       expect(await gateway.getRequests("sessions.catalog.list")).toEqual([]);
       expect(await sidebar.getByRole("alert").count()).toBe(0);
@@ -47,7 +52,9 @@ suite.define(() => {
       await page.getByText("Welcome back.", { exact: true }).waitFor();
       expect(await gateway.getRequests("sessions.catalog.list")).toEqual([]);
       expect(await sidebar.getByRole("alert").count()).toBe(0);
-      await page.screenshot({ path: path.join(artifactDir, "opened-session.png") });
+      if (artifactDir) {
+        await page.screenshot({ path: path.join(artifactDir, "opened-session.png") });
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }

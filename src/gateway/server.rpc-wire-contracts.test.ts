@@ -1,9 +1,8 @@
-// Real Gateway WebSocket proof for RPC envelopes, discovery, and event ordering.
 import { once } from "node:events";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -13,41 +12,17 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-type WireFrame = {
-  type?: string;
-  id?: string;
-  ok?: boolean;
-  event?: string;
-  payload?: Record<string, unknown> | null;
-  seq?: number;
-};
-
-let harness: GatewayServerHarness;
-
-beforeAll(async () => {
-  harness = await startGatewayServerHarness();
-});
-
-afterAll(async () => {
-  await harness.close();
-});
-
-async function openWireClient() {
-  const ws = new WebSocket(`ws://127.0.0.1:${harness.port}`);
+async function openWireClient(port: number) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   trackConnectChallengeNonce(ws);
-  const challengePromise = onceMessage<WireFrame>(
+  const challengePromise = onceMessage(
     ws,
     (frame) => frame.type === "event" && frame.event === "connect.challenge",
   );
   await once(ws, "open");
   const challenge = await challengePromise;
   expect(challenge).toMatchObject({
-    type: "event",
-    event: "connect.challenge",
-    payload: {
-      nonce: expect.any(String),
-      ts: expect.any(Number),
-    },
+    payload: { nonce: expect.any(String), ts: expect.any(Number) },
   });
   expect(challenge).not.toHaveProperty("id");
   expect(await connectReq(ws)).toMatchObject({
@@ -57,10 +32,7 @@ async function openWireClient() {
     payload: {
       type: "hello-ok",
       protocol: expect.any(Number),
-      server: {
-        version: expect.any(String),
-        connId: expect.any(String),
-      },
+      server: { version: expect.any(String), connId: expect.any(String) },
       features: {
         methods: expect.arrayContaining(["health", "agent"]),
         events: expect.arrayContaining(["connect.challenge", "heartbeat"]),
@@ -71,17 +43,16 @@ async function openWireClient() {
 }
 
 test("publishes canonical envelopes, discovery catalogs, and ordered events", async () => {
-  const clients = await Promise.all([openWireClient(), openWireClient()]);
-
+  const harness = await startGatewayServerHarness();
+  let clients: [WebSocket, WebSocket] | undefined;
   try {
-    const healthResponsePromise = onceMessage<WireFrame>(
+    clients = await Promise.all([openWireClient(harness.port), openWireClient(harness.port)]);
+    const healthResponsePromise = onceMessage(
       clients[0],
       (frame) => frame.type === "res" && frame.id === "wire-health",
     );
     clients[0].send(JSON.stringify({ type: "req", id: "wire-health", method: "health" }));
     expect(await healthResponsePromise).toMatchObject({
-      type: "res",
-      id: "wire-health",
       ok: true,
       payload: expect.any(Object),
     });
@@ -93,7 +64,7 @@ test("publishes canonical envelopes, discovery catalogs, and ordered events", as
     ];
     for (const event of events) {
       const received = clients.map((ws) =>
-        onceMessage<WireFrame>(
+        onceMessage(
           ws,
           (frame) =>
             frame.type === "event" &&
@@ -103,19 +74,15 @@ test("publishes canonical envelopes, discovery catalogs, and ordered events", as
       );
       emitHeartbeatEvent(event);
       for (const [index, frame] of (await Promise.all(received)).entries()) {
-        expect(frame).toMatchObject({
-          type: "event",
-          event: "heartbeat",
-          payload: { status: event.status },
-          seq: expect.any(Number),
-        });
+        expect(frame.seq).toEqual(expect.any(Number));
         expect(frame.seq).toBeGreaterThan(sequences[index] ?? Number.NEGATIVE_INFINITY);
         sequences[index] = frame.seq!;
       }
     }
   } finally {
-    for (const client of clients) {
+    for (const client of clients ?? []) {
       client.close();
     }
+    await harness.close();
   }
 });

@@ -36,14 +36,6 @@ const managersForCleanup: Array<{
   expire(id: string, resolvedBy?: string | null): Promise<boolean>;
 }> = [];
 
-export function createDatabaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-handler-")),
-  );
-  tempDirs.push(stateDir);
-  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-}
-
 export function createManagers(databaseOptions: OpenClawStateDatabaseOptions) {
   const common = {
     scheduler: createTestGatewayScheduler(),
@@ -88,7 +80,13 @@ export function createHandlers(
 }
 
 export function createFixture(includeSystemAgent = false) {
-  const databaseOptions = createDatabaseOptions();
+  const stateDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-handler-")),
+  );
+  tempDirs.push(stateDir);
+  const databaseOptions: OpenClawStateDatabaseOptions = {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  };
   const managers = createManagers(databaseOptions);
   const handlers = createHandlers(managers, databaseOptions, {
     systemAgentApprovalManager: includeSystemAgent ? managers.systemAgent : undefined,

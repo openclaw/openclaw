@@ -776,6 +776,27 @@ describe("tui command handlers", () => {
     expect(h.addSystem).toHaveBeenCalledWith("session agent:main:replacement reset");
   });
 
+  it("forwards /reset soft to the gateway instead of resetting the session", async () => {
+    const h = createHarness();
+    await h.handleCommand("/reset soft please reload");
+    expectSendChatFields(h.sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/reset soft please reload",
+    });
+    expect(h.sendChat).toHaveBeenCalledOnce();
+    expect(h.resetSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects /reset soft in local mode without resetting the session", async () => {
+    const h = createHarness({ opts: { local: true } });
+    await h.handleCommand("/reset soft please reload");
+    expect(h.sendChat).not.toHaveBeenCalled();
+    expect(h.resetSession).not.toHaveBeenCalled();
+    expect(h.addSystem).toHaveBeenCalledWith(
+      "/reset soft is not available in local embedded mode; message not sent",
+    );
+  });
+
   it("reloads a global session after /reset returns no session entry", async () => {
     const h = createHarness({
       currentSessionKey: "global",

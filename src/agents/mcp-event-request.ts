@@ -5,10 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
-import { redactMcpDiagnosticError } from "./mcp-error.js";
-import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
-import { resolveMcpTransport } from "./mcp-transport.js";
 
 export const MCP_EVENTS_PROTOCOL_VERSION = "2026-07-28";
 export type McpEventRequestMethod =
@@ -19,10 +16,7 @@ export type McpEventRequestMethod =
 
 /** Preserve protocol dispositions without exposing remote diagnostic bodies or credentials. */
 class McpEventRequestError extends Error {
-  constructor(
-    readonly code: number,
-    readonly reason?: string,
-  ) {
+  constructor(code: number, reason?: string) {
     super("MCP Events request failed (code " + code + (reason ? ", reason " + reason : "") + ")");
     this.name = "McpEventRequestError";
   }
@@ -30,8 +24,7 @@ class McpEventRequestError extends Error {
 
 /** Transport failures may carry credentials beyond their message; expose only redacted diagnostics. */
 class McpEventTransportError extends Error {
-  constructor(error: unknown) {
-    const diagnostic = redactMcpDiagnosticError(error);
+  constructor(diagnostic: string) {
     super(diagnostic, { cause: diagnostic });
   }
 }
@@ -62,6 +55,11 @@ export async function requestMcpEvent(params: {
     signal.throwIfAborted();
     params.assertCurrent();
   };
+  const [{ resolveMcpTransport }, { redactMcpDiagnosticError }] = await Promise.all([
+    import("./mcp-transport.js"),
+    import("./mcp-error.js"),
+  ]);
+  assertCurrent();
   const resolved = resolveMcpTransport(params.serverName, params.server, {
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -69,7 +67,7 @@ export async function requestMcpEvent(params: {
     requestHeaders: { "Mcp-Method": params.method },
     beforeRequest: assertCurrent,
   });
-  if (!resolved || !(resolved.transport instanceof OpenClawStreamableHTTPClientTransport)) {
+  if (!resolved || resolved.transportType !== "streamable-http") {
     throw new Error("MCP Events connection is unavailable for this subscription owner.");
   }
   const transport = resolved.transport;
@@ -130,7 +128,7 @@ export async function requestMcpEvent(params: {
     if (error instanceof McpEventRequestError) {
       throw error;
     }
-    throw new McpEventTransportError(error);
+    throw new McpEventTransportError(redactMcpDiagnosticError(error));
   } finally {
     signal.removeEventListener("abort", onAbort);
     // Closing cancels a still-open SSE response after its final JSON-RPC result.

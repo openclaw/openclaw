@@ -106,14 +106,14 @@ await runWithFailedTrailer("macos-native", async () => {
     | {
         executable: string;
         testBundle: string;
-        filters: [string, string];
+        filters: string[];
       }
     | undefined;
   if (appHost) {
-    const [appPath, testBundle, retryFilter, relaunchFilter] = args;
-    if (args.length !== 4 || !appPath || !testBundle || !retryFilter || !relaunchFilter) {
+    const [appPath, testBundle, ...filters] = args;
+    if (!appPath || !testBundle || filters.length === 0 || filters.some((filter) => !filter)) {
       throw new Error(
-        "App-host mode requires a staged app, built test bundle, Retry filter, and relaunch filter.",
+        "App-host mode requires a staged app, built test bundle, and at least one test filter.",
       );
     }
     const app = fs.realpathSync(appPath);
@@ -123,7 +123,7 @@ await runWithFailedTrailer("macos-native", async () => {
     appHostConfiguration = {
       executable: path.join(app, "Contents/MacOS/OpenClawRecoveryTestHost"),
       testBundle,
-      filters: [retryFilter, relaunchFilter],
+      filters,
     };
   }
   if (profileMode !== "default" && profileMode !== "named" && !appHost) {
@@ -211,13 +211,18 @@ await runWithFailedTrailer("macos-native", async () => {
     for (const dir of [path.dirname(keychain), path.join(home, "Library/Preferences")]) {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
-    const run = async (bin: string, commandArgs: string[], timeoutMs?: number) => {
+    const run = async (
+      bin: string,
+      commandArgs: string[],
+      timeoutMs?: number,
+      outputFd?: number,
+    ) => {
       canRemove = false;
       const code = await runManagedCommand({
         bin,
         args: commandArgs,
         env: childEnv,
-        stdio: "inherit",
+        stdio: outputFd === undefined ? "inherit" : ["ignore", outputFd, outputFd],
         requireProcessTreeExit: true,
         timeoutMs,
       });
@@ -230,16 +235,7 @@ await runWithFailedTrailer("macos-native", async () => {
       const output = path.join(root, "service-inspection.txt");
       const fd = fs.openSync(output, "w", 0o600);
       try {
-        canRemove = false;
-        const code = await runManagedCommand({
-          bin: "launchctl",
-          args: ["print", serviceTarget],
-          env: childEnv,
-          stdio: ["ignore", fd, fd],
-          requireProcessTreeExit: true,
-          timeoutMs: 30_000,
-        });
-        canRemove = true;
+        const code = await run("launchctl", ["print", serviceTarget], 30_000, fd);
         const text = fs.readFileSync(output, "utf8");
         const pid = /^\tpid = ([0-9]+)$/mu.exec(text)?.[1];
         if (code === 0 && pid) {
@@ -335,6 +331,10 @@ await runWithFailedTrailer("macos-native", async () => {
                 "worker-schema-before",
                 "worker-schema-after",
                 "worker-schema-no-updater",
+                "gateway-status-before",
+                "gateway-status-after",
+                "gateway-status-pending-newer",
+                "gateway-status-healthy-newer",
               ]
             : ["thread-reasoning", "thread-tool-activity", "model-initial", "thread-restored"];
         const allowed = new RegExp(

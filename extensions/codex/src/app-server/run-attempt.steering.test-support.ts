@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, vi } from "vitest";
+import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import {
   createParams,
   fastWait,
@@ -8,6 +9,30 @@ import {
 } from "./run-attempt-test-harness.js";
 
 let steeringSessionIndex = 0;
+
+type SteeringRecorder = NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
+
+export function createSteeringRecorder<Message extends NonNullable<SteeringRecorder["message"]>>(
+  message: Message,
+  persistApproved: () => Promise<undefined>,
+  hasPersisted: () => boolean,
+) {
+  return {
+    message,
+    resolveMessage: async () => message,
+    getAdmissionReceipt: () => undefined,
+    markRuntimePersistencePending: vi.fn(),
+    markRuntimePersisted: vi.fn(),
+    markBlocked: vi.fn(),
+    isBlocked: () => false,
+    hasRuntimePersistencePending: () => false,
+    waitForRuntimePersistence: async () => {},
+    persistBlocked: async () => undefined,
+    persistFallback: async () => undefined,
+    persistApproved: vi.fn(persistApproved),
+    hasPersisted,
+  } satisfies SteeringRecorder;
+}
 
 export function createSteeringParams() {
   const sessionId = `steering-session-${++steeringSessionIndex}`;

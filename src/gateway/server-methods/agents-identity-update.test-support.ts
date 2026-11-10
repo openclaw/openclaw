@@ -35,6 +35,13 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
   const { mocks, makeCall, call, makeFileStat, createEnoentError } = harness;
   const update = (params: Record<string, unknown>) =>
     call("agents.update", { agentId: "test-agent", ...params });
+  const beginUpdate = (params: Record<string, unknown>) =>
+    makeCall("agents.update", { agentId: "test-agent", ...params });
+  const bindWorkspace = (
+    workspace: string,
+    readFile: () => Promise<Buffer>,
+    writeFile = vi.fn(async () => {}),
+  ) => registerAgentWorkspaceAccess(workspace, { bridge: { readFile, writeFile, stat: vi.fn() } });
   function identityRead(rootDir: string, relativePath: string, content: string): ReadResult {
     return {
       buffer: Buffer.from(content),
@@ -54,114 +61,68 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
     });
   }
   describe("identity", () => {
-    it.each(["available", "revoked"] as const)(
-      "updates the identity form through remote workspace access when %s",
+    it.each(["revoked", "replaced during fallback"] as const)(
+      "does not write identity or config after workspace access is %s",
       async (state) => {
         const workspace = `/remote-identity-${randomUUID()}`;
-        mocks.loadConfigReturn = agentConfig({
-          "test-agent": { workspace, identity: { name: "Current Agent" } },
-        });
-        let release = () => {};
-        const readFile = vi.fn(async () => {
-          if (state === "revoked") {
-            release();
-          }
-          return Buffer.from("# Identity\n\n- **Name:** Current Agent\n\nRemote custom notes.\n");
-        });
-        const writeFile = vi.fn(async () => {});
-        release = registerAgentWorkspaceAccess(workspace, {
-          bridge: { readFile, writeFile, stat: vi.fn() },
-        });
-        try {
-          const { respond, promise } = makeCall("agents.update", {
-            agentId: "test-agent",
-            name: "Updated Name",
+        const fallback = state === "replaced during fallback";
+        const destination = fallback ? `/resolved${workspace}` : workspace;
+        if (fallback) {
+          mocks.ensureAgentWorkspace.mockResolvedValueOnce({
+            dir: destination,
+            identityPathCreated: false,
           });
-          if (state === "revoked") {
-            await expect(promise).rejects.toThrow("Workspace access");
-            expectUncalled(writeFile, mocks.writeConfigFile);
-          } else {
-            await promise;
-            expect(respond).toHaveBeenCalledWith(
-              true,
-              { ok: true, agentId: "test-agent" },
-              undefined,
-            );
-            expect(writeFile).toHaveBeenCalledWith({
-              filePath: "IDENTITY.md",
-              data: expect.stringContaining("Updated Name"),
-              mkdir: false,
-            });
-            expect(writeFile).toHaveBeenCalledWith(
-              expect.objectContaining({ data: expect.stringContaining("Remote custom notes.") }),
-            );
-            expect(mocks.writeConfigFile).toHaveBeenCalled();
-          }
-          expectUncalled(mocks.rootRead, mocks.rootWrite, mocks.fsMkdir);
-        } finally {
-          release();
+        } else {
+          mocks.loadConfigReturn = agentConfig({
+            "test-agent": { workspace, identity: { name: "Current Agent" } },
+          });
+        }
+        using bindings = new DisposableStack();
+        let release = () => {};
+        const writeFile = vi.fn(async () => {});
+        const replacementWrite = vi.fn(async () => {});
+        const content = "# Identity\n\n- **Name:** Current Agent\n\nRemote custom notes.\n";
+        release = bindWorkspace(
+          destination,
+          async () => {
+            if (fallback) {
+              throw createEnoentError();
+            }
+            release();
+            return Buffer.from(content);
+          },
+          writeFile,
+        );
+        bindings.defer(release);
+        if (fallback) {
+          mocks.rootRead.mockImplementation(async ({ rootDir, relativePath }) => {
+            expect(rootDir).toBe("/workspace/test-agent");
+            release();
+            bindings.defer(bindWorkspace(destination, vi.fn(), replacementWrite));
+            return identityRead(rootDir, relativePath, content);
+          });
+        }
+        const { promise } = beginUpdate(fallback ? { workspace } : { name: "Updated Name" });
+        await expect(promise).rejects.toThrow(
+          fallback ? "Workspace access changed" : "Workspace access",
+        );
+        expectUncalled(writeFile, replacementWrite, mocks.writeConfigFile);
+        expectUncalled(mocks.rootWrite, mocks.fsMkdir);
+        if (!fallback) {
+          expectUncalled(mocks.rootRead);
         }
       },
     );
 
-    it("does not redirect an identity save when its destination binding changes during fallback read", async () => {
-      const workspace = `/identity-move-${randomUUID()}`;
-      const destination = `/resolved${workspace}`;
-      const oldWrite = vi.fn(async () => {});
-      const replacementWrite = vi.fn(async () => {});
-      const releaseOld = registerAgentWorkspaceAccess(destination, {
-        bridge: {
-          readFile: vi.fn(async () => {
-            throw createEnoentError();
-          }),
-          writeFile: oldWrite,
-          stat: vi.fn(),
-        },
-      });
-      let releaseReplacement = () => {};
-      mocks.ensureAgentWorkspace.mockResolvedValueOnce({
-        dir: destination,
-        identityPathCreated: false,
-      });
-      mocks.rootRead.mockImplementation(async ({ rootDir, relativePath }) => {
-        expect(rootDir).toBe("/workspace/test-agent");
-        releaseOld();
-        releaseReplacement = registerAgentWorkspaceAccess(destination, {
-          bridge: { readFile: vi.fn(), writeFile: replacementWrite, stat: vi.fn() },
-        });
-        return identityRead(
-          rootDir,
-          relativePath,
-          "# Identity\n\n- Name: Current Agent\n\nOriginal notes.\n",
-        );
-      });
-      try {
-        const { promise } = makeCall("agents.update", { agentId: "test-agent", workspace });
-        await expect(promise).rejects.toThrow("Workspace access changed");
-        expectUncalled(oldWrite, replacementWrite, mocks.writeConfigFile);
-      } finally {
-        releaseOld();
-        releaseReplacement();
-      }
-    });
-
     it("writes combined identity fields to both config and IDENTITY.md", async () => {
       mocks.rootRead.mockRejectedValue(new FsSafeError("not-found", "file not found"));
-      const respond = await update({
-        name: "New Name",
-        emoji: "🤖",
-        avatar: "https://example.com/new.png",
-      });
+      const identity = { name: "New Name", emoji: "🤖", avatar: "https://example.com/new.png" };
+      const respond = await update(identity);
 
       expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-      expectRecordFields(mockCallArg(mocks.rootRead), { relativePath: "IDENTITY.md" });
       expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
         name: "New Name",
-        identity: expect.objectContaining({
-          name: "New Name",
-          emoji: "🤖",
-          avatar: "https://example.com/new.png",
-        }),
+        identity: expect.objectContaining(identity),
       });
       expectRecordFields(mockCallArg(mocks.rootWrite), {
         rootDir: "/workspace/test-agent",
@@ -170,34 +131,18 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
       });
     });
 
-    it.each([
-      {
-        created: true,
-        source:
-          "- Name: Current Agent\n- **Creature:** Steady Turtle\n\n## Role\nProtect the queue.\n",
-        destination: "- Name: Dev Agent\n- **Creature:** Flustered Protocol Droid\n",
-        kept: ["- **Creature:** Steady Turtle", "## Role"],
-        removed: "Flustered Protocol Droid",
-      },
-      {
-        created: false,
-        source:
-          "- Name: Current Agent\n- **Creature:** Old Turtle\n\n## Role\nOld workspace role.\n",
-        destination:
-          "- Name: Destination Agent\n- **Creature:** Destination Fox\n\n## Role\nDestination workspace role.\n",
-        kept: ["- **Creature:** Destination Fox", "Destination workspace role."],
-        removed: "Old workspace role.",
-      },
-    ])(
-      "preserves the correct identity when moving workspace (new=$created)",
-      async ({ created, source, destination, kept, removed }) => {
+    it.each([true, false])(
+      "preserves the correct identity when moving workspace (new=%s)",
+      async (created) => {
+        const identity = (name: string, creature: string, role: string) =>
+          `- Name: ${name}\n- **Creature:** ${creature}\n\n## Role\n${role}\n`;
         mocks.ensureAgentWorkspace.mockResolvedValueOnce({
           dir: "/resolved/new/workspace",
           identityPathCreated: created,
         });
         readIdentities({
-          "/workspace/test-agent/IDENTITY.md": source,
-          "/resolved/new/workspace/IDENTITY.md": destination,
+          "/workspace/test-agent/IDENTITY.md": identity("Source", "Turtle", "Source role"),
+          "/resolved/new/workspace/IDENTITY.md": identity("Destination", "Fox", "Destination role"),
         });
         const respond = await update({ workspace: "/new/workspace" });
         expectRespondOk(respond, { ok: true, agentId: "test-agent" });
@@ -205,40 +150,37 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
           rootDir: "/resolved/new/workspace",
           relativePath: "IDENTITY.md",
         });
-        for (const content of kept) {
+        for (const content of [
+          created ? "- **Creature:** Turtle" : "- **Creature:** Fox",
+          created ? "Source role" : "Destination role",
+        ]) {
           expect(write.data).toEqual(expect.stringContaining(content));
         }
-        expect(typeof write.data).toBe("string");
-        expect(write.data).not.toContain(removed);
+        expect(write.data).toContain("## Role");
+        expect(write.data).not.toContain(created ? "Destination role" : "Source role");
       },
     );
 
     it.each([
-      {
-        operation: "write",
-        error: new FsSafeError("path-mismatch", "path escapes workspace root"),
-        params: { name: "Bad Update", avatar: "https://example.com/avatar.png" },
-        message: "unsafe workspace file",
-      },
-      {
-        operation: "read",
-        error: new FsSafeError("invalid-path", "path is not a regular file under root"),
-        params: { avatar: "https://example.com/unsafe.png" },
-        message: 'unsafe workspace file "IDENTITY.md"',
-      },
-    ])(
-      "rejects unsafe identity $operation without persisting config",
-      async ({ operation, error, params, message }) => {
+      ["write", "path-mismatch", "unsafe workspace file"],
+      ["read", "invalid-path", 'unsafe workspace file "IDENTITY.md"'],
+    ] as const)(
+      "rejects unsafe identity %s without persisting config",
+      async (operation, code, message) => {
+        const error = new FsSafeError(code, "unsafe identity path");
         if (operation === "read") {
           mocks.rootRead.mockRejectedValue(error);
         } else {
           mocks.rootWrite.mockRejectedValueOnce(error);
         }
-        const respond = await update(params);
+        const respond = await update({
+          name: "Bad Update",
+          avatar: "https://example.com/unsafe.png",
+        });
         expectRespondErrorContaining(respond, message);
-        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expectUncalled(mocks.writeConfigFile);
         if (operation === "read") {
-          expect(mocks.rootWrite).not.toHaveBeenCalled();
+          expectUncalled(mocks.rootWrite);
         }
       },
     );

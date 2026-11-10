@@ -4,7 +4,6 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { AgentSelectionRequiredError, listAgentIds } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeExecApprovalDisplayText } from "../infra/exec-approval-text-sanitize.js";
 import {
   collectExecPolicyScopeSnapshots,
@@ -35,7 +34,8 @@ import {
   type ExecPolicyToolAccess,
   type ExecPolicyShowOptions,
 } from "./exec-policy-diagnostics.js";
-import { ExpectedCliError, rethrowExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { rethrowExpectedCliError } from "./failure-output.js";
 import { addGatewayClientOptions, resolveGatewayRpcOptionsWithLocalPort } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
@@ -116,87 +116,13 @@ function sanitizeExecPolicyTableCell(value: string): string {
   return sanitizeExecApprovalDisplayText(sanitizeTerminalText(value));
 }
 
+/** Sanitize each cell line on its own so the table, not a value, supplies the line breaks. */
+function formatExecPolicyTableLines(...lines: string[]): string {
+  return lines.map(sanitizeExecPolicyTableCell).join("\n");
+}
+
 function sanitizeExecPolicyMessage(value: unknown): string {
   return sanitizeTerminalText(String(value));
-}
-
-function resolveExecPolicyInput(params: {
-  host?: string;
-  security?: string;
-  ask?: string;
-  askFallback?: string;
-}): ExecPolicyResolved {
-  const resolved: ExecPolicyResolved = {};
-  const parse = <T extends string>(
-    value: string,
-    normalize: (value: string) => T | null,
-    label: string,
-  ): T => {
-    const parsed = normalize(value);
-    if (!parsed) {
-      throw new Error(`Invalid exec ${label}: ${sanitizeExecPolicyMessage(value)}`);
-    }
-    return parsed;
-  };
-  if (params.host !== undefined) {
-    resolved.host = parse(params.host, normalizeExecTarget, "host");
-  }
-  if (params.security !== undefined) {
-    resolved.security = parse(params.security, normalizeExecSecurity, "security");
-  }
-  if (params.ask !== undefined) {
-    resolved.ask = parse(params.ask, normalizeExecAsk, "ask mode");
-  }
-  if (params.askFallback !== undefined) {
-    resolved.askFallback = parse(params.askFallback, normalizeExecSecurity, "askFallback");
-  }
-  return resolved;
-}
-
-function applyConfigExecPolicy(root: OpenClawConfig, policy: ExecPolicyResolved): void {
-  root.tools ??= {};
-  root.tools.exec ??= {};
-  if (policy.host !== undefined) {
-    root.tools.exec.host = policy.host;
-  }
-  if (policy.security !== undefined || policy.ask !== undefined) {
-    const currentPolicy = resolveExecModePolicy({
-      mode: normalizeExecMode(root.tools.exec.mode),
-      security: root.tools.exec.security ?? "full",
-      ask: root.tools.exec.ask ?? "off",
-    });
-    const security = policy.security ?? currentPolicy.security;
-    const ask = policy.ask ?? currentPolicy.ask;
-    const mode = resolveExactExecModeFromPolicy({ security, ask });
-    if (mode) {
-      root.tools.exec.mode = mode;
-      delete root.tools.exec.security;
-      delete root.tools.exec.ask;
-    } else {
-      delete root.tools.exec.mode;
-      root.tools.exec.security = security;
-      root.tools.exec.ask = ask;
-    }
-  }
-}
-
-function applyApprovalsDefaults(
-  file: ExecApprovalsFile,
-  policy: ExecPolicyResolved,
-): ExecApprovalsFile {
-  const next: ExecApprovalsFile = structuredClone(file ?? { version: 1 });
-  next.version = 1;
-  next.defaults ??= {};
-  if (policy.security !== undefined) {
-    next.defaults.security = policy.security;
-  }
-  if (policy.ask !== undefined) {
-    next.defaults.ask = policy.ask;
-  }
-  if (policy.askFallback !== undefined) {
-    next.defaults.askFallback = policy.askFallback;
-  }
-  return next;
 }
 
 async function buildLocalExecPolicyShowPayload(
@@ -309,18 +235,19 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
       ],
       rows: payload.effectivePolicy.scopes.map((scope) => ({
         Scope: sanitizeExecPolicyTableCell(scope.scopeLabel),
-        Requested: sanitizeExecPolicyTableCell(
-          `host=${scope.host.requested} (${scope.host.requestedSource})\n` +
-            `security=${scope.security.requested} (${scope.security.requestedSource})\n` +
-            `ask=${scope.ask.requested} (${scope.ask.requestedSource})`,
+        Requested: formatExecPolicyTableLines(
+          `host=${scope.host.requested} (${scope.host.requestedSource})`,
+          `security=${scope.security.requested} (${scope.security.requestedSource})`,
+          `ask=${scope.ask.requested} (${scope.ask.requestedSource})`,
         ),
-        Host: sanitizeExecPolicyTableCell(
-          `security=${scope.security.host} (${scope.security.hostSource})\n` +
-            `ask=${scope.ask.host} (${scope.ask.hostSource})\n` +
-            `askFallback=${scope.askFallback.effective} (${scope.askFallback.source})`,
+        Host: formatExecPolicyTableLines(
+          `security=${scope.security.host} (${scope.security.hostSource})`,
+          `ask=${scope.ask.host} (${scope.ask.hostSource})`,
+          `askFallback=${scope.askFallback.effective} (${scope.askFallback.source})`,
         ),
-        Effective: sanitizeExecPolicyTableCell(
-          `security=${scope.security.effective}\nask=${scope.ask.effective}`,
+        Effective: formatExecPolicyTableLines(
+          `security=${scope.security.effective}`,
+          `ask=${scope.ask.effective}`,
         ),
       })),
     }).trimEnd(),
@@ -335,78 +262,109 @@ function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicySho
     params: { ...policy },
     target: "local exec policy and approvals",
     onForeignOwner: "refuse",
-    runLocal: ({ assertCurrent }) => applyOwnedExecPolicy(policy, assertCurrent),
-  });
-}
-
-async function applyOwnedExecPolicy(
-  policy: ExecPolicyResolved,
-  assertCurrent: () => void,
-): Promise<ExecPolicyShowPayload> {
-  const context = captureOpenClawStateWorkerContext();
-  const configSnapshot = await readConfigFileSnapshot();
-  assertCurrent();
-  const nextConfig = structuredClone(configSnapshot.config ?? {});
-  applyConfigExecPolicy(nextConfig, policy);
-  if (nextConfig.tools?.exec?.host === "node") {
-    throw new Error(
-      "Local exec-policy cannot synchronize host=node. Node approvals are fetched from the node at runtime.",
-    );
-  }
-  const approvalsSnapshot = await readExecApprovalsSnapshotAsync(context);
-  assertCurrent();
-  const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
-  const writtenApprovals = await updateExecApprovals(
-    {
-      baseHash: approvalsSnapshot.hash,
-      assertCurrent,
-      update: { kind: "replace", file: nextApprovals },
-    },
-    context,
-  );
-  if (!writtenApprovals) {
-    throw new Error("Exec approvals changed; reload and retry.");
-  }
-  try {
-    assertCurrent();
-    await replaceConfigFile({
-      baseHash: configSnapshot.hash,
-      nextConfig,
-      writeOptions: { assertCurrent },
-    });
-  } catch (err) {
-    try {
+    runLocal: async ({ assertCurrent }) => {
+      const context = captureOpenClawStateWorkerContext();
+      const configSnapshot = await readConfigFileSnapshot();
       assertCurrent();
-      if (
-        !(await restoreExecApprovalsSnapshotLocked(
-          approvalsSnapshot,
-          writtenApprovals.hash,
-          context,
-          assertCurrent,
-        ))
-      ) {
-        await updateExecApprovals(
-          {
-            assertCurrent,
-            update: {
-              kind: "rollback-defaults",
-              original: approvalsSnapshot.file,
-              written: writtenApprovals.file,
-              policy,
-            },
-          },
-          context,
+      const nextConfig = structuredClone(configSnapshot.config ?? {});
+      nextConfig.tools ??= {};
+      nextConfig.tools.exec ??= {};
+      if (policy.host !== undefined) {
+        nextConfig.tools.exec.host = policy.host;
+      }
+      if (policy.security !== undefined || policy.ask !== undefined) {
+        const current = resolveExecModePolicy({
+          mode: normalizeExecMode(nextConfig.tools.exec.mode),
+          security: nextConfig.tools.exec.security ?? "full",
+          ask: nextConfig.tools.exec.ask ?? "off",
+        });
+        const security = policy.security ?? current.security;
+        const ask = policy.ask ?? current.ask;
+        const mode =
+          current.mode === "auto" && security === current.security && ask === current.ask
+            ? "auto"
+            : resolveExactExecModeFromPolicy({ security, ask });
+        if (mode) {
+          nextConfig.tools.exec.mode = mode;
+          delete nextConfig.tools.exec.security;
+          delete nextConfig.tools.exec.ask;
+        } else {
+          delete nextConfig.tools.exec.mode;
+          nextConfig.tools.exec.security = security;
+          nextConfig.tools.exec.ask = ask;
+        }
+      }
+      if (nextConfig.tools?.exec?.host === "node") {
+        throw new Error(
+          "Local exec-policy cannot synchronize host=node. Node approvals are fetched from the node at runtime.",
         );
       }
-    } catch (rollbackError) {
-      throw new Error(
-        `Config update failed: ${formatExecPolicyError(err)}; exec approvals rollback failed: ${formatExecPolicyError(rollbackError)}`,
-        { cause: rollbackError },
+      const approvalsSnapshot = await readExecApprovalsSnapshotAsync(context);
+      assertCurrent();
+      const nextApprovals: ExecApprovalsFile = structuredClone(approvalsSnapshot.file);
+      nextApprovals.defaults ??= {};
+      if (policy.security !== undefined) {
+        nextApprovals.defaults.security = policy.security;
+      }
+      if (policy.ask !== undefined) {
+        nextApprovals.defaults.ask = policy.ask;
+      }
+      if (policy.askFallback !== undefined) {
+        nextApprovals.defaults.askFallback = policy.askFallback;
+      }
+      const writtenApprovals = await updateExecApprovals(
+        {
+          baseHash: approvalsSnapshot.hash,
+          assertCurrent,
+          update: { kind: "replace", file: nextApprovals },
+        },
+        context,
       );
-    }
-    throw err;
-  }
-  return await buildLocalExecPolicyShowPayload();
+      if (!writtenApprovals) {
+        throw new Error("Exec approvals changed; reload and retry.");
+      }
+      try {
+        assertCurrent();
+        await replaceConfigFile({
+          baseHash: configSnapshot.hash,
+          nextConfig,
+          writeOptions: { assertCurrent },
+        });
+      } catch (err) {
+        try {
+          assertCurrent();
+          if (
+            !(await restoreExecApprovalsSnapshotLocked(
+              approvalsSnapshot,
+              writtenApprovals.hash,
+              context,
+              assertCurrent,
+            ))
+          ) {
+            await updateExecApprovals(
+              {
+                assertCurrent,
+                update: {
+                  kind: "rollback-defaults",
+                  original: approvalsSnapshot.file,
+                  written: writtenApprovals.file,
+                  policy,
+                },
+              },
+              context,
+            );
+          }
+        } catch (rollbackError) {
+          throw new Error(
+            `Config update failed: ${formatExecPolicyError(err)}; exec approvals rollback failed: ${formatExecPolicyError(rollbackError)}`,
+            { cause: rollbackError },
+          );
+        }
+        throw err;
+      }
+      return await buildLocalExecPolicyShowPayload();
+    },
+  });
 }
 
 export function registerExecPolicyCli(program: Command) {
@@ -523,7 +481,30 @@ export function registerExecPolicyCli(program: Command) {
         json?: boolean;
       }) => {
         await runExecPolicyAction(opts, async () => {
-          const policy = resolveExecPolicyInput(opts);
+          const policy: ExecPolicyResolved = {};
+          const parse = <T extends string>(
+            value: string,
+            normalize: (value: string) => T | null,
+            label: string,
+          ): T => {
+            const parsed = normalize(value);
+            if (!parsed) {
+              throw new Error(`Invalid exec ${label}: ${sanitizeExecPolicyMessage(value)}`);
+            }
+            return parsed;
+          };
+          if (opts.host !== undefined) {
+            policy.host = parse(opts.host, normalizeExecTarget, "host");
+          }
+          if (opts.security !== undefined) {
+            policy.security = parse(opts.security, normalizeExecSecurity, "security");
+          }
+          if (opts.ask !== undefined) {
+            policy.ask = parse(opts.ask, normalizeExecAsk, "ask mode");
+          }
+          if (opts.askFallback !== undefined) {
+            policy.askFallback = parse(opts.askFallback, normalizeExecSecurity, "askFallback");
+          }
           if (Object.keys(policy).length === 0) {
             throw new Error(
               "Provide at least one of --host, --security, --ask, or --ask-fallback.",

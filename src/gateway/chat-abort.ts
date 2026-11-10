@@ -80,17 +80,6 @@ import {
 
 export { resolveAgentRunExpiresAtMs, resolveChatRunExpiresAtMs } from "./chat-run-deadline.js";
 
-export type RestartRecoveryCandidate = {
-  storePath: string;
-  agentId: string | undefined;
-  runId: string;
-  sourceRunId?: string;
-  lifecycleGeneration: string;
-  sessionKey: string;
-  sessionId: string;
-  observedAt?: number;
-};
-
 type RegisteredChatAbortController = {
   controller: AbortController;
   initializeTiming: (options?: {
@@ -122,13 +111,18 @@ export function resolveChatAbortStopReason(signal: AbortSignal): string {
     : (resolveAgentRunAbortLifecycleFields(signal).stopReason ?? "rpc");
 }
 
-export function createChatAbortSignalReason(stopReason: string | undefined): Error {
+export function createChatAbortSignalReason(
+  stopReason: string | undefined,
+  userInitiated?: boolean,
+): Error {
   if (stopReason === "restart") {
     return createAgentRunRestartAbortError();
   }
   if (stopReason !== "timeout") {
     // Keep transport presentation separate from the typed lifecycle cause.
-    return Object.assign(createAgentRunDirectAbortError(), { gatewayStopReason: stopReason });
+    return Object.assign(createAgentRunDirectAbortError(userInitiated), {
+      gatewayStopReason: stopReason,
+    });
   }
   const reason = new Error("chat run timed out");
   reason.name = "TimeoutError";
@@ -350,49 +344,6 @@ function resolveChatAbortDeliverySessionKeys(
   );
 }
 
-function broadcastChatAborted(
-  ops: ChatAbortOps,
-  params: {
-    runId: string;
-    sessionKey: string;
-    agentId?: string;
-    stopReason?: string;
-    message?: Record<string, unknown>;
-    errorMessage?: string;
-    localModelMayStillBeFinishing?: boolean;
-    liveTextGroup?: AbortSignal;
-  },
-) {
-  const { runId, sessionKey, stopReason } = params;
-  const errorMessage = readToolValidationErrorSummary(params.errorMessage);
-  const explicitAgentId = normalizeOptionalLowercaseString(params.agentId);
-  const defaultGlobalAgentId =
-    sessionKey === "global" && !explicitAgentId
-      ? normalizeOptionalLowercaseString(resolveDefaultGlobalAgentId(ops))
-      : undefined;
-  const payloadAgentId =
-    sessionKey === "global" ? (explicitAgentId ?? defaultGlobalAgentId) : explicitAgentId;
-  const payload = {
-    runId,
-    sessionKey,
-    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    seq: (ops.agentRunSeq.get(runId) ?? 0) + 1,
-    state: "aborted" as const,
-    stopReason,
-    ...(params.localModelMayStillBeFinishing ? { localModelMayStillBeFinishing: true } : {}),
-    ...(errorMessage ? { errorMessage } : {}),
-    message: params.message ? { ...params.message, timestamp: Date.now() } : undefined,
-  };
-  const deliverySessionKeys = resolveChatAbortDeliverySessionKeys(ops, sessionKey, payloadAgentId);
-  ops.broadcast("chat", payload, {
-    sessionKeys: deliverySessionKeys,
-    ...(params.liveTextGroup ? { liveText: { group: params.liveTextGroup } } : {}),
-  });
-  for (const deliverySessionKey of deliverySessionKeys) {
-    ops.nodeSendToSession(deliverySessionKey, "chat", payload);
-  }
-}
-
 function resolveDefaultGlobalAgentId(ops: ChatAbortOps): string | undefined {
   const cfg = ops.getRuntimeConfig?.();
   if (!cfg) {
@@ -557,16 +508,37 @@ export function abortChatRunById(
   }
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   if (!params.preserveTerminal && active.adapter.controlUiVisible !== false) {
-    broadcastChatAborted(ops, {
+    const errorMessage = readToolValidationErrorSummary(active.adapter.toolErrorSummary);
+    const explicitAgentId = normalizeOptionalLowercaseString(identity.agentId);
+    const defaultGlobalAgentId =
+      sessionKey === "global" && !explicitAgentId
+        ? normalizeOptionalLowercaseString(resolveDefaultGlobalAgentId(ops))
+        : undefined;
+    const payloadAgentId =
+      sessionKey === "global" ? (explicitAgentId ?? defaultGlobalAgentId) : explicitAgentId;
+    const payload = {
       runId,
       sessionKey,
-      agentId: identity.agentId,
+      ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
+      seq: (ops.agentRunSeq.get(runId) ?? 0) + 1,
+      state: "aborted" as const,
       stopReason,
-      message,
-      errorMessage: active.adapter.toolErrorSummary,
-      localModelMayStillBeFinishing,
-      liveTextGroup,
+      ...(localModelMayStillBeFinishing ? { localModelMayStillBeFinishing: true } : {}),
+      ...(errorMessage ? { errorMessage } : {}),
+      message: message ? { ...message, timestamp: Date.now() } : undefined,
+    };
+    const deliverySessionKeys = resolveChatAbortDeliverySessionKeys(
+      ops,
+      sessionKey,
+      payloadAgentId,
+    );
+    ops.broadcast("chat", payload, {
+      sessionKeys: deliverySessionKeys,
+      ...(liveTextGroup ? { liveText: { group: liveTextGroup } } : {}),
     });
+    for (const deliverySessionKey of deliverySessionKeys) {
+      ops.nodeSendToSession(deliverySessionKey, "chat", payload);
+    }
   }
   if (!params.preserveTerminal) {
     terminal?.publish({
@@ -633,7 +605,6 @@ export function abortChatRunsForProvider(
     cfg: OpenClawConfig;
     providerId: string;
     agentId?: string;
-    stopReason?: string;
   },
 ): { runIds: string[] } {
   const providerId = normalizeOptionalLowercaseString(params.providerId);
@@ -674,7 +645,7 @@ export function abortChatRunsForProvider(
   stopSession({
     capture,
     source: "operator-revocation",
-    reason: createChatAbortSignalReason(params.stopReason),
+    reason: createChatAbortSignalReason("auth-revoked"),
     cancelInput: (input, cancel) => {
       const target = byInput.get(input);
       if (!target) {
@@ -686,7 +657,7 @@ export function abortChatRunsForProvider(
         expectedEntry: target.entry,
         presentation: target.presentation,
         cancel,
-        stopReason: params.stopReason,
+        stopReason: "auth-revoked",
         onAbortCommitted: () => runIds.push(target.runId),
       }).aborted;
     },

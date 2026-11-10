@@ -35,11 +35,16 @@ export const QA_PROVIDER_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_LIVE_ANTHROPIC_KEYS",
   "OPENCLAW_LIVE_GEMINI_KEY",
   "OPENCLAW_LIVE_OPENAI_KEY",
+  "OPENCLAW_LIVE_SETUP_TOKEN_VALUE",
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
+  "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN",
   "VOYAGE_API_KEY",
 ]);
 export const QA_PROVIDER_SECRET_ENV_KEY_PATTERNS = Object.freeze([
+  /^[A-Z0-9_]+_API_KEY$/u,
+  /^[A-Z0-9_]+_API_KEYS$/u,
+  /^[A-Z0-9_]+_API_KEY_[0-9]+$/u,
   /^OPENCLAW_LIVE_[A-Z0-9_]+_KEYS?$/u,
 ]);
 
@@ -71,14 +76,8 @@ const QA_LIVE_ALLOWED_ENV_VARS: ReadonlySet<string> = new Set([
   "OPENAI_BASE_URL",
   QA_LIVE_PROVIDER_CONFIG_PATH_ENV,
   "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE",
 ]);
-
-const QA_LIVE_ALLOWED_ENV_PATTERNS: readonly RegExp[] = [
-  /^[A-Z0-9_]+_API_KEYS$/u,
-  /^[A-Z0-9_]+_API_KEY_[0-9]+$/u,
-  /^OPENCLAW_LIVE_[A-Z0-9_]+_KEY$/u,
-  /^OPENCLAW_LIVE_[A-Z0-9_]+_KEYS$/u,
-];
 
 function resolveUserPath(value: string, env: NodeJS.ProcessEnv = process.env) {
   if (value === "~") {
@@ -190,7 +189,7 @@ export function resolveQaForwardedLiveEnv(baseEnv: NodeJS.ProcessEnv = process.e
   for (const [key, rawValue] of Object.entries(baseEnv)) {
     if (
       !QA_LIVE_ALLOWED_ENV_VARS.has(key) &&
-      !QA_LIVE_ALLOWED_ENV_PATTERNS.some((pattern) => pattern.test(key))
+      !QA_PROVIDER_SECRET_ENV_KEY_PATTERNS.some((pattern) => pattern.test(key))
     ) {
       continue;
     }

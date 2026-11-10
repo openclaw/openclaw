@@ -6,9 +6,9 @@ import type {
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { prepareOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
-  withSessionActorStorage,
   type SelectedSessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";

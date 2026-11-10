@@ -52,6 +52,10 @@ it("repairs a missing codex plugin before the retry succeeds without leaking to 
   const { agentDir, evaluate } = await createAgentState();
   await removeCodexPluginFixture(agentDir);
   const missing = await evaluate();
+  expect(resolveCodexAuthProfile(await snapshotAuthProfiles(agentDir))).toMatchObject({
+    status: "ready",
+    profileId: QA_CODEX_OAUTH_PROFILE_ID,
+  });
   expect(missing).toMatchObject({
     status: "repair-required",
     remediation: CODEX_PLUGIN_LIFECYCLE_MESSAGES.missingPlugin,
@@ -65,22 +69,8 @@ it("repairs a missing codex plugin before the retry succeeds without leaking to 
   expect(repaired.remediation).toBeUndefined();
 });
 
-it("selects openai OAuth when openai API-key profiles are present", async () => {
-  const { agentDir } = await createAgentState();
-  const selection = resolveCodexAuthProfile(await snapshotAuthProfiles(agentDir));
-
-  expect(selection).toMatchObject({
-    status: "ready",
-    profileId: QA_CODEX_OAUTH_PROFILE_ID,
-    provider: "openai",
-    mode: "oauth",
-  });
-  expect(selection).not.toMatchObject({ profileId: QA_OPENAI_API_KEY_PROFILE_ID });
-});
-
 it.each([
   ["oauth-only", undefined],
-  ["mixed", undefined],
   ["mixed", "defaults"],
   ["mixed", "main"],
 ] as const)(

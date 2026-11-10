@@ -3,10 +3,14 @@ import { expect, onTestFinished, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { ensureSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-state-worker-contract.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  acknowledgeMockSubagentRegistryWrite,
+  createSubagentRunRecord,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveRequesterStoreKey } from "../announce/subagent-requester-store-key.js";
 import {
   SubagentLifecycleController,
@@ -78,6 +82,37 @@ export function expectUndefinedFields<T>(record: T | undefined, keys: readonly (
   }
 }
 
+/** Release a blocked operation and join its work even when an assertion fails. */
+export function createSubagentTestGate() {
+  const entered = createDeferredCore();
+  const released = createDeferredCore();
+  const work: Promise<unknown>[] = [];
+  const drain = async () => {
+    const results = await Promise.allSettled(work);
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      throw failed.reason;
+    }
+  };
+  return {
+    entered: entered.promise,
+    async wait() {
+      entered.resolve();
+      await released.promise;
+    },
+    release: () => released.resolve(),
+    track<T>(pending: Promise<T>): Promise<T> {
+      work.push(pending);
+      return pending;
+    },
+    drain,
+    async [Symbol.asyncDispose]() {
+      released.resolve();
+      await drain();
+    },
+  };
+}
+
 type FixtureOwner = {
   runs: Map<string, SubagentRunRecord>;
   beforeWrite?: LifecycleControllerFixtureOptions["beforeWrite"];
@@ -143,7 +178,7 @@ function installPolicyWorkerStub(fallbackOwner?: FixtureOwner) {
                 ),
                 [...postimages.keys()],
               );
-              return { writeId: write.writeId, notices: [] };
+              acknowledgeMockSubagentRegistryWrite(options?.createAdmission, write.writeId);
             },
           ),
       });

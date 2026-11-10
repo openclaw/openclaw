@@ -56,9 +56,7 @@ export const collectMSTeamsSecurityWarnings = createAllowlistProviderGroupPolicy
     }
     const account = resolveMSTeamsSecurityWarningAccount({ cfg, accountId });
     const accounts = cfg.channels?.msteams?.accounts;
-    const rawAccountKey = accounts
-      ? Object.keys(accounts).find((key) => normalizeAccountId(key) === account.accountId)
-      : undefined;
+    const rawAccountKey = resolveMSTeamsAccountEntryKey(accounts, account.accountId);
     const hasAccountPolicyOverride =
       rawAccountKey !== undefined && accounts?.[rawAccountKey]?.groupPolicy !== undefined;
     const configPath =

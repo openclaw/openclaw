@@ -1,8 +1,9 @@
-import { vi } from "vitest";
-import type { enqueueSessionEventForHost } from "../../auto-reply/reply/session-event-handoff.js";
+import { beforeEach, vi } from "vitest";
+import * as sessionEventHandoff from "../../auto-reply/reply/session-event-handoff.js";
+import * as processSupervisor from "../../process/supervisor/index.js";
 import type { ProcessSupervisor, RunExit } from "../../process/supervisor/types.js";
 import { withTestRunAdmission } from "../admitted-run-context.test-support.js";
-import { executeDeps } from "./execute-deps.js";
+import { createRunExit } from "../bash-tools.exec-runtime.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 /** Encloses a logical test run, including retries, in the admission preparation normally owns. */
@@ -22,79 +23,83 @@ export function wrapPreparedCliRunWithTestAdmission<Args extends unknown[], T>(
   };
 }
 
-export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
-  Object.assign(executeDeps, overrides);
-}
-
 export const supervisorSpawnMock = vi.fn<ProcessSupervisor["spawn"]>();
-export const enqueueSessionEventMock = vi.fn<typeof enqueueSessionEventForHost>(() => ({
-  id: "cli-watchdog-event",
-  accepted: Promise.resolve({ ok: true }),
-  cancel: () => true,
-  settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-}));
+export const enqueueSessionEventMock = vi.fn<typeof sessionEventHandoff.enqueueSessionEventForHost>(
+  () => ({
+    id: "cli-watchdog-event",
+    accepted: Promise.resolve({ ok: true }),
+    cancel: () => true,
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+  }),
+);
 
-setCliRunnerExecuteTestDeps({
-  getProcessSupervisor: () => {
-    const activeRuns = new Map<string, Awaited<ReturnType<ProcessSupervisor["spawn"]>>>();
-    return {
-      acquireScopeCleanup: vi.fn(() => {
-        throw new Error("CLI execution fixture does not own a cleanup scope");
-      }),
-      spawn: async (params: Parameters<ProcessSupervisor["spawn"]>[0]) => {
-        const streamed = { stdout: false, stderr: false };
-        const callbacks = { stdout: params.onStdout, stderr: params.onStderr };
-        const forward = (stream: keyof typeof callbacks) => {
-          const callback = callbacks[stream];
-          return callback
-            ? (chunk: string) => {
-                streamed[stream] = true;
+beforeEach(({ onTestFinished }) => {
+  const spies = [
+    vi.spyOn(processSupervisor, "getProcessSupervisor").mockImplementation(() => {
+      const activeRuns = new Map<string, Awaited<ReturnType<ProcessSupervisor["spawn"]>>>();
+      return {
+        acquireScopeCleanup: vi.fn(() => {
+          throw new Error("CLI execution fixture does not own a cleanup scope");
+        }),
+        spawn: async (params: Parameters<ProcessSupervisor["spawn"]>[0]) => {
+          const pending = { stdout: params.onStdout, stderr: params.onStderr };
+          const forward = (stream: keyof typeof pending) => {
+            const callback = pending[stream];
+            return (
+              callback &&
+              ((chunk: string) => {
+                pending[stream] = undefined;
                 callback(chunk);
-              }
-            : undefined;
-        };
-        const wrappedParams = {
-          ...params,
-          ...(params.mode === "child" && params.resolveArgs
-            ? { argv: [...params.argv, ...params.resolveArgs()] }
-            : {}),
-          onStdout: forward("stdout"),
-          onStderr: forward("stderr"),
-        };
-        const managedRun = await supervisorSpawnMock(wrappedParams);
-        if (!managedRun) {
-          throw new Error("supervisorSpawnMock returned no managed run (consumed or reset mock)");
-        }
-        activeRuns.set(params.runId ?? managedRun.runId, managedRun);
-        const wait = managedRun.wait;
-        return {
-          ...managedRun,
-          wait: async () => {
-            const exit = await wait();
-            if (params.captureOutput === false) {
-              for (const stream of ["stdout", "stderr"] as const) {
-                if (!streamed[stream] && exit[stream]) {
-                  callbacks[stream]?.(exit[stream]);
+              })
+            );
+          };
+          const managedRun = await supervisorSpawnMock({
+            ...params,
+            ...(params.mode === "child" && params.resolveArgs
+              ? { argv: [...params.argv, ...params.resolveArgs()] }
+              : {}),
+            onStdout: forward("stdout"),
+            onStderr: forward("stderr"),
+          });
+          if (!managedRun) {
+            throw new Error("supervisorSpawnMock returned no managed run (consumed or reset mock)");
+          }
+          activeRuns.set(params.runId ?? managedRun.runId, managedRun);
+          const wait = managedRun.wait;
+          return {
+            ...managedRun,
+            wait: async () => {
+              const exit = await wait();
+              if (params.captureOutput === false) {
+                for (const stream of ["stdout", "stderr"] as const) {
+                  if (exit[stream]) {
+                    pending[stream]?.(exit[stream]);
+                  }
                 }
               }
-            }
-            return exit;
-          },
-        };
-      },
-      cancel: vi.fn((runId: string, reason?: Parameters<ProcessSupervisor["cancel"]>[1]) => {
-        activeRuns.get(runId)?.cancel(reason);
-      }),
-      cancelScope: vi.fn(),
-    };
-  },
-  captureSessionEventTarget: async (agentId, sessionKey) => ({
-    agentId,
-    sessionKey,
-    sessionId: sessionKey,
-    generation: "test",
-  }),
-  enqueueSessionEvent: (text, options) => enqueueSessionEventMock(text, options),
+              return exit;
+            },
+          };
+        },
+        cancel: vi.fn((runId: string, reason?: Parameters<ProcessSupervisor["cancel"]>[1]) => {
+          activeRuns.get(runId)?.cancel(reason);
+        }),
+        cancelScope: vi.fn(),
+      };
+    }),
+    vi
+      .spyOn(sessionEventHandoff, "captureSessionEventTargetForHost")
+      .mockImplementation(async (agentId, sessionKey) => ({
+        agentId,
+        sessionKey,
+        sessionId: sessionKey,
+        generation: "test",
+      })),
+    vi
+      .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+      .mockImplementation(enqueueSessionEventMock),
+  ];
+  onTestFinished(() => spies.forEach((spy) => spy.mockRestore()));
 });
 
 type MockRunExit = Omit<RunExit, "oomScoreWrapperSelected">;
@@ -112,14 +117,5 @@ export function createManagedRun(exit: MockRunExit, pid = 1234) {
 }
 
 export function createSuccessfulProcessExit(): MockRunExit {
-  return {
-    reason: "exit",
-    exitCode: 0,
-    exitSignal: null,
-    durationMs: 50,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-  };
+  return createRunExit({ durationMs: 50 });
 }

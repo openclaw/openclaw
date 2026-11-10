@@ -1,5 +1,7 @@
-import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "../../packages/retry/src/index.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import type { PluginHookRegistration } from "./hook-types.js";
 
 export const withHookTimeout = async <T>(
   promise: Promise<T>,
@@ -17,4 +19,17 @@ export const withHookTimeout = async <T>(
     },
     { ref: !optionsResult.unref, signal: optionsResult.signal },
   );
+};
+
+export const awaitHook = <T>(
+  hook: PluginHookRegistration,
+  promise: Promise<T>,
+  defaultTimeoutMs?: number,
+  timeoutOptions?: { unref?: boolean; signal?: AbortSignal },
+): Promise<T> => {
+  const timeoutMs =
+    clampPositiveTimerTimeoutMs(hook.timeoutMs) ?? clampPositiveTimerTimeoutMs(defaultTimeoutMs);
+  return timeoutMs
+    ? withHookTimeout(promise, timeoutMs, timeoutOptions)
+    : racePromiseWithAbortSignal(promise, timeoutOptions?.signal);
 };

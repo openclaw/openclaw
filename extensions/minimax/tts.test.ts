@@ -1,12 +1,13 @@
 import { once } from "node:events";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import { promisify } from "node:util";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   isProviderAuthProfileConfigured,
   isProviderAuthProfileConfiguredAsync,
 } from "openclaw/plugin-sdk/provider-auth";
+import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 
 const guardedFetch = vi.hoisted(() => vi.fn());
@@ -48,14 +49,11 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("caps oversized request timeout before arming abort timers", async () => {
-  const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+it("forwards the capped request timeout to the guarded transport", async () => {
   mockTtsResponse({ data: { audio: Buffer.from("audio").toString("hex") } });
   await expect(tts({ timeoutMs: Number.MAX_SAFE_INTEGER })).resolves.toEqual(Buffer.from("audio"));
-  expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   expect(guardedFetch.mock.calls[0]?.[0]).toMatchObject({
     timeoutMs: MAX_TIMER_TIMEOUT_MS,
-    init: { signal: expect.any(AbortSignal) },
   });
 });
 
@@ -66,6 +64,113 @@ it("throws on base_resp envelope error even when data.audio is present (regressi
   });
   await expect(tts()).rejects.toThrow("MiniMax TTS API error (1002): Quota exceeded");
 });
+
+it.each(["success", "http-error", "stalled-headers", "stalled-body"] as const)(
+  "settles guarded speech transport and releases its socket (%s)",
+  async (mode) => {
+    const claim = await acquireTestPortBlock({ offsets: [0] });
+    const ready = Promise.withResolvers<number>();
+    const released = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    const sockets = new Set<Socket>();
+    const requests: string[] = [];
+    let receivedResponse: ServerResponse | undefined;
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? "");
+      request.resume();
+      request.socket.once("close", () => closed.resolve());
+      receivedResponse = response;
+      if (mode === "stalled-headers") {
+        ready.resolve(0);
+        return;
+      }
+      response.writeHead(mode === "http-error" ? 401 : 200, {
+        "content-type": "application/json",
+      });
+      if (mode === "stalled-body") {
+        response.write('{"data":{"audio":"');
+      } else {
+        response.end(mode === "http-error" ? "Unauthorized" : '{"data":{"audio":"706f6e67"}}');
+      }
+    });
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    });
+    let pending: Promise<unknown> | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(claim.port, "127.0.0.1", resolve);
+      });
+      vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+        "openclaw/plugin-sdk/ssrf-runtime",
+      );
+      guardedFetch.mockImplementation(async (params) => {
+        const result = await actual.fetchWithSsrFGuard(params);
+        ready.resolve(result.response.status);
+        return {
+          ...result,
+          release: async () => {
+            await result.release();
+            released.resolve();
+          },
+        };
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const outcome = tts({
+        providerConfig: { apiKey: "fixture-key", baseUrl: `http://127.0.0.1:${claim.port}` },
+        timeoutMs: 1_000,
+      }).then(
+        (audio) => ({ ok: true as const, audio }),
+        (error: unknown) => {
+          ready.reject(error);
+          return { ok: false as const, error };
+        },
+      );
+      pending = outcome;
+      const status = await ready.promise;
+      if (mode.startsWith("stalled")) {
+        expect(status).toBe(mode === "stalled-body" ? 200 : 0);
+        const settled = vi.fn();
+        void outcome.then(settled);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(settled).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await outcome).toMatchObject({ ok: false, error: expect.any(Error) });
+        expect(receivedResponse?.writableEnded).toBe(false);
+      } else if (mode === "success") {
+        expect(await outcome).toEqual({ ok: true, audio: Buffer.from("pong") });
+      } else {
+        expect(await outcome).toMatchObject({
+          ok: false,
+          error: expect.objectContaining({ message: "MiniMax TTS API error (401): Unauthorized" }),
+        });
+      }
+      if (mode !== "stalled-headers") {
+        await released.promise;
+      }
+      await closed.promise;
+      expect(requests).toEqual(["/v1/t2a_v2"]);
+    } finally {
+      vi.useRealTimers();
+      try {
+        if (server.listening) {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+            for (const socket of sockets) {
+              socket.destroy();
+            }
+          });
+        }
+        await pending;
+      } finally {
+        await claim.release();
+      }
+    }
+  },
+);
 
 type WireFixture = {
   entryPoint: "speech" | "music";
@@ -107,17 +212,7 @@ async function runFixture(fixture: WireFixture) {
 
   try {
     if (fixture.entryPoint === "speech") {
-      const result = await buildMinimaxSpeechProvider({
-        isProviderAuthProfileConfigured,
-        isProviderAuthProfileConfiguredAsync,
-      }).synthesize({
-        text: "loopback fixture",
-        cfg: {},
-        providerConfig: { apiKey: "sk-test" },
-        target: "audio-file",
-        timeoutMs: 1_000,
-      });
-      return result.audioBuffer;
+      return await tts({ text: "loopback fixture", timeoutMs: 1_000 });
     }
 
     const providerId = fixture.provider ?? "minimax";

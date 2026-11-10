@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -53,9 +53,7 @@ type Scope = { agentId: string; storePath: string; sessionKey: string };
 
 async function admit(scope: Scope, sessionId: string, resetTriggered: boolean) {
   const admitted = await admitReplyTurn({ ...scope, sessionId, kind: "visible", resetTriggered });
-  if (admitted.status !== "owned" || !admitted.databaseClaim) {
-    throw new Error("Fixture requires a retained reply admission");
-  }
+  assert(admitted.status === "owned" && admitted.databaseClaim, "Expected retained admission");
   const controller = getSessionControllerEntryForOperation(admitted.operation);
   return {
     ...admitted,
@@ -129,9 +127,7 @@ export function registerSessionInitializationAdmissionTests({
         ).rejects.toThrow("released");
       }
       const reader = getReplyOperationSessionReader(admitted.operation);
-      if (!reader) {
-        throw new Error("Acknowledged initialization must retain its new reader");
-      }
+      assert(reader, "Acknowledged initialization must retain its new reader");
       const read = () =>
         reader.withRead(
           { sessionKeys: [sessionKey] },
@@ -158,13 +154,14 @@ export function registerSessionInitializationAdmissionTests({
     const idempotencyKey = "first-turn-input-custody";
     await using admitted = await admit(scope, "initializing-input", false);
     const initialized = await initialize(scope, admitted, text);
+    const target = {
+      ...scope,
+      sessionId: initialized.sessionId,
+      sessionEntry: initialized.sessionEntry,
+    };
     const recorder = createUserTurnTranscriptRecorder({
       input: { text, idempotencyKey },
-      target: {
-        ...scope,
-        sessionId: initialized.sessionId,
-        sessionEntry: initialized.sessionEntry,
-      },
+      target,
       updateMode: "none",
     });
     // The Gateway recorder predates first-session initialization and has no read source yet.
@@ -187,7 +184,7 @@ export function registerSessionInitializationAdmissionTests({
       run: {
         ...queued.run,
         agentId: scope.agentId,
-        sessionId: initialized.sessionId,
+        sessionId: target.sessionId,
         sessionKey: scope.sessionKey,
         config: { session: { store: scope.storePath } },
       },
@@ -215,16 +212,14 @@ export function registerSessionInitializationAdmissionTests({
           typing,
           typingMode: "never",
           defaultModel: queued.run.model,
-          sessionEntry: initialized.sessionEntry,
+          sessionEntry: target.sessionEntry,
           sessionStore: initialized.sessionStore,
           sessionKey: scope.sessionKey,
           storePath: scope.storePath,
           opts: { runId: idempotencyKey },
         },
         signalRunStart: async () => {
-          expect(
-            await listSessionPendingInputs({ ...scope, sessionId: initialized.sessionId }),
-          ).toMatchObject({
+          expect(await listSessionPendingInputs(target)).toMatchObject({
             total: 1,
             items: [{ state: "queued", message: { role: "user", content: text, idempotencyKey } }],
           });
@@ -233,9 +228,7 @@ export function registerSessionInitializationAdmissionTests({
           throw checkpoint;
         },
       });
-      if (prepared.kind !== "admitted") {
-        throw new Error("First-turn preparation did not retain its admitted owner");
-      }
+      assert(prepared.kind === "admitted", "First-turn preparation must retain its admitted owner");
       releaseSourceAdmission = prepared.turn.releaseSourceAdmission;
       expect(prepared.turn.preflightError).toBe(checkpoint);
       expect(existsSync(scope.storePath)).toBe(false);
@@ -270,9 +263,10 @@ export function registerSessionInitializationAdmissionTests({
       await seed(scope, sessionId, "before-close");
       await using admitted = await admit(scope, sessionId, true);
       const previous = admitted.databaseClaim;
-      if (!("kind" in previous) || !previous.afterTransition) {
-        throw new Error("Fixture requires the worker initialization handoff");
-      }
+      assert(
+        "kind" in previous && typeof previous.afterTransition === "function",
+        "Expected initialization handoff",
+      );
       const prepare = previous.afterTransition.bind(previous);
       const prepared = createDeferred<Awaited<ReturnType<typeof prepare>>>();
       const paused = createDeferred();

@@ -1,11 +1,13 @@
 /** Invokes current-context plugin tool factories and reports one assembly's timings. */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { runWithPluginToolInvocationSource } from "../agents/agent-tool-source-execution-guard.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithTrackedCancellation } from "../shared/async-work-resources.js";
+import { bindPluginInlineViewInvocation } from "./inline-view.js";
 import { prepareMemoryAudienceRead } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
@@ -40,21 +42,6 @@ function formatPluginToolFactoryTiming(timing: PluginToolFactoryTiming): string 
   ].join(" ");
 }
 
-function runWithPluginToolScope<T>(
-  entry: PluginToolRegistration,
-  registry: PluginRegistry,
-  run: () => T,
-): T {
-  return withPluginRuntimePluginScope(
-    {
-      pluginId: entry.pluginId,
-      pluginSource: entry.source,
-    },
-    run,
-    registry,
-  );
-}
-
 /** Callback availability is captured once; missing records must never become a fallback after removal. */
 export function bindPluginToolCallbacks(
   entry: PluginToolRegistration,
@@ -70,7 +57,7 @@ export function bindPluginToolCallbacks(
       throw new Error(`Plugin "${entry.pluginId}" tool runtime is no longer active.`);
     }
     assertInvocationCurrent?.();
-    const result = runWithPluginToolScope(entry, registry, run);
+    const result = run();
     if (assertInvocationCurrent && isPromiseLike(result)) {
       return Promise.resolve(result).then((value) => {
         assertInvocationCurrent();
@@ -81,24 +68,32 @@ export function bindPluginToolCallbacks(
     return result;
   };
   const prepare = tool.prepareArguments;
+  const executeBound = async (...args: Parameters<AnyAgentTool["execute"]>) => {
+    const [toolCallId, params, signal, onUpdate] = args;
+    const pending =
+      memoryAudience &&
+      resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.pluginId === entry.pluginId
+        ? prepareMemoryAudienceRead(memoryAudience)
+        : undefined;
+    if (pending) {
+      await racePromiseWithAbortSignal(pending, signal);
+    }
+    // Cancellation retains this context after the instance call has settled.
+    const result = await withPluginRuntimePluginScope(
+      { pluginId: entry.pluginId, pluginSource: entry.source },
+      () =>
+        invoke(() => {
+          const execute = (executionSignal?: AbortSignal) =>
+            tool.execute(toolCallId, params, executionSignal, onUpdate);
+          return signal ? runWithTrackedCancellation(signal, execute) : execute();
+        }),
+      registry,
+    );
+    return bindPluginInlineViewInvocation(result, entry.pluginId, tool.name, toolCallId);
+  };
   const callbacks = {
-    execute: async (...args: Parameters<AnyAgentTool["execute"]>) => {
-      const [toolCallId, params, signal, onUpdate] = args;
-      const pending =
-        memoryAudience &&
-        resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.pluginId ===
-          entry.pluginId
-          ? prepareMemoryAudienceRead(memoryAudience)
-          : undefined;
-      if (pending) {
-        await racePromiseWithAbortSignal(pending, signal);
-      }
-      return invoke(() => {
-        const execute = (executionSignal?: AbortSignal) =>
-          tool.execute(toolCallId, params, executionSignal, onUpdate);
-        return signal ? runWithTrackedCancellation(signal, execute) : execute();
-      });
-    },
+    execute: (...args: Parameters<AnyAgentTool["execute"]>) =>
+      runWithPluginToolInvocationSource(() => executeBound(...args)),
     ...(prepare
       ? { prepareArguments: (args: unknown) => invoke(() => prepare.call(tool, args)) }
       : {}),
@@ -185,13 +180,12 @@ export function createPluginToolFactoryResolver(logError: (message: string) => v
       entry: PluginToolRegistration,
       ctx: OpenClawPluginToolContext,
       declaredNames: string[],
-      registry: PluginRegistry,
     ) {
       let resolved: ReturnType<PluginToolRegistration["factory"]> = null;
       let failed = false;
       const factoryStartedAt = Date.now();
       try {
-        resolved = runWithPluginToolScope(entry, registry, () => entry.factory(ctx));
+        resolved = entry.factory(ctx);
       } catch (err) {
         failed = true;
         // Only the config producer can confirm its diagnostic was emitted;

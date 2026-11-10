@@ -2,8 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { deserialize } from "node:v8";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -18,7 +16,6 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -26,6 +23,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { interceptManagedImageMutationReplies } from "./managed-image-attachments.test-support.js";
 import {
   attachManagedImageRecordsToMessage,
   claimManagedImageRecordCleanupIfCurrent,
@@ -249,36 +247,20 @@ describe("managed image record SQLite store", () => {
 
   it("recovers exact native mutation receipts after ordinary replies are lost", async () => {
     const initial = record();
-    const dispatch = brokerReply.dispatchSqliteWorkerJob;
-    const receive = brokerReply.receiveSqliteWorkerReply;
-    const commandTypes = new WeakMap<object, string>();
     const corrupted: string[] = [];
-    vi.spyOn(brokerReply, "dispatchSqliteWorkerJob").mockImplementation((slot, job, onRejected) => {
-      if (job.request.type === "execute") {
-        const command: unknown = deserialize(job.request.input);
-        if (isRecord(command) && typeof command.type === "string") {
-          commandTypes.set(job.request, command.type);
-        }
+    interceptManagedImageMutationReplies((commandType) => {
+      if (
+        ![
+          "managedImages.insert",
+          "managedImages.attach",
+          "managedImages.claimCleanup",
+          "managedImages.deleteClaimed",
+        ].includes(commandType)
+      ) {
+        return false;
       }
-      return dispatch(slot, job, onRejected);
-    });
-    vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
-      if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
-        const commandType = commandTypes.get(slot.current.request);
-        if (
-          commandType &&
-          [
-            "managedImages.insert",
-            "managedImages.attach",
-            "managedImages.claimCleanup",
-            "managedImages.deleteClaimed",
-          ].includes(commandType)
-        ) {
-          corrupted.push(commandType);
-          return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
-        }
-      }
-      return receive(slot, reply, owner);
+      corrupted.push(commandType);
+      return true;
     });
     await insertManagedImageRecord(initial, stateDir);
     expect(await attach(initial, "committed", initial.createdAt)).toBe(true);

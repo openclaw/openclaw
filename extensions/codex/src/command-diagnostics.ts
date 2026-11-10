@@ -56,11 +56,10 @@ type CodexDiagnosticsCandidate = Omit<
 
 export async function handleCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
-  context: PluginCommandContext,
+  ctx: PluginCommandContext,
   pluginConfig: CodexPluginConfig | undefined,
   args: string,
 ): Promise<PluginCommandResult> {
-  const ctx = { ...context };
   if (ctx.senderIsOwner !== true) {
     return { text: "Only an owner can send Codex diagnostics." };
   }

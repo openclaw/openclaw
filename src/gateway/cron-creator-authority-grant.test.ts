@@ -12,6 +12,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptParamsV2,
 } from "../plugin-sdk/agent-harness-runtime.js";
+import { expectCollected } from "../test-utils/retention.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
   attachCronStreamExecPolicy,
@@ -84,6 +85,31 @@ function createManagementFixture(controlUiAdmin = true) {
 }
 
 describe("cron creator authority grants", () => {
+  it("retains the expired reason without retaining the revoking caller", async () => {
+    const formatter = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+    Reflect.deleteProperty(Error, "prepareStackTrace");
+    onTestFinished(() => {
+      if (formatter) {
+        Object.defineProperty(Error, "prepareStackTrace", formatter);
+      }
+    });
+    class RevokingCaller {
+      revoke() {
+        const scope = createCronCreatorAuthorityRunScope("expired-stack");
+        revokeScope(scope);
+        return scope.signal;
+      }
+    }
+    const { signal, caller: callerRef } = (() => {
+      const caller = new RevokingCaller();
+      return { signal: caller.revoke(), caller: new WeakRef(caller) };
+    })();
+    await expectCollected(callerRef);
+    expect(signal.reason).toBeInstanceOf(TypeError);
+    expect(signal.reason).toMatchObject({ name: "CronCreatorAuthorityExpiredError", status: 403 });
+    expect(() => signal.throwIfAborted()).toThrow(signal.reason);
+  });
+
   it("preserves the Control UI admin SDK projection without granting creator authority", () => {
     const scope = createScope("sdk-compat", { kind: "unknown" }, { source: "control-ui-admin" });
     const legacy: Pick<EmbeddedRunAttemptParams, "cronCreatorAuthorityCapability"> = {
@@ -101,10 +127,7 @@ describe("cron creator authority grants", () => {
       capturesRuntimeAuthority: false,
       callerOrigin: { kind: "local" },
     });
-    const external = createScope("run-external", {
-      kind: "external",
-      channel: "discord",
-    });
+    const external = createScope("run-external", { kind: "external", channel: "discord" });
     expect(() => mint(external, undefined, undefined, undefined, "requester")).toThrow(
       "requires authenticated creator facts",
     );
@@ -219,11 +242,7 @@ describe("cron management authority grants", () => {
     clock.mockReturnValue(51_000);
     attachCronStreamExecPolicy(streamGrant, policy);
     clock.mockReturnValue(61_000);
-    const deniedEffect = vi.fn();
-    await expect(
-      withGrant(ordinaryGrant, fixture.identity, "cron.update", deniedEffect),
-    ).rejects.toThrow(denied);
-    expect(deniedEffect).not.toHaveBeenCalled();
+    await fixture.deny(ordinaryGrant, "cron.update");
 
     const effect = vi.fn();
     await withGrant(streamGrant, fixture.identity, "cron.update", async () => {
@@ -235,10 +254,7 @@ describe("cron management authority grants", () => {
       expect(assertActive).toThrow(denied);
     });
     expect(effect).toHaveBeenCalledOnce();
-    await expect(
-      withGrant(streamGrant, fixture.identity, "cron.update", deniedEffect),
-    ).rejects.toThrow(denied);
-    expect(deniedEffect).not.toHaveBeenCalled();
+    await fixture.deny(streamGrant, "cron.update");
   });
 
   it.each(["method", "run", "instance", "lifecycle", "claim"] as const)(
@@ -291,15 +307,9 @@ describe("cron management authority grants", () => {
         ),
     ],
     ["lifecycle rotation", () => rotateAgentRunRegistryLifecycleGeneration()],
-    [
-      "scope revocation",
-      (fixture: ReturnType<typeof createManagementFixture>) => revokeScope(fixture.scope),
-    ],
-    ["scope abort", (fixture: ReturnType<typeof createManagementFixture>) => fixture.scope.abort()],
-    [
-      "operation abort",
-      (fixture: ReturnType<typeof createManagementFixture>) => fixture.operation.abort(),
-    ],
+    ["scope revocation", (fixture: Fixture) => revokeScope(fixture.scope)],
+    ["scope abort", (fixture: Fixture) => fixture.scope.abort()],
+    ["operation abort", (fixture: Fixture) => fixture.operation.abort()],
     [
       "expiry",
       () =>

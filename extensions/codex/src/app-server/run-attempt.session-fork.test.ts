@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { AgentHarnessSideQuestionParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
@@ -11,6 +12,7 @@ import { createCodexInferenceModelBinding } from "./inference-dispatch.js";
 import { getCodexInferenceThread, ownCodexInferenceClient } from "./inference-routing.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
+import { requestParams } from "./run-attempt-continuity.test-support.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createCodexRuntimePlanFixture,
@@ -34,6 +36,15 @@ const cases = [
   { completeParent: true, rebuilt: false },
   { completeParent: true, rebuilt: true },
 ];
+const clientMetadata = (threadId: string, generation: unknown) => ({
+  thread_id: threadId,
+  "x-codex-turn-metadata": JSON.stringify({
+    thread_id: threadId,
+    request_kind: "turn",
+    [CODEX_INFERENCE_GENERATION_KEY]: generation,
+  }),
+});
+
 it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
   let inferenceAdmitted = false;
   let sideRequest: JsonObject | undefined;
@@ -66,15 +77,10 @@ it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
               instructions: "rebuilt native base",
               tools: [],
               input: [...nativeInput, ...completed, question],
-              client_metadata: {
-                thread_id: "fork-thread",
-                "x-codex-turn-metadata": JSON.stringify({
-                  thread_id: "fork-thread",
-                  request_kind: "turn",
-                  [CODEX_INFERENCE_GENERATION_KEY]:
-                    request.responsesapiClientMetadata[CODEX_INFERENCE_GENERATION_KEY],
-                }),
-              },
+              client_metadata: clientMetadata(
+                "fork-thread",
+                request.responsesapiClientMetadata[CODEX_INFERENCE_GENERATION_KEY],
+              ),
             }).body;
             const execution = await createCodexInferenceModelBinding({
               client: harness.client,
@@ -144,14 +150,10 @@ it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
   const binding = testCodexAppServerBindingStore.read(sessionBindingIdentity(params));
   expect(binding?.clientId).toBe(harness.client.getInstanceId());
   const route = getCodexInferenceThread(harness.client, binding?.threadId ?? "thread-1");
-  const parentTurn = harness.requests.find(({ method }) => method === "turn/start")?.params;
-  const parentGeneration =
-    isJsonObject(parentTurn) && isJsonObject(parentTurn.responsesapiClientMetadata)
-      ? parentTurn.responsesapiClientMetadata[CODEX_INFERENCE_GENERATION_KEY]
-      : undefined;
-  if (!route || !isJsonObject(parentTurn) || typeof parentGeneration !== "string") {
-    throw new Error("Expected a prepared parent inference generation");
-  }
+  const parentTurn = requestParams(harness, "turn/start");
+  assert(route && isJsonObject(parentTurn.responsesapiClientMetadata));
+  const parentGeneration = parentTurn.responsesapiClientMetadata[CODEX_INFERENCE_GENERATION_KEY];
+  assert(typeof parentGeneration === "string", "Expected a prepared parent inference generation");
   const parentInput: JsonObject[] = [
     { role: "developer", content: "exact parent environment\n".repeat(12000) },
     { role: "user", content: "parent task" },
@@ -165,14 +167,7 @@ it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
     instructions: "native base",
     tools: [{ type: "function", name: "read", parameters: { type: "object" } }],
     input: parentInput,
-    client_metadata: {
-      thread_id: binding?.threadId ?? "thread-1",
-      "x-codex-turn-metadata": JSON.stringify({
-        thread_id: binding?.threadId ?? "thread-1",
-        request_kind: "turn",
-        [CODEX_INFERENCE_GENERATION_KEY]: parentGeneration,
-      }),
-    },
+    client_metadata: clientMetadata(binding?.threadId ?? "thread-1", parentGeneration),
   };
   route.context.prepare({ ...parentRequest, input: [] });
   const expectedRequest = route.context.prepare(parentRequest).body;
@@ -240,13 +235,10 @@ it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
         turnId: "fork-turn",
       }),
     ).toBeUndefined();
-    const parentStart = harness.requests.find(({ method }) => method === "thread/start");
-    const fork = harness.requests.find(({ method }) => method === "thread/fork");
-    if (!isJsonObject(parentStart?.params) || !isJsonObject(fork?.params)) {
-      throw new Error("Expected real parent startup and side fork requests");
-    }
-    expect(fork.params.developerInstructions).toBe(parentStart.params.developerInstructions);
-    expect(fork.params.threadId).toBe(binding?.threadId);
+    expect(requestParams(harness, "thread/fork")).toMatchObject({
+      developerInstructions: requestParams(harness, "thread/start").developerInstructions,
+      threadId: binding?.threadId,
+    });
     expect(harness.client.getCloseError()).toBeUndefined();
   } finally {
     await harness.completeTurn({ threadId: binding?.threadId ?? "thread-1", turnId: "turn-1" });

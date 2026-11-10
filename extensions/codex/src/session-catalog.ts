@@ -1,5 +1,6 @@
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeInvokePolicy,
@@ -8,6 +9,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 import {
@@ -48,6 +50,12 @@ import {
   codexUpstreamContinueResult,
   type CodexUpstreamBaseline,
 } from "./session-upstream-marker.js";
+
+const loadNodeContinue = createLazyRuntimeModule(
+  () => import("./session-catalog-node-continue.js"),
+);
+const loadCatalogAdoption = createLazyRuntimeModule(() => import("./session-catalog-adoption.js"));
+const loadCatalogArchive = createLazyRuntimeModule(() => import("./session-catalog-archive.js"));
 
 export { createCodexSessionCatalogControl } from "./session-catalog-control.js";
 export { createCodexSessionCatalogNodeHostCommands } from "./session-catalog-listing.js";
@@ -143,6 +151,7 @@ function withCatalogListScope(
 function catalogHostMapper(
   localTerminalAvailable: boolean,
   localHomes: readonly CodexCatalogHome[],
+  supervisionEnabled: boolean,
 ) {
   return (host: CodexSessionCatalogHost): SessionCatalogHost => {
     const finishTiming = startCodexCatalogListTiming("mappingMs");
@@ -182,7 +191,9 @@ function catalogHostMapper(
             ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
             archived: session.archived,
             ...(session.sessionKey ? { sessionKey: session.sessionKey } : {}),
-            canContinue: (local || host.canContinueCodex === true) && continuable,
+            // Local adoption opens a supervised binding, which the runtime refuses unless enabled.
+            canContinue:
+              (local ? supervisionEnabled : host.canContinueCodex === true) && continuable,
             canArchive: local && continuable,
             canOpenTerminal:
               interactive && (local ? localSourceAvailable : host.canOpenTerminalCodex === true),
@@ -209,6 +220,8 @@ export function registerCodexSessionCatalog(params: {
   getRuntimeConfig: () => OpenClawConfig | undefined;
   resolveRuntimeOptions: CodexTerminalConfigSources["resolveRuntimeOptions"];
 }): void {
+  const supervisionEnabled = () =>
+    readCodexPluginConfig(params.getPluginConfig()).supervision?.enabled === true;
   const catalogHomes = async (agentId: string, allowProcessHomeFallback?: boolean) => {
     const homes = await params.control.homesForAgent(agentId);
     return allowProcessHomeFallback === false
@@ -267,6 +280,8 @@ export function registerCodexSessionCatalog(params: {
       const mapHost = catalogHostMapper(
         resolveLocalCodexTerminalExecutable() !== undefined,
         localHomes,
+        // Local homes exist only after this config generation parsed; node-only lists skip it.
+        localHomes.length > 0 && supervisionEnabled(),
       );
       const operation = createCodexSessionCatalogListOperation({
         agentId,
@@ -325,7 +340,7 @@ export function registerCodexSessionCatalog(params: {
       }
       if (request.hostId.startsWith("node:")) {
         const agentId = resolveRequestAgentId(request.agentId);
-        const { continueNodeCodexSession } = await import("./session-catalog-node-continue.js");
+        const { continueNodeCodexSession } = await loadNodeContinue();
         return await continueNodeCodexSession({
           agentId,
           api: params.api,
@@ -341,8 +356,13 @@ export function registerCodexSessionCatalog(params: {
       }
       const { agentId, source, control } = await bindLocalRequest(request);
       source.assertCurrent();
+      if (!supervisionEnabled()) {
+        throw new CatalogParamsError(
+          "Codex supervision is disabled; enable plugins.entries.codex.config.supervision.enabled to continue local sessions",
+        );
+      }
       let upstreamBaseline: (CodexUpstreamBaseline & { connectionFingerprint: string }) | undefined;
-      const { continueLocalCodexSession } = await import("./session-catalog-adoption.js");
+      const { continueLocalCodexSession } = await loadCatalogAdoption();
       const continued = await continueLocalCodexSession({
         agentId,
         api: params.api,
@@ -388,7 +408,7 @@ export function registerCodexSessionCatalog(params: {
       }
       const { agentId, source, control } = await bindLocalRequest(request);
       source.assertCurrent();
-      const { archiveLocalCodexSession } = await import("./session-catalog-archive.js");
+      const { archiveLocalCodexSession } = await loadCatalogArchive();
       await archiveLocalCodexSession({
         agentId,
         bindingStore: params.bindingStore,

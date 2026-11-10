@@ -40,7 +40,9 @@ export function registerExecutorRootOwnershipTests(
       let mutated = false;
       const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(root, { serviceRoot });
-        expect(captureUpdateCommandExecutorAuthority(fence).installKey).toBe(root);
+        const authority = captureUpdateCommandExecutorAuthority(fence);
+        expect(authority.installKey).toBe(root);
+        expect(Object.isFrozen(authority)).toBe(true);
         for (const admitted of [root, serviceRoot]) {
           expect(store.acquire(admitted, "contender", { kind: "update" }).kind).toBe("busy");
         }
@@ -75,6 +77,14 @@ export function registerExecutorRootOwnershipTests(
       expect(fence.assertCurrent).toThrow("no longer current");
       for (const admitted of [root, serviceRoot]) {
         expect(store.read(admitted)).toEqual({ kind: "absent" });
+      }
+      const acquired = store.acquire(root, "independent-helper", { kind: "update" });
+      assert(acquired.kind === "acquired");
+      try {
+        await expect(executor.enter(root)).rejects.toThrow("closed or busy");
+        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      } finally {
+        expect(store.release(acquired.lease)).toBe(true);
       }
     });
   });

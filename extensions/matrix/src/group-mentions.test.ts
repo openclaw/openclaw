@@ -1,9 +1,12 @@
 // Matrix tests cover group mentions plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  resolveMatrixGroupRequireMention,
-  resolveMatrixGroupToolPolicy,
-} from "./group-mentions.js";
+import { matrixPlugin } from "./channel.js";
+
+const resolveMatrixGroupRequireMention = matrixPlugin.groups?.resolveRequireMention;
+const resolveMatrixGroupToolPolicy = matrixPlugin.groups?.resolveToolPolicy;
+if (!resolveMatrixGroupRequireMention || !resolveMatrixGroupToolPolicy) {
+  throw new Error("Expected Matrix group policy callbacks");
+}
 
 describe("Matrix group policy", () => {
   it.each(["!trusted:example.org", "#trusted:example.org", "Trusted Room"])(

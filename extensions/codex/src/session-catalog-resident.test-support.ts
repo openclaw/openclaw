@@ -139,11 +139,10 @@ export async function measureCatalogLists(
     page = await control.listPage({ limit: 100, cursor: page.nextCursor });
   }
   const elapsed: number[] = [];
-  const cpu: number[] = [];
-  const beforeCalls = commandRpcMocks.codexControlRequest.mock.calls.length;
+  const calls = commandRpcMocks.codexControlRequest.mock.calls;
+  const beforeCalls = calls.length;
   for (let i = 0; i < 100; i++) {
     advanceClock();
-    const startCpu = process.threadCpuUsage();
     const start = performance.now();
     await control.listPage({
       limit: 64,
@@ -151,18 +150,10 @@ export async function measureCatalogLists(
       ...(i % 3 === 2 ? { searchTerm: "native" } : {}),
     });
     elapsed.push(performance.now() - start);
-    const usage = process.threadCpuUsage(startCpu);
-    cpu.push((usage.user + usage.system) / 1_000);
   }
   elapsed.sort((a, b) => a - b);
   return {
-    fixtureThreads: 3_000,
-    lists: 100,
     p50Ms: elapsed[49],
-    p95Ms: elapsed[94],
-    threadListCalls: commandRpcMocks.codexControlRequest.mock.calls
-      .slice(beforeCalls)
-      .filter((call) => call[1] === "thread/list").length,
-    mainThreadCpuMsPerList: cpu.reduce((sum, value) => sum + value, 0) / cpu.length,
+    threadListCalls: calls.slice(beforeCalls).filter((call) => call[1] === "thread/list").length,
   };
 }

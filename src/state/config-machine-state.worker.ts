@@ -19,10 +19,10 @@ export const machineStateOperations = {
   "machineState.write": (
     input: { key: string; value: unknown },
     context: WorkerWriteOperationContext,
-  ) =>
-    context.write(
+  ) => {
+    const key = normalizeConfigMachineStateKey(input.key);
+    return context.write(
       ({ db }) => {
-        const key = normalizeConfigMachineStateKey(input.key);
         if (key !== "authProfiles.store") {
           return writeConfigMachineStateInDatabase(db, key, input.value);
         }
@@ -35,8 +35,12 @@ export const machineStateOperations = {
         });
         return result;
       },
-      { operationLabel: "config-machine-state.write" },
-    ),
+      {
+        operationLabel: "config-machine-state.write",
+        singleStatement: key === "authProfiles.store" ? undefined : true,
+      },
+    );
+  },
 };
 
 export type MachineStateWorkerOperations = WorkerOperations<typeof machineStateOperations>;

@@ -6,7 +6,6 @@ import type {
 } from "../../state/openclaw-agent-db.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type {
-  SessionArchivedTranscriptCleanupRule,
   SessionLifecycleArchivedTranscript,
   SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
@@ -28,6 +27,7 @@ import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-en
 import type {
   SessionEntryMaintenanceAgeChange,
   SessionEntryMaintenanceAgeFact,
+  SessionMaintenanceAgeContinuation,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionEntryCommitContext,
@@ -35,6 +35,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
@@ -133,6 +134,7 @@ export type ProjectedLifecycleCommitInput = {
 };
 
 type SessionLifecycleCreation = {
+  receipt?: { operation: SessionCreationOperation; sessionKey: string; entry: SessionEntry };
   preparedTranscript?: {
     sessionKey: string;
     sessionId: string;
@@ -150,10 +152,6 @@ export type SessionEntryLifecycleMutationParams = {
   activeSessionKey?: string;
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
   skipMaintenance?: boolean;
-  cleanupArchivedTranscripts?: {
-    rules: SessionArchivedTranscriptCleanupRule[];
-    nowMs?: number;
-  };
   captureArtifactCleanupError?: boolean;
   /** Doctor-only bypass while exact malformed rows are removed in the same transaction. */
   allowCanonicalRepair?: boolean;
@@ -201,6 +199,9 @@ export type SessionEntryMaintenanceInput = {
   forceMaintenance?: boolean;
   /** Automatic cap work yields between operations; inline cleanup remains exhaustive. */
   maxCapEntries?: number;
+  /** Automatic age scans resume after each settled page, before cap cleanup. */
+  maxAgeEntries?: number;
+  ageContinuation?: SessionMaintenanceAgeContinuation;
   maintenance: ResolvedSessionMaintenanceConfig;
   preservation: SessionMaintenancePreservationSnapshot;
   storePath: string;
@@ -356,6 +357,7 @@ type SessionEntryMaintenanceCounts = {
   capped: number;
 };
 export type SessionEntryMaintenancePlan = SessionEntryMaintenanceCounts & {
+  ageContinuation?: SessionMaintenanceAgeContinuation;
   /** An exhaustive over-cap scan found only durable protection, without runtime/recent guards. */
   durableNoCandidates?: true;
   /** Exact rows written by planning; parent publication must not rescan the store. */

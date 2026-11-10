@@ -1,5 +1,3 @@
-import { execFileSync } from "node:child_process";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
@@ -7,11 +5,16 @@ import {
   type MockOpenAiRequestSnapshot,
   createQaGatewayChild,
   startQaMockOpenAiServer,
-  writeJson,
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { createTelegramApi, telegramGatewayOptions } from "./telegram-gateway.test-support.js";
+import {
+  createTelegramApi,
+  telegramProofChannel,
+  telegramGatewayOptions,
+  telegramRequestHandler,
+  settleTelegramCleanup,
+} from "./telegram-gateway.test-support.js";
 
 const BOT_ID = 424242;
 const BOT_TOKEN = `${BOT_ID}:${"A".repeat(35)}`;
@@ -50,39 +53,19 @@ test.each(["allowlist", "open"] as const)(
       };
       updates.enqueue(update);
     };
-
     await withServer(
-      (req, res) => {
-        void api.handle(req, res).catch((error: unknown) => {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
-        });
-      },
+      telegramRequestHandler(api.handle.bind(api)),
       async (apiRoot) =>
         await withTempDir("openclaw-telegram-policy-", async (workspace) => {
           const mock = await startQaMockOpenAiServer();
           const gatewayOwner = createQaGatewayChild();
           let gateway: QaGatewayChild | undefined;
-          const evidence: Record<string, unknown> = {
-            head: execFileSync("git", ["rev-parse", "HEAD"], {
-              cwd: repoRoot,
-              encoding: "utf8",
-            }).trim(),
-            groupPolicy,
-            accountId: "proof",
-            accountPolicy: "omitted",
-            passed: false,
-            groupAllowFrom: [String(ALLOWED_SENDER)],
-          };
-          const modelRequests = async () => {
-            const response = await fetch(`${mock.baseUrl}/debug/requests`);
+          const debugRequests = async <T>(endpoint: string) => {
+            const response = await fetch(`${mock.baseUrl}/debug/${endpoint}`);
             expect(response.ok).toBe(true);
-            return (await response.json()) as MockOpenAiRequestSnapshot[];
+            return (await response.json()) as T[];
           };
-          const inflightRequests = async () => {
-            const response = await fetch(`${mock.baseUrl}/debug/inflight-requests`);
-            expect(response.ok).toBe(true);
-            return (await response.json()) as unknown[];
-          };
+          const modelRequests = () => debugRequests<MockOpenAiRequestSnapshot>("requests");
           const telegramSessions = async () => {
             const result = (await gateway?.call("sessions.list", {})) as {
               sessions: Array<{ key: string; channel?: string; lastRunId?: string }>;
@@ -104,22 +87,16 @@ test.each(["allowlist", "open"] as const)(
                 },
                 providerMode: "mock-openai",
                 providerBaseUrl: `${mock.baseUrl}/v1`,
-                telegram: {
-                  enabled: true,
-                  defaultAccount: "proof",
-                  groupPolicy,
-                  groupAllowFrom: [String(ALLOWED_SENDER)],
-                  groups: { "*": { requireMention: false } },
-                  accounts: {
-                    proof: {
-                      enabled: true,
-                      botToken: BOT_TOKEN,
-                      apiRoot,
-                      commands: { native: false },
-                      streaming: { mode: "off" },
-                    },
+                telegram: telegramProofChannel(
+                  apiRoot,
+                  BOT_TOKEN,
+                  { commands: { native: false }, streaming: { mode: "off" } },
+                  {
+                    groupPolicy,
+                    groupAllowFrom: [String(ALLOWED_SENDER)],
+                    groups: { "*": { requireMention: false } },
                   },
-                },
+                ),
                 messages: { groupChat: { visibleReplies: "automatic" } },
                 mutateConfig: (cfg) => {
                   cfg.logging = { level: "debug", file: path.join(workspace, "gateway.log") };
@@ -130,8 +107,7 @@ test.each(["allowlist", "open"] as const)(
                 },
               }),
             );
-            evidence.gatewayPort = new URL(gateway.baseUrl).port;
-            expect(evidence.gatewayPort).not.toBe("18789");
+            expect(new URL(gateway.baseUrl).port).not.toBe("18789");
             await expect
               .poll(() => updates.pendingPolls.size, { timeout: 30_000 })
               .toBeGreaterThan(0);
@@ -140,16 +116,9 @@ test.each(["allowlist", "open"] as const)(
               sendInbound(FORBIDDEN_SENDER, REJECTED_MARKER);
               await expect.poll(() => gateway?.logs(), { timeout: 30_000 }).toContain(REJECTION);
               expect(await modelRequests()).toEqual([]);
-              expect(await inflightRequests()).toEqual([]);
+              expect(await debugRequests("inflight-requests")).toEqual([]);
               expect(await telegramSessions()).toEqual([]);
               expect(deliveries()).toEqual([]);
-              evidence.rejected = {
-                decision: REJECTION,
-                modelRequests: 0,
-                inflightRequests: 0,
-                telegramSessions: 0,
-                outboundReplies: 0,
-              };
             }
             const senderId = groupPolicy === "allowlist" ? ALLOWED_SENDER : FORBIDDEN_SENDER;
             sendInbound(senderId, REPLY_MARKER);
@@ -176,53 +145,11 @@ test.each(["allowlist", "open"] as const)(
             expect(deliveries()).toHaveLength(1);
             expect(String(deliveries()[0]?.body.chat_id)).toBe(String(CHAT_ID));
             expect(deliveries()[0]?.body.text).toBe(REPLY_MARKER);
-            evidence.admitted = {
-              senderId,
-              modelRequests: requests.length,
-              outboundReplies: 1,
-              text: REPLY_MARKER,
-            };
-            evidence.passed = true;
           } finally {
-            const outputDir = path.join(
-              repoRoot,
-              ".artifacts/qa-e2e/telegram-inherited-policy",
-              String(evidence.head),
-              groupPolicy,
+            await settleTelegramCleanup(
+              () => stopQaGatewayFixture(gatewayOwner),
+              () => mock.stop(),
             );
-            try {
-              evidence.rejectionLog =
-                gateway
-                  ?.logs()
-                  .split("\n")
-                  .filter((line) => line.includes(REJECTION)) ?? [];
-              evidence.modelRequests = (await modelRequests()).map((request) => ({
-                requestKind: request.requestKind,
-                outcome: request.outcome,
-                admittedMarker: request.allInputText.includes(REPLY_MARKER),
-                rejectedMarker: request.allInputText.includes(REJECTED_MARKER),
-              }));
-              evidence.inflightRequests = (await inflightRequests()).length;
-              evidence.outboundReplies = deliveries().map((call) => ({
-                chatId: call.body.chat_id,
-                text: call.body.text,
-              }));
-              evidence.telegramSessions = gateway ? await telegramSessions() : [];
-              await fs.mkdir(outputDir, { recursive: true });
-              await fs.writeFile(
-                path.join(outputDir, "verdict.json"),
-                `${JSON.stringify(evidence, null, 2)}\n`,
-              );
-              console.log(`TELEGRAM_AUTHORITY_CHAIN ${JSON.stringify(evidence)}`);
-            } finally {
-              try {
-                await stopQaGatewayFixture(gatewayOwner, {
-                  preserveToDir: path.join(outputDir, "gateway"),
-                });
-              } finally {
-                await mock.stop();
-              }
-            }
           }
         }),
     );

@@ -8,78 +8,94 @@ struct VoiceWakeOverlayView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            HStack(alignment: .top, spacing: 8) {
-                if self.controller.model.isEditing {
-                    TranscriptTextView(
-                        text: Binding(
-                            get: { self.controller.model.text },
-                            set: { self.controller.updateText($0) }),
-                        attributed: self.controller.model.attributed,
-                        onBeginEditing: {
-                            self.controller.userBeganEditing()
-                        },
-                        onEscape: {
-                            self.controller.cancelEditingAndDismiss()
-                        },
-                        onEndEditing: {
-                            self.controller.endEditing()
-                        },
-                        onSend: {
-                            self.controller.requestSend()
-                        })
-                        .focused(self.$textFocused)
-                        .frame(maxWidth: .infinity, minHeight: 32, maxHeight: .infinity, alignment: .topLeading)
-                        .id("editing")
-                } else {
-                    VibrantLabelView(
-                        attributed: self.controller.model.attributed,
-                        onTap: {
-                            self.controller.userBeganEditing()
-                            self.textFocused = true
-                        })
-                        .frame(maxWidth: .infinity, minHeight: 32, maxHeight: .infinity, alignment: .topLeading)
-                        .focusable(false)
-                        .id("display")
-                }
-
-                Button {
-                    self.controller.requestSend()
-                } label: {
-                    let sending = self.controller.model.isSending
-                    let level = self.controller.model.level
-                    ZStack {
-                        GeometryReader { geo in
-                            let width = geo.size.width
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.accentColor.opacity(0.12))
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.accentColor.opacity(0.25))
-                                .frame(width: width * max(0, min(1, level)), alignment: .leading)
-                                .animation(.easeOut(duration: 0.08), value: level)
-                        }
-                        .frame(height: 32)
-
-                        ZStack {
-                            Image(systemName: "paperplane.fill")
-                                .opacity(sending ? 0 : 1)
-                                .scaleEffect(sending ? 0.5 : 1)
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                                .opacity(sending ? 1 : 0)
-                                .scaleEffect(sending ? 1.05 : 0.8)
-                        }
-                        .imageScale(.small)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .top, spacing: 8) {
+                    if self.controller.model.isEditing {
+                        TranscriptTextView(
+                            text: Binding(
+                                get: { self.controller.model.text },
+                                set: { self.controller.updateText($0) }),
+                            attributed: self.controller.model.attributed,
+                            onBeginEditing: {
+                                self.controller.userBeganEditing()
+                            },
+                            onEscape: {
+                                self.controller.cancelEditingAndDismiss()
+                            },
+                            onEndEditing: {
+                                self.controller.endEditing()
+                            },
+                            onSend: {
+                                self.controller.requestSend()
+                            })
+                            .focused(self.$textFocused)
+                            .frame(maxWidth: .infinity, minHeight: 32, maxHeight: .infinity, alignment: .topLeading)
+                            .id("editing")
+                    } else {
+                        VibrantLabelView(
+                            attributed: self.controller.model.attributed,
+                            onTap: {
+                                self.controller.userBeganEditing()
+                                self.textFocused = true
+                            })
+                            .frame(maxWidth: .infinity, minHeight: 32, maxHeight: .infinity, alignment: .topLeading)
+                            .focusable(false)
+                            .id("display")
+                            .allowsHitTesting(!self.controller.model.isSending && !self.controller.model.isSent)
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .frame(width: 32, height: 32)
-                    .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .animation(.spring(response: 0.35, dampingFraction: 0.78), value: sending)
+
+                    Button {
+                        self.controller.requestSend()
+                    } label: {
+                        let sending = self.controller.model.isSending
+                        let sent = self.controller.model.isSent
+                        let level = self.controller.model.level
+                        ZStack {
+                            GeometryReader { geo in
+                                let width = geo.size.width
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Color.accentColor.opacity(0.12))
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Color.accentColor.opacity(0.25))
+                                    .frame(width: width * max(0, min(1, level)), alignment: .leading)
+                                    .animation(.easeOut(duration: 0.08), value: level)
+                            }
+                            .frame(height: 32)
+
+                            ZStack {
+                                if sending {
+                                    ProgressView().controlSize(.small)
+                                }
+                                Image(systemName: "paperplane.fill")
+                                    .opacity(sending || sent ? 0 : 1)
+                                    .scaleEffect(sending || sent ? 0.5 : 1)
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .opacity(sent ? 1 : 0)
+                                    .scaleEffect(sent ? 1.05 : 0.8)
+                            }
+                            .imageScale(.small)
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .frame(width: 32, height: 32)
+                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .animation(.spring(response: 0.35, dampingFraction: 0.78), value: sent)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Send message")
+                    .accessibilityLabel("Send message")
+                    .disabled(
+                        !self.controller.model.forwardEnabled || self.controller.model.isSending ||
+                            self.controller.model.isSent)
+                    .keyboardShortcut(.return, modifiers: [.command])
                 }
-                .buttonStyle(.plain)
-                .help("Send message")
-                .accessibilityLabel("Send message")
-                .disabled(!self.controller.model.forwardEnabled || self.controller.model.isSending)
-                .keyboardShortcut(.return, modifiers: [.command])
+                if let error = self.controller.model.sendError {
+                    Text("Send failed. Click Send to retry.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(height: 32, alignment: .leading)
+                        .help(error)
+                }
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 10)

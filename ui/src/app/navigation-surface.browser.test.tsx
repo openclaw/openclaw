@@ -51,7 +51,8 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
       </div>
     ));
 
-    await vi.waitFor(() => expect(document.querySelector(".sidebar-update-card")).not.toBeNull());
+    await vi.dynamicImportSettled();
+    expect(document.querySelector(".refresh-notice")).not.toBeNull();
     const refreshCardHost = document.querySelector("openclaw-sidebar-update-card");
     const attentionHost = document.querySelector<
       HTMLElement & { updateComplete: Promise<boolean> }
@@ -59,7 +60,7 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
     await attentionHost?.updateComplete;
     expect(attentionHost).not.toBeNull();
     expect(attentionHost?.querySelector(".sidebar-issues-button")).toBeNull();
-    const refreshCard = refreshCardHost?.querySelector<HTMLElement>(".sidebar-update-card");
+    const refreshCard = refreshCardHost?.querySelector<HTMLElement>(".refresh-notice");
     const buttons = Array.from(
       document.querySelectorAll<HTMLElement>(".shell-chrome-controls__button"),
     );
@@ -73,8 +74,9 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
       expect(bounds.width).toBeGreaterThan(0);
       expect(overlaps(cardBounds, bounds)).toBe(false);
     }
+    // The notice floats at the bottom-left, below the collapsed chrome cluster.
     expect(
-      cardBounds.left - Math.max(...buttonBounds.map((bounds) => bounds.right)),
+      cardBounds.top - Math.max(...buttonBounds.map((bounds) => bounds.bottom)),
     ).toBeGreaterThanOrEqual(8);
   });
 });

@@ -12,7 +12,7 @@ import { createRemoteShellSandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { createBridge, callTool } from "./dynamic-tools.test-support.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test-support.js";
 
@@ -220,16 +220,13 @@ it("preserves completion-only sandbox exec when policy denies process", async ()
   expect(execTool.catalogMode).toBe("direct-only");
   expect(execTool.parameters).not.toHaveProperty("properties.background");
   expect(execTool.parameters).not.toHaveProperty("properties.yieldMs");
-  const bridge = createCodexDynamicToolBridge({ tools, signal: new AbortController().signal });
+  const bridge = createBridge(tools);
   const onAgentToolResult = vi.fn();
-  const response = await bridge.handleToolCall(
-    {
-      threadId: "sandbox-thread",
-      turnId: "sandbox-turn",
-      callId: "sandbox-exec-only",
-      tool: "sandbox_exec",
-      arguments: { command: "echo sandbox request", background: true, yieldMs: 1 },
-    },
+  const response = await callTool(
+    bridge,
+    "sandbox_exec",
+    { command: "echo sandbox request", background: true, yieldMs: 1 },
+    "sandbox-exec-only",
     { onAgentToolResult },
   );
 

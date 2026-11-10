@@ -1,0 +1,3 @@
+# Regression coverage for source-specific package selection, barrel exports,
+# unresolved bindings, deletions, and metadata fallback across packages/plugins.
+37

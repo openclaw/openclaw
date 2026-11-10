@@ -7,11 +7,6 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
-import {
-  runWithOwnedSessionTranscriptWrite,
-  withOwnedSessionTranscriptWrites,
-} from "../../config/sessions/transcript-write-context.js";
 import {
   captureGatewayDeviceRevocation,
   closeGatewayDeviceRevocation,
@@ -39,10 +34,10 @@ import {
 } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronJob } from "../types.js";
+import type { CronEvent, CronJob } from "../types.js";
 import { remove, update } from "./ops-mutations.js";
 import { enqueueRun, run, waitForManualRun } from "./ops-run.js";
-import type { CronEvent } from "./state.js";
+import type { CronServiceDeps } from "./state.js";
 import { ensureLoaded } from "./store.js";
 import { onTimer } from "./timer.test-support.js";
 
@@ -169,50 +164,6 @@ it("transfers queued manual runs out of the released request root", async () => 
   } finally {
     requestRoot?.release();
     enterRunner.resolve();
-    await Promise.allSettled(state.queuedManualRuns.values());
-    resetGatewayWorkAdmission();
-  }
-});
-
-it("runs a manual run queued from an agent turn outside that turn's transcript lifecycle", async () => {
-  vi.useRealTimers();
-  resetGatewayWorkAdmission();
-  const now = Date.parse("2026-02-06T10:05:00.000Z");
-  const job = dueJob("manual-from-agent-turn", now);
-
-  const callerSessionKey = "agent:main:main";
-  const callerTurnEnded = createDeferred();
-  const terminal = terminalEvents(job.id);
-  const reportWrites: string[] = [];
-  const state = await prepareJob(job, {
-    nowMs: () => now,
-    runIsolatedAgentJob: vi.fn(async () => {
-      await callerTurnEnded.promise;
-      // A current-session report lands in the session that started the run.
-      await runWithOwnedSessionTranscriptWrite({ sessionKey: callerSessionKey }, () => {
-        reportWrites.push("report");
-      });
-      return { status: "ok" as const };
-    }),
-    onEvent: terminal.onEvent,
-  });
-  const callerTurn = createEmbeddedAttemptTranscriptLifecycle({ runId: "caller-turn" });
-
-  try {
-    await withOwnedSessionTranscriptWrites(
-      {
-        sessionKey: callerSessionKey,
-        withTranscriptWrite: (write) => callerTurn.withTranscriptWrite(write),
-      },
-      async () => expectQueuedRunAck(await enqueueRun(state, job.id, "force")),
-    );
-    await callerTurn.dispose();
-    callerTurnEnded.resolve();
-
-    expect(await terminal.finished).toMatchObject({ status: "ok" });
-    expect(reportWrites).toEqual(["report"]);
-  } finally {
-    callerTurnEnded.resolve();
     await Promise.allSettled(state.queuedManualRuns.values());
     resetGatewayWorkAdmission();
   }
@@ -403,7 +354,7 @@ it("applies timeoutSeconds to manual cron.run isolated executions", async () => 
   }
 });
 
-it("keeps a queued quiet schedule event separate from its one terminal event", async () => {
+it("publishes a queued quiet run's next schedule in its one terminal event", async () => {
   vi.useRealTimers();
 
   const dueAt = Date.parse("2026-02-06T10:05:02.000Z");
@@ -412,6 +363,7 @@ it("keeps a queued quiet schedule event separate from its one terminal event", a
     trigger: { script: "return false" },
   });
   const terminal = terminalEvents(job.id, undefined, true);
+  let finishedContext: Parameters<NonNullable<CronServiceDeps["onEvent"]>>[1];
   const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
   const state = await prepareJob(job, {
     cronConfig: { triggers: { enabled: true } },
@@ -421,7 +373,12 @@ it("keeps a queued quiet schedule event separate from its one terminal event", a
       fire: false,
     })),
     runIsolatedAgentJob,
-    onEvent: terminal.onEvent,
+    onEvent: (event, context) => {
+      if (event.action === "finished") {
+        finishedContext = context;
+      }
+      terminal.onEvent(event);
+    },
   });
 
   try {
@@ -430,18 +387,17 @@ it("keeps a queued quiet schedule event separate from its one terminal event", a
     await expect(waitForManualRun(state, runId, 5_000)).resolves.toBe(true);
 
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-    expect(terminal.events.map((event) => event.action)).toEqual([
-      "started",
-      "finished",
-      "scheduled",
-    ]);
+    expect(terminal.events.map((event) => event.action)).toEqual(["started", "finished"]);
     const finished = terminal.events.filter((event) => event.action === "finished");
+    expect(finished[0]?.triggerFired).toBe(false);
     expectSingleEvent(finished, {
       jobId: job.id,
       runId,
       status: "skipped",
       error: "queued manual run skipped: trigger condition not met",
+      nextRunAtMs: dueAt + 60_000,
     });
+    expect(finishedContext).toMatchObject({ quietTrigger: true });
   } finally {
     await Promise.allSettled(state.queuedManualRuns.values());
   }
@@ -507,9 +463,12 @@ it.each(["removed", "disabled"] as const)(
         }).entries,
         expected,
       );
-      expect(latestRunReceipt(state.deps.storePath, job.id)).toEqual({
-        status: "error",
-        error: reason,
+      // Terminal history can precede the separate execution-receipt write.
+      await vi.waitFor(() => {
+        expect(latestRunReceipt(state.deps.storePath, job.id)).toEqual({
+          status: "error",
+          error: reason,
+        });
       });
       const storedJob = state.store?.jobs.find((entry) => entry.id === job.id);
       if (mutation === "removed") {

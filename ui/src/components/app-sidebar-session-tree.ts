@@ -24,12 +24,14 @@ function summarizeChildren(
   const childAttention: SidebarSessionAttention[] = [];
   let unreadChildCount = 0;
   let runningChildCount = 0;
-  let failedChildCount = 0;
   let queuedChildCount = 0;
   let workspaceConflictCount = 0;
   const unreadHiddenRuns: SidebarRecentSession[] = [];
   for (const child of children) {
     if (onlySubagents && !isSubagentSessionKey(child.key)) {
+      // Persistent children keep their own activity, but their hidden runs still fold upward.
+      runningChildCount += child.subagentSummary?.runningChildCount ?? 0;
+      queuedChildCount += child.subagentSummary?.queuedChildCount ?? 0;
       continue;
     }
     const descendants = onlySubagents ? child.subagentSummary : child;
@@ -39,17 +41,12 @@ function summarizeChildren(
           child.subagentSummary?.attention ?? SIDEBAR_SESSION_NO_ATTENTION,
         ])
       : child.attention;
-    childAttention.push(
-      attention.kind === "error" && attention.childLabel === undefined
-        ? { ...attention, childLabel: child.label }
-        : attention,
-    );
+    childAttention.push(attention);
     unreadChildCount += Number(child.unread) + (descendants?.unreadChildCount ?? 0);
     const visuallyActive = child.isRunVisuallyActive ?? child.hasActiveRun;
-    runningChildCount += (visuallyActive ? 1 : 0) + (descendants?.runningChildCount ?? 0);
-    failedChildCount +=
-      Number(child.status === "failed" || child.status === "timeout") +
-      (descendants?.failedChildCount ?? 0);
+    runningChildCount +=
+      Number(visuallyActive || (child.backgroundProcessCount ?? 0) > 0) +
+      (descendants?.runningChildCount ?? 0);
     queuedChildCount +=
       Number(visuallyActive && child.status === "queued") + (descendants?.queuedChildCount ?? 0);
     workspaceConflictCount += onlySubagents
@@ -63,10 +60,12 @@ function summarizeChildren(
     }
   }
   return {
-    attention: summarizeSidebarSessionAttention([...childAttention, ...unloadedAttention]),
+    // Terminal failures belong to the child transcript, not the parent's current state.
+    attention: summarizeSidebarSessionAttention(
+      [...childAttention, ...unloadedAttention].filter((attention) => attention.kind !== "error"),
+    ),
     unreadChildCount,
     runningChildCount,
-    failedChildCount,
     queuedChildCount,
     workspaceConflictCount,
     // Hidden runs have no row to open, so their parent acknowledges them.
@@ -86,6 +85,8 @@ export function projectSessionTree(params: {
   rowsByKey: ReadonlyMap<string, GatewaySessionRow>;
   loadingChildKeys: ReadonlySet<string>;
   isChildSessionVisible?: (parentKey: string, childKey: string, row?: GatewaySessionRow) => boolean;
+  /** Orders each parent's children like the roots; omitted keeps link order. */
+  compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
   resolveAttention: (row: Pick<GatewaySessionRow, "key" | "agentId">) => SidebarSessionAttention;
   toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession;
 }): SidebarRecentSession[] {
@@ -94,6 +95,7 @@ export function projectSessionTree(params: {
     mainSessionKeys = new Set<string>(),
     rowsByKey,
     loadingChildKeys,
+    compareSessions,
     resolveAttention,
     toSidebarSession,
   } = params;
@@ -104,6 +106,7 @@ export function projectSessionTree(params: {
     !isSubagentSessionKey(row.key);
 
   const nestedKeys = new Set<string>();
+  const sourceRows = new WeakMap<SidebarRecentSession, GatewaySessionRow>();
   const build = (
     row: GatewaySessionRow,
     isChild: boolean,
@@ -136,9 +139,13 @@ export function projectSessionTree(params: {
     });
     // Runs contribute to the same transitive fold as persistent children, but
     // only persistent sessions participate in sidebar navigation and expansion.
-    const children = descendants.flatMap((child) =>
+    const foldedChildren = descendants.flatMap((child) =>
       isSubagentSessionKey(child.key) ? child.children : [child],
     );
+    // Link order follows session keys; folded run children join their siblings here.
+    const children = compareSessions
+      ? foldedChildren.toSorted((a, b) => compareSessions(sourceRows.get(a)!, sourceRows.get(b)!))
+      : foldedChildren;
     children.forEach((child) => nestedKeys.add(child.key));
     // Aliased map entries can share row.key with an ancestor; only remove our own entry.
     if (ownsAncestor) {
@@ -180,7 +187,7 @@ export function projectSessionTree(params: {
       subagentSummary.runningChildCount,
       hasUnloadedDescendantRun && summary.runningChildCount === 0 ? 1 : 0,
     );
-    return {
+    const session: SidebarRecentSession = {
       ...projected,
       ...summary,
       ownAttention: projected.attention,
@@ -198,6 +205,8 @@ export function projectSessionTree(params: {
       workspaceConflictCount: workspaceConflictCount || undefined,
       runningChildCount: Math.max(summary.runningChildCount, hasUnloadedDescendantRun ? 1 : 0),
     };
+    sourceRows.set(session, row);
+    return session;
   };
 
   const rootKeys = new Set(roots.filter((row) => row.archived !== true).map((row) => row.key));

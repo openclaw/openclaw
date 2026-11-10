@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { resolveCronStoreKeyAsync } from "../cron/store/paths.js";
 import { getPairedDevice, withPairedDeviceRecords } from "../infra/device-pairing.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -151,3 +152,59 @@ it.each([false, true])(
     );
   },
 );
+
+it("refreshes health from the cron partition currently published by the kernel", async () => {
+  const fixture = await createKernelFixture("gateway-health-cron-partition", {
+    layout: "home",
+  });
+  const { state } = fixture;
+  let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+  const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  try {
+    await fixture.configure({
+      agents: {
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {} },
+      },
+    });
+    kernel = await fixture.open();
+    const previous = kernel.runtimeState.cronState;
+    const firstPartition = await resolveCronStoreKeyAsync(previous.storePath);
+    const secondPartition = state.statePath("health-second-partition.json");
+    reads.mockClear();
+    const partitions = () =>
+      reads.mock.calls.flatMap(([, command]) =>
+        command.type === "automationProactive.jobs" ? [command.input.storeKey] : [],
+      );
+    const { gatewayRequestContext } = kernel;
+    const refresh = () =>
+      gatewayRequestContext.refreshHealthSnapshot({
+        probe: false,
+        includeSensitive: true,
+      });
+    await refresh();
+    expect(partitions()).toEqual([firstPartition]);
+
+    await previous.cron.start();
+    reads.mockClear();
+    for (let index = 0; index < 2; index += 1) {
+      await refresh();
+    }
+    expect(partitions()).toEqual([]);
+
+    // Hot reload uses this same owner publication; retained request contexts must follow it.
+    kernel.kernel.swapCronState({
+      ...previous,
+      storePath: secondPartition,
+      readHeartbeatSummary: undefined,
+    });
+    try {
+      await refresh();
+      expect(partitions()).toEqual([secondPartition]);
+    } finally {
+      kernel.kernel.swapCronState(previous);
+    }
+  } finally {
+    await closeKernelFixture(kernel, state, () => reads.mockRestore());
+  }
+});

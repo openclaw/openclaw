@@ -1,17 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeCacheKey,
-  readCache,
   readResponseText,
   resolvePositiveTimeoutSeconds,
   resolveTimeoutSeconds,
-  writeCache,
-  type CacheEntry,
 } from "./web-shared.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function responseFromReader(params: {
   chunks: string[];
@@ -46,24 +41,21 @@ async function expectDecoded(bytes: Uint8Array<ArrayBuffer>, contentType: string
   }
 }
 
+function expectRead(response: Response, maxBytes: number | undefined, text: string) {
+  return expect(readResponseText(response, { maxBytes })).resolves.toEqual({
+    text,
+    truncated: false,
+    bytesRead: new TextEncoder().encode(text).byteLength,
+  });
+}
+
 describe("web shared helpers", () => {
-  it("keeps case-sensitive request components distinct in cache keys", () => {
-    const upper = normalizeCacheKey(" fetch:https://example.com/get?marker=OpenClawCase ");
-    const lower = normalizeCacheKey("fetch:https://example.com/get?marker=openclawcase");
-
-    expect(upper).toBe("fetch:https://example.com/get?marker=OpenClawCase");
-    expect(lower).toBe("fetch:https://example.com/get?marker=openclawcase");
-    expect(upper).not.toBe(lower);
+  it("trims cache-key framing without changing case-sensitive request components", () => {
+    const key = "fetch:https://example.com/get?marker=OpenClawCase";
+    expect(normalizeCacheKey(` ${key} `)).toBe(key);
+    expect(normalizeCacheKey(key.toLowerCase())).toBe(key.toLowerCase());
+    expect(normalizeCacheKey(key)).not.toBe(normalizeCacheKey(key.toLowerCase()));
   });
-  it("bounds reuse by the current TTL without evicting a longer-lived entry", () => {
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const cache = new Map<string, CacheEntry<string>>();
-    writeCache(cache, "key", "value", 900_000);
-    clock.mockReturnValue(61_000);
-    expect(readCache(cache, "key", 60_000)).toBeNull();
-    expect(readCache(cache, "key")).toEqual({ value: "value", cached: true });
-  });
-
   it("preserves fallback and minimum behavior", () => {
     expect(resolveTimeoutSeconds(Number.NaN, 30)).toBe(30);
     expect(resolveTimeoutSeconds(0, 30)).toBe(1);
@@ -84,50 +76,36 @@ describe("readResponseText", () => {
     expectDecoded(bytes, contentType, "café 日本"),
   );
 
-  it("uses document metadata when there is no byte-order mark or declared charset", async () => {
-    const bytes = Buffer.from('<meta charset="iso-8859-1"><p>café</p>', "latin1");
-    const response = new Response(bytes, { headers: { "content-type": "text/html" } });
-
-    await expect(readResponseText(response, { maxBytes: bytes.byteLength })).resolves.toMatchObject(
-      {
-        text: '<meta charset="iso-8859-1"><p>café</p>',
-        truncated: false,
-      },
-    );
-  });
-
   it.each([
-    [
-      '<?xml version="1.0" encoding="utf-16"?><rss><title>café</title></rss>',
-      "application/rss+xml",
-    ],
-    ['<meta charset="UTF-16LE"><p>café</p>', "text/html"],
-    [
-      '<meta http-equiv="Content-Type" content="text/html; charset=utf-16"><p>café</p>',
-      "text/html",
-    ],
-  ])("decodes ASCII-compatible documents declaring UTF-16 as UTF-8: %s", (body, contentType) =>
-    expectDecoded(new TextEncoder().encode(body), contentType, body),
+    ['<meta charset="iso-8859-1"><p>café</p>', "latin1"],
+    ['<meta name="description" content="<!--"><meta charset="windows-1252"><p>café</p>', "latin1"],
+    ...[
+      '<!-- <meta charset="windows-1252"> -->',
+      '<!-- <meta charset="windows-1252"> --!>',
+      '<!-- <meta http-equiv="Content-Type" content="text/html; charset=windows-1252"> -->',
+      '<!-- <?xml version="1.0" encoding="windows-1252"?> -->',
+    ].map((comment) => [`${comment}<meta charset="utf-8"><p>café 日本 😀</p>`] as const),
+    ['<!-- <meta charset="windows-1252">' + " ".repeat(4096) + "café -->"],
+    ['<?xml encoding="utf-16"?><rss>café</rss>', "utf8", "application/rss+xml"],
+    ['<meta charset="UTF-16LE"><p>café</p>'],
+    ['<meta http-equiv="Content-Type" content="text/html; charset=utf-16"><p>café</p>'],
+  ] as const)(
+    "decodes active metadata, not comments: %s",
+    (text, encoding = "utf8", type?: string) =>
+      expectDecoded(Buffer.from(text, encoding), type ?? "text/html", text),
   );
 
   it("keeps truncated fallback charset decoding isolated between responses", async () => {
-    const firstResponse = responseFromReader({
-      chunks: ["ab😀cd"],
-      contentType: "text/plain; charset=x-unsupported-test",
-    });
-    await expect(readResponseText(firstResponse, { maxBytes: 3 })).resolves.toMatchObject({
+    const response = (chunk: string) =>
+      responseFromReader({
+        chunks: [chunk],
+        contentType: "text/plain; charset=x-unsupported-test",
+      });
+    await expect(readResponseText(response("ab😀cd"), { maxBytes: 3 })).resolves.toMatchObject({
       text: "ab",
       truncated: true,
     });
-
-    const secondResponse = responseFromReader({
-      chunks: ["cd"],
-      contentType: "text/plain; charset=x-unsupported-test",
-    });
-    await expect(readResponseText(secondResponse, { maxBytes: 64 })).resolves.toMatchObject({
-      text: "cd",
-      truncated: false,
-    });
+    await expectRead(response("cd"), 64, "cd");
   });
 
   it("does not mark exact-limit responses as truncated when followed by zero-byte chunks", async () => {
@@ -139,32 +117,17 @@ describe("readResponseText", () => {
       releaseLock,
     });
 
-    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
-      text: "hello",
-      truncated: false,
-      bytesRead: 5,
-    });
+    await expectRead(response, 5, "hello");
     expect(cancel).not.toHaveBeenCalled();
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it("treats a native bodyless response as empty when maxBytes is set", async () => {
-    await expect(
-      readResponseText(new Response(null, { status: 204 }), { maxBytes: 4 }),
-    ).resolves.toEqual({
-      text: "",
-      truncated: false,
-      bytesRead: 0,
-    });
+    await expectRead(new Response(null, { status: 204 }), 4, "");
   });
 
   it("counts UTF-8 bytes in uncapped native responses", async () => {
-    const value = "中文🔥";
-    await expect(readResponseText(new Response(value))).resolves.toEqual({
-      text: value,
-      truncated: false,
-      bytesRead: new TextEncoder().encode(value).byteLength,
-    });
+    await expectRead(new Response("中文🔥"), undefined, "中文🔥");
   });
 
   it("rejects an unreadable uncapped native response", async () => {

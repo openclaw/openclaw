@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { GetReplyOptions } from "../types.js";
 import {
+  createRunResult,
   createMinimalRunAgentTurnParams,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
@@ -14,9 +15,9 @@ function mockEvents(
 ) {
   state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
     for (const event of events) {
-      await params.onAgentEvent?.(event);
+      await params.onAgentEvent?.(structuredClone(event));
     }
-    return { payloads: [{ text: "final" }], meta: {} };
+    return createRunResult("final");
   });
 }
 
@@ -42,79 +43,64 @@ it("forwards plan, approval, command output, and patch events", async () => {
   const onApprovalEvent = vi.fn();
   const onCommandOutput = vi.fn();
   const onPatchSummary = vi.fn();
+  const steps = [
+    { step: "Inspect code", status: "completed" },
+    { step: "Patch code", status: "in_progress" },
+    { step: "Run tests", status: "pending" },
+  ];
+  const plan = {
+    phase: "update",
+    title: "Assistant proposed a plan",
+    explanation: "Inspect code, patch it, run tests.",
+  };
+  const approval = {
+    phase: "requested",
+    kind: "exec",
+    status: "pending",
+    title: "Command approval requested",
+    approvalId: "approval-1",
+  };
+  const command = {
+    itemId: "command:exec-1",
+    phase: "delta",
+    title: "command ls",
+    toolCallId: "exec-1",
+    output: "README.md",
+  };
+  const patch = {
+    itemId: "patch:patch-1",
+    phase: "end",
+    title: "apply patch",
+    toolCallId: "patch-1",
+    added: ["a.ts"],
+    modified: ["b.ts"],
+    deleted: [],
+    summary: "1 added, 1 modified",
+  };
   mockEvents(
     {
       stream: "plan",
       data: {
-        phase: "update",
-        title: "Assistant proposed a plan",
-        explanation: "Inspect code, patch it, run tests.",
-        steps: [
-          { step: "Inspect code", status: "completed" },
-          { step: "Patch code", status: "in_progress" },
-          { step: "Run tests", status: "pending" },
-          { step: "Malformed", status: "unknown" },
-          "legacy string",
-        ],
+        ...plan,
+        steps: [...steps, { step: "Malformed", status: "unknown" }, "legacy string"],
       },
     },
-    {
-      stream: "approval",
-      data: {
-        phase: "requested",
-        kind: "exec",
-        status: "pending",
-        title: "Command approval requested",
-        approvalId: "approval-1",
-      },
-    },
-    {
-      stream: "command_output",
-      data: {
-        itemId: "command:exec-1",
-        phase: "delta",
-        title: "command ls",
-        toolCallId: "exec-1",
-        output: "README.md",
-      },
-    },
-    {
-      stream: "patch",
-      data: {
-        itemId: "patch:patch-1",
-        phase: "end",
-        title: "apply patch",
-        toolCallId: "patch-1",
-        added: ["a.ts"],
-        modified: ["b.ts"],
-        deleted: [],
-        summary: "1 added, 1 modified",
-      },
-    },
+    { stream: "approval", data: approval },
+    { stream: "command_output", data: command },
+    { stream: "patch", data: patch },
   );
 
   await execute({ onPlanUpdate, onApprovalEvent, onCommandOutput, onPatchSummary });
 
   expect(onPlanUpdate).toHaveBeenCalledWith({
-    phase: "update",
-    title: "Assistant proposed a plan",
-    explanation: "Inspect code, patch it, run tests.",
-    steps: [
-      { step: "Inspect code", status: "completed" },
-      { step: "Patch code", status: "in_progress" },
-      { step: "Run tests", status: "pending" },
-      { step: "legacy string", status: "pending" },
-    ],
+    ...plan,
+    steps: [...steps, { step: "legacy string", status: "pending" }],
     source: undefined,
   });
   expect(onApprovalEvent).toHaveBeenCalledWith({
-    phase: "requested",
-    kind: "exec",
-    status: "pending",
-    title: "Command approval requested",
+    ...approval,
     itemId: undefined,
     toolCallId: undefined,
-    approvalId: "approval-1",
     approvalSlug: undefined,
     command: undefined,
     host: undefined,
@@ -123,27 +109,16 @@ it("forwards plan, approval, command output, and patch events", async () => {
     message: undefined,
   });
   expect(onCommandOutput).toHaveBeenCalledWith({
-    itemId: "command:exec-1",
-    phase: "delta",
-    title: "command ls",
-    toolCallId: "exec-1",
+    ...command,
     name: undefined,
-    output: "README.md",
     status: undefined,
     exitCode: undefined,
     durationMs: undefined,
     cwd: undefined,
   });
   expect(onPatchSummary).toHaveBeenCalledWith({
-    itemId: "patch:patch-1",
-    phase: "end",
-    title: "apply patch",
-    toolCallId: "patch-1",
+    ...patch,
     name: undefined,
-    added: ["a.ts"],
-    modified: ["b.ts"],
-    deleted: [],
-    summary: "1 added, 1 modified",
   });
 });
 
@@ -159,7 +134,7 @@ it("projects transient model waits and clears them across later model calls", as
     ]) {
       await params.onAgentEvent?.({ stream: "run_status", data });
     }
-    return { payloads: [{ text: "final" }], meta: {} };
+    return createRunResult("final");
   });
 
   await execute({ onItemEvent });

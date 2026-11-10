@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
-import type { LlmCompleteParams } from "./types-core.js";
+import type { LlmCompleteParams } from "./runtime-llm.types.js";
 
 const mocks = vi.hoisted(() => ({
   acquire:

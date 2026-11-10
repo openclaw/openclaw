@@ -31,7 +31,7 @@ import {
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import { resolveCodexDynamicToolsLoadingForRuntime } from "./dynamic-tool-profile.js";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { createBridge } from "./dynamic-tools.test-support.js";
 import {
   createCodexTestHostCapabilities,
   setCodexTestToolFactory,
@@ -99,13 +99,6 @@ async function nativeSurface(
 
 function buildTools(options: Parameters<typeof buildDynamicToolsForTest>[2] = {}) {
   return buildDynamicToolsForTest(params, workspaceDir, options);
-}
-
-function createBridge(
-  tools: AnyAgentTool[],
-  options: Omit<Parameters<typeof createCodexDynamicToolBridge>[0], "tools" | "signal"> = {},
-) {
-  return createCodexDynamicToolBridge({ tools, signal: new AbortController().signal, ...options });
 }
 
 function mockTools(names: string[] = [], extra: AnyAgentTool[] = []) {
@@ -202,7 +195,7 @@ it("binds a resolver-backed constructed tool surface exactly once", async () => 
   expect(factory).toHaveBeenCalledOnce();
   expect(bindToolSurface).toHaveBeenCalledExactlyOnceWith(
     expect.arrayContaining([expect.objectContaining({ name: "read" })]),
-    { cwd: effectiveCwd },
+    { cwd: effectiveCwd, nativeLocalExecution: true },
   );
   expect(tools).toEqual([]);
 });
@@ -1030,20 +1023,19 @@ it("quarantines exposed Codex memory writes and edits after a network tool", asy
 
   const tools = await buildTools({ sandbox: null as never });
   const tool = (name: string) => toolNamed(tools, name);
-  await tool("write").execute("codex-trusted-write", {
-    path: "memory/trusted.md",
-    content: "owner note\n",
-  });
+  const write = (surface: AnyAgentTool[], name: string, content: string) =>
+    toolNamed(surface, "write").execute(`codex-${name}-write`, {
+      path: `memory/${name}.md`,
+      content,
+    });
+  await write(tools, "trusted", "owner note\n");
   await tool("web_fetch").execute("codex-network-call", {});
   expect(params.onToolOutcome).toHaveBeenCalledWith(
     expect.objectContaining({ toolName: "web_fetch", resultContentSource: "network" }),
   );
   expect(params.isTurnTainted()).toBe(true);
 
-  await tool("write").execute("codex-network-write", {
-    path: "memory/network.md",
-    content: "network note\n",
-  });
+  await write(tools, "network", "network note\n");
   await tool("edit").execute("codex-network-edit", {
     path: "memory/trusted.md",
     edits: [{ oldText: "owner note", newText: "network edit" }],
@@ -1060,10 +1052,7 @@ it("quarantines exposed Codex memory writes and edits after a network tool", asy
     isTurnTainted: () => false,
   });
   const freshTools = await buildDynamicToolsForTest(fresh, workspaceDir, { sandbox: null });
-  await toolNamed(freshTools, "write").execute("codex-fresh-write", {
-    path: "memory/fresh.md",
-    content: "fresh owner note\n",
-  });
+  await write(freshTools, "fresh", "fresh owner note\n");
 
   const origin = async (relativePath: string) =>
     (await readMemoryArtifactProvenance({ workspaceDir, relativePath }))?.originClass;
@@ -1086,20 +1075,20 @@ it("builds the durable registered-tool superset without loading a provider runti
   );
   runtimePlan.tools.normalize = planNormalize as typeof runtimePlan.tools.normalize;
   params.runtimePlan = runtimePlan;
+  params.disableMessageTool = true;
+  const statusTool = createRuntimeDynamicTool("session_status");
   const messageTool = createRuntimeDynamicTool("message");
-  const heartbeatTool = createRuntimeDynamicTool("heartbeat_respond");
   const invalidTool = {
     ...createRuntimeDynamicTool("invalid_registered_tool"),
     parameters: { type: "array", items: { type: "string" } },
   };
   setCodexTestToolFactory(params, (options) => [
-    messageTool,
-    ...(options?.enableHeartbeatTool === true ? [heartbeatTool, invalidTool] : []),
+    statusTool,
+    ...(options?.disableMessageTool === true ? [] : [messageTool, invalidTool]),
   ]);
 
   const turnTools = await buildTools({ sandbox: null as never });
   const registeredTools = await buildTools({
-    forceHeartbeatTool: true,
     ignoreDisableMessageTool: true,
     ignoreRuntimePlan: true,
     sandbox: null as never,
@@ -1112,11 +1101,11 @@ it("builds the durable registered-tool superset without loading a provider runti
   ]);
   expect(hoisted.normalizeAgentRuntimeTools.mock.calls[1]?.[0]).not.toHaveProperty("runtimeHandle");
   expect(turnTools).toMatchObject([
-    { name: "message", description: `turn:${messageTool.description}` },
+    { name: "session_status", description: `turn:${statusTool.description}` },
   ]);
   expect(registeredTools).toMatchObject([
+    { name: "session_status", description: statusTool.description },
     { name: "message", description: messageTool.description },
-    { name: "heartbeat_respond", description: heartbeatTool.description },
   ]);
 });
 

@@ -1,10 +1,10 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
-import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
+import { createEffect, createMemo, createSignal, isPending, onSettled } from "solid-js";
+import { observeDocumentRootAttributes } from "../lib/reactive/document-root-attributes.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { createDocumentVisibility, createMediaQuery } from "../lib/reactive/platform.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../lib/reactive/theme-branding.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
-import { MascotAnimator } from "./mascot-animator.ts";
+import type { MascotAnimator } from "./mascot-animator.ts";
 import { drawMascot } from "./mascot-canvas.ts";
 import {
   MASCOT_MOODS,
@@ -23,26 +23,34 @@ defineSolidBridge<Props>(
   "openclaw-mascot",
   (props, host) => {
     host.setAttribute("aria-hidden", "true");
-    const branding = projectSource(undefined, {
-      read: currentThemeBranding,
-      subscribe: (_, notify) => subscribeThemeBranding(notify),
-      equality: Object.is,
+    const branding = themeBrandingProjection;
+    const [animationRequested, setAnimationRequested] = createSignal(false);
+    const animation = createMemo(async () => {
+      if (!animationRequested()) {
+        return undefined;
+      }
+      try {
+        const { MascotAnimator } = await import("./mascot-animator.ts");
+        return new MascotAnimator();
+      } catch {
+        // Optional motion can fail independently; the same canvas keeps its static pose.
+        return undefined;
+      }
     });
-    const animator = new MascotAnimator();
+    let animator: MascotAnimator | undefined;
     const [themeRevision, setThemeRevision] = createSignal(0);
     const mood = () => (moods.has(props.mood) ? props.mood : "idle");
     const size = () => (Number.isFinite(props.size) && props.size > 0 ? props.size : 120);
     const reducedMotion = createMediaQuery("(prefers-reduced-motion: reduce)");
     const documentVisible = createDocumentVisibility();
     let animationFrame = 0;
-    let visible = true;
+    let visible = typeof IntersectionObserver === "undefined";
     let canvas: HTMLCanvasElement | undefined;
-    const shouldAnimate = () =>
-      canvas?.isConnected &&
-      branding.read().brandIcon === "claw" &&
-      visible &&
-      !reducedMotion() &&
-      documentVisible();
+    // Native frame/observer callbacks consume the last committed canvas inputs.
+    let drawingSize = 120;
+    let stillPose: MascotPose | undefined;
+    let playbackEnabled = false;
+    const shouldAnimate = () => canvas?.isConnected && visible && playbackEnabled && animator;
     const stopAnimation = () => {
       if (animationFrame) {
         window.cancelAnimationFrame(animationFrame);
@@ -56,23 +64,27 @@ defineSolidBridge<Props>(
         return;
       }
       const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
-      const pixelSize = Math.round(size() * pixelRatio);
+      const pixelSize = Math.round(drawingSize * pixelRatio);
       if (element.width !== pixelSize || element.height !== pixelSize) {
         element.width = pixelSize;
         element.height = pixelSize;
       }
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-      context.clearRect(0, 0, size(), size());
+      context.clearRect(0, 0, drawingSize, drawingSize);
       drawMascot(
         pose,
         mascotPalette(document.documentElement.dataset.themeMode === "light"),
         context,
-        size(),
+        drawingSize,
       );
-      element.style.transform = `translate3d(0, ${(pose.floatOffset * size()) / 120}px, 0)`;
+      element.style.transform = `translate3d(0, ${(pose.floatOffset * drawingSize) / 120}px, 0)`;
     };
-    const draw = (time: number) =>
-      drawPose(reducedMotion() ? staticMascotPose(mood()) : animator.poseAt(time));
+    const draw = (time: number) => {
+      const pose = stillPose ?? animator?.poseAt(time);
+      if (pose) {
+        drawPose(pose);
+      }
+    };
     const renderFrame = (timestamp: number) => {
       animationFrame = 0;
       if (!shouldAnimate()) {
@@ -82,27 +94,42 @@ defineSolidBridge<Props>(
       animationFrame = window.requestAnimationFrame(renderFrame);
     };
     const syncPlayback = () => {
+      if (visible && playbackEnabled) {
+        setAnimationRequested(true);
+      }
       if (!shouldAnimate()) {
         stopAnimation();
-        if (reducedMotion()) {
-          drawPose(staticMascotPose(mood()));
+        if (stillPose) {
+          drawPose(stillPose);
         }
       } else if (!animationFrame) {
         animationFrame = window.requestAnimationFrame(renderFrame);
       }
     };
     const configuration = createMemo(
-      () => [props.mood, props.tease, props.size, branding.read(), themeRevision()] as const,
+      () => [mood(), props.tease, size(), branding.read(), themeRevision()] as const,
     );
     createEffect(
-      () => [configuration(), reducedMotion(), documentVisible()] as const,
-      ([current], previous) => {
+      () =>
+        [
+          configuration(),
+          reducedMotion(),
+          documentVisible(),
+          isPending(animation) ? undefined : animation(),
+        ] as const,
+      ([current, motionReduced, documentIsVisible, loadedAnimator], previous) => {
+        const [currentMood, tease, currentSize, currentBranding] = current;
+        drawingSize = currentSize;
+        animator = loadedAnimator;
+        stillPose = motionReduced || !animator ? staticMascotPose(currentMood) : undefined;
+        playbackEnabled =
+          currentBranding.brandIcon === "claw" && !motionReduced && documentIsVisible;
         // Visibility changes resume playback without resetting the tease timestamp.
-        if (current !== previous?.[0]) {
+        if (current !== previous?.[0] || animator !== previous?.[3]) {
           const time = performance.now() / 1_000;
-          animator.setMood(mood(), time);
-          animator.setTease(props.tease, time);
-          host.style.setProperty("--openclaw-mascot-size", `${size()}px`);
+          animator?.setMood(currentMood, time);
+          animator?.setTease(tease, time);
+          host.style.setProperty("--openclaw-mascot-size", `${currentSize}px`);
           draw(time);
         }
         syncPlayback();
@@ -116,18 +143,18 @@ defineSolidBridge<Props>(
       },
     );
     onSettled(() => {
-      const themeObserver = new MutationObserver(() => setThemeRevision((value) => value + 1));
-      themeObserver.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ["data-theme-mode", "data-theme-mascot"],
-      });
+      const stopTheme = observeDocumentRootAttributes(
+        document,
+        ["data-theme-mode", "data-theme-mascot"],
+        () => setThemeRevision((value) => value + 1),
+      );
       draw(performance.now() / 1_000);
       syncPlayback();
       return () => {
-        themeObserver.disconnect();
+        stopTheme();
+        stopAnimation();
       };
     });
-    onCleanup(stopAnimation);
     return (
       <>
         {branding.read().brandIcon === "claw" ? (

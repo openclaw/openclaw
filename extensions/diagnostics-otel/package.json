@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/diagnostics-otel",
-  "version": "2026.10.5",
+  "version": "2026.11.2",
   "description": "OpenClaw diagnostics OpenTelemetry exporter for metrics, traces, and logs.",
   "repository": {
     "type": "git",
@@ -21,7 +21,7 @@
     "@opentelemetry/sdk-logs": "0.223.0",
     "@opentelemetry/sdk-metrics": "2.12.0",
     "@opentelemetry/sdk-trace-base": "2.12.0",
-    "@opentelemetry/semantic-conventions": "1.43.0"
+    "@opentelemetry/semantic-conventions": "1.44.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -37,10 +37,10 @@
       "minHostVersion": ">=2026.4.25"
     },
     "compat": {
-      "pluginApi": ">=2026.10.5"
+      "pluginApi": ">=2026.11.2"
     },
     "build": {
-      "openclawVersion": "2026.10.5"
+      "openclawVersion": "2026.11.2"
     },
     "release": {
       "publishToClawHub": true,

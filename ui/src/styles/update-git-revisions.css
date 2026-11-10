@@ -9,7 +9,7 @@
   gap: 6px 16px;
   color: var(--muted);
   font-family: var(--font-body);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   white-space: normal;
 }
@@ -29,8 +29,6 @@
 
 .update-run-dialog .update-git-revisions {
   margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
 }
 
 .sidebar-update-card > .update-git-revisions {

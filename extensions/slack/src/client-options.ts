@@ -4,7 +4,6 @@ import {
   addActiveManagedProxyTlsOptions,
   createHttp1EnvHttpProxyAgent,
   captureChannelReadAuthority,
-  captureEffectAuthority,
   resolveFetch,
   resolveEnvHttpProxyAgentOptions,
 } from "openclaw/plugin-sdk/fetch-runtime";
@@ -181,15 +180,11 @@ function fenceSlackReadFetch(
   // Read/lookup clients are operation-local. Capture before the SDK queues or
   // retries, and also honor a caller scope when an unscoped client is reused.
   const assertReadAuthority = captureChannelReadAuthority();
-  const capturedEffect = captureEffectAuthority();
-  return (input, init) => {
-    const effect = capturedEffect.active ? capturedEffect : captureEffectAuthority();
-    return effect.initiate(() => {
-      assertReadAuthority?.();
-      captureChannelReadAuthority()?.();
-      assertDirectAdapterHandoff?.();
-      return slackFetch(input, init);
-    });
+  return async (input, init) => {
+    assertReadAuthority?.();
+    captureChannelReadAuthority()?.();
+    assertDirectAdapterHandoff?.();
+    return slackFetch(input, init);
   };
 }
 

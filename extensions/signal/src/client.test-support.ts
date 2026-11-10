@@ -1,6 +1,34 @@
+import http from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
-import { expect, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+
+export function useSignalHttpServer() {
+  const servers: http.Server[] = [];
+  afterEach(async () => {
+    await Promise.all(
+      servers.splice(0).map(async (server) => {
+        server.closeAllConnections();
+        await server[Symbol.asyncDispose]();
+      }),
+    );
+  });
+  return async (
+    handler: (req: http.IncomingMessage, res: http.ServerResponse) => void | Promise<void>,
+  ) => {
+    const server = http.createServer((req, res) => {
+      void Promise.resolve(handler(req, res)).catch((error: unknown) => {
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end(error instanceof Error ? error.message : String(error));
+      });
+    });
+    servers.push(server);
+    server.on("clientError", () => {});
+    const port = await listenOnLoopback(server);
+    return `http://127.0.0.1:${port}`;
+  };
+}
 
 // Each transport supplies its real wire fixture; only the shared authority interleaving lives here.
 export async function expectPreparedHandoff(
@@ -60,6 +88,8 @@ export async function expectPreparedHandoff(
     if (!revoked) {
       await arrived.promise;
       expect(settled).toBe(false);
+      // Transmission owns settlement even if its caller closes before the reply.
+      caller.abort(failure);
       response.resolve();
     }
     expect(await sending).toEqual(revoked ? { error: failure } : { value: fixture.result });

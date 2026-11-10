@@ -54,6 +54,22 @@ async function files(directory: string): Promise<Record<string, string>> {
     ),
   );
 }
+
+function renameAgent(ctx: DoctorHealthFlowContext, name: string) {
+  ctx.cfg = { ...ctx.cfg, agents: { entries: { main: { name } } } };
+}
+
+async function expectRefusal(ctx: DoctorHealthFlowContext, run: () => Promise<unknown>) {
+  const baseline = ctx.cfgForPersistence;
+  const receipt = ctx.configResult.confirmedConfigSource;
+  const directory = path.dirname(ctx.configPath);
+  const retained = await files(directory);
+  expect(await run()).toBe(false);
+  expect(ctx.configWriteRefusal).toBe("config-conflict");
+  expect(ctx.cfgForPersistence).toBe(baseline);
+  expect(ctx.configResult.confirmedConfigSource).toBe(receipt);
+  expect(await files(directory)).toEqual(retained);
+}
 describe("Doctor receipt owner with real config files", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
   it.each([
@@ -85,16 +101,7 @@ describe("Doctor receipt owner with real config files", () => {
               : undefined,
           );
         for (const name of ["first", "second"]) {
-          ctx.cfg = {
-            ...ctx.cfg,
-            agents: {
-              ...ctx.cfg.agents,
-              entries: {
-                ...ctx.cfg.agents?.entries,
-                main: { ...ctx.cfg.agents?.entries?.main, name },
-              },
-            },
-          };
+          renameAgent(ctx, name);
           expect(await write()).toBe(true);
           const snapshot = await readConfigFileSnapshot();
           expect(ctx.configResult.confirmedConfigSource).toEqual({
@@ -112,24 +119,8 @@ describe("Doctor receipt owner with real config files", () => {
         const drifted = await readConfigFileSnapshot();
         expect(drifted.sourceConfig).toEqual(before.sourceConfig);
         expect(drifted.hash).not.toBe(before.hash);
-        const baseline = ctx.cfgForPersistence;
-        const receipt = ctx.configResult.confirmedConfigSource;
-        const retained = await files(path.dirname(configPath));
-        ctx.cfg = {
-          ...ctx.cfg,
-          agents: {
-            ...ctx.cfg.agents,
-            entries: {
-              ...ctx.cfg.agents?.entries,
-              main: { ...ctx.cfg.agents?.entries?.main, name: "third" },
-            },
-          },
-        };
-        expect(await write()).toBe(false);
-        expect(ctx.configWriteRefusal).toBe("config-conflict");
-        expect(ctx.cfgForPersistence).toBe(baseline);
-        expect(ctx.configResult.confirmedConfigSource).toBe(receipt);
-        expect(await files(path.dirname(configPath))).toEqual(retained);
+        renameAgent(ctx, "third");
+        await expectRefusal(ctx, write);
       });
     },
   );
@@ -149,17 +140,10 @@ describe("Doctor receipt owner with real config files", () => {
       const alternate = path.join(path.dirname(configPath), "alternate.json");
       await fs.copyFile(configPath, alternate);
       const { withEnvAsync } = await import("../test-utils/env.js");
-      const baseline = ctx.cfgForPersistence;
-      const receipt = ctx.configResult.confirmedConfigSource;
-      const retained = await files(path.dirname(configPath));
       ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19091 } };
-      await withEnvAsync({ OPENCLAW_CONFIG_PATH: alternate }, async () => {
-        expect(await runWriteConfigHealth(ctx)).toBe(false);
-      });
-      expect(ctx.configWriteRefusal).toBe("config-conflict");
-      expect(ctx.cfgForPersistence).toBe(baseline);
-      expect(ctx.configResult.confirmedConfigSource).toBe(receipt);
-      expect(await files(path.dirname(configPath))).toEqual(retained);
+      await expectRefusal(ctx, () =>
+        withEnvAsync({ OPENCLAW_CONFIG_PATH: alternate }, () => runWriteConfigHealth(ctx)),
+      );
     });
   });
 });

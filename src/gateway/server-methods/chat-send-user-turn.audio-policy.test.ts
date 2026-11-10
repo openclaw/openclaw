@@ -13,25 +13,14 @@ import { transcribeAudioAttachments } from "../../media-understanding/audio-pref
 import { createSafeAudioFixtureBuffer } from "../../media-understanding/runner.test-utils.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import * as chatAttachments from "../chat-attachments.js";
-import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
-import {
-  createAttachments,
-  createClientInfo,
-  createUserTurnInputController,
-} from "./chat-send-user-turn.test-support.js";
+import { prepareVoice, requireInputText } from "./chat-send-user-turn-family.test-support.js";
+import { createClientInfo } from "./chat-send-user-turn.test-support.js";
 
 const runExec = vi.hoisted(() => vi.fn());
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: (...args: Parameters<typeof runExec>) => runExec(...args),
 }));
-
-function requireInputText(input: { text?: string | null }): string {
-  if (typeof input.text !== "string") {
-    throw new Error("Expected prepared user-turn text");
-  }
-  return input.text;
-}
 
 describe("chat.send voice transcription policy boundary", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -51,7 +40,6 @@ describe("chat.send voice transcription policy boundary", () => {
       entries: [],
       omission: "none",
     });
-    const { controller, readInput } = createUserTurnInputController("caption");
     const cfg: OpenClawConfig = {
       // The test exercises an explicit CLI audio model; disable unrelated plugin
       // discovery so the policy boundary stays isolated from global catalog setup.
@@ -71,28 +59,16 @@ describe("chat.send voice transcription policy boundary", () => {
         },
       },
     };
-    const prepared = prepareChatSendUserTurn({
-      request: {
-        inboundMessage: "caption",
-        clientInfo: createClientInfo({
-          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-          mode: GATEWAY_CLIENT_MODES.UI,
-        }),
-        suppressCommandInterpretation: false,
-        systemInputProvenance: undefined,
-        systemProvenanceReceipt: undefined,
-      },
-      session: {
-        agentId: "main",
-        clientRunId: "run-policy",
-        sessionKey: "agent:main:voice-policy",
-        cfg,
-      },
-      admission: {
-        originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
-        assertClientUploadAllowed,
-      },
-      attachments: createAttachments({
+    const prepared = prepareVoice({
+      clientInfo: createClientInfo({
+        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        mode: GATEWAY_CLIENT_MODES.UI,
+      }),
+      clientRunId: "run-policy",
+      sessionKey: "agent:main:voice-policy",
+      cfg,
+      assertClientUploadAllowed,
+      attachments: {
         parsedMessage: "caption",
         mediaPathOffloads: [{ path: mediaPath, contentType: "audio/wav", workspaceDir: dir }],
         offloadedRefs: [
@@ -107,13 +83,10 @@ describe("chat.send voice transcription policy boundary", () => {
             sourceIndex: 0,
           },
         ],
-      }),
-      client: null,
-      logGateway: { warn: vi.fn() } as never,
+      },
       assertInputCurrent,
-      userTurn: controller,
     });
-    const input = await readInput();
+    const input = await prepared.readInput();
     return { prepared, input, cfg };
   }
 
@@ -170,7 +143,9 @@ describe("chat.send voice transcription policy boundary", () => {
         const { prepared, input, cfg } = await prepare({ default: "allow" }, undefined, echoFormat);
         expect(input.text).toBe("caption");
         expect(runExec).not.toHaveBeenCalled();
+        expect(prepared.ctx.media?.[0]?.transcribed).not.toBe(true);
         prepared.applyApprovedText(requireInputText(input));
+        expect(prepared.ctx.BodyForAgent).toBe("caption");
         await applyMediaUnderstanding({ ctx: prepared.ctx, cfg, processingMode: "audio-only" });
         expect(runExec).toHaveBeenCalledOnce();
         expect(prepared.ctx.BodyForAgent).toContain("policy-approved voice");

@@ -1,28 +1,33 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
 import {
+  bindsClaudeThinkingPrefix,
   CLAUDE_FABLE_5_THINKING_PROFILE,
   CLAUDE_HAIKU_55_THINKING_PROFILE,
   CLAUDE_OPUS_55_THINKING_PROFILE,
   CLAUDE_SONNET_55_THINKING_PROFILE,
+  rejectsClaudeAssistantPrefill,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeHaiku55ModelIdentity,
-  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
   resolveClaudeOpus55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
-  resolveClaudeSonnet5ModelIdentity,
   resolveClaudeSonnet55ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
+  usesClaude5RequestContract,
 } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { clampThinkingLevel } from "../model-utils.js";
 import type { AnthropicEffort } from "../provider-options.js";
 import type {
   Context,
   Model,
+  ModelRequestHeaders,
   ModelThinkingLevel,
   SimpleStreamOptions,
   StopReason,
@@ -47,14 +52,80 @@ export {
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
 
-// Anthropic gates OAuth models with claude_code_version_too_old. Keep this floor
-// at the published Claude Code release (2.1.280); older or absent CLIs must not downgrade it.
+// Starting Claude Code identity for OAuth requests. Anthropic gates newer models
+// with claude_code_version_too_old and names the required version; the transport
+// adopts that answer (see raiseClaudeCodeVersionFloor), so new models never
+// require changing this value. A newer installed CLI also wins.
 export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.280";
+
+// Process-wide: the requirement is per Anthropic, not per session or credential.
+// A restart forgets it and costs one rejected request to learn again.
+let learnedClaudeCodeVersion: string | undefined;
+
+function parseClaudeCodeVersion(value: string | undefined): number[] | undefined {
+  const match = value?.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  const parts = match?.slice(1).map(Number);
+  return parts?.every(Number.isSafeInteger) ? parts : undefined;
+}
+
+function isNewerClaudeCodeVersion(candidate: string | undefined, current: string): boolean {
+  const next = parseClaudeCodeVersion(candidate);
+  const base = parseClaudeCodeVersion(current);
+  if (!next || !base) {
+    return false;
+  }
+  for (const [index, part] of next.entries()) {
+    const other = base[index] ?? 0;
+    if (part !== other) {
+      return part > other;
+    }
+  }
+  return false;
+}
+
+function currentClaudeCodeVersionFloor(): string {
+  return learnedClaudeCodeVersion ?? ANTHROPIC_CLAUDE_CODE_VERSION;
+}
+
+/**
+ * Read the Claude Code version Anthropic requires from a
+ * claude_code_version_too_old rejection (SDK APIError or transport error body).
+ */
+export function readRequiredClaudeCodeVersion(error: unknown): string | undefined {
+  if (!isRecord(error) || error.status !== 400) {
+    return undefined;
+  }
+  const body = error.errorBody ?? error.error;
+  const payload = isRecord(body) && isRecord(body.error) ? body.error : body;
+  if (!isRecord(payload) || typeof payload.message !== "string") {
+    return undefined;
+  }
+  const details = payload.details;
+  if (!isRecord(details) || details.error_code !== "claude_code_version_too_old") {
+    return undefined;
+  }
+  const required = payload.message.match(/version (\d+\.\d+\.\d+) or newer is required/)?.[1];
+  return parseClaudeCodeVersion(required) ? required : undefined;
+}
+
+/** Adopt a version Anthropic required; true when it raised the floor and a retry can help. */
+export function raiseClaudeCodeVersionFloor(required: string): boolean {
+  if (!isNewerClaudeCodeVersion(required, currentClaudeCodeVersionFloor())) {
+    return false;
+  }
+  learnedClaudeCodeVersion = required;
+  return true;
+}
+
+/** Test seam: forget the learned requirement. */
+export function resetLearnedClaudeCodeVersionForTest(): void {
+  learnedClaudeCodeVersion = undefined;
+}
 
 /** Build OAuth headers and the matching billing identity from one request snapshot. */
 export function buildAnthropicClaudeCodeIdentity(
   betaHeader: string | undefined,
-  ...headerSources: (Record<string, string> | undefined)[]
+  ...headerSources: (ModelRequestHeaders | undefined)[]
 ): { headers: Record<string, string>; version: string } {
   const headers = new Headers({
     accept: "application/json",
@@ -64,26 +135,16 @@ export function buildAnthropicClaudeCodeIdentity(
   });
   for (const source of headerSources) {
     for (const [name, value] of Object.entries(source ?? {})) {
-      headers.set(name, value);
+      if (value === null) {
+        headers.delete(name);
+      } else {
+        headers.set(name, value);
+      }
     }
   }
-  let version = ANTHROPIC_CLAUDE_CODE_VERSION;
+  const floor = currentClaudeCodeVersionFloor();
   const candidate = headers.get("user-agent")?.match(/^claude-cli\/(\d+\.\d+\.\d+)$/)?.[1];
-  if (candidate) {
-    const components = candidate.split(".").map(Number);
-    const minimum = version.split(".").map(Number);
-    const differing = components.findIndex((component, index) => component !== minimum[index]);
-    const component = components[differing];
-    const minimumComponent = minimum[differing];
-    if (
-      components.every(Number.isSafeInteger) &&
-      component !== undefined &&
-      minimumComponent !== undefined &&
-      component > minimumComponent
-    ) {
-      version = candidate;
-    }
-  }
+  const version = candidate && isNewerClaudeCodeVersion(candidate, floor) ? candidate : floor;
   headers.set("user-agent", `claude-cli/${version}`);
   return { headers: headersToRecord(headers), version };
 }
@@ -133,16 +194,7 @@ export function usesClaudeStreamingRefusalContract(model: {
   params?: Record<string, unknown>;
   api?: string;
 }): boolean {
-  if (normalizeApi(model.api) !== "anthropic-messages") {
-    return false;
-  }
-  return (
-    resolveClaudeHaiku55ModelIdentity(model) !== undefined ||
-    resolveClaudeFable5ModelIdentity(model) !== undefined ||
-    resolveClaudeMythos5ModelIdentity(model) !== undefined ||
-    resolveClaudeOpus5ModelIdentity(model) !== undefined ||
-    resolveClaudeSonnet5ModelIdentity(model) !== undefined
-  );
+  return normalizeApi(model.api) === "anthropic-messages" && usesClaude5RequestContract(model);
 }
 
 export function requiresClaudeAdaptiveThinking(model: {
@@ -164,10 +216,7 @@ export function defaultsClaudeAdaptiveThinking(model: {
 }): boolean {
   return (
     requiresClaudeAdaptiveThinking(model) ||
-    (normalizeApi(model.api) === "anthropic-messages" &&
-      (resolveClaudeOpus5ModelIdentity(model) !== undefined ||
-        resolveClaudeHaiku55ModelIdentity(model) !== undefined ||
-        resolveClaudeSonnet5ModelIdentity(model) !== undefined))
+    (normalizeApi(model.api) === "anthropic-messages" && usesClaude5RequestContract(model))
   );
 }
 
@@ -237,11 +286,7 @@ export function mapAnthropicStopReason(reason: string | undefined): StopReason {
 
 /** Remove unsupported assistant prefills while preserving completed tool-use turns. */
 export function prepareClaudeNoPrefillRequestContext(model: Model, context: Context): Context {
-  if (
-    !resolveClaudeOpus5ModelIdentity(model) &&
-    !resolveClaudeSonnet5ModelIdentity(model) &&
-    !resolveClaudeHaiku55ModelIdentity(model)
-  ) {
+  if (!rejectsClaudeAssistantPrefill(model)) {
     return context;
   }
 
@@ -261,15 +306,13 @@ export function prepareClaudeNoPrefillRequestContext(model: Model, context: Cont
     : { ...context, messages: context.messages.slice(0, end) };
 }
 
-type ClaudeSamplingRequestParams = {
-  temperature?: unknown;
-  top_p?: unknown;
-  top_k?: unknown;
-  service_tier?: unknown;
-};
-
 export function applyClaudeRequestContract(
-  params: ClaudeSamplingRequestParams,
+  params: {
+    temperature?: unknown;
+    top_p?: unknown;
+    top_k?: unknown;
+    service_tier?: unknown;
+  },
   model: {
     id?: string;
     params?: Record<string, unknown>;
@@ -279,107 +322,73 @@ export function applyClaudeRequestContract(
   if (normalizeApi(model.api) !== "anthropic-messages") {
     return;
   }
-  const opus5 = resolveClaudeOpus5ModelIdentity(model) !== undefined;
-  const sonnet5 = resolveClaudeSonnet5ModelIdentity(model) !== undefined;
-  const haiku55 = resolveClaudeHaiku55ModelIdentity(model) !== undefined;
-  if (!requiresClaudeDefaultSampling(model) && !opus5 && !sonnet5) {
+  if (!requiresClaudeDefaultSampling(model)) {
     return;
   }
   delete params.temperature;
   delete params.top_p;
   delete params.top_k;
-  if (opus5 || sonnet5 || haiku55) {
+  if (
+    resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+    resolveClaudeSonnet5ModelIdentity(model) !== undefined ||
+    resolveClaudeHaiku55ModelIdentity(model) !== undefined
+  ) {
     delete params.service_tier;
   }
 }
 
-function resolveReplayModelBoundIdentity(ref: ReplayModelRef): string | undefined {
+/**
+ * Claude identity of a transcript or target model on the Messages API. The
+ * response model wins when it differs, so server-side fallbacks keep their own identity.
+ */
+function resolveReplayClaudeIdentity(ref: ReplayModelRef): string | undefined {
   if (normalizeApi(ref.api) !== "anthropic-messages") {
     return undefined;
   }
   const modelRef = hasConcreteResponseModel(ref)
     ? { id: ref.responseModelId }
     : { id: ref.modelId, params: ref.modelParams };
-  const fableIdentity = resolveClaudeFable5ModelIdentity(modelRef);
-  const haikuIdentity = resolveClaudeHaiku55ModelIdentity(modelRef);
-  if (haikuIdentity) {
-    return `haiku:${haikuIdentity}`;
-  }
-  if (fableIdentity) {
-    return `fable:${fableIdentity}`;
-  }
-  const mythosIdentity = resolveClaudeMythos5ModelIdentity(modelRef);
-  if (mythosIdentity) {
-    return `mythos:${mythosIdentity}`;
-  }
-  const opusIdentity = resolveClaudeOpus5ModelIdentity(modelRef);
-  if (opusIdentity) {
-    return `opus:${opusIdentity}`;
-  }
-  const sonnetIdentity = resolveClaudeSonnet5ModelIdentity(modelRef);
-  return sonnetIdentity ? `sonnet:${sonnetIdentity}` : undefined;
+  const identity = resolveClaudeModelIdentity(modelRef);
+  return identity.startsWith("claude-") ? identity : undefined;
 }
 
-const FABLE_51_REPLAY_IDENTITY = /^fable:claude-fable-5-1(?=$|[^a-z0-9])/;
-const SONNET_55_REPLAY_IDENTITY = /^sonnet:claude-sonnet-5-5(?=$|[^a-z0-9])/;
-
-/**
- * Verified live (2026-09-28): Fable 5.1 reads every earlier Claude generation
- * except Sonnet 5.5; Sonnet 5.5 reads Sonnet 5 and pre-Claude-5 thinking but
- * not Opus 5, Fable, or Mythos; no other model reads Sonnet 5.5 thinking. The
- * API drops what a target cannot read, and every other cross-identity move
- * stays dropped here until its replay contract is proven separately.
- */
-function readsPriorClaudeThinking(
-  targetIdentity: string | undefined,
-  sourceIdentity: string | undefined,
-): boolean {
-  if (targetIdentity === undefined) {
-    return false;
-  }
-  if (FABLE_51_REPLAY_IDENTITY.test(targetIdentity)) {
-    return (
-      sourceIdentity === undefined ||
-      (!SONNET_55_REPLAY_IDENTITY.test(sourceIdentity) && !sourceIdentity.startsWith("haiku:"))
-    );
-  }
-  if (SONNET_55_REPLAY_IDENTITY.test(targetIdentity)) {
-    return sourceIdentity === undefined || sourceIdentity.startsWith("sonnet:");
-  }
-  return false;
-}
-
-function isClaudeReplaySource(ref: ReplayModelRef): boolean {
-  const modelId = hasConcreteResponseModel(ref) ? ref.responseModelId : ref.modelId;
-  return /(?:^|[-/])claude-/.test(normalizeModelId(modelId));
-}
-
-export function resolveModelBoundThinkingReplayMode(params: {
-  source: ReplayModelRef;
-  target: ReplayModelRef;
-}): "default" | "preserve" | "drop" {
-  const sourceApi = normalizeApi(params.source.api);
-  const targetApi = normalizeApi(params.target.api);
-  const sourceIdentity = resolveReplayModelBoundIdentity(params.source);
-  const targetIdentity = resolveReplayModelBoundIdentity(params.target);
-  const sameRoute =
-    normalizeLowercaseStringOrEmpty(params.source.provider) ===
-      normalizeLowercaseStringOrEmpty(params.target.provider) &&
-    sourceApi === targetApi &&
-    normalizeModelId(params.source.modelId) === normalizeModelId(params.target.modelId);
-  if (!sourceIdentity && !targetIdentity) {
-    return "default";
-  }
-  if (
-    sourceApi === targetApi &&
-    readsPriorClaudeThinking(targetIdentity, sourceIdentity) &&
-    isClaudeReplaySource(params.source)
-  ) {
-    return "preserve";
-  }
-  if (!sourceIdentity && !hasConcreteResponseModel(params.source) && targetIdentity && sameRoute) {
-    return "preserve";
-  }
-  const sameModel = sourceApi === targetApi && sourceIdentity === targetIdentity;
-  return sameModel ? "preserve" : "drop";
+/** The destination is fixed during one synchronous history transform. */
+export function prepareModelBoundThinkingReplay(
+  target: Pick<Model, "api" | "provider" | "id" | "params">,
+) {
+  const targetApi = normalizeApi(target.api);
+  const targetIdentity = resolveReplayClaudeIdentity({
+    api: target.api,
+    modelId: target.id,
+    modelParams: target.params,
+  });
+  const targetProvider = normalizeLowercaseStringOrEmpty(target.provider);
+  const targetModelId = normalizeModelId(target.id);
+  return (source: ReplayModelRef): "default" | "preserve" | "drop" => {
+    const sourceApi = normalizeApi(source.api);
+    const sourceIdentity = resolveReplayClaudeIdentity(source);
+    if (!sourceIdentity && !targetIdentity) {
+      return "default";
+    }
+    if (sourceIdentity && targetIdentity && sourceApi === targetApi) {
+      // A prefix-bound block is valid only after the exact system prompt and
+      // tools it was produced with, and those differ per model, so it cannot
+      // follow a switch. Unbound blocks stay; the API itself drops what the
+      // target cannot read, so OpenClaw keeps no table of which model reads which.
+      return sourceIdentity === targetIdentity || !bindsClaudeThinkingPrefix({ id: sourceIdentity })
+        ? "preserve"
+        : "drop";
+    }
+    if (
+      !sourceIdentity &&
+      !hasConcreteResponseModel(source) &&
+      targetIdentity &&
+      normalizeLowercaseStringOrEmpty(source.provider) === targetProvider &&
+      sourceApi === targetApi &&
+      normalizeModelId(source.modelId) === targetModelId
+    ) {
+      return "preserve";
+    }
+    return sourceApi === targetApi && sourceIdentity === targetIdentity ? "preserve" : "drop";
+  };
 }

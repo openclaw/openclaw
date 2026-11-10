@@ -203,7 +203,7 @@ describe("prepared model runtime scoped refresh", () => {
         identityKey: `profile:${profileId}`,
       });
       const readTier = (profileId: string) =>
-        accounts.readServiceTierObservation({
+        accounts.readServiceTierObservations({
           ...observation,
           identityKey: selected(profileId).identityKey,
         });
@@ -230,16 +230,16 @@ describe("prepared model runtime scoped refresh", () => {
         }
       };
       await refresh(authStore);
-      expect(readTier("demo:changed")).toEqual(tier);
+      expect(readTier("demo:changed")).toEqual([tier]);
       await refresh({
         version: 1,
         profiles: { "demo:changed": { ...credential, key: "synthetic-replacement" } },
       });
       for (const profileId of ["demo:changed", "demo:removed"]) {
-        expect(readTier(profileId)).toBeUndefined();
+        expect(readTier(profileId)).toEqual([]);
       }
       for (const profileId of ["other:retained", personalId]) {
-        expect(readTier(profileId)).toEqual(tier);
+        expect(readTier(profileId)).toEqual([tier]);
       }
       expect(recordChanged({ ...observation, modelId: "next-model" })).toBe(false);
       expect(owner.isCurrent()).toBe(true);
@@ -333,7 +333,7 @@ describe("prepared model runtime scoped refresh", () => {
     });
   });
 
-  it.each(["credential", "selected-profile", "synthetic-credential"] as const)(
+  it.each(["credential", "selected-profile"] as const)(
     "does not retain an account inventory after its %s changes",
     async (change) => {
       const learned = entry("demo", "learned", "Learned");
@@ -342,28 +342,25 @@ describe("prepared model runtime scoped refresh", () => {
         "demo:first": { type: "api_key" as const, provider: "demo", key: "first-key" },
         "demo:second": { type: "api_key" as const, provider: "demo", key: "second-key" },
       };
-      const synthetic = change === "synthetic-credential";
-      const profileId = synthetic ? undefined : "demo:first";
       const previous = makeCatalog([learned], {
-        providerOutcomes: [outcome("demo", "ready", profileId)],
+        providerOutcomes: [outcome("demo", "ready", "demo:first")],
       });
       const failed = makeCatalog([], {
         staticEntries: [starter],
         providerOutcomes: [
-          outcome("demo", "unavailable", change === "selected-profile" ? "demo:second" : profileId),
+          outcome(
+            "demo",
+            "unavailable",
+            change === "selected-profile" ? "demo:second" : "demo:first",
+          ),
         ],
       });
-      const auth = (key: string, nextProfiles = profiles) =>
-        catalogAuth(
-          "demo",
-          { version: 1, profiles: synthetic ? {} : nextProfiles },
-          synthetic ? { demo: { type: "api_key", key } } : {},
-        );
-      setPreparedModelFullCatalogAuth(previous, auth("first-synthetic-key"));
+      const auth = (nextProfiles = profiles) =>
+        catalogAuth("demo", { version: 1, profiles: nextProfiles });
+      setPreparedModelFullCatalogAuth(previous, auth());
       setPreparedModelFullCatalogAuth(
         failed,
         auth(
-          "second-synthetic-key",
           change === "credential"
             ? { ...profiles, "demo:first": { ...profiles["demo:first"], key: "replacement-key" } }
             : profiles,
@@ -523,6 +520,47 @@ describe("prepared model runtime scoped refresh", () => {
     await vi.waitFor(() => expect(catalogWorker).toHaveBeenLastCalledWith(["demo"]));
     containsEntries(published(config).readFullModelCatalog!()?.entries, unrelated);
   });
+
+  it.each([undefined, ["demo"]])(
+    "defers headless inventory until its first request and keeps reloads scoped (%j)",
+    async (providerIds) => {
+      mocks.configuredAgentIds = ["pro"];
+      mocks.authStorage.getAll.mockReturnValue({
+        demo: { type: "api_key", key: "startup-synthetic-credential" },
+      });
+      const config: OpenClawConfig = {
+        ...proConfig,
+        gateway: { controlUi: { enabled: false } },
+      };
+      const unrelated = entry("unrelated", "found", "Found");
+      serveCatalog(makeCatalog([entry("demo", "learned", "Learned"), unrelated]));
+      await refreshPreparedModelRuntimeSnapshots(config, gatewayOptions);
+      expect(catalogWorker).not.toHaveBeenCalled();
+
+      await published(config).loadFullModelCatalog!(
+        providerIds ? { refresh: true, wait: true, providerIds } : { changedOnly: true },
+      );
+      await vi.waitFor(() => expect(catalogWorker).toHaveBeenCalledExactlyOnceWith(providerIds));
+      if (providerIds) {
+        expect(published(config).readFullModelCatalog!()?.entries).not.toContainEqual(unrelated);
+        await published(config).loadFullModelCatalog!({ changedOnly: true });
+        await vi.waitFor(() => expect(catalogWorker).toHaveBeenLastCalledWith(undefined));
+      }
+      await vi.waitFor(() =>
+        containsEntries(published(config).readFullModelCatalog!()?.entries, unrelated),
+      );
+      const acquisitions = catalogWorker.mock.calls.length;
+      containsEntries(published(config).readFullModelCatalog!()?.entries, unrelated);
+
+      mocks.authStorage.getAll.mockReturnValue({
+        demo: { type: "api_key", key: "replacement-synthetic-credential" },
+      });
+      await refreshPreparedModelRuntimeSnapshots(config, gatewayOptions);
+      await vi.waitFor(() => expect(catalogWorker).toHaveBeenCalledTimes(acquisitions + 1));
+      expect(catalogWorker).toHaveBeenLastCalledWith(["demo"]);
+      containsEntries(published(config).readFullModelCatalog!()?.entries, unrelated);
+    },
+  );
 
   it.each(["endpoint", "plugin", "prepared-credential"] as const)(
     "invalidates retained discovery after the %s identity changes",

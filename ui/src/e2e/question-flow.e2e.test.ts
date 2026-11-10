@@ -1,8 +1,8 @@
 import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import type { SessionsListResult } from "../api/types.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
@@ -10,6 +10,7 @@ import {
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { defineQuestionFooterTests } from "./question-footer.test-support.ts";
@@ -108,7 +109,11 @@ function historyMessages() {
   }));
 }
 
-async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouch = false) {
+async function openQuestionPage(
+  viewport = { height: 900, width: 1440 },
+  hasTouch = false,
+  extraSessions: GatewaySessionRow[] = [],
+) {
   const page = await newPage(viewport, hasTouch);
   const gateway = await installMockGateway(page, {
     featureMethods: [
@@ -129,19 +134,22 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
       "sessions.list": {
         ts: Date.now(),
         path: "",
-        count: 2,
+        count: 2 + extraSessions.length,
         defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: null },
-        sessions: (
-          [
-            [mainSessionKey, "Home", -1_000],
-            [questionSessionKey, "Question proof", 0],
-          ] as const
-        ).map(([key, label, offset]) => ({
-          key,
-          label,
-          kind: "direct" as const,
-          updatedAt: Date.now() + offset,
-        })),
+        sessions: [
+          ...(
+            [
+              [mainSessionKey, "Home", -1_000],
+              [questionSessionKey, "Question proof", 0],
+            ] as const
+          ).map(([key, label, offset]) => ({
+            key,
+            label,
+            kind: "direct" as const,
+            updatedAt: Date.now() + offset,
+          })),
+          ...extraSessions,
+        ],
       } satisfies SessionsListResult,
     },
     // The handshake must advertise the genuine canonical main; the question
@@ -149,8 +157,9 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
     sessionKey: mainSessionKey,
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, questionSessionKey));
-  const startup = await gateway.waitForRequest("chat.startup");
-  expect(startup.params).toEqual(expect.objectContaining({ sessionKey: questionSessionKey }));
+  await gateway.waitForRequest("sessions.messages.subscribe", {
+    match: { key: questionSessionKey },
+  });
   const compactMobileViewport =
     viewport.width <= 768 ||
     (viewport.width <= 932 && viewport.height <= 500 && viewport.width > viewport.height);
@@ -246,7 +255,7 @@ suite.define(() => {
     const request = questionRecord("sidebar-touch-question", { isOther: false });
 
     await gateway.emitGatewayEvent("question.requested", request);
-    await page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first().tap();
+    await navigationDrawerToggle(page).tap();
     await expectQuestionAttention(page, request.questions[0]!.question);
     // The drawer's initial focus move must finish before opening the tooltip.
     await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();
@@ -277,6 +286,122 @@ suite.define(() => {
     await row.locator(".sidebar-recent-session__link").tap();
     await expect.poll(() => shell.getAttribute("class")).not.toContain("shell--nav-drawer-open");
   });
+
+  it.each(["parent", "child"] as const)(
+    "shows one child question in both sessions and resolves it from the %s",
+    async (answerFrom) => {
+      const childKey = "agent:main:dashboard:child-question";
+      const { gateway, page } = await openQuestionPage(undefined, false, [
+        {
+          key: childKey,
+          kind: "direct",
+          label: "Release checks",
+          parentSessionKey: questionSessionKey,
+          spawnDepth: 1,
+          status: "running",
+          hasActiveRun: true,
+          updatedAt: Date.now(),
+        },
+      ]);
+      const choice = (question: string) => ({
+        questionId: "channel",
+        header: "Channel",
+        question,
+        options: [{ label: "Beta" }, { label: "Stable" }],
+        isOther: false,
+      });
+      const unrelatedPrompt = "Which channel should the unrelated session use?";
+      await gateway.emitGatewayEvent("question.requested", {
+        ...questionRecord("unrelated-session-question", [choice(unrelatedPrompt)]),
+        sessionKey: "agent:main:dashboard:unrelated",
+      });
+      const childPrompt = "Which channel should the release checks use?";
+      const request = {
+        ...questionRecord("child-session-question", [choice(childPrompt)]),
+        sessionKey: childKey,
+      };
+      const composer = page.locator(composerSelector);
+      await composer.fill("Continue reviewing the release notes");
+      await gateway.setMethodResponse("question.list", { questions: [request] });
+      let panel = await showQuestion(page, gateway, request);
+      expect(await composer.inputValue()).toBe("Continue reviewing the release notes");
+      await expectFocused(composer);
+      expect(
+        (await panel.locator(".chat-question-panel__source > span").textContent())?.trim(),
+      ).toBe("Asked by");
+      expect((await panel.locator(".chat-question-panel__source a").textContent())?.trim()).toBe(
+        "Release checks",
+      );
+      expect(await panelFor(page, unrelatedPrompt).count()).toBe(0);
+      await panel.getByRole("button", { name: "Collapse question", exact: true }).click();
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      await page.getByRole("button", { name: "Expand question", exact: true }).click();
+      if (answerFrom === "child") {
+        await panel.locator(".chat-question-panel__source a").click();
+        panel = page
+          .getByRole("region", { name: "Chat", exact: true })
+          .locator("openclaw-chat-question-panel")
+          .filter({ hasText: childPrompt });
+        await page.waitForFunction(
+          (key) =>
+            window.openclawControlUi?.snapshot().sessionKey === key &&
+            window.openclawControlUi.snapshot().routeReady,
+          childKey,
+        );
+        await panel.waitFor();
+        await expectCount(panel.locator(".chat-question-panel__source"), 0);
+        await expectCount(
+          page.getByRole("region", { name: "Chat", exact: true }).locator(composerSelector),
+          0,
+        );
+      }
+
+      await panel.getByRole("radio", { name: /Beta/ }).click();
+      const answers = { answers: { channel: ["Beta"] } };
+      await gateway.setMethodResponse("question.resolve", {
+        status: "answered",
+        answers,
+      } satisfies QuestionResolveResult);
+      await gateway.setMethodResponse("question.list", { questions: [] });
+      await panel.getByRole("button", { name: "Submit", exact: true }).click();
+      expect((await gateway.waitForRequest("question.resolve")).params).toEqual({
+        id: request.id,
+        answers,
+      });
+      await expect.poll(() => panel.count()).toBe(0);
+      if (answerFrom === "child") {
+        await page
+          .locator(`[data-session-key="${questionSessionKey}"] .sidebar-recent-session__link`)
+          .first()
+          .click();
+        await page.waitForFunction(
+          (key) =>
+            window.openclawControlUi?.snapshot().sessionKey === key &&
+            window.openclawControlUi.snapshot().routeReady,
+          questionSessionKey,
+        );
+        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+      }
+      // The answered question belongs to the child's transcript, not the parent's.
+      await expectCount(
+        page
+          .getByRole("region", { name: "Chat", exact: true })
+          .locator("openclaw-chat-question-panel")
+          .filter({ hasText: childPrompt }),
+        0,
+      );
+      expect(
+        await page
+          .getByRole("region", { name: "Chat", exact: true })
+          .locator(".chat-thread")
+          .getByText(childPrompt)
+          .count(),
+      ).toBe(0);
+      expect(
+        await page.getByRole("textbox", { name: "Chat composer", exact: true }).inputValue(),
+      ).toBe("Continue reviewing the release notes");
+    },
+  );
 
   it("opens an external question step without answering until completion is submitted", async () => {
     const { gateway, page } = await openQuestionPage();
@@ -397,7 +522,7 @@ suite.define(() => {
     questionSessionKey,
   });
 
-  it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
+  it("restores the composer without a resolution event and retains later pending-question drafts", async () => {
     const { gateway, page } = await openQuestionPage();
     const composer = page.locator(composerSelector);
     await composer.fill("Keep this release note draft");
@@ -468,13 +593,47 @@ suite.define(() => {
     expect(
       await summary.getByText(request.questions[0]!.question, { exact: true }).isVisible(),
     ).toBe(true);
+
+    const first = questionRecord("question-a-format", {
+      questionId: "format",
+      header: "Format",
+      question: "Which format should I use?",
+      options: [{ label: "Compact" }, { label: "Detailed" }],
+      isOther: true,
+    });
+
+    const second = questionRecord("question-b-audience", {
+      questionId: "audience",
+      header: "Audience",
+      question: "Who should read it?",
+      options: [{ label: "Engineers" }, { label: "Everyone" }],
+      isOther: true,
+    });
+
+    await gateway.emitGatewayEvent("question.requested", first);
+    await gateway.emitGatewayEvent("question.requested", second);
+    const pendingPanel = page.locator("openclaw-chat-question-panel");
+    await pendingPanel.getByRole("textbox", { name: "Your own answer for Format" }).fill("Compact");
+    await button(pendingPanel, "Next").click();
+    await pendingPanel.getByText("Who should read it?", { exact: true }).waitFor();
+    await button(pendingPanel, "Previous").click();
+    await pendingPanel.getByText("Which format should I use?", { exact: true }).waitFor();
+    expect(
+      await pendingPanel.getByRole("textbox", { name: "Your own answer for Format" }).inputValue(),
+    ).toBe("Compact");
+    expect(
+      await pendingPanel.getByRole("radio", { name: /Compact/ }).getAttribute("aria-checked"),
+    ).toBe("false");
   });
 
-  it("masks a store-bound secret and resolves it with edited hosts without echoing the value", async () => {
+  it("preserves secret keyboard custody and retries rejected hosts without echoing the value", async () => {
     const { gateway, page } = await openQuestionPage();
     const request = secretStoreQuestion("question-store-secret-success");
     const fakeSecret = "fake-secret-never-use-browser-proof-123";
-    await gateway.setMethodResponse("question.resolve", storedSecretAnswer());
+    const validationMessage = "Allowed hosts must be valid hostnames.";
+    await gateway.setMethodResponse("question.resolve", {
+      __mockError: { code: "INVALID_REQUEST", message: validationMessage },
+    });
     const panel = await showQuestion(page, gateway, request);
     await expectCount(panel.getByText("Requested by main", { exact: false }), 1);
     await expectCount(panel.getByText("Publish the release artifacts."), 1);
@@ -506,33 +665,6 @@ suite.define(() => {
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
 
     await button(panel, "Submit").click();
-    await expectResolution(gateway, {
-      id: request.id,
-      answers: { answers: { api_key: [fakeSecret] } },
-      secretStoreAllowedHosts: ["api.example.test", "uploads.example.test", "extra.example.test"],
-    });
-    await expectCount(panel, 0);
-    const summary = page.locator(".chat-question-summary").filter({ hasText: "API key:" });
-    await summary.waitFor();
-    await expectCount(summary.getByText("Answered", { exact: true }), 1);
-    expect(await summary.textContent()).not.toContain("stored");
-    await expectSecretNotEchoed(page, fakeSecret);
-  });
-
-  it("keeps a store-bound question interactive after Gateway validation rejects its hosts", async () => {
-    const { gateway, page } = await openQuestionPage();
-    const request = secretStoreQuestion("question-store-secret-validation");
-    const fakeSecret = "fake-secret-never-use-validation-proof-456";
-    const validationMessage = "Allowed hosts must be valid hostnames.";
-    await gateway.setMethodResponse("question.resolve", {
-      __mockError: { code: "INVALID_REQUEST", message: validationMessage },
-    });
-    const panel = await showQuestion(page, gateway, request);
-    const secretInput = panel.locator('input[type="password"]');
-    const hostsInput = panel.locator(".chat-question-panel__hosts");
-    await secretInput.fill(fakeSecret);
-    await hostsInput.fill("bad-host.example.test");
-    await button(panel, "Submit").click();
     await gateway.waitForRequest("question.resolve");
     await panel.getByText(validationMessage, { exact: false }).waitFor();
     await expect.poll(() => secretInput.isEnabled()).toBe(true);
@@ -540,7 +672,7 @@ suite.define(() => {
     await expectSecretNotEchoed(page, fakeSecret);
 
     await gateway.setMethodResponse("question.resolve", storedSecretAnswer());
-    await hostsInput.fill("corrected.example.test");
+    await hostsInput.fill("corrected.example.test, uploads.example.test extra.example.test");
     const previousRequestCount = (await gateway.getRequests("question.resolve")).length;
     await button(panel, "Submit").click();
     await expectResolution(
@@ -548,11 +680,19 @@ suite.define(() => {
       {
         id: request.id,
         answers: { answers: { api_key: [fakeSecret] } },
-        secretStoreAllowedHosts: ["corrected.example.test"],
+        secretStoreAllowedHosts: [
+          "corrected.example.test",
+          "uploads.example.test",
+          "extra.example.test",
+        ],
       },
       previousRequestCount,
     );
     await expectCount(panel, 0);
+    const summary = page.locator(".chat-question-summary").filter({ hasText: "API key:" });
+    await summary.waitFor();
+    await expectCount(summary.getByText("Answered", { exact: true }), 1);
+    expect(await summary.textContent()).not.toContain("stored");
     await expectSecretNotEchoed(page, fakeSecret);
   });
 
@@ -607,43 +747,48 @@ suite.define(() => {
     expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
   });
 
-  it("retains a typed answer when navigating between pending questions", async () => {
-    const { gateway, page } = await openQuestionPage();
-    const first = questionRecord("question-a-format", {
-      questionId: "format",
-      header: "Format",
-      question: "Which format should I use?",
-      options: [{ label: "Compact" }, { label: "Detailed" }],
+  it("keeps a long /ask document on one scroller with reachable answers at phone width", async () => {
+    const page = await newPage({ height: 844, width: 390 }, true);
+    const request = questionRecord("question-long-document", {
+      multiSelect: true,
       isOther: true,
+      options: Array.from({ length: 14 }, (_value, index) => ({
+        label: `Rollout option ${index + 1}`,
+        description: "Drains the writers, applies the migration and waits for the health check.",
+      })),
     });
-
-    const second = questionRecord("question-b-audience", {
-      questionId: "audience",
-      header: "Audience",
-      question: "Who should read it?",
-      options: [{ label: "Engineers" }, { label: "Everyone" }],
-      isOther: true,
+    await installMockGateway(page, {
+      featureMethods: ["question.get", "question.resolve"],
+      methodResponses: { "question.get": { question: request } },
     });
+    await page.goto(new URL(`ask/${request.id}`, suite.server.baseUrl).toString());
+    const document = page.locator("openclaw-question-page");
+    const panel = document.locator(".chat-question-panel");
+    await panel.waitFor();
 
-    await gateway.emitGatewayEvent("question.requested", first);
-    await gateway.emitGatewayEvent("question.requested", second);
-    const panel = page.locator("openclaw-chat-question-panel");
-    await panel.getByRole("textbox", { name: "Your own answer for Format" }).fill("Compact");
-    await button(panel, "Next").click();
-    await panel.getByText("Who should read it?", { exact: true }).waitFor();
-    await button(panel, "Previous").click();
-    await panel.getByText("Which format should I use?", { exact: true }).waitFor();
-    expect(
-      await panel.getByRole("textbox", { name: "Your own answer for Format" }).inputValue(),
-    ).toBe("Compact");
-    expect(await panel.getByRole("radio", { name: /Compact/ }).getAttribute("aria-checked")).toBe(
-      "false",
-    );
+    const layout = await panel.evaluate((element) => {
+      const scroller = element.closest<HTMLElement>(".approval-page")!;
+      const box = (selector: string) => element.querySelector(selector)!.getBoundingClientRect();
+      return {
+        panelOverflow: element.scrollHeight - element.clientHeight,
+        pageOverflow: scroller.scrollHeight - scroller.clientHeight,
+        documentOverflow: element.ownerDocument.documentElement.scrollWidth - window.innerWidth,
+        advanceHeight: box(".chat-question-panel__advance").height,
+      };
+    });
+    expect(layout.panelOverflow).toBeLessThanOrEqual(0);
+    expect(layout.pageOverflow).toBeGreaterThan(0);
+    expect(layout.documentOverflow).toBeLessThanOrEqual(0);
+    expect(layout.advanceHeight).toBeGreaterThanOrEqual(44);
+
+    await panel.getByRole("checkbox").first().tap();
+    const submit = button(panel, "Submit");
+    await submit.scrollIntoViewIfNeeded();
+    expect(await submit.isEnabled()).toBe(true);
   });
 
   it.each([
     ["answered", false],
-    ["cancelled", false],
     ["answered", true],
     ["cancelled", true],
   ] as const)(

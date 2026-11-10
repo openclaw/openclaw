@@ -1,7 +1,7 @@
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { z } from "zod";
-import type { GithubSourceConfig, SourceRuntime, SourceStatus } from "../../types.js";
+import type { GithubSourceConfig, SourceStatus } from "../../types.js";
 import {
   ApiResponseReadError,
   createResponseParser,
@@ -30,7 +30,6 @@ export class GithubClient {
 
   constructor(
     private readonly cfg: GithubSourceConfig,
-    private readonly runtime: SourceRuntime,
     readonly status: SourceStatus,
   ) {
     try {
@@ -89,7 +88,6 @@ export class GithubClient {
             "X-GitHub-Api-Version": "2022-11-28",
             Authorization: `Bearer ${this.cfg.token}`,
           },
-          this.runtime,
           this.status,
         );
         data = response.data;

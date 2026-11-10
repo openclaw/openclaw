@@ -1,12 +1,17 @@
 import { randomUUID, createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
+import * as handles from "../state/openclaw-state-db-handle.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { retainedCheckpointBinding } from "./update-retained-checkpoint.test-support.js";
 import {
   createRetainedUpdateRecovery,
@@ -19,6 +24,7 @@ import {
   finishUpdateRun,
   finishInterruptedUpdatePreview,
   getUpdateRun,
+  recordUpdateRunPhase,
 } from "./update-run-ledger.js";
 import { legacyRecord } from "./update-run-recovery-legacy.test-support.js";
 import {
@@ -26,6 +32,7 @@ import {
   inspectUpdateRecovery,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
+import { readRecovery } from "./update-run-recovery-store.js";
 import {
   assertNoPendingUpdateRecovery,
   inspectUpdateRecoveries,
@@ -33,6 +40,7 @@ import {
   UpdateRecoveryRequiredError,
 } from "./update-run-recovery.js";
 import { captureCompletedUpdateRun } from "./update-run-terminal-record.js";
+import { updateRunLedgerSchema } from "./update-run-write.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -249,6 +257,38 @@ describe("retained recovery read-only compatibility", () => {
     expect(inspectUpdateRecoveries(options)).toEqual([]);
     expect(() => assertNoPendingUpdateRecovery(options)).not.toThrow();
     expect(fs.readdirSync(root)).toEqual([]);
+  });
+  it("reads only the named recovery payload regardless of unrelated history", () => {
+    const f = setup();
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(f.options).db);
+    const raw = JSON.stringify(f.record);
+    const selectedBytes =
+      Buffer.byteLength(raw) + Buffer.byteLength("update.recovery." + f.run.runId);
+    db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?").run(
+      raw,
+      "update.recovery." + f.run.runId,
+    );
+    const insert = db.prepare(
+      "INSERT INTO config_machine_state (state_key,value_json,updated_at_ms) VALUES (?,?,0)",
+    );
+    for (let i = 0; i < 32; i++) {
+      insert.run(`update.recovery.unrelated-${i}`, "invalid:" + "x".repeat(8192));
+    }
+    const counter = trackSqliteStatementExecutions(db, ["recovery"], (sql) =>
+      /^select .* from "config_machine_state"/i.test(sql) ? "recovery" : null,
+    );
+    try {
+      expect(readRecovery(db, f.run.runId)).toEqual(f.record);
+      expect(counter.counts.recovery).toBe(1);
+      expect(counter.rowCounts.recovery).toBe(1);
+      expect(counter.textBytes.recovery).toBe(selectedBytes);
+      expect(readRecovery(db, "missing-run")).toBeUndefined();
+      expect(counter.counts.recovery).toBe(2);
+      expect(counter.rowCounts.recovery).toBe(1);
+      expect(counter.textBytes.recovery).toBe(selectedBytes);
+    } finally {
+      counter.restore();
+    }
   });
   it.each(["intent", "completed"] as const)("preserves %s package effects", (outcome) => {
     const f = setup();
@@ -496,4 +536,101 @@ it.each(["current", "legacy-serving"] as const)("inspects %s packages", (format)
   }
   expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
   expect(snapshot(f.root)).toEqual(before);
+});
+
+function source() {
+  const { options, run, record } = setup();
+  record.handoff = { handoffId: randomUUID(), state: "prepared" };
+  storeRetainedUpdateRecovery(record, options);
+  const pathname = openOpenClawStateDatabase(options).path;
+  closeOpenClawStateDatabaseForTest();
+  using legacy = openNodeSqliteDatabase(pathname);
+  // Older markers on current layout, not a v15 migration fixture.
+  legacy.exec(`PRAGMA foreign_keys=OFF;
+      PRAGMA user_version=15;
+      UPDATE schema_meta SET schema_version=15 WHERE meta_key='primary';`);
+  return { options, run, record, pathname };
+}
+function shape(pathname: string) {
+  using db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  return {
+    version: db.prepare("PRAGMA user_version").get(),
+    schema: db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name").all(),
+    metadata: db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
+    recovery: db
+      .prepare(
+        "SELECT value_json FROM config_machine_state WHERE state_key LIKE 'update.recovery.%'",
+      )
+      .get(),
+  };
+}
+it("refuses existing-state writes while another connection holds the native transaction", () => {
+  const f = source();
+  const before = fs.readFileSync(f.pathname);
+  using writer = openNodeSqliteDatabase(f.pathname);
+  writer.exec("BEGIN IMMEDIATE");
+  expect(() => probeExistingWriter(f, 0)).toThrow(/locked/);
+  expect(fs.readFileSync(f.pathname)).toEqual(before);
+  writer.exec("ROLLBACK");
+});
+
+it.each([
+  [
+    "future",
+    "PRAGMA user_version=2147483647; UPDATE schema_meta SET schema_version=2147483647 WHERE meta_key='primary'",
+  ],
+  ["metadata", "UPDATE schema_meta SET schema_version=14 WHERE meta_key='primary'"],
+  [
+    "trigger",
+    "CREATE TRIGGER unexpected_recovery_write AFTER UPDATE ON update_runs BEGIN UPDATE schema_meta SET app_version='unexpected'; END;",
+  ],
+])("refuses %s state without changing a retained handoff", (_scenario, sql) => {
+  const f = source();
+  {
+    using db = openNodeSqliteDatabase(f.pathname);
+    db.exec(sql);
+  }
+  const before = shape(f.pathname);
+  expect(() => probeExistingWriter(f)).toThrow();
+  expect(shape(f.pathname)).toEqual(before);
+  expect(before.recovery).toBeDefined();
+  expect(JSON.parse(String(before.recovery?.value_json))).toEqual(f.record);
+});
+
+it.each(["before admission", "before tracked open"])(
+  "does not recreate state displaced %s",
+  (when) => {
+    const f = source();
+    const before = shape(f.pathname);
+    const open = handles.openTrackedStateDatabase;
+    if (when === "before admission") {
+      fs.renameSync(f.pathname, f.pathname + ".retained");
+    }
+    using _ =
+      when === "before tracked open"
+        ? vi.spyOn(handles, "openTrackedStateDatabase").mockImplementation((pathname, options) => {
+            fs.renameSync(pathname, pathname + ".retained");
+            return open(pathname, options);
+          })
+        : undefined;
+    expect(() => probeExistingWriter(f)).toThrow();
+    expect(fs.existsSync(f.pathname)).toBe(false);
+    expect(shape(f.pathname + ".retained")).toEqual(before);
+    expect(before.version).toEqual({ user_version: 15 });
+  },
+);
+
+function probeExistingWriter(f: ReturnType<typeof source>, busyTimeoutMs?: number) {
+  return runExistingOpenClawStateWriteTransaction(() => undefined, f.options, {
+    schemaSql: updateRunLedgerSchema,
+    operationLabel: "retained-test-owner",
+    busyTimeoutMs,
+  });
+}
+it("preserves the previous runtime schema during ledger bookkeeping", () => {
+  const f = source();
+  const before = shape(f.pathname);
+  expect(recordUpdateRunPhase(f.run.runId, "verifying", {}, f.options).phase).toBe("verifying");
+  closeOpenClawStateDatabaseForTest();
+  expect(shape(f.pathname)).toEqual(before);
 });

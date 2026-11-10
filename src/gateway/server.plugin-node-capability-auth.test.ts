@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { request, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, createServer, type ListenOptions, type Socket } from "node:net";
@@ -15,6 +16,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { withEnv } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -32,7 +34,6 @@ const WS_REJECT_TIMEOUT_MS = 2_000;
 const WS_CONNECT_TIMEOUT_MS = 5_000;
 const HTTP_REQUEST_TIMEOUT_MS = 15_000;
 const SERVER_CLOSE_TIMEOUT_MS = 5_000;
-const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 const CANVAS_WS_PATH = "/__openclaw__/test/ws";
 
@@ -240,7 +241,13 @@ function makeWsClient(
   params: { role?: "node" | "operator"; mode?: "node" | "webchat"; expiresAtMs?: number } = {},
 ): GatewayWsClient {
   return {
-    socket: {} as unknown as WebSocket,
+    socket: Object.assign(new EventEmitter(), {
+      readyState: WebSocket.OPEN,
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+      terminate: vi.fn(),
+    }),
     connect: {
       role: params.role ?? "node",
       client: { mode: params.mode ?? "node" },
@@ -297,13 +304,6 @@ async function withCanvasGatewayHarness(
     openResponsesEnabled: false,
     handleHooksRequest: async () => false,
     handlePluginRequest: async (req, res) => {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      if (url.pathname === A2UI_PATH || url.pathname.startsWith(`${A2UI_PATH}/`)) {
-        res.statusCode = 503;
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("A2UI assets not found");
-        return true;
-      }
       return (params.handleHttpRequest ?? allowCanvasHostHttp)(req, res);
     },
   });
@@ -323,7 +323,10 @@ async function withCanvasGatewayHarness(
       return true;
     },
     ...shared,
-    preauthConnectionBudget: createPreauthConnectionBudget(8),
+    preauthConnectionBudget: withEnv(
+      { OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "8" },
+      createPreauthConnectionBudget,
+    ),
     desktopSessionRegistry: params.desktopSessionRegistry,
   });
 
@@ -364,7 +367,7 @@ describe("gateway plugin node capability auth", () => {
       const activeCanvasPath = scopedCanvasPath(activeNodeCapability);
       const activeWsPath = scopedCanvasPath(activeNodeCapability, CANVAS_WS_PATH);
       await expectCanvasStatus(listener, `${CANVAS_HOST_PATH}/`, 401);
-      await expectCanvasStatus(listener, `${PLUGIN_NODE_CAPABILITY_PATH_PREFIX}/broken`, 401);
+      await expectCanvasStatus(listener, `${PLUGIN_NODE_CAPABILITY_PATH_PREFIX}/broken`, 400);
       for (const [capability, options, status] of [
         ["webchat-cap", { role: "operator", mode: "webchat" }, 200],
         ["expired-node", { expiresAtMs: Date.now() - 1 }, 401],
@@ -376,10 +379,6 @@ describe("gateway plugin node capability auth", () => {
       clients.add(activeNodeClient);
       const scopedCanvas = await expectCanvasStatus(listener, activeCanvasPath, 200);
       expect(await scopedCanvas.text()).toBe("ok");
-      const scopedA2ui = await fetchCanvas(
-        canvasUrl(listener, scopedCanvasPath(activeNodeCapability, `${A2UI_PATH}/`)),
-      );
-      expect([200, 404, 503]).toContain(scopedA2ui.status);
       await expectWsConnected(canvasUrl(listener, activeWsPath, "ws"));
       clients.delete(activeNodeClient);
       await expectCanvasStatus(listener, activeCanvasPath, 401);
@@ -470,20 +469,70 @@ describe("gateway plugin node capability auth", () => {
     async (_transport, headers) => {
       setRuntimeConfigSnapshot({});
       await withCanvasGatewayHarness(async ({ listener }) => {
-        for (const requestTarget of ["//", "///", "//${jndi:ldap://example}.action"]) {
+        for (const [requestTarget, status] of [
+          ["//", 401],
+          ["///", 401],
+          ["//${jndi:ldap://example}.action", 401],
+          [scopedCanvasPath("token", "//example/canvas"), 400],
+          [scopedCanvasPath("token", "/%2F%2Fexample/canvas"), 400],
+          [scopedCanvasPath("token", "/\\example/canvas"), 400],
+          [scopedCanvasPath("token", "/%5cexample/canvas"), 400],
+        ] as const) {
           const response = await sendRawHttpRequest({
             host: "127.0.0.1",
             port: listener.port,
             requestTarget,
             headers,
           });
-          expect(response).toMatch(/^HTTP\/1\.1 401 /);
+          expect(response).toMatch(new RegExp(`^HTTP/1\\.1 ${status} `));
         }
         await expectCanvasStatus(listener, CANVAS_HOST_PATH, 401);
       });
     },
     60_000,
   );
+
+  test("rejects ambiguous scoped paths before route resolution or HTTP dispatch", async () => {
+    let routePath = "";
+    const resolveRoute = vi.fn<NonNullable<UpgradeOptions["resolvePluginNodeCapabilityRoute"]>>(
+      (context) => {
+        routePath = context.pathname;
+        return { surface: "canvas" };
+      },
+    );
+    await withLoopbackTrustedProxy(
+      async ({ listener, clients }) => {
+        clients.add(makeWsClient("active-node"));
+        const valid = await expectCanvasStatus(listener, scopedCanvasPath("active-node"), 200);
+        expect(await valid.json()).toEqual({
+          routePath: `${CANVAS_HOST_PATH}/`,
+          handlerPath: `${CANVAS_HOST_PATH}/`,
+        });
+        resolveRoute.mockClear();
+        for (const leading of ["//", "///", "/\\", "\\\\", "/%2F%2F", "/%2f", "/%5C", "/%2F%5c"]) {
+          const response = await sendRawHttpRequest({
+            host: "127.0.0.1",
+            port: listener.port,
+            requestTarget: scopedCanvasPath("active-node", `${leading}example${CANVAS_HOST_PATH}/`),
+          });
+          expect.soft(response).toMatch(/^HTTP\/1\.1 400 /);
+        }
+        expect(resolveRoute).not.toHaveBeenCalled();
+      },
+      {
+        resolvePluginNodeCapabilityRoute: resolveRoute,
+        handleHttpRequest: async (req, res) => {
+          res.end(
+            JSON.stringify({
+              routePath,
+              handlerPath: new URL(req.url ?? "/", "http://localhost").pathname,
+            }),
+          );
+          return true;
+        },
+      },
+    );
+  });
 
   test("re-resolves canvas bearer auth on each upgrade after shared auth rotation", async () => {
     setRuntimeConfigSnapshot({});

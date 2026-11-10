@@ -61,6 +61,7 @@ export async function withPreparedModelInference<Result>(
           agentDir: resolveAgentDir(params.cfg, agentId),
           workspaceDir,
           loadRuntimePlugins: true,
+          runtimePluginPurpose: "isolated-completion",
           runtimePluginSelections: [{ ...selection, agentId }],
         },
         {
@@ -75,12 +76,14 @@ export async function withPreparedModelInference<Result>(
         workspaceDir: lease.snapshot.workspaceDir ?? workspaceDir,
       };
       params.signal?.throwIfAborted();
-      return withPluginRuntimeGenerationScope(context.preparedModelRuntime, async () => {
-        captureWorkContext();
-        const result = await execute(context);
-        params.signal?.throwIfAborted();
-        return result;
-      });
+      return lease.run(() =>
+        withPluginRuntimeGenerationScope(context.preparedModelRuntime, async () => {
+          captureWorkContext();
+          const result = await execute(context);
+          params.signal?.throwIfAborted();
+          return result;
+        }),
+      );
     }),
   );
 }

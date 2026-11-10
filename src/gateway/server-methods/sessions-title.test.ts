@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
@@ -11,6 +12,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { sessionTitleHandlers } from "./sessions-title.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -91,15 +93,9 @@ const refusal = (code: string) => [false, undefined, expect.objectContaining({ c
 function connectedClient(profileId?: string): GatewayClient {
   return {
     connId: "title-preparation-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.write"],
-    },
+    connect: gatewayConnect(["operator.write"]),
     authenticatedUserProfile: profileId
-      ? { profileId, displayName: "Title Test Person", hasAvatar: false, updatedAt: 1 }
+      ? gatewayProfile(profileId, "Title Test Person")
       : undefined,
   };
 }
@@ -378,7 +374,7 @@ describe("sessions.title.prepare", () => {
     }
   });
 
-  it.each([
+  it.for([
     { loss: "disconnected", completion: "succeeds" },
     { loss: "replaced", completion: "succeeds" },
     { loss: "role revoked", completion: "succeeds" },
@@ -387,7 +383,7 @@ describe("sessions.title.prepare", () => {
     { loss: "disconnected", completion: "fails" },
   ] as const)(
     "rejects a $loss personal selection when pending inference $completion",
-    async ({ loss, completion }) => {
+    async ({ loss, completion }, { signal }) => {
       const writer: GatewayOperatorRoleDefinition = {
         agents: "*",
         scopes: ["operator.write"],
@@ -398,7 +394,11 @@ describe("sessions.title.prepare", () => {
       const connections = new Set([client]);
       const abort = new AbortController();
       const inference = createDeferredCore<{ text: string }>();
-      mocks.runIsolatedCompletion.mockReturnValueOnce(inference.promise);
+      const entered = createDeferredCore();
+      mocks.runIsolatedCompletion.mockImplementationOnce(() => {
+        entered.resolve();
+        return inference.promise;
+      });
       const pending = prepare(
         {
           agentId: "main",
@@ -410,7 +410,15 @@ describe("sessions.title.prepare", () => {
         { connections, signal: abort.signal },
       );
       try {
-        await vi.waitFor(() => expect(mocks.runIsolatedCompletion).toHaveBeenCalledOnce());
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Title preparation settled before entering the held inference",
+          ),
+          signal,
+        );
+        expect(mocks.runIsolatedCompletion).toHaveBeenCalledOnce();
         if (loss === "disconnected" || loss === "replaced") {
           connections.delete(client);
           if (loss === "replaced") {
@@ -429,6 +437,8 @@ describe("sessions.title.prepare", () => {
         } else {
           inference.resolve({ text: "Title after authority ended" });
         }
+        // Drain both promises without masking an earlier setup failure.
+        await Promise.allSettled([pending, inference.promise]);
       }
       expect(await pending).toEqual([refusal("FORBIDDEN")]);
       expect(mocks.runIsolatedCompletion).toHaveBeenCalledTimes(1);

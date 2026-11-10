@@ -250,7 +250,11 @@ private class BottomInsetsGateway : AutoCloseable {
         val payload =
           when (method) {
             "connect" -> {
-              Json.parseToJsonElement("""{"type":"hello-ok","protocol":3,"server":{"host":"inset-proof","version":"proof"},"features":{"methods":["agents.workspace.list","agents.workspace.get","models.list","models.authStatus","chat.history","chat.metadata","health","sessions.list"],"events":[]},"auth":{"role":${params.getValue("role")},"scopes":["operator.read","operator.write"]},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""")
+              Json.parseToJsonElement("""{"type":"hello-ok","protocol":3,"server":{"host":"inset-proof","version":"proof"},"features":{"methods":["agents.list","agents.workspace.list","agents.workspace.get","models.list","models.authStatus","chat.history","chat.metadata","health","sessions.list"],"events":[]},"auth":{"role":${params.getValue("role")},"scopes":["operator.read","operator.write"]},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""")
+            }
+
+            "agents.list" -> {
+              Json.parseToJsonElement("""{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}""")
             }
 
             "agents.workspace.list" -> {

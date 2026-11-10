@@ -141,12 +141,11 @@ export async function deliverDiscordInteractionReply(params: {
   componentRoute?: { accountId: string; agentId: string; sessionKey: string };
   textLimit: number;
   maxLinesPerMessage?: number;
-  preferFollowUp: boolean;
   responseEphemeral?: boolean;
   chunkMode: "length" | "newline";
   onDelivered?: (text: string) => Promise<void>;
 }): Promise<boolean> {
-  const { interaction, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
+  const { interaction, textLimit, maxLinesPerMessage, chunkMode } = params;
   const nativeParts = resolveDiscordInteractionMessageParts(params.payload);
   // Keep attachments and authored native parts on their existing delivery path.
   const preserveNativeParts =
@@ -195,13 +194,11 @@ export async function deliverDiscordInteractionReply(params: {
     };
     try {
       const result = await safeDiscordInteractionCall("interaction send", async () => {
-        const sent =
-          await interaction[!preferFollowUp && !payloadDelivered ? "reply" : "followUp"](
-            payloadLocal,
-          );
+        // Command entry points acknowledge interactions before dispatching replies.
+        const sent = await interaction.followUp(payloadLocal);
         payloadDelivered = true;
         if (firstMessage && componentBuild) {
-          // Initial callbacks need not return a message; callback input supplies its ID later.
+          // Native sends need not return a message; callback input supplies its ID later.
           const messageId =
             sent && typeof sent === "object" && "id" in sent && typeof sent.id === "string"
               ? sent.id

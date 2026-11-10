@@ -223,3 +223,12 @@ it("promotes agent, session, and channel context to top-level JSONL fields", asy
     message: "session routed",
   });
 });
+
+it("keeps falsy scalar context ahead of later aliases and logger bindings", async () => {
+  const logger = getChildLogger({ agentId: "binding-agent", messageProvider: "binding-channel" });
+  logger.info(
+    { agent_id: 0, agentId: "later-agent", channel: false, messageProvider: "later-channel" },
+    "context priority",
+  );
+  expect((await readRecords())[0]).toMatchObject({ agent_id: "0", channel: "false" });
+});

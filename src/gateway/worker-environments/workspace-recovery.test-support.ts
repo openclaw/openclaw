@@ -10,6 +10,7 @@ import type {
   WorkerWorkspaceConflictReport,
   WorkspaceResultConflictLookup,
 } from "./workspace-conflicts.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -35,6 +36,7 @@ export function createWorkerWorkspaceRecoveryFixture(options: {
     report: WorkerSessionPlacementIdentity & WorkerWorkspaceConflictReport,
   ) => Promise<void>;
   reportFailure?: (report: WorkerWorkspaceRecoveryFailureReport) => Promise<void>;
+  reportNote?: (report: WorkerSessionPlacementIdentity & { note: string }) => Promise<void>;
 }): Pick<PlacementRecoveryDeps, "resolveWorkspace" | "withPreparedRecovery"> {
   return {
     resolveWorkspace: options.resolveWorkspace,
@@ -59,6 +61,7 @@ export function createWorkerWorkspaceRecoveryFixture(options: {
         reportConflict: (report) =>
           guarded(() => options.reportConflict?.({ ...identity, ...report })),
         reportFailure: (error) => guarded(() => options.reportFailure?.({ ...identity, error })),
+        reportNote: (note) => guarded(() => options.reportNote?.({ ...identity, note })),
       });
     },
   };
@@ -149,6 +152,7 @@ export async function applyWorkspace(params: {
   const { applyStagedWorkerWorkspace } = await import("./workspace-reconcile-apply.js");
   return await applyStagedWorkerWorkspace({
     ...params,
+    reconciliation: prepareWorkspaceReconciliation(params.base, params.current),
     baseManifestRef: `sha256:${"a".repeat(64)}`,
     currentManifestRef: `sha256:${"b".repeat(64)}`,
     acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },

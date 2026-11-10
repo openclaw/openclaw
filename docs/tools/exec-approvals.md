@@ -60,6 +60,13 @@ for matching, prompting, and binding restrictions.
 
 ### macOS split
 
+OpenClaw keeps its native macOS human-approval panels out of Peekaboo screen
+snapshots and refuses native computer input while approvals are pending, including
+the menu-bar queue. Human approval controls remain usable. These native guards do
+not cover browser automation, the separate CUA driver, or third-party automation
+on the same machine. Do not combine ask-mode exec with unrestricted computer use
+for a model you do not trust. This is hardening, not an isolation boundary.
+
 - The **node host service** forwards `system.run` to the **macOS app** over local IPC.
 - The **macOS app** enforces approvals and executes the command in UI context.
 
@@ -171,8 +178,16 @@ Legacy allowlist entries may contain `null` for `lastUsedAt` or
 `lastUsedCommand`. Doctor treats those two usage fields as absent during
 import, including when the config still needs repair. This does not relax
 validation of the current policy: other malformed fields or conflicting legacy
-policies remain preserved for operator recovery, and exec approvals stay
-blocked until the legacy file is resolved. After repair, verify with
+policies remain preserved for operator recovery. The Gateway and node host start
+degraded with canonical SQLite approvals still authoritative; they never import
+conflicting policy or socket credentials. Without canonical policy, exec approvals
+remain unavailable until migration succeeds. Status and Doctor report the retained
+startup warning, including the possibility that an older node host or external
+writer is still changing the legacy file. Stop those writers and reconcile the
+retained file with the intended policy, preserving SQLite policy, then run
+`openclaw doctor --fix` against the same state directory. Legacy-only valid policy
+still imports automatically at startup, and byte-identical legacy copies are removed
+by the migration owner. After repair, verify with
 `openclaw approvals get` using the same state directory.
 
 Example shared policy (socket credentials are held by the local client owner):
@@ -614,6 +629,10 @@ operation without prompting while the grant is valid. The approval card says
 so up front: automation approvals carry a scope line describing exactly what
 Always allow will mint.
 
+Card and ledger previews truncate sanitized text without splitting UTF-16 surrogate pairs.
+Those display limits do not shorten the command, working directory, or
+environment used to bind and match a grant.
+
 ### What a grant covers, and when it stops
 
 A grant is rejected and a normal prompt is required when the job is deleted or its
@@ -697,7 +716,7 @@ native approval clients), see
 
 ## Control UI editing
 
-Use the **Control UI -> Nodes -> Exec approvals** card to edit defaults,
+Use the **Control UI → Devices → Command approvals** card to edit defaults,
 per-agent overrides, and allowlists. Pick a scope (Defaults or an agent),
 tweak the policy, add/remove allowlist patterns, then **Save**. The UI
 shows last-used metadata per pattern so you can keep the list tidy.

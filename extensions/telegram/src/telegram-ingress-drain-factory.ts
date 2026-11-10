@@ -122,12 +122,12 @@ export function createTelegramTransportIngressMonitor(
             if (
               isRecord(update) &&
               isRecord(update[messageKind]) &&
-              hookRunner?.hasHooks("before_channel_ingress")
+              hookRunner?.hasHooks("before_channel_attachment_load")
             ) {
-              let prepared: Awaited<ReturnType<typeof hookRunner.runBeforeChannelIngress>>;
+              let prepared: Awaited<ReturnType<typeof hookRunner.runBeforeChannelAttachmentLoad>>;
               try {
                 lifecycle.abortSignal.throwIfAborted();
-                prepared = await hookRunner.runBeforeChannelIngress(
+                prepared = await hookRunner.runBeforeChannelAttachmentLoad(
                   { providerUpdate: projectPreparationUpdate(update, messageKind) },
                   {
                     channelId: "telegram",

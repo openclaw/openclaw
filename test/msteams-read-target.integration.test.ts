@@ -37,6 +37,11 @@ import {
 import type { PluginRuntime } from "../src/plugins/runtime/types.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { defaultRuntime } from "../src/runtime.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 
 const graph = vi.hoisted(() => ({
   endpoint: undefined as { origin: string; signal: AbortSignal } | undefined,
@@ -216,6 +221,12 @@ async function createFixture(
   const requests: GraphRequest[] = [];
   const controller = new AbortController();
   const pending = new Set<Promise<unknown>>();
+  const graphMessage = (destination: Destination, id = destination.messageId) => ({
+    id,
+    body: { content: destination.text, contentType: "text" },
+    from: messageSender,
+    createdDateTime: messageCreatedAt,
+  });
   const server = createServer((request, response) => {
     const path = decodeURIComponent(new URL(request.url ?? "/", "http://fixture.invalid").pathname);
     requests.push({ method: request.method, path, authorization: request.headers.authorization });
@@ -245,30 +256,24 @@ async function createFixture(
       path === `/v1.0/teams/${destination.teamId}/channels/${destination.channelId}/messages`
     ) {
       body = {
-        value: Array.from({ length: searchMatches }, (_, index) => ({
-          id: index === 0 ? destination.messageId : `${destination.messageId}-${index}`,
-          body: { content: destination.text, contentType: "text" },
-          from: messageSender,
-          createdDateTime: messageCreatedAt,
-        })),
+        value: Array.from({ length: searchMatches }, (_, index) =>
+          graphMessage(
+            destination,
+            index ? `${destination.messageId}-${index}` : destination.messageId,
+          ),
+        ),
       };
     } else if (
       destination &&
       path ===
         `/v1.0/teams/${destination.teamId}/channels/${destination.channelId}/messages/${destination.messageId}`
     ) {
-      body = {
-        id: destination.messageId,
-        body: { content: destination.text, contentType: "text" },
-        from: messageSender,
-        createdDateTime: messageCreatedAt,
-      };
+      body = graphMessage(destination);
     } else {
       response.statusCode = 404;
       body = { error: { message: "Unexpected Graph fixture route" } };
     }
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify(body));
+    respondJson(response, body, response.statusCode);
   });
   cleanups.push(async () => {
     controller.abort(new Error("Teams fixture closed"));
@@ -276,20 +281,11 @@ async function createFixture(
     releaseAgentRunDelegatedAuthority(delegatedAuthority);
     server.closeAllConnections();
     await Promise.allSettled(pending);
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeHttpServer(server);
     await getPluginInstance(record)?.dispose();
     graph.endpoint = undefined;
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected a loopback Graph fixture address");
-  }
-  graph.endpoint = { origin: `http://127.0.0.1:${address.port}`, signal: controller.signal };
+  graph.endpoint = { origin: await listenLoopback(server), signal: controller.signal };
   const tool = wrapToolWithGatewayCallerIdentity(
     createMessageTool({
       ...capabilityParams,
@@ -581,25 +577,14 @@ describe.each([
 
 describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (route) => {
   describe.each(["search", "member-info"] as const)("%s", (action) => {
-    it("reads the current channel when the target is omitted", async () => {
-      const fixture = await createFixture();
-      const result = await fixture.invoke(route, action);
-      expectReadResult(result, action, current);
-      expectGraphRequests(fixture.requests, action, current);
-    });
-
-    it("uses an explicit permitted channelId instead of the current channel", async () => {
-      const fixture = await createFixture();
-      const result = await fixture.invoke(route, action, { channelId: otherTarget });
-      expectReadResult(result, action, other);
-      expectGraphRequests(fixture.requests, action, other);
-    });
-
-    it("uses an explicit channelId without current conversation context", async () => {
-      const fixture = await createFixture("none");
-      const result = await fixture.invoke(route, action, { channelId: otherTarget });
-      expectReadResult(result, action, other);
-      expectGraphRequests(fixture.requests, action, other);
+    it.each([
+      { context: "channel", params: {}, destination: current },
+      { context: "channel", params: { channelId: otherTarget }, destination: other },
+      { context: "none", params: { channelId: otherTarget }, destination: other },
+    ] as const)("reads $params in $context context", async ({ context, params, destination }) => {
+      const fixture = await createFixture(context);
+      expectReadResult(await fixture.invoke(route, action, params), action, destination);
+      expectGraphRequests(fixture.requests, action, destination);
     });
 
     it("preserves the missing-target error when no current context exists", async () => {

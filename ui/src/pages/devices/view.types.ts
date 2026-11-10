@@ -1,15 +1,31 @@
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
 import type { PresenceEntry } from "../../api/types.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import type {
   DevicesPageDataState,
   InventoryRemovalRequest,
 } from "../../lib/nodes/page-operations.ts";
+import type { DevicePolicyRead } from "./devices-policy-reads.ts";
+
+export type DevicesRouteData = {
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
+  devices: DevicesPageDataState;
+};
 
 export type DevicesProps = Omit<
   DevicesPageDataState,
   "client" | "requestGeneration" | "nodesLoading" | "nodesQueuedRefresh" | "devicesQueuedRefresh"
 > & {
   loading: boolean;
+  initialInventoryReady: boolean;
+  configRead: DevicePolicyRead;
+  execApprovalsRead: DevicePolicyRead;
+  inventoryRead: () => void;
+  inventoryScope: object;
+  inventorySaving?: boolean;
+  onReloadInventory: () => void;
   presence: PresenceEntry[];
   gatewayVersion: string | null;
   basePath: string;
@@ -18,10 +34,10 @@ export type DevicesProps = Omit<
   canPairDevice: boolean;
   canManagePairing: boolean;
   canAdmin: boolean;
+  roleAllowsAdmin?: boolean;
   configForm: Record<string, unknown> | null;
   configLoading: boolean;
   configSaving: boolean;
-  configDirty: boolean;
   configFormMode: "form" | "raw";
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
@@ -46,9 +62,7 @@ export type DevicesProps = Omit<
   onLoadExecApprovals: () => void;
   onBindDefault: (nodeId: string | null) => void;
   onBindAgent: (agentId: string, nodeId: string | null) => void;
-  onSaveBindings: () => void;
   onExecApprovalsTargetChange: (kind: "gateway" | "node", nodeId: string | null) => void;
-  onExecApprovalsSelectAgent: (agentId: string) => void;
   onExecApprovalsPatch: (path: Array<string | number>, value: unknown) => void;
   onExecApprovalsRemove: (path: Array<string | number>) => void;
   onSaveExecApprovals: () => void;

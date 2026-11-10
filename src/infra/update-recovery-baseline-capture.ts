@@ -11,7 +11,8 @@ import { createConfigIO } from "../config/io.factory.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
-import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
+import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-preparation.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { ensurePrivateSnapshotRepositoryRoot } from "../snapshot/local-repository.js";
 import {
   withArtifactPreservingStateReads,
@@ -39,12 +40,12 @@ import {
 import { root as safeRoot } from "./fs-safe.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
-import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 import { isUpdateCapturePath, resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
 } from "./update-capture-privacy-marker.js";
+import { UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 import { canonicalEntryPath } from "./update-recovery-path.js";
@@ -119,6 +120,8 @@ export function captureUpdateRecoveryBaseline(params: {
   timeoutMs?: number;
   acquisition?: UpdateRecoveryCaptureAcquisition;
   fullIntegrityCheck?: boolean;
+  /** Standalone Doctor retains live custody separately from its capture deadline. */
+  discardIncompleteOnFailure?: { assertCurrent: () => void };
 }) {
   // Sealed helpers consume retained evidence; the installed CLI owns fresh capture.
   if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
@@ -200,6 +203,8 @@ export function captureUpdateRecoveryBaseline(params: {
         stateDir,
         warnings,
         requireLocalResources: true,
+        assertCurrent,
+        signal: params.signal,
         ...(resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
           ? {
               manifestRegistry: (
@@ -238,8 +243,9 @@ export function captureUpdateRecoveryBaseline(params: {
       );
       const space = tryReadDiskSpace(store);
       if (space && space.availableBytes < requiredBytes) {
-        throw new Error(
+        throw new UpdateCaptureSpaceError(
           `Original update capture needs ${formatDiskSpaceBytes(requiredBytes)} near ${store}, but only ${formatDiskSpaceBytes(space.availableBytes)} is available. Free space on this volume, then retry; original state has not been changed.`,
+          { requiredBytes, availableBytes: space.availableBytes },
         );
       }
       if (!space) {
@@ -363,6 +369,13 @@ export function captureUpdateRecoveryBaseline(params: {
         ...databases.databases.map((file) => file.path),
         ...databases.missingPaths,
       ]);
+      for (const pathname of databases.missingPaths) {
+        for (const suffix of ["-wal", "-journal"]) {
+          if (await statOrMissing(pathname + suffix)) {
+            throw new Error(`Database is absent but retained journal data exists: ${pathname}`);
+          }
+        }
+      }
       const databaseSpellings = new Set([
         ...databasePaths,
         ...databases.sourcePaths.map(canonicalEntryPath),
@@ -473,39 +486,6 @@ export function captureUpdateRecoveryBaseline(params: {
       }
       await configCapture.revalidate();
       assertCurrent();
-      const originalCaptureSources = new Set(databases.originalCaptureSourcePaths);
-      const generationPaths = [...databasePaths].filter(
-        (pathname) => !originalCaptureSources.has(pathname),
-      );
-      const generations =
-        generationPaths.length === 0
-          ? {}
-          : await readUpdateDatabaseGenerationsIsolated(generationPaths, {
-              env,
-              pluginOwners: databases.pluginOwners,
-              signal: params.signal,
-              timeoutMs: params.timeoutMs,
-              acquisition: params.acquisition,
-              retryAdvice: false,
-            });
-      const unverified = generationPaths.flatMap((pathname): [string, string][] =>
-        !Object.hasOwn(databases.sourceGenerations, pathname)
-          ? [[pathname, "no stable generation was recorded during its snapshot."]]
-          : databases.sourceGenerations[pathname] !== generations[pathname]
-            ? [[pathname, "generation changed after its snapshot."]]
-            : [],
-      );
-      if (unverified.length) {
-        throw new Error(
-          [
-            "Original database generation changed or could not be verified; capture is unsealed.",
-            ...unverified.map(([pathname, reason]) => `${pathname}: ${reason}`),
-            ...databases.warnings.filter((warning) =>
-              unverified.some(([pathname]) => warning.includes(pathname)),
-            ),
-          ].join("\n"),
-        );
-      }
       const boundedWarnings = warnings.slice(0, 32).map((warning) => ({
         kind: warning.kind,
         pluginId: warning.pluginId,
@@ -586,7 +566,26 @@ export function captureUpdateRecoveryBaseline(params: {
         diagnostics: { databaseWarnings: [...capacityWarnings, ...databases.warnings] },
       };
     } catch (cause) {
-      throw new Error(`Original update capture failed; evidence retained at ${directory}`, {
+      let outcome = `evidence retained at ${directory}`;
+      const discard = params.discardIncompleteOnFailure;
+      if (discard && !hasCommandProcessCleanupError(cause)) {
+        try {
+          // A final name can mean publication completed before its acknowledgement failed.
+          if (!(await statOrMissing(path.join(directory, "manifest.json")))) {
+            await pin.assertCurrent();
+            discard.assertCurrent();
+            await fs.rm(directory, { recursive: true });
+            outcome = `incomplete copy removed from ${directory}`;
+          }
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [cause, cleanupError],
+            `Original update capture failed; incomplete copy cleanup failed; ${outcome}`,
+            { cause: cleanupError },
+          );
+        }
+      }
+      throw new Error(`Original update capture failed; ${outcome}`, {
         cause,
       });
     } finally {

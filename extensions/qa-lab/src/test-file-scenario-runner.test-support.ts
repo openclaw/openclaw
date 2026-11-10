@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { vi } from "vitest";
 import {
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
@@ -8,10 +9,35 @@ import {
 } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
-import type {
-  QaScenarioCommandExecution,
-  runQaTestFileScenarios,
-} from "./test-file-scenario-runner.js";
+import * as commandLifecycle from "./test-file-scenario-command-lifecycle.js";
+import type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
+import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
+
+export async function withQaScenarioCommand<T>(
+  runCommand: typeof commandLifecycle.runQaScenarioCommandLifecycle | undefined,
+  run: () => Promise<T>,
+) {
+  if (!runCommand) {
+    return run();
+  }
+  const command = vi
+    .spyOn(commandLifecycle, "runQaScenarioCommandLifecycle")
+    .mockImplementation(runCommand);
+  try {
+    return await run();
+  } finally {
+    command.mockRestore();
+  }
+}
+
+export async function runQaTestFileScenariosWithCommand({
+  runCommand,
+  ...params
+}: Parameters<typeof runQaTestFileScenarios>[0] & {
+  runCommand?: typeof commandLifecycle.runQaScenarioCommandLifecycle;
+}) {
+  return withQaScenarioCommand(runCommand, () => runQaTestFileScenarios(params));
+}
 
 export const writeFixtureJson = (file: string, value: unknown) =>
   fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");

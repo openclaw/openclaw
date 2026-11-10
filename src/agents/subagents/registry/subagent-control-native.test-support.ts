@@ -11,7 +11,31 @@ import {
   detachActiveEmbeddedRun as clearNative,
 } from "../../embedded-agent-runner/runs.js";
 
-const producers = new Map<EmbeddedAgentQueueHandle, { finish(): void; settled: Promise<void> }>();
+const producers = new Map<EmbeddedAgentQueueHandle, { finish(): Promise<void> }>();
+
+type OperationIdentity = Pick<
+  Parameters<typeof createReplyOperation>[0],
+  "sessionKey" | "sessionId" | "agentId" | "upstreamAbortSignal"
+>;
+function operationFor(identity: OperationIdentity, storeScope: string) {
+  return createReplyOperation({
+    ...identity,
+    resetTriggered: false,
+    target: captureSessionTarget({ ...identity, incarnation: identity.sessionId, storeScope }),
+  });
+}
+
+// Cleanup follows actual producer settlement, including rejection, on every exit path.
+function ownProducer(run: (finished: Promise<void>) => Promise<void>, cleanup: () => void) {
+  const finished = createDeferred();
+  const settled = run(finished.promise).finally(cleanup);
+  const finish = () => {
+    finished.resolve();
+    return settled;
+  };
+  onTestFinished(finish);
+  return { finish, settled };
+}
 
 /** The fixture owns an actual async producer; cancellation does not fabricate its receipt. */
 export function attachActiveEmbeddedRun(
@@ -23,44 +47,28 @@ export function attachActiveEmbeddedRun(
   explicitAgentId?: string,
 ) {
   const agentId = explicitAgentId ?? parseAgentSessionKey(sessionKey)?.agentId;
-  const operation = createReplyOperation({
-    sessionKey,
-    sessionId,
-    agentId,
-    resetTriggered: false,
-    upstreamAbortSignal: signal,
-    target: captureSessionTarget({
-      sessionKey,
-      incarnation: sessionId,
-      agentId,
-      storeScope:
-        storePath ?? resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId }),
-    }),
-  });
-  const finished = createDeferred();
+  const operation = operationFor(
+    { sessionKey, sessionId, agentId, upstreamAbortSignal: signal },
+    storePath ?? resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId }),
+  );
   const abort = handle.abort;
+  const producer = ownProducer(
+    (finished) => finished,
+    () => {
+      clearNative(sessionId, handle, sessionKey);
+      operation.complete();
+      producers.delete(handle);
+    },
+  );
   handle.abort = (...args) => {
     try {
       abort(...args);
     } finally {
-      finished.resolve();
+      void producer.finish();
     }
   };
   registerNative(sessionId, handle, sessionKey, undefined, agentId, operation);
-  const settled = (async () => {
-    try {
-      await finished.promise;
-    } finally {
-      clearNative(sessionId, handle, sessionKey);
-      operation.complete();
-      producers.delete(handle);
-    }
-  })();
-  producers.set(handle, { finish: () => finished.resolve(), settled });
-  onTestFinished(async () => {
-    finished.resolve();
-    await settled;
-  });
+  producers.set(handle, producer);
 }
 
 export async function detachActiveEmbeddedRun(
@@ -68,9 +76,7 @@ export async function detachActiveEmbeddedRun(
   handle: EmbeddedAgentQueueHandle,
   _sessionKey: string,
 ) {
-  const producer = producers.get(handle);
-  producer?.finish();
-  await producer?.settled;
+  await producers.get(handle)?.finish();
 }
 
 /** Own a real producer so Stop joins its completion, not a fabricated abort receipt. */
@@ -81,38 +87,18 @@ export function startControlProducer(
   onCancel: () => void | Promise<void> = () => {},
   runId?: string,
 ) {
-  const operation = createReplyOperation({
-    sessionKey,
-    sessionId,
-    agentId: "main",
-    resetTriggered: false,
-    target: captureSessionTarget({
-      storeScope: storePath,
-      sessionKey,
-      agentId: "main",
-      incarnation: sessionId,
-    }),
-  });
+  const operation = operationFor({ sessionKey, sessionId, agentId: "main" }, storePath);
   const cancelled = createDeferred();
-  const finished = createDeferred();
   const cancel = vi.fn(() => cancelled.resolve());
-  operation.attachBackend({ kind: "embedded", runId, isStreaming: () => true, cancel });
-  const settled = (async () => {
-    try {
-      const wasCancelled = await Promise.race([
-        cancelled.promise.then(() => true),
-        finished.promise.then(() => false),
-      ]);
-      if (wasCancelled) {
+  const backend = { kind: "embedded" as const, runId, isStreaming: () => true, cancel };
+  operation.attachBackend(backend);
+  const producer = ownProducer(
+    async (finished) => {
+      if (await Promise.race([cancelled.promise.then(() => true), finished.then(() => false)])) {
         await onCancel();
       }
-    } finally {
-      operation.complete();
-    }
-  })();
-  onTestFinished(async () => {
-    finished.resolve();
-    await settled;
-  });
-  return { operation, cancel, settled };
+    },
+    () => operation.complete(),
+  );
+  return { operation, backend, cancel, ...producer };
 }

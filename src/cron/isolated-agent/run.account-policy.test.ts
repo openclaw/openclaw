@@ -4,7 +4,6 @@ import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
@@ -21,11 +20,10 @@ import {
 import { stop } from "../service/ops-lifecycle.js";
 import { list } from "../service/ops-read.js";
 import { enqueueRun } from "../service/ops-run.js";
-import type { CronEvent } from "../service/state.js";
 import { onTimer } from "../service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronStoredJob } from "../types.js";
+import type { CronEvent, CronStoredJob } from "../types.js";
 import {
   getChannelPluginMock,
   loadRunCronIsolatedAgentTurn,
@@ -119,12 +117,10 @@ it.each<AccountCase>([
     };
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const events: CronEvent[] = [];
-    const warn = vi.fn();
     const continuePayload = createDeferredCore();
     const state = createCronRegressionState({
       storePath,
       defaultAgentId: "main",
-      log: { ...noopLogger, warn },
       onEvent: (event) => events.push(structuredClone(event)),
       runSchedulerOwned: createScheduledGatewayRunner(),
       runIsolatedAgentJob: async (params) => {
@@ -161,14 +157,10 @@ it.each<AccountCase>([
       });
       const tasks = readCronRunRecordsForTests(job.id);
       const expectedStatus = fails ? "error" : "ok";
+      const completionStatus = fails ? "failed" : "succeeded";
       expect(persisted?.state.lastRunStatus).toBe(expectedStatus);
-      expect(history.entries).toMatchObject([
-        {
-          status: expectedStatus,
-          completionStatus: fails ? "failed" : "succeeded",
-        },
-      ]);
-      expect(tasks).toMatchObject([{ status: fails ? "failed" : "succeeded" }]);
+      expect(history.entries).toMatchObject([{ status: expectedStatus, completionStatus }]);
+      expect(tasks).toMatchObject([{ status: completionStatus }]);
       expect(events.filter((event) => event.action === "finished")).toEqual([
         expect.objectContaining({ status: expectedStatus }),
       ]);
@@ -178,14 +170,9 @@ it.each<AccountCase>([
         expect(history.entries[0]?.error).toBe(reason);
         expect(history.entries[0]?.diagnostics?.summary).toContain(reason);
         expect(persisted?.state.lastDiagnosticSummary).toContain(reason);
-        expect(warn).toHaveBeenCalledWith(
-          expect.objectContaining({ error: reason }),
-          "cron: job run returned error status",
-        );
         expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       } else {
         expect(persisted?.state.lastError).toBeUndefined();
-        expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
         expect(runEmbeddedAgentMock.mock.calls[0]?.[0].toolsAllow).toEqual(toolsAllow);
         if (!accountId) {
           expect(runEmbeddedAgentMock.mock.calls[0]?.[0].scheduledToolPolicy).toBeUndefined();

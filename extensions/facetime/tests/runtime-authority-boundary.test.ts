@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import { once } from "node:events";
 import net from "node:net";
 import { createInterface } from "node:readline";
@@ -9,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { incomingCall, pendingDial } from "./fixtures.test-support.js";
+import { HelperClient, type Payload } from "./helper-wire.test-support.js";
 
 const isolation = vi.hoisted(() => ({
   port: 0,
@@ -48,10 +48,7 @@ import type { PendingFaceTimeDial } from "../src/outbound-call.js";
 import { PendingFaceTimeDialStore } from "../src/pending-dial-store.js";
 import { createFaceTimeRuntime, type FaceTimeRuntime } from "../src/runtime.js";
 
-const ipcKey = "a".repeat(64);
 const validateConfig = configModule.validateFaceTimeConfig;
-const buildId = "b".repeat(64);
-const mac = (key: string, value: string) => createHmac("sha256", key).update(value).digest("hex");
 const storeOptions = {
   namespace: "pending-dial",
   maxEntries: 1,
@@ -62,74 +59,32 @@ const openStore = () =>
     Omit<PendingFaceTimeDial, "callUUIDAliases"> & { callUUIDAliases?: string[] }
   >("facetime", storeOptions, { assertCurrent() {} });
 
-class WireHelper {
-  readonly actions: Array<Record<string, unknown>> = [];
-  private readonly lines: ReturnType<typeof createInterface>;
-  private epoch = "";
-  private key = "";
-  private sent = 0;
-  private received = 0;
-
-  constructor(readonly socket: net.Socket) {
-    socket.setEncoding("utf8");
-    this.lines = createInterface({ input: socket });
-  }
-
-  private async read(): Promise<Record<string, unknown>> {
-    const [line] = await once(this.lines, "line");
-    return JSON.parse(line) as Record<string, unknown>;
-  }
-
-  private decode(frame: Record<string, unknown>) {
-    const payload = String(frame.payload_json);
-    const sequence = ++this.received;
-    expect(frame).toMatchObject({
-      connection_epoch: this.epoch,
-      direction: "server-to-helper",
-      sequence,
-      auth: mac(this.key, `message\nserver-to-helper\n${this.epoch}\n${sequence}\n${payload}`),
-    });
-    return JSON.parse(payload) as Record<string, unknown>;
-  }
-
-  send(payload: Record<string, unknown>) {
-    const json = JSON.stringify(payload);
-    const sequence = ++this.sent;
-    this.socket.write(
-      `${JSON.stringify({ connection_epoch: this.epoch, direction: "helper-to-server", sequence, payload_json: json, auth: mac(this.key, `message\nhelper-to-server\n${this.epoch}\n${sequence}\n${json}`) })}\n`,
-    );
-  }
-
-  async authenticate() {
-    const bundle = "com.apple.FaceTime";
-    const pid = 1234;
-    const started = 1_700_000_000_000;
-    const nonce = "c".repeat(64);
-    this.socket.write(
-      `${JSON.stringify({ event: "client-hello", bundle_identifier: bundle, build_id: buildId, process_id: pid, process_started_at_ms: started, client_nonce: nonce, proof: mac(ipcKey, `client-hello\n${bundle}\n${buildId}\n${pid}\n${started}\n${nonce}`) })}\n`,
-    );
-    const hello = await this.read();
-    this.epoch = String(hello.connection_epoch);
-    const context = `${bundle}\n${buildId}\n${pid}\n${started}\n${nonce}\n${String(hello.server_nonce)}\n${this.epoch}`;
-    expect(hello.proof).toBe(mac(ipcKey, `server-hello\n${context}`));
-    this.key = mac(ipcKey, `session\n${context}`);
-    this.socket.write(
-      `${JSON.stringify({ event: "client-finish", connection_epoch: this.epoch, proof: mac(this.key, `client-finish\n${this.epoch}`) })}\n`,
-    );
-    expect(this.decode(await this.read())).toEqual({ event: "session-ready" });
-    // Handshake replies are lockstep; commands start only after this acknowledgement.
-    this.lines.on("line", (line) => {
-      const payload = this.decode(JSON.parse(line) as Record<string, unknown>);
-      this.actions.push(payload);
-      this.send({
+async function createWireHelper(socket: net.Socket) {
+  socket.setEncoding("utf8");
+  const lines = createInterface({ input: socket });
+  const peer = new HelperClient(
+    socket,
+    async () => {
+      const [line] = await once(lines, "line");
+      return JSON.parse(line) as Payload;
+    },
+    "\n",
+  );
+  const actions: Payload[] = [];
+  await peer.authenticate(() => {
+    // Install the command reader before acknowledging the authenticated session.
+    lines.on("line", (line) => {
+      const payload = peer.decode(JSON.parse(line) as Payload);
+      actions.push(payload);
+      peer.send({
         transactionId: payload.transactionId,
         ...(payload.action === "find-outgoing-call"
           ? { found: true, call_uuid: "recovered-call" }
           : { found: false, cancelled: true, tombstoned: true }),
       });
     });
-    this.send({ event: "session-ready-ack" });
-  }
+  });
+  return Object.assign(peer, { actions });
 }
 
 const call = (status = 4, overrides: Record<string, unknown> = {}) =>
@@ -137,7 +92,7 @@ const call = (status = 4, overrides: Record<string, unknown> = {}) =>
 
 describe("FaceTime production authority boundary", () => {
   let ownedRuntime: FaceTimeRuntime | undefined;
-  let ownedPeer: WireHelper | undefined;
+  let ownedSocket: net.Socket | undefined;
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
   beforeEach(async () => {
@@ -164,9 +119,9 @@ describe("FaceTime production authority boundary", () => {
 
   afterEach(async () => {
     await ownedRuntime?.stop();
-    ownedPeer?.socket.destroy();
+    ownedSocket?.destroy();
     ownedRuntime = undefined;
-    ownedPeer = undefined;
+    ownedSocket = undefined;
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
   });
@@ -188,10 +143,9 @@ describe("FaceTime production authority boundary", () => {
     });
     ownedRuntime = runtime;
     const socket = net.createConnection({ host: "127.0.0.1", port: isolation.port });
-    const peer = new WireHelper(socket);
-    ownedPeer = peer;
+    ownedSocket = socket;
     await once(socket, "connect");
-    await peer.authenticate();
+    const peer = await createWireHelper(socket);
     await vi.waitFor(async () => expect((await runtime.status()).helperConnected).toBe(true));
     return { runtime, peer };
   }

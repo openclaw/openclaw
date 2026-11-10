@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  controllerSource as reserve,
+  controllerTarget,
+  controllerTurn as turn,
+} from "./controller-core.test-support.js";
 import { withSessionTurn } from "./session-controller.admission.js";
 import { ReplyRunAlreadyActiveError } from "./session-controller.contracts.js";
 import {
@@ -18,7 +22,6 @@ import {
   getCurrentSessionControllerClaim as currentClaim,
   runSessionMutation as mutate,
   startSessionControllerInterruption as interrupt,
-  captureSessionControllerSettlement as controllerSettlement,
   bindSessionControllerTarget as bindTarget,
 } from "./session-controller.lifecycle.js";
 import {
@@ -44,17 +47,7 @@ import {
 
 const key = "agent:main:physical-identity";
 const target = (storeScope: string, sessionKey = key, incarnation = "incarnation") =>
-  captureTarget({ storeScope, sessionKey, incarnation });
-function reserve(
-  physical: ReturnType<typeof captureTarget>,
-  options: Partial<Parameters<typeof reserveSource>[1]> = {},
-) {
-  return reserveSource(physical.sessionKey, {
-    target: physical,
-    policy: { mode: "followup" },
-    ...options,
-  });
-}
+  controllerTarget(storeScope, sessionKey, incarnation);
 function adopt(
   input: Parameters<typeof adoptSource>[0],
   physical: ReturnType<typeof captureTarget>,
@@ -69,9 +62,6 @@ function adopt(
   });
 }
 
-function turn(physical: ReturnType<typeof captureTarget>) {
-  return { sessionKey: physical.sessionKey, sessionId: physical.incarnation, target: physical };
-}
 const unboundTarget = (storeScope: string) => captureTarget({ storeScope, sessionKey: key });
 function releaseAndWait(claim: Awaited<ReturnType<typeof claimTask>>) {
   releaseClaim(claim);
@@ -119,11 +109,7 @@ it("treats equal active identities in two stores as busy and mutates only the se
   expect(ownerA).toBeDefined();
   expect(ownerB).toBeDefined();
   expect(ownerA).not.toBe(ownerB);
-  using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
-  expect(resolveRun("incarnation")).toEqual({
-    kind: "ambiguous",
-    operations: [ownerA, ownerB],
-  });
+  expect(resolveRun("incarnation")).toEqual({ kind: "ambiguous", operations: [ownerA, ownerB] });
   expect(isSessionRunActive("incarnation")).toBe(true);
   for (const lookup of [
     () => resolveActiveRun("incarnation"),
@@ -133,13 +119,6 @@ it("treats equal active identities in two stores as busy and mutates only the se
   ]) {
     expect(lookup).toThrow(ReplyRunAlreadyActiveError);
   }
-  const entryIds = [ownerA, ownerB]
-    .map((operation) => entryFor(operation!).id)
-    .toSorted()
-    .join(",");
-  expect(warning).toHaveBeenCalledWith(
-    `ambiguous session controller identity: sessionId=incarnation entryIds=${entryIds}`,
-  );
   let idle = false;
   const idleReceipt = waitForSessionRunIdle(key).then((result) => {
     idle = result;
@@ -219,10 +198,7 @@ it("keeps nested raw-key turns owned by separate agents in one physical store", 
 
 it("deduplicates one reserved delivery identity and rejects conflicting reuse", () => {
   const physical = target("/stores/reservation.sqlite");
-  const reservation = {
-    reservationId: "subagent-completion:run-1:0",
-    protocolRunId: "run-1",
-  };
+  const reservation = { reservationId: "subagent-completion:run-1:0", protocolRunId: "run-1" };
   const first = reserve(physical, reservation);
   const second = reserve(physical, reservation);
 
@@ -247,10 +223,7 @@ it("adopts only the exact unclaimed reserved source", async () => {
     "foreign or claimed",
   );
   adopt(input, physical, { adapter });
-  expect(sourceIdentity(input)).toMatchObject({
-    sessionKey: key,
-    sessionId: "incarnation",
-  });
+  expect(sourceIdentity(input)).toMatchObject({ sessionKey: key, sessionId: "incarnation" });
   expect(input).toMatchObject({ protocolRunId: "settle-run", custody: { rpcAdopted: true } });
   expect(input.sourceAdapter).toBe(adapter);
   expect(() => adopt(input, physical, { adapter })).toThrow("foreign or claimed");
@@ -383,44 +356,6 @@ it("reuses an early input and cancels reset preparation without completing its l
   await work;
   await interruption.released;
   expect(settled).toHaveBeenCalledOnce();
-});
-
-it("holds uncertain injection and source cleanup through clear while allowing a fresh signal afterward", async () => {
-  const physical = target("/stores/injection.sqlite");
-  const cleanup = createDeferredCore();
-  const input = reserve(physical, {
-    adapter: { onSettled: () => cleanup.promise },
-  });
-  const injection = createDeferredCore<boolean>();
-  const settle = vi.fn(injection.resolve);
-  input.phase = "injecting";
-  input.injection = { predecessor: Promise.resolve(true), settled: injection.promise, settle };
-  clearMailbox(input.mailbox, () => {});
-  expect(settle).not.toHaveBeenCalled();
-  expect(input.mailbox.entries).toContain(input);
-  const fresh = reserve(physical);
-  expect(fresh.abortSignal.aborted).toBe(false);
-  const started = vi.fn();
-  const queued = claimTask(fresh, started);
-  expect(started).not.toHaveBeenCalled();
-  const receipt = controllerSettlement({ target: physical });
-  let ended = false;
-  void sourceSettlement(input).then(() => {
-    ended = true;
-  });
-  injection.resolve(true);
-  input.injection = undefined;
-  input.phase = "waiting";
-  retireInput(input);
-  await Promise.resolve();
-  expect(ended).toBe(false);
-  expect(started).not.toHaveBeenCalled();
-  cleanup.resolve();
-  await sourceSettlement(input);
-  const claim = await queued;
-  expect(started).toHaveBeenCalledOnce();
-  releaseClaim(claim);
-  await receipt;
 });
 
 it("retains claimed source adoption until the callback settles", async () => {

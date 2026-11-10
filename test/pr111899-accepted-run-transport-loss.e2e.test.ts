@@ -7,6 +7,7 @@ import { agentCliCommand } from "../src/commands/agent-via-gateway.js";
 import { startGatewayWithClient } from "../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { isGatewayTransportError } from "../src/gateway/transport-error.js";
+import { rawDataToString } from "../src/infra/ws.js";
 import type { RuntimeEnv } from "../src/runtime.js";
 import { setTestEnvValue } from "../src/test-utils/env.js";
 import { listenProofProvider, useRuntimeProofFixture } from "./runtime-proof.test-support.js";
@@ -14,31 +15,24 @@ import { listenProofProvider, useRuntimeProofFixture } from "./runtime-proof.tes
 const createFixture = useRuntimeProofFixture(afterEach);
 
 // Sever the real transport only after the Gateway has accepted the CLI run.
-async function startAcceptedThenCloseProxy(targetUrl: string): Promise<{
-  url: string;
-  stop: () => void;
-}> {
-  return await new Promise<{ url: string; stop: () => void }>((resolve, reject) => {
+function startAcceptedThenCloseProxy(targetUrl: string) {
+  return new Promise<{ url: string; stop: () => void }>((resolve, reject) => {
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     let acceptedSeen = false;
 
     wss.on("connection", (clientWs) => {
       const targetWs = new WebSocket(targetUrl);
 
-      const forward = (source: WebSocket, destination: WebSocket, destinationName: string) => {
+      const forward = (source: WebSocket, destination: WebSocket) => {
         source.on("message", (raw) => {
           if (destination.readyState !== WebSocket.OPEN) {
             return;
           }
           destination.send(raw);
 
-          if (destinationName === "client" && !acceptedSeen) {
+          if (destination === clientWs && !acceptedSeen) {
             try {
-              const text =
-                typeof raw === "string"
-                  ? raw
-                  : new TextDecoder().decode(Array.isArray(raw) ? Buffer.concat(raw) : raw);
-              const message = JSON.parse(text) as {
+              const message = JSON.parse(rawDataToString(raw)) as {
                 type?: unknown;
                 payload?: { status?: unknown } | null;
               };
@@ -66,8 +60,8 @@ async function startAcceptedThenCloseProxy(targetUrl: string): Promise<{
       };
 
       targetWs.once("open", () => {
-        forward(clientWs, targetWs, "target");
-        forward(targetWs, clientWs, "client");
+        forward(clientWs, targetWs);
+        forward(targetWs, clientWs);
       });
 
       targetWs.on("error", () => {

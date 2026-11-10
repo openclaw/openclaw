@@ -33,42 +33,35 @@ async function mount(overrides: Partial<Parameters<typeof DecisionModelPicker>[0
   };
   await update();
   const picker = container.querySelector<SelectPicker>("openclaw-select-picker")!;
+  const find = (selector: string) => picker.querySelector<HTMLElement>(selector)!;
   const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
   await userEvent.click(trigger);
-  await expect.element(picker.querySelector<HTMLInputElement>("input")!).toHaveFocus();
+  await userEvent.click(find(".header-search__toggle"));
+  await expect.element(find("input")).toHaveFocus();
   const rows = () => [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
-  const search = async (value: string) => {
-    const input = picker.querySelector<HTMLInputElement>("input")!;
-    await userEvent.fill(input, value);
-    return input;
-  };
-  const key = async (value: string, target: HTMLElement = picker.querySelector("input")!) => {
-    const observed: { event?: KeyboardEvent } = {};
-    const capture = (event: KeyboardEvent) => {
-      observed.event = event;
-    };
-    target.addEventListener("keydown", capture, { once: true });
+  const search = (value: string) => userEvent.fill(find("input"), value);
+  const key = async (value: string, target: HTMLElement = find("input")) => {
+    let observed: KeyboardEvent | undefined;
+    target.addEventListener(
+      "keydown",
+      (event) => {
+        observed = event;
+      },
+      { once: true },
+    );
     target.focus();
     await userEvent.keyboard(value === " " ? " " : `{${value}}`);
-    if (!observed.event) {
-      throw new Error(`Missing ${value} key event`);
-    }
-    return observed.event;
+    expect(observed, `Missing ${value} key event`).toBeDefined();
+    return observed!;
   };
-  const group = (label: string) =>
-    picker.querySelector<HTMLElement>('[role="group"][aria-label="' + label + '"]')!;
-  const toggle = async (label: string) => {
-    await userEvent.click(group(label).querySelector<HTMLButtonElement>("button")!);
-  };
+  const group = (label: string) => find('[role="group"][aria-label="' + label + '"]');
+  const toggle = (label: string) =>
+    userEvent.click(group(label).querySelector<HTMLButtonElement>("button")!);
   const choose = async (value: string) => {
     if (trigger.getAttribute("aria-expanded") !== "true") {
       await userEvent.click(trigger);
     }
-    const row = rows().find((option) => option.dataset.value === value);
-    if (!row) {
-      throw new Error(`Missing picker option: ${value}`);
-    }
-    await userEvent.click(row);
+    await userEvent.click(rows().find((option) => option.dataset.value === value)!);
   };
   return { params, picker, trigger, update, rows, search, key, group, toggle, choose };
 }
@@ -102,11 +95,8 @@ describe("decision model provider groups", () => {
     const button = p.group("Alpha").querySelector<HTMLButtonElement>("button")!;
     expect(button.closest('[role="listbox"]')).toBeNull();
     const controls = p.picker.querySelector("input")!.getAttribute("aria-controls")!.split(" ");
-    expect(controls.map((id) => document.getElementById(id)?.getAttribute("role"))).toEqual([
-      "listbox",
-      "listbox",
-      "listbox",
-    ]);
+    const roles = controls.map((id) => document.getElementById(id)?.getAttribute("role"));
+    expect(roles).toEqual(["listbox", "listbox", "listbox"]);
     button.focus();
     expect((await p.key("Enter", button)).defaultPrevented).toBe(false);
     expect((await p.key(" ", button)).defaultPrevented).toBe(false);
@@ -129,12 +119,8 @@ describe("decision model provider groups", () => {
         expect(
           [...p.picker.querySelectorAll('[role="group"]')].map((g) => g.getAttribute("aria-label")),
         ).toEqual(["Alpha", "Beta"]);
-        expect(p.rows().map((r) => r.dataset.value)).toEqual([
-          "",
-          "alpha/first",
-          "alpha/last",
-          "beta/middle",
-        ]);
+        const values = p.rows().map((row) => row.dataset.value);
+        expect(values).toEqual(["", "alpha/first", "alpha/last", "beta/middle"]);
         expect(p.rows()[0]!.closest('[role="group"]')).toBeNull();
         expect(p.group("Alpha").querySelector("button")!.textContent).toContain("2");
         expect(p.group("Alpha").querySelector(".provider-brand-icon--fallback")).not.toBeNull();

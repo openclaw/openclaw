@@ -1,4 +1,6 @@
 // Structural formatting stays policy-free; diagnostic adapters supply their redaction policy.
+export { toStringifiedError } from "./stringified-error.js";
+
 export type FormatErrorMessageOptions = {
   includeCode?: boolean;
   redact?: (text: string) => string;
@@ -268,11 +270,6 @@ export function toStructuredErrorObject(value: unknown): Error {
   return error;
 }
 
-/** Preserves Error values and stringifies every other value into a new Error. */
-export function toStringifiedError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
-}
-
 /** Reads Error messages unchanged and stringifies every other value. */
 export function coerceErrorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
@@ -294,6 +291,24 @@ export function stringifyNonErrorCause(value: unknown): string {
   } catch {
     return Object.prototype.toString.call(value);
   }
+}
+
+/** Renders an error and up to eight causes without choosing log formatting or redaction. */
+export function mapErrorCauseChain(error: Error, renderError: (error: Error) => string): string[] {
+  const segments = [renderError(error)];
+  let current: unknown = error.cause;
+  let depth = 0;
+  while (current !== undefined && current !== null && depth < 8) {
+    if (current instanceof Error) {
+      segments.push(renderError(current));
+      current = current.cause;
+    } else {
+      segments.push(stringifyNonErrorCause(current));
+      current = undefined;
+    }
+    depth += 1;
+  }
+  return segments;
 }
 
 export function extractErrorCode(err: unknown): string | undefined {

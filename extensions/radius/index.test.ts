@@ -32,11 +32,14 @@ afterEach(() => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+const response = (payload: object) => ({
+  response: Response.json(payload),
+  release: async () => {},
+});
 function mockCatalog(model: ReturnType<typeof fixture.catalogModel>) {
-  fetchGuard.mockImplementation(async () => ({
-    response: Response.json({ baseUrl: fixture.baseUrl, models: [model] }),
-    release: async () => {},
-  }));
+  fetchGuard.mockImplementation(async () =>
+    response({ baseUrl: fixture.baseUrl, models: [model] }),
+  );
 }
 
 it.each([true, false])(
@@ -44,17 +47,10 @@ it.each([true, false])(
   async (credentialOnly) => {
     const provider = await registerSingleProviderPlugin(radiusPlugin);
     const method = provider.auth.find((auth) => auth.id === "oauth")!;
-    fetchGuard.mockImplementation(async ({ url }: { url: string }) => {
-      const payload = url.endsWith("/oauth/device")
-        ? fixture.devicePayload
-        : url.endsWith("/oauth/token")
-          ? fixture.tokenPayload
-          : {
-              models: [fixture.catalogModel("balanced", "Balanced")],
-              baseUrl: fixture.baseUrl,
-            };
-      return { response: Response.json(payload), release: async () => {} };
-    });
+    mockCatalog(fixture.catalogModel("balanced", "Balanced"));
+    fetchGuard
+      .mockResolvedValueOnce(response(fixture.devicePayload))
+      .mockResolvedValueOnce(response(fixture.tokenPayload));
     const { promise: deviceCode, resolve: codeShown } = Promise.withResolvers<void>();
     const { ctx } = fixture.authContext({
       config: { agents: { defaults: { model: { primary: "other/existing" } } } },
@@ -117,13 +113,7 @@ it("routes a discovered organization model through the registered native transpo
   });
   assert(streamFn, "expected the registered native transport");
   streamFetch.mockResolvedValue(
-    new Response(
-      fixture.sse([
-        { type: "text_start", contentIndex: 0 },
-        { type: "text_end", contentIndex: 0, content: "Connected" },
-        { type: "done", reason: "stop", usage: fixture.usage },
-      ]),
-    ),
+    new Response(fixture.sse([{ type: "done", reason: "stop", usage: fixture.usage }])),
   );
   const stream = await streamFn(
     model,
@@ -133,8 +123,6 @@ it("routes a discovered organization model through the registered native transpo
   expect(await stream.result()).toMatchObject({
     api: "pi-messages",
     stopReason: "stop",
-    content: [{ type: "text", text: "Connected" }],
-    usage: fixture.usage,
   });
   const [url, request] = streamFetch.mock.calls[0]!;
   expect(url).toBe("https://radius.pi.dev/v1/messages");

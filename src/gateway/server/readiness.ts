@@ -7,7 +7,6 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
   type ChannelHealthPolicy,
-  type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
@@ -15,12 +14,15 @@ import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 type ReadinessResult = {
   ready: boolean;
+  coreReady: boolean;
   failing: string[];
+  degraded?: string[];
   suppressed?: string[];
   uptimeMs: number;
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
   agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
+  agentDeletions?: readonly AgentDatabaseAdmissionRefusal[];
   stateDatabase?: { reason: string };
 };
 
@@ -73,7 +75,7 @@ export function createStartupChecker(
 
 function shouldIgnoreReadinessFailure(
   accountSnapshot: ChannelAccountSnapshot,
-  health: ChannelHealthEvaluation,
+  health: ReturnType<typeof evaluateChannelHealth>,
 ): boolean {
   if (health.reason === "unmanaged" || health.reason === "stale-socket") {
     return true;
@@ -101,6 +103,7 @@ export function createReadinessChecker(
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
+    isChatSendAvailable?: () => boolean;
     shouldSkipChannelReadiness?: () => boolean;
   },
 ): ReadinessChecker {
@@ -116,19 +119,20 @@ export function createReadinessChecker(
     const uptimeMs = startup.uptimeMs;
     const now = startedAt + uptimeMs;
     if (startup.status === "starting") {
-      return { ready: false, failing: [startup.pendingReason], uptimeMs };
+      return { ready: false, coreReady: false, failing: [startup.pendingReason], uptimeMs };
     }
     if (startup.status === "draining") {
-      return { ready: false, failing: ["gateway-draining"], uptimeMs };
+      return { ready: false, coreReady: false, failing: ["gateway-draining"], uptimeMs };
     }
     if (!readChildRuntimeViability().available) {
-      return { ready: false, failing: ["child-runtime"], uptimeMs };
+      return { ready: false, coreReady: false, failing: ["child-runtime"], uptimeMs };
     }
     const stateDatabaseFailure = deps.getStateDatabaseFailure?.();
     if (stateDatabaseFailure) {
       cachedState = null;
       return {
         ready: false,
+        coreReady: false,
         failing: ["state-database"],
         stateDatabase: { reason: stateDatabaseFailure.message },
         uptimeMs,
@@ -138,6 +142,7 @@ export function createReadinessChecker(
       cachedState = null;
       return {
         ready: false,
+        coreReady: false,
         failing: agentDatabases.map(({ agentId }) => `agent-database:${agentId}`),
         uptimeMs,
       };
@@ -145,7 +150,11 @@ export function createReadinessChecker(
     const pluginReload = deps.getPluginReloadStatus?.();
     if (pluginReload) {
       cachedState = null;
-      return { ready: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
+      return { ready: false, coreReady: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
+    }
+    if (deps.isChatSendAvailable?.() === false) {
+      cachedState = null;
+      return { ready: false, coreReady: false, failing: ["chat-startup"], uptimeMs };
     }
     if (
       cachedState &&
@@ -155,12 +164,13 @@ export function createReadinessChecker(
       return { ...cachedState, uptimeMs };
     }
     if (deps.shouldSkipChannelReadiness?.()) {
-      return { ready: true, failing: [], uptimeMs };
+      return { ready: true, coreReady: true, failing: [], uptimeMs };
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();
     const globallyAutostartSuppressed = channelManager.getAutostartSuppression() !== null;
     const failing: string[] = [];
+    const degraded: string[] = [];
     const suppressed: string[] = [];
 
     for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
@@ -180,6 +190,9 @@ export function createReadinessChecker(
           channelId,
         };
         const health = evaluateChannelHealth(accountSnapshot, policy);
+        if (health.reason === "reconnect-grace" && !degraded.includes(channelId)) {
+          degraded.push(channelId);
+        }
         if (!health.healthy && autostartSuppressed && health.reason === "not-running") {
           if (!suppressed.includes(channelId)) {
             suppressed.push(channelId);
@@ -196,19 +209,24 @@ export function createReadinessChecker(
     cachedAt = now;
     cachedState = {
       ready: failing.length === 0,
+      coreReady: true,
       failing,
+      ...(degraded.length > 0 ? { degraded } : {}),
       ...(suppressed.length > 0 ? { suppressed } : {}),
     };
     return { ...cachedState, uptimeMs };
   };
   return () => {
-    const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
+    const refusals = deps.getAgentDatabaseAdmissionRefusals?.();
+    const agentDatabases = refusals?.filter(({ code }) => code !== "agent-deletion");
+    const agentDeletions = refusals?.filter(({ code }) => code === "agent-deletion");
     const result = readReadiness(agentDatabases);
     const getEventLoopHealth = deps.getEventLoopHealth;
     const eventLoop = getEventLoopHealth?.();
     return {
       ...result,
       ...(agentDatabases?.length ? { agentDatabases } : {}),
+      ...(agentDeletions?.length ? { agentDeletions } : {}),
       ...(eventLoop ? { eventLoop } : {}),
     };
   };

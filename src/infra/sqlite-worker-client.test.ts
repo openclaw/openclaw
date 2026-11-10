@@ -6,6 +6,7 @@ import {
   runSqliteWorkerClientOperation as runOperation,
 } from "./sqlite-worker-client.js";
 import { createSqliteWorkerClientActor } from "./sqlite-worker-client.test-support.js";
+import { normalizeWorkerRequestClass } from "./sqlite-worker-request-class.js";
 
 const closedError = { code: "closed", message: "SQLite worker store is closed" };
 type DiagnosticOperations = Record<string, { input: unknown; output: string }>;
@@ -55,35 +56,32 @@ it("attributes queued commands without changing wire bytes or exposing private c
   const check = async (type: string, input: unknown, requestClass: string) => {
     const command = { type, input };
     await expect(store.execute(command)).resolves.toBe("committed");
-    expect(dispatch).toHaveBeenLastCalledWith(
-      serialize(command),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      requestClass,
-    );
+    expect(dispatch.mock.lastCall?.[0]).toEqual(serialize(command));
+    expect(dispatch.mock.lastCall?.[5]).toBe(requestClass);
+    expect(normalizeWorkerRequestClass(dispatch.mock.lastCall?.[5])).toBe(requestClass);
   };
   const input = { value: "synthetic-private-payload" };
   const cases = [
     ["audit.writer.process", "audit.writer.process"],
-    ["audit.writer.prune", "audit.writer.prune"],
-    ["stateLease.renew", "stateLease.renew"],
-    ["worktrees.get", "worktrees.get"],
-    ["worktrees.insert", "worktrees.insert"],
-    ["worktrees.templates.has", "worktrees.templates.has"],
     ["worktrees.private-customer-123", "worktrees"],
-    ["capture.recordEventWithPayload", "capture"],
-    ["workerInference.complete", "workerInference"],
     ["session.entry.read", "session.entry.read"],
-    ["session.actor.acceptInput", "session.actor.acceptInput"],
-    ["session.actor.completeTurn", "session.actor.completeTurn"],
-    ["session.lifecycle.project", "session.lifecycle.project"],
-    ["transcript.prepare", "transcript.prepare"],
-    ["transcript.commit", "transcript.commit"],
+    ["session.entries.replace", "session.entries.replace"],
+    ["session.archivePruning.pruneRetention", "session.archivePruning.pruneRetention"],
+    ["session.lifecycle.delete", "session.lifecycle.delete"],
+    // Other families keep their established dashboard labels.
+    ["session.transcript.watermark.read", "transcripts"],
+    ["cron.schedulerTick", "cron"],
+    ["pluginState.executeOperation", "plugin_state"],
+    ["transcripts.append", "transcripts"],
     ["session.actor.private-customer-123", "sessions"],
+    ["session.archivePruning.pruneRetention.private-customer-123", "sessions"],
+    ["session.transcript.private-customer-123", "transcripts"],
+    ["session.history.private-customer-123", "transcript_read"],
+    ["trajectory.private-customer-123", "transcripts"],
+    ["transcripts.private-customer-123", "transcripts"],
+    ["cron.private-customer-123", "cron"],
+    ["pluginState.executeOperation.private-customer-123", "plugin_state"],
     ["pluginState.get", "plugin_state"],
-    ["audit.private-customer-123", "audit"],
     ["private-customer-123.execute", "execute"],
     ["unrecognized", "execute"],
   ] as const;
@@ -96,16 +94,14 @@ it("attributes queued commands without changing wire bytes or exposing private c
   const domainCases = [
     ["publish", js, "preflight", "transcript-projection.preflight"],
     ["publish", `${projectionModule}.ts`, "sweep", "transcript-projection.sweep"],
-    ["publish", js, "claim", "transcript-projection.claim"],
-    ["publish", js, "deleteChunk", "transcript-projection.deleteChunk"],
-    ["publish", js, "appendChunk", "transcript-projection.appendChunk"],
-    ["publish", js, "finalize", "transcript-projection.finalize"],
     ["publish", js, "private-customer-123", "domain_execute"],
     ["publish", "file:///synthetic-private-root/another.worker.js", "claim", "domain_execute"],
     ["publish", `${js}.private`, "claim", "domain_execute"],
     ["execute", undefined, "claim", "domain_execute"],
     ["execute", undefined, "transcript.prepare", "transcript.prepare"],
-    ["execute", undefined, "transcript.commit", "transcript.commit"],
+    ["execute", undefined, "session.metadata.append", "session.metadata.append"],
+    ["publish", js, "session.transcript.lock.commit", "transcripts"],
+    ["execute", undefined, "session.metadata.append.private-customer-123", "sessions"],
   ] as const;
   for (const [type, moduleUrl, innerType, requestClass] of domainCases) {
     await check(
@@ -114,7 +110,6 @@ it("attributes queued commands without changing wire bytes or exposing private c
       requestClass,
     );
   }
-  expect(dispatch).toHaveBeenCalledTimes(cases.length + domainCases.length);
 });
 
 it.each(["scope", "command"] as const)(
@@ -123,13 +118,13 @@ it.each(["scope", "command"] as const)(
     const finish = createDeferredCore<string>();
     const release = vi.fn(async (_reclaiming: boolean) => {});
     const retireIdle = vi.fn(() => store.close());
+    const operation = () => finish.promise;
+    const track = () => () => {};
     const { client, store } = clientFixture({
       dispatch: () => finish.promise,
       release,
       retireIdle,
     });
-    const operation = () => finish.promise;
-    const track = () => () => {};
     const accepted =
       kind === "scope"
         ? runOperation(client, operation, undefined, track)

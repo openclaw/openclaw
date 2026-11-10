@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "./command-format.js";
 
 const DEFAULT_GATEWAY_PORT_EXAMPLE = 18789;
@@ -35,35 +34,6 @@ export function formatUnsupportedChannelActionMessage(params: {
   return `Channel "${params.channel}" does not support ${params.action}. Run ${formatInlineCliCommand(
     inspectCommand,
   )} to inspect supported actions.`;
-}
-
-export function formatStrictJsonParseFailure(params: { value: string; cause: unknown }): string {
-  const rawCause = params.cause instanceof Error ? params.cause.message : String(params.cause);
-  const cause = rawCause.trim().replace(/[.。]+$/u, "");
-  const preview =
-    params.value.length > 48 ? `${truncateUtf16Safe(params.value, 45).trimEnd()}...` : params.value;
-  return [
-    `Could not parse ${JSON.stringify(preview)} as JSON for --strict-json.`,
-    `${cause}.`,
-    `Use valid JSON. For structured changes, use a JSON5 config patch object file with ${formatInlineCliCommand(
-      "openclaw config patch --file <path> --dry-run",
-    )}.`,
-    "For plain strings, omit --strict-json.",
-  ].join(" ");
-}
-
-export function formatGatewayCommandFailure(params: { action: string; error: unknown }): string {
-  const raw = params.error instanceof Error ? params.error.message : String(params.error);
-  const message = raw
-    .replace(/\s*Run [`"]?openclaw doctor[`"]? for diagnostics\.?/gi, "")
-    .replace(/\s+Gateway target:\s+.*$/isu, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[.。]+$/u, "");
-  const detail = message ? `: ${message}` : "";
-  return `Could not ${params.action} because the Gateway did not respond${detail}. Run ${formatInlineCliCommand(
-    "openclaw gateway status --deep",
-  )} to inspect the active Gateway.`;
 }
 
 export function formatMissingPluginMessage(params: {

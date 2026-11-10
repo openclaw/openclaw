@@ -921,9 +921,9 @@ it("pins proof to protected main and publishes with fresh membership authority",
   if (typeof installCommand !== "string") {
     throw new Error("Crabbox install command is missing");
   }
-  expect(installCommand).toContain("crabbox_0.77.0_linux_amd64.tar.gz");
+  expect(installCommand).toContain("crabbox_0.79.2_linux_amd64.tar.gz");
   expect(installCommand).toContain(
-    "cbf6cb74251a454c65d13d7a92b070cf8c37ee81c300c97123063b9d21206d5f",
+    "316e2d788c9f85d0a7e876a0a91eab5e0a9257b8c572ca2c1372dbe066395dae",
   );
   expect(job.steps.at(-1)).toMatchObject({
     env: {

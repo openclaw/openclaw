@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "openclaw/plugin-sdk/file-lock";
 import { getMatrixRuntime } from "../runtime.js";
 import {
@@ -51,12 +52,7 @@ export async function listMatrixCryptoUnsafeState(
       }
     } catch (error) {
       // Lock contention means an owner is live, not that its armed marker is abandoned.
-      if (
-        error !== null &&
-        typeof error === "object" &&
-        "code" in error &&
-        error.code === FILE_LOCK_TIMEOUT_ERROR_CODE
-      ) {
+      if (extractErrorCode(error) === FILE_LOCK_TIMEOUT_ERROR_CODE) {
         continue;
       }
       throw error;
@@ -78,12 +74,7 @@ export async function recoverMatrixCryptoUnsafeState(params: {
     try {
       await fs.access(path.join(params.storageRootDir, "state", "openclaw.sqlite"));
     } catch (error) {
-      if (
-        error !== null &&
-        typeof error === "object" &&
-        "code" in error &&
-        error.code === "ENOENT"
-      ) {
+      if (extractErrorCode(error) === "ENOENT") {
         throw new Error("Matrix crypto SQLite snapshot is absent; refusal remains in place.", {
           cause: error,
         });

@@ -26,6 +26,7 @@ export {
 
 export const FULL_RELEASE_SOURCE_ADMISSION_CONTRACT = "1";
 export const FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT = "1";
+const PUBLICATION_OBSERVATION_WINDOW_MS = 300_000;
 const sha = /^[a-f0-9]{40}$/u;
 const digest = /^[a-f0-9]{64}$/u;
 const coverageInputs = {
@@ -43,7 +44,6 @@ const coverageInputs = {
   extension_test_exclude_patterns_json: "extensionTestExcludePatternsJson",
   qualification_baselines_json: "qualificationBaselinesJson",
   skip_package_telegram_e2e: "skipPackageTelegramE2e",
-  telegram_waiver: "telegramWaiver",
   allow_unreleased_changelog: "allowUnreleasedChangelog",
 };
 
@@ -199,8 +199,16 @@ function validatePublicationSourceFact(value, expected = {}) {
     "run_release_soak",
     "coverage_policy",
   ];
-  // Published admissions bind this retired empty field into their digest.
-  object(value.coverage, [...coverageKeys, "known_flaky_jobs_json"], "source admission coverage");
+  // Pre-cutover evidence binds this empty field into its original digest.
+  // Retire with those release lines and their retained publication recovery.
+  object(
+    value.coverage,
+    [...coverageKeys, "known_flaky_jobs_json", "telegram_waiver"],
+    "source admission coverage",
+  );
+  if (Object.hasOwn(value.coverage, "telegram_waiver") && value.coverage.telegram_waiver !== "") {
+    throw new Error("source admission telegram_waiver must be empty");
+  }
   if (
     Object.hasOwn(value.coverage, "known_flaky_jobs_json") &&
     value.coverage.known_flaky_jobs_json !== "[]"
@@ -647,7 +655,11 @@ function validatePublicationObservations(source, value) {
   const prerequisites = observationTime(value.prerequisitesCompletedAt);
   const start = observationTime(value.collectionStartedAt);
   const end = observationTime(value.collectionCompletedAt);
-  if (prerequisites > start || start > end || end - prerequisites > 300_000) {
+  if (
+    prerequisites > start ||
+    start > end ||
+    end - prerequisites > PUBLICATION_OBSERVATION_WINDOW_MS
+  ) {
     throw new Error("publication observation time ordering is invalid");
   }
   const required = (registry) =>
@@ -832,7 +844,21 @@ export function createPublicationObservations(source, observations) {
   });
 }
 
-export function createPublicationAdmission(source, observations, artifact, admittedAt) {
+export function createPublicationAdmission(
+  source,
+  observations,
+  artifact,
+  admittedAt,
+  { workflowPath = ".github/workflows/full-release-validation.yml" } = {},
+) {
+  if (
+    ![
+      ".github/workflows/full-release-validation.yml",
+      ".github/workflows/full-release-receipt-recovery.yml",
+    ].includes(workflowPath)
+  ) {
+    throw new Error("unsupported publication admission workflow");
+  }
   const admission = {
     observations,
     binding: {
@@ -842,7 +868,7 @@ export function createPublicationAdmission(source, observations, artifact, admit
       parentRunId: source.runId,
       parentRunAttempt: source.runAttempt,
       workflow: {
-        path: ".github/workflows/full-release-validation.yml",
+        path: workflowPath,
         event: "workflow_dispatch",
         ...source.workflow,
       },
@@ -853,12 +879,15 @@ export function createPublicationAdmission(source, observations, artifact, admit
       status: "admitted-for-validation",
     },
   };
-  return validatePublicationAdmissionBinding({
-    sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
-    sourceAdmission: source,
-    publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
-    publicationAdmission: admission,
-  });
+  return validatePublicationAdmissionBinding(
+    {
+      sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
+      sourceAdmission: source,
+      publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
+      publicationAdmission: admission,
+    },
+    { workflowPath },
+  );
 }
 
 export function validatePublicationAdmissionBinding(record, expected = {}) {
@@ -919,7 +948,8 @@ export function validatePublicationAdmissionBinding(record, expected = {}) {
     binding.repository !== source.repository ||
     binding.parentRunId !== source.runId ||
     binding.parentRunAttempt !== source.runAttempt ||
-    binding.workflow.path !== ".github/workflows/full-release-validation.yml" ||
+    binding.workflow.path !==
+      (expected.workflowPath ?? ".github/workflows/full-release-validation.yml") ||
     binding.workflow.event !== "workflow_dispatch" ||
     binding.workflow.ref !== source.workflow.ref ||
     binding.workflow.sha !== source.workflow.sha ||
@@ -946,11 +976,12 @@ export function validatePublicationAdmissionBinding(record, expected = {}) {
     throw new Error("invalid publication observation artifact descriptor");
   }
   const admitted = observationTime(binding.admittedAt);
+  const completed = observationTime(observations.collectionCompletedAt);
   if (
-    admitted < observationTime(observations.collectionCompletedAt) ||
-    admitted - observationTime(observations.prerequisitesCompletedAt) > 300_000 ||
+    admitted < completed ||
+    admitted - completed > PUBLICATION_OBSERVATION_WINDOW_MS ||
     [...observations.npm.filter((row) => row.required), ...observations.clawhub].some(
-      (row) => admitted - observationTime(row.observedAt) > 300_000,
+      (row) => completed - observationTime(row.observedAt) > PUBLICATION_OBSERVATION_WINDOW_MS,
     )
   ) {
     throw new Error("publication admission freshness window exceeded");

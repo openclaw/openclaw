@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
@@ -7,6 +8,7 @@ import {
   runSetupWizardConfigure,
 } from "../../test-utils/plugin-setup-wizard.js";
 import { defineChannelSetupContract } from "./setup-contract.js";
+import type { ChannelAccessPolicy } from "./setup-group-access.js";
 import { patchScopedAccountConfig } from "./setup-helpers.js";
 import type { ChannelSetupPlugin, ChannelSetupWizard } from "./setup-wizard-types.js";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "./setup-wizard.js";
@@ -25,26 +27,6 @@ type ChannelConfig = AccountConfig & {
 
 const mainCredentials = { botId: "test-main-bot-id", secret: "test-secret" };
 const alertCredentials = { botId: "test-alerts-bot-id", secret: "example-secret" };
-
-function newAccountPrompter() {
-  return createQueuedWizardPrompter({
-    selectValues: ["__new__"],
-    textValues: ["alerts", alertCredentials.botId, alertCredentials.secret],
-  });
-}
-
-function expectPromotion(
-  result: { cfg: OpenClawConfig },
-  queued: ReturnType<typeof createQueuedWizardPrompter>,
-  accounts: ChannelConfig["accounts"],
-) {
-  const channel = getChannelConfig(result.cfg);
-  expect(channel).not.toHaveProperty("botId");
-  expect(channel).not.toHaveProperty("secret");
-  expect(channel.accounts).toEqual(accounts);
-  expect(queued.confirm).not.toHaveBeenCalled();
-  return channel;
-}
 
 function getChannelConfig(cfg: OpenClawConfig): ChannelConfig {
   return ((cfg.channels as Record<string, unknown> | undefined)?.demo ?? {}) as ChannelConfig;
@@ -68,14 +50,9 @@ function resolveLegacyAccount(cfg: OpenClawConfig): AccountConfig {
 function setLegacyAccount(cfg: OpenClawConfig, patch: AccountConfig): OpenClawConfig {
   const channel = getChannelConfig(cfg);
   const accountId = resolveDefaultAccountId(cfg);
-  const updated = channel.accounts
-    ? {
-        ...channel,
-        accounts: {
-          ...channel.accounts,
-          [accountId]: { ...channel.accounts[accountId], ...patch },
-        },
-      }
+  const accounts = channel.accounts;
+  const updated = accounts
+    ? { ...channel, accounts: { ...accounts, [accountId]: { ...accounts[accountId], ...patch } } }
     : { ...channel, ...patch };
   return {
     ...cfg,
@@ -84,25 +61,21 @@ function setLegacyAccount(cfg: OpenClawConfig, patch: AccountConfig): OpenClawCo
 }
 
 function createLegacyPlugin(): ChannelSetupPlugin {
-  return {
-    ...createChannelTestPluginBase({
-      id: "demo",
-      label: "Demo",
-      config: {
-        listAccountIds: (cfg) => {
-          const ids = Object.keys(getChannelConfig(cfg).accounts ?? {});
-          return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
-        },
-        defaultAccountId: resolveDefaultAccountId,
+  const plugin = createChannelTestPluginBase({
+    id: "demo",
+    label: "Demo",
+    config: {
+      listAccountIds: (cfg) => {
+        const ids = Object.keys(getChannelConfig(cfg).accounts ?? {});
+        return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
       },
-    }),
-    setup: {
-      applyAccountConfig: ({ cfg, input }) =>
-        setLegacyAccount(cfg, {
-          botId: typeof input.token === "string" ? input.token : undefined,
-          secret: typeof input.privateKey === "string" ? input.privateKey : undefined,
-        }),
+      defaultAccountId: resolveDefaultAccountId,
     },
+  });
+  return {
+    ...plugin,
+    // Credentials own applySet; retain the undeclared legacy setup capability for promotion.
+    setup: { applyAccountConfig: ({ cfg }) => cfg },
   };
 }
 
@@ -187,14 +160,12 @@ describe("channel setup wizard account scoping", () => {
     wizard.credentials = [
       {
         ...wizard.credentials[0]!,
-        inspect: ({ cfg, accountId }) => ({
-          accountConfigured: Boolean(
+        inspect: ({ cfg, accountId }) => {
+          const configured = Boolean(
             getChannelConfig(cfg).accounts?.[accountId ?? "default"]?.botId,
-          ),
-          hasConfiguredValue: Boolean(
-            getChannelConfig(cfg).accounts?.[accountId ?? "default"]?.botId,
-          ),
-        }),
+          );
+          return { accountConfigured: configured, hasConfiguredValue: configured };
+        },
         applySet: undefined,
       },
     ];
@@ -211,24 +182,39 @@ describe("channel setup wizard account scoping", () => {
     expect(queued.confirm).not.toHaveBeenCalled();
   });
 
-  it("promotes mixed root credentials before adding another named account", async () => {
-    const queued = newAccountPrompter();
-
-    const result = await configure(
-      {
-        defaultAccount: "main",
-        ...mainCredentials,
-        accounts: { main: { marker: { keep: "mixed-shape" } } },
-      },
-      queued,
-    );
-
-    const channel = expectPromotion(result, queued, {
-      main: { ...mainCredentials, marker: { keep: "mixed-shape" } },
-      alerts: alertCredentials,
-    });
-    expect(channel.defaultAccount).toBe("main");
-  });
+  it.each([false, true])(
+    "promotes root credentials with an existing named account=%s",
+    async (mixed) => {
+      const queued = createQueuedWizardPrompter({
+        selectValues: ["__new__"],
+        textValues: ["alerts", alertCredentials.botId, alertCredentials.secret],
+      });
+      const marker = { marker: { keep: "mixed-shape" } };
+      const result = await configure(
+        mixed
+          ? {
+              defaultAccount: "main",
+              ...mainCredentials,
+              accounts: { main: marker },
+            }
+          : { enabled: true, ...mainCredentials },
+        queued,
+      );
+      const channel = getChannelConfig(result.cfg);
+      expect(channel).not.toHaveProperty("botId");
+      expect(channel).not.toHaveProperty("secret");
+      expect(channel.accounts).toEqual({
+        [mixed ? "main" : "default"]: { ...mainCredentials, ...(mixed ? marker : {}) },
+        alerts: alertCredentials,
+      });
+      expect(queued.confirm).not.toHaveBeenCalled();
+      if (mixed) {
+        expect(channel.defaultAccount).toBe("main");
+      } else {
+        expect(channel).not.toHaveProperty("defaultAccount");
+      }
+    },
+  );
 
   it("scopes a named default account when another account is the channel default", async () => {
     const main = { ...mainCredentials };
@@ -260,16 +246,142 @@ describe("channel setup wizard account scoping", () => {
     });
     expect(queued.confirm).toHaveBeenCalledTimes(2);
   });
+});
 
-  it("promotes root credentials before adding the first named account", async () => {
-    const queued = newAccountPrompter();
+type GroupAccess = NonNullable<ChannelSetupWizard["groupAccess"]>;
 
-    const result = await configure({ enabled: true, ...mainCredentials }, queued);
+function createGroupPrompter(params: {
+  confirm: boolean;
+  policy?: ChannelAccessPolicy;
+  text?: string;
+}) {
+  return createWizardPrompter(
+    {
+      confirm: vi.fn(async () => params.confirm),
+      text: vi.fn(async () => params.text ?? ""),
+    },
+    { defaultSelect: params.policy ?? "allowlist" },
+  );
+}
 
-    const channel = expectPromotion(result, queued, {
-      default: mainCredentials,
-      alerts: alertCredentials,
+async function configureGroup(
+  cfg: OpenClawConfig,
+  prompter: ReturnType<typeof createGroupPrompter>,
+  groupAccess: Pick<GroupAccess, "setPolicy"> & Partial<GroupAccess>,
+  finalize?: ChannelSetupWizard["finalize"],
+) {
+  const adapter = buildChannelSetupWizardAdapterFromSetupWizard({
+    plugin: createChannelTestPluginBase({ id: "demo" }),
+    wizard: {
+      ...createLegacyWizard(),
+      credentials: [],
+      groupAccess: {
+        label: "Slack channels",
+        placeholder: "#general",
+        currentPolicy: () => "allowlist",
+        currentEntries: () => [],
+        updatePrompt: () => true,
+        ...groupAccess,
+      },
+      finalize,
+    },
+  });
+  return (await runSetupWizardConfigure({ configure: adapter.configure, cfg, prompter })).cfg;
+}
+
+describe("channel setup wizard group access", () => {
+  it("keeps the config and continues finalization when access configuration is skipped", async () => {
+    const cfg: OpenClawConfig = {};
+    const setPolicy = vi.fn<GroupAccess["setPolicy"]>(({ cfg: current }) => current);
+    const resolveAllowlist = vi.fn(async () => []);
+    const applyAllowlist = vi.fn<NonNullable<GroupAccess["applyAllowlist"]>>(
+      ({ cfg: current }) => current,
+    );
+    const finalize = vi.fn();
+
+    expect(
+      await configureGroup(
+        cfg,
+        createGroupPrompter({ confirm: false }),
+        { setPolicy, resolveAllowlist, applyAllowlist },
+        finalize,
+      ),
+    ).toBe(cfg);
+    expect(setPolicy).not.toHaveBeenCalled();
+    expect(resolveAllowlist).not.toHaveBeenCalled();
+    expect(applyAllowlist).not.toHaveBeenCalled();
+    expect(finalize).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { name: "non-allowlist", policy: "open" as const, skipAllowlistEntries: false },
+    { name: "entry-free allowlist", policy: "allowlist" as const, skipAllowlistEntries: true },
+  ])(
+    "applies $name policy without resolving old entries",
+    async ({ policy, skipAllowlistEntries }) => {
+      const resolveAllowlist = vi.fn(async () => ["ignored"]);
+      const applyAllowlist = vi.fn<NonNullable<GroupAccess["applyAllowlist"]>>(({ cfg }) => cfg);
+      const next = await configureGroup({}, createGroupPrompter({ confirm: true, policy }), {
+        ...(skipAllowlistEntries
+          ? {
+              currentPolicy: () => "disabled" as const,
+              updatePrompt: () => false,
+              skipAllowlistEntries,
+              placeholder: "",
+            }
+          : {}),
+        setPolicy: ({ cfg, policy: selectedPolicy }) => ({
+          ...cfg,
+          channels: { demo: { groupPolicy: selectedPolicy } },
+        }),
+        resolveAllowlist,
+        applyAllowlist,
+      });
+
+      expect(next.channels).toEqual({ demo: { groupPolicy: policy } });
+      expect(resolveAllowlist).not.toHaveBeenCalled();
+      expect(applyAllowlist).not.toHaveBeenCalled();
+    },
+  );
+
+  it("resolves entries before setting policy and applying the resolved allowlist", async () => {
+    const cfg: OpenClawConfig = {};
+    const calls: string[] = [];
+    const resolved = ["C1", "C2"];
+    const next = await configureGroup(
+      cfg,
+      createGroupPrompter({ confirm: true, text: "#general, #support" }),
+      {
+        resolveAllowlist: async ({ cfg: current, entries }) => {
+          calls.push("resolve");
+          expect(current).toBe(cfg);
+          expect(entries).toEqual(["#general", "#support"]);
+          return resolved;
+        },
+        setPolicy: ({ cfg: current, policy }) => {
+          calls.push("setPolicy");
+          return { ...current, channels: { slack: { groupPolicy: policy } } };
+        },
+        applyAllowlist: ({ cfg: current, resolved: actual }) => {
+          calls.push("apply");
+          expect(actual).toBe(resolved);
+          expect(current.channels?.slack?.groupPolicy).toBe("allowlist");
+          return {
+            channels: {
+              slack: {
+                ...current.channels?.slack,
+                channels: Object.fromEntries(resolved.map((id) => [id, { enabled: true }])),
+              },
+            },
+          };
+        },
+      },
+    );
+
+    expect(calls).toEqual(["resolve", "setPolicy", "apply"]);
+    expect(next.channels?.slack?.channels).toEqual({
+      C1: { enabled: true },
+      C2: { enabled: true },
     });
-    expect(channel).not.toHaveProperty("defaultAccount");
   });
 });

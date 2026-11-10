@@ -11,7 +11,7 @@ import {
   createControlUiE2eSuite,
   tooltipTitleText,
 } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
-import { createQaGatewayChild } from "../api.ts";
+import { createQaGatewayChild } from "./gateway-child.ts";
 
 const COMMAND = "codex.exec-server.stdio.v1";
 const MODEL = "openai/gpt-5.6-luna";
@@ -209,7 +209,7 @@ suite.define(() => {
             await page.reload();
             await page.locator("#new-session-where-trigger").click();
             await row(unauthorizedIdentity.deviceId).waitFor();
-            expect(await row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);
+            await expect.poll(() => row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);
             await capture("03-invocable-after-reallow.png");
           },
         );

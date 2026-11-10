@@ -48,14 +48,6 @@ export const REALTIME_VOICE_AGENT_CONTROL_TOOL: RealtimeVoiceTool = {
 
 type RealtimeVoiceAgentControlIntent = {
   mode: RealtimeVoiceAgentControlMode;
-  confidence: "high" | "medium" | "low";
-  reason:
-    | "explicit_mode"
-    | "cancel_safety"
-    | "status_query"
-    | "followup_marker"
-    | "steer_command"
-    | "safe_default";
   shouldAutoControl: boolean;
 };
 
@@ -137,11 +129,11 @@ function hasNegatedCancelIntent(text: string): boolean {
 }
 
 const CONTROL_INTENT_RULES = [
-  ["steer", "steer_command", STOP_REDIRECT_CONTROL_PATTERNS],
-  ["cancel", "cancel_safety", CANCEL_CONTROL_PATTERNS],
-  ["status", "status_query", STATUS_CONTROL_PATTERNS],
-  ["followup", "followup_marker", FOLLOWUP_CONTROL_PATTERNS],
-  ["steer", "steer_command", STEER_CONTROL_PATTERNS],
+  ["steer", STOP_REDIRECT_CONTROL_PATTERNS],
+  ["cancel", CANCEL_CONTROL_PATTERNS],
+  ["status", STATUS_CONTROL_PATTERNS],
+  ["followup", FOLLOWUP_CONTROL_PATTERNS],
+  ["steer", STEER_CONTROL_PATTERNS],
 ] as const;
 
 /** Classify raw spoken control text with conservative auto-control gating. */
@@ -153,8 +145,6 @@ export function resolveRealtimeVoiceAgentControlIntent(params: {
   if (explicitMode) {
     return {
       mode: explicitMode,
-      confidence: "high",
-      reason: "explicit_mode",
       shouldAutoControl: true,
     };
   }
@@ -162,23 +152,19 @@ export function resolveRealtimeVoiceAgentControlIntent(params: {
   const normalized = params.text.trim().toLowerCase();
   // "Stop using X" redirects the active work; it must not be treated as an
   // abort of the whole run just because it starts with "stop".
-  for (const [mode, reason, patterns] of CONTROL_INTENT_RULES) {
+  for (const [mode, patterns] of CONTROL_INTENT_RULES) {
     if (
       (mode !== "cancel" || !hasNegatedCancelIntent(normalized)) &&
       patterns.some((pattern) => pattern.test(normalized))
     ) {
       return {
         mode,
-        confidence: mode === "steer" ? "medium" : "high",
-        reason,
         shouldAutoControl: true,
       };
     }
   }
   return {
     mode: "status",
-    confidence: "low",
-    reason: "safe_default",
     shouldAutoControl: false,
   };
 }

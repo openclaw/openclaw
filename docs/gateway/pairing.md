@@ -98,6 +98,58 @@ Gateway command policy and [node-local exec approvals](/tools/exec-approvals)
 remain separate gates. Local exec approvals default to `full` with `ask: "off"`;
 configure them before using a link if that access is too broad.
 
+## OpenClaw ID nodes (Labs)
+
+An owner-approved OpenClaw ID node invitation replaces the initial manual device
+pairing and command-surface approval. The owner must compare the six-digit code
+and explicitly approve the signed redemption, which includes the node's
+self-reported name, platform, commands, and capabilities.
+
+On the first connection for each newly approved node listing, the Gateway
+automatically pairs the node device once. Only commands and capabilities within the description
+the owner approved qualify for automatic surface approval. Additional access uses
+the normal `node.pair` approval flow. Gateway command policy, node-local execution
+approvals, and OS permissions still apply.
+
+The approval records `approvedVia: "openclaw-id-node"` and its tunnel-key
+provenance. Removing the pairing with `openclaw nodes remove` keeps subsequent
+pairing requests for that key manual, including after a Gateway restart. It does
+not silently repeat the invitation's one-time approval. A second device using the
+same key also needs manual approval.
+
+Removing or revoking the node's OpenClaw ID key ends its listing. If the owner
+later approves the same key again with a new invitation, the new listing pairs
+automatically once more. Approving another invitation for a key that is still
+listed keeps the existing listing and does not repeat automatic pairing.
+
+Removing or revoking the node's OpenClaw ID key disconnects it, invalidates its
+tunnel-bound device tokens, and removes node-role pairings and approved surfaces
+associated with that key. Unrelated device roles remain intact. Synthetic tunnel
+addresses are never evidence for trusted-CIDR or SSH-verified auto-approval.
+
+For connection setup, see [OpenClaw ID nodes](/gateway/remote#openclaw-id-nodes-labs).
+
+### Gateway API for owner clients
+
+- Register the signed cap with `openclawId.authority`, action
+  `register_node_invite`, using `{cap, proofKey}`; `proofKey` is base64url.
+  Owner tunnel clients can also use `POST /_openclaw-id/v1/node-invites` with
+  `{cap, proof_key}`. The RPC response includes `discoveryUrl` (null when not
+  configured) and `version` so the UI can build ready-to-paste commands locally.
+  The secret-bearing join link stays in the browser and is never sent to this
+  RPC. Both UI-generated commands must include the configured `--discovery-url`;
+  there is no inferred Discovery default.
+- Approve, remove, or deny through the same authority RPC's `submit` action,
+  carrying an owner-signed `MembershipChange` (`add_node`, `remove_node`, or
+  `deny_invite`). The Gateway verifies the signer, capability, and sequence.
+- Read `openclawId.people` for the owner-only `{link}` projection. `link.nodes`
+  lists admitted nodes; `link.nodeInvites` includes each pending description,
+  `verificationCode`, `peerKey`, `requestedAt`, and `decideBy`. Proof keys are
+  never returned. Tunnel membership uses the field names `nodes` and
+  `node_invites`.
+- Refetch this view on the existing keyless `openclawId.people.changed` event.
+  Receiving an event or opening the view must not submit an approval.
+
 ## CLI workflow (headless friendly)
 
 For manual device admission, first run on the Gateway:
@@ -429,6 +481,10 @@ Boundaries:
   their next connection.
 
 ## Metadata-upgrade auto-approval
+
+On an already-paired Mac, the CLI and probe can use `macos` or `darwin`
+alongside the native app's versioned macOS label without re-pairing. The pinned
+device family must still match.
 
 When an already-paired device reconnects with only non-sensitive metadata
 changes (for example display name or client platform hints), OpenClaw treats

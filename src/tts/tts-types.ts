@@ -6,7 +6,8 @@ import type {
   TtsMode,
   TtsProvider,
 } from "../config/types.tts.js";
-import type { SpeechModelOverridePolicy, SpeechProviderConfig } from "./provider-types.js";
+import type { SpeechModelOverridePolicy } from "./provider-types.js";
+import type { SpeechProviderConfig } from "./tts-runtime-types.js";
 
 /** Resolved directive override policy after config defaults are applied. */
 export type ResolvedTtsModelOverrides = SpeechModelOverridePolicy;

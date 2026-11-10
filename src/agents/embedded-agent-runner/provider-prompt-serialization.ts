@@ -1,16 +1,21 @@
-import { createHash } from "node:crypto";
-import { serializeModelRequestBody } from "@openclaw/ai/internal/model-request-body";
+import { createHash, hash } from "node:crypto";
+import {
+  serializeModelRequestBody,
+  type EncodedModelRequestBody,
+} from "@openclaw/ai/internal/model-request-body";
 import { sha256Hex, sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export type ProviderPromptTask = { payload: unknown; encode: boolean };
+type ModelRequestJson = NonNullable<ReturnType<typeof serializeModelRequestBody>["json"]>;
 
-type ProviderPromptItemFingerprint = { digest: string; fields?: Record<string, string> };
+type ProviderPromptItemFingerprint = { digest: string; fields: Record<string, string> };
 
 export type ProviderPromptCachePrefix = {
   system: string;
   tools: string;
-  messages: ProviderPromptItemFingerprint[];
+  messageDigests: string;
+  messageFields: Record<string, string>[];
   messageField?: "input" | "messages";
   messageCount: number;
   tail?: string;
@@ -68,78 +73,106 @@ const PARAMETER_FIELDS = new Set([
   "user",
 ]);
 
-function fingerprintItem(
-  value: unknown,
-  allowedFields?: Set<string>,
+function fingerprintFields(
+  members: Iterable<[string, ModelRequestJson]>,
+  allowedFields: Set<string>,
 ): ProviderPromptItemFingerprint {
-  if (!allowedFields || !isRecord(value)) {
-    return { digest: sha256Hex(JSON.stringify(value)), ...(allowedFields ? { fields: {} } : {}) };
-  }
   const digest = createHash("sha256").update("{");
   let other: ReturnType<typeof createHash> | undefined;
   const fields: Record<string, string> = {};
   let separator = "";
-  for (const [key, field] of Object.entries(value)) {
-    // Serialize each field once, sharing its bytes between the item and field digests.
+  for (const [key, field] of members) {
     const name = `${JSON.stringify(key)}:`;
-    const encoded = JSON.stringify(field);
-    digest.update(separator).update(name).update(encoded);
+    digest.update(separator).update(name).update(field.json);
     separator = ",";
     if (allowedFields.has(key)) {
-      fields[key] = sha256Hex(encoded);
+      fields[key] = sha256Hex(field.json);
     } else {
-      (other ??= createHash("sha256")).update(name).update(encoded).update(",");
+      (other ??= createHash("sha256")).update(name).update(field.json).update(",");
     }
   }
   if (other) {
     fields.other = other.digest("hex");
   }
-  return { digest: digest.update("}").digest("hex"), fields };
+  return { digest: digest.update("}").digest("latin1"), fields };
 }
 
-function fingerprintSerializedPrompt(payload: unknown): ProviderPromptCachePrefix | undefined {
-  if (!isRecord(payload)) {
+function fingerprintSerializedPrompt(
+  payload: ModelRequestJson | undefined,
+): ProviderPromptCachePrefix | undefined {
+  if (payload?.json[0] !== "{") {
     return undefined;
   }
-  const { instructions, system, tools, ...parameters } = payload;
-  let messageField: "input" | "messages" | undefined;
-  let messages: unknown[] = [];
-  if (Array.isArray(parameters.input)) {
-    messageField = "input";
-    messages = parameters.input;
-    delete parameters.input;
-  } else if (Array.isArray(parameters.messages)) {
-    messageField = "messages";
-    messages = parameters.messages;
-    delete parameters.messages;
+  const parameters = new Map(payload.members());
+  const system = createHash("sha256").update("{");
+  let separator = "";
+  for (const key of ["instructions", "system"]) {
+    const field = parameters.get(key);
+    parameters.delete(key);
+    if (field) {
+      system
+        .update(separator)
+        .update(`${JSON.stringify(key)}:`)
+        .update(field.json);
+      separator = ",";
+    }
   }
+  const tools = parameters.get("tools");
+  parameters.delete("tools");
+  let messageField: "input" | "messages" | undefined;
+  if (parameters.get("input")?.json[0] === "[") {
+    messageField = "input";
+  } else if (parameters.get("messages")?.json[0] === "[") {
+    messageField = "messages";
+  }
+  const messages = messageField ? parameters.get(messageField) : undefined;
+  if (messageField) {
+    parameters.delete(messageField);
+  }
+  const messageFields: Record<string, string>[] = [];
+  let messageDigests = "";
+  let messageCount = 0;
+  let tail: ReturnType<typeof createHash> | undefined;
+  for (const [, message] of messages?.members() ?? []) {
+    const index = messageCount++;
+    if (index >= MAX_MESSAGE_FINGERPRINTS) {
+      if (tail) {
+        tail.update(",");
+      } else {
+        tail = createHash("sha256").update("[");
+      }
+      tail.update(message.json);
+    } else if (index >= MAX_MESSAGE_FIELD_FINGERPRINTS || message.json[0] !== "{") {
+      messageDigests += hash("sha256", message.json, "latin1");
+      if (index < MAX_MESSAGE_FIELD_FINGERPRINTS) {
+        messageFields.push({});
+      }
+    } else {
+      const fingerprint = fingerprintFields(message.members(), MESSAGE_FIELDS);
+      messageFields.push(fingerprint.fields);
+      messageDigests += fingerprint.digest;
+    }
+  }
+  const previousResponse = parameters.get("previous_response_id")?.json;
   return {
-    system: sha256Hex(JSON.stringify({ instructions, system })),
-    tools: sha256Hex(JSON.stringify({ tools })),
-    messages: messages
-      .slice(0, MAX_MESSAGE_FINGERPRINTS)
-      .map((message, index) =>
-        fingerprintItem(
-          message,
-          index < MAX_MESSAGE_FIELD_FINGERPRINTS ? MESSAGE_FIELDS : undefined,
-        ),
-      ),
+    system: system.update("}").digest("hex"),
+    tools: tools
+      ? createHash("sha256").update('{"tools":').update(tools.json).update("}").digest("hex")
+      : sha256Hex("{}"),
+    messageDigests,
+    messageFields,
     messageField,
-    messageCount: messages.length,
-    ...(messages.length > MAX_MESSAGE_FINGERPRINTS
-      ? { tail: sha256Hex(JSON.stringify(messages.slice(MAX_MESSAGE_FINGERPRINTS))) }
-      : {}),
-    parameters: fingerprintItem(parameters, PARAMETER_FIELDS),
-    continuation:
-      typeof parameters.previous_response_id === "string" &&
-      parameters.previous_response_id.length > 0,
+    messageCount,
+    ...(tail ? { tail: tail.update("]").digest("hex") } : {}),
+    parameters: fingerprintFields(parameters, PARAMETER_FIELDS),
+    continuation: previousResponse?.[0] === '"' && previousResponse !== '""',
   };
 }
 
 export function prepareProviderPrompt({ payload, encode }: ProviderPromptTask): {
   digest: string;
   byteWeight: number;
-  encoded: ReturnType<typeof serializeModelRequestBody> | undefined;
+  encoded: EncodedModelRequestBody | undefined;
   cachePrefix?: ProviderPromptCachePrefix;
   wire?: {
     requestBytes: number;
@@ -155,10 +188,8 @@ export function prepareProviderPrompt({ payload, encode }: ProviderPromptTask): 
   if (!encode) {
     return { ...sha256StableValue(payload), encoded: undefined };
   }
-  let cachePrefix: ProviderPromptCachePrefix | undefined;
-  const encoded = serializeModelRequestBody(payload, (serialized) => {
-    cachePrefix = fingerprintSerializedPrompt(serialized);
-  });
+  const { json, ...encoded } = serializeModelRequestBody(payload);
+  const cachePrefix = fingerprintSerializedPrompt(json);
   return {
     digest: sha256Hex(encoded.body),
     byteWeight: encoded.body.byteLength,

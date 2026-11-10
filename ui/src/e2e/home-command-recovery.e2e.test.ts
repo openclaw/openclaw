@@ -51,12 +51,12 @@ suite.define(() => {
         );
         if (handoff) {
           const pages = await openSidebarPages(page);
-          await pages.getByRole("link", { name: "Agents", exact: true }).click();
-          await page.waitForURL((url) => url.pathname.endsWith("/agents"));
-          await page.getByRole("region", { name: "Agents", exact: true }).waitFor();
+          await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+          await page.waitForURL((url) => url.pathname.endsWith("/sessions"));
+          await page.locator("openclaw-sessions-page").waitFor();
           await page.getByRole("button", { name: "Talk to your Home agent", exact: true }).click();
           await dockComposer.waitFor({ state: "visible" });
-          expect(new URL(page.url()).pathname).toBe("/agents");
+          expect(new URL(page.url()).pathname).toBe("/sessions");
           expect(await composer.isVisible()).toBe(false);
           await expect.poll(() => dockComposer.inputValue()).toBe("");
           if (newerDraft) {

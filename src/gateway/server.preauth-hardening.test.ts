@@ -17,7 +17,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, setTestEnvValue, withEnv } from "../test-utils/env.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -62,7 +62,10 @@ async function withUpgradeServer(
     wss,
     clients,
     resolvedAuth,
-    preauthConnectionBudget: createPreauthConnectionBudget(1),
+    preauthConnectionBudget: withEnv(
+      { OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "1" },
+      createPreauthConnectionBudget,
+    ),
     ...options,
   });
   try {

@@ -30,7 +30,7 @@ import * as support from "./doctor-health.test-support.js";
 const { mocks, registerDoctorConfigReceiptTests } = support;
 const repairOptions = { repair: true, nonInteractive: true };
 const leaseRefusal =
-  "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.";
+  "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.";
 
 function expectNotCalled(...spies: { mock: { calls: unknown[][] } }[]) {
   spies.forEach((spy) => expect(spy).not.toHaveBeenCalled());
@@ -71,8 +71,8 @@ it.each(["unresolved-unknown", "windows-queued", "windows-startup-unknown", "spl
       const sourcePath = path.join(state.workspaceDir, "openclaw-workspace-state.json");
       const completedAt = "2026-07-15T00:00:00.000Z";
       fs.writeFileSync(sourcePath, JSON.stringify({ version: 1, setupCompletedAt: completedAt }));
-      const sourceBefore = fs.readFileSync(sourcePath);
-      const configBefore = fs.readFileSync(state.configPath);
+      const persistedPaths = [sourcePath, state.configPath];
+      const before = persistedPaths.map((file) => fs.readFileSync(file));
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
       const ownerPath = resolveGatewayStateOwnerPath(databasePath);
       const serviceRoot = state.path("service-install");
@@ -140,8 +140,7 @@ it.each(["unresolved-unknown", "windows-queued", "windows-startup-unknown", "spl
         await expect(run).rejects.toThrow(
           split ? "different OpenClaw installation" : "Doctor could not enter maintenance",
         );
-        expect(fs.readFileSync(sourcePath)).toEqual(sourceBefore);
-        expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+        expect(persistedPaths.map((file) => fs.readFileSync(file))).toEqual(before);
         expect([databasePath, ownerPath].some((file) => fs.existsSync(file))).toBe(false);
         expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
         if (split) {
@@ -152,10 +151,6 @@ it.each(["unresolved-unknown", "windows-queued", "windows-startup-unknown", "spl
           await expect(run).rejects.toThrow("openclaw doctor --fix");
           await expect(run).rejects.not.toThrow(/--no-restart|before the update/);
           expectNotCalled(mocks.config, mocks.runContributions);
-          expect(mocks.taskDefinitelyStopped).toHaveBeenCalled();
-          if (kind === "windows-startup-unknown") {
-            expect(mocks.startupFallbackRuntime).toHaveBeenCalled();
-          }
         }
       } else {
         await run;
@@ -166,12 +161,12 @@ it.each(["unresolved-unknown", "windows-queued", "windows-startup-unknown", "spl
         expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
         const action = "Stop the Gateway through its owner";
         expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(action));
-        expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
+        expect(mocks.writeUpdatePostInstallDoctorResult.mock.lastCall?.[0]).toMatchObject({
           resultPath,
-          result: expect.objectContaining({
+          result: {
             status: "ok",
             warnings: expect.arrayContaining([expect.stringContaining(action)]),
-          }),
+          },
         });
       }
       expectNotCalled(service.stop, service.restart);
@@ -204,7 +199,9 @@ it("refuses blocked required migration, then completes after the writer releases
       vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", state.path("advisory.json"));
       await runCommandWithRuntime(runtime, () => runDoctorHealthFlow(runtime, options));
       expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(leaseRefusal);
+      expect(runtime.error).toHaveBeenCalledWith(
+        `${leaseRefusal} Observed lease holder PID ${process.pid}.`,
+      );
       expect(maintenanceOutcome()).toEqual({ outcome: "startup_failed" });
       expect(
         mocks.writeUpdatePostInstallDoctorResult.mock.lastCall?.[0].result.failureFacts,

@@ -16,7 +16,9 @@ import {
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import { selectSidebarContext, type ContextualSidebar } from "./sidebar-context-state.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
@@ -43,6 +45,7 @@ export type AppSidebarProps = {
   sessionKey: string;
   sidebarEntries: readonly string[];
   navigationVisible: boolean;
+  connectionPending?: boolean;
   navigationView: "pages" | "sessions" | "online";
   navigationCollapsed: boolean;
   sidebarAgentsMode: "chip" | "roster";
@@ -61,7 +64,6 @@ export type AppSidebarProps = {
   onNavigate:
     | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
     | undefined;
-  onPreloadRoute: ((routeId: NavigationRouteId) => Promise<void>) | undefined;
 };
 
 export const appSidebarProperties = {
@@ -84,6 +86,7 @@ export const appSidebarProperties = {
   sessionKey: { default: "", attribute: false },
   sidebarEntries: { default: DEFAULT_SIDEBAR_ENTRIES, attribute: false },
   navigationVisible: { default: true, attribute: false },
+  connectionPending: { default: false, attribute: false },
   navigationView: { default: "sessions", attribute: false },
   navigationCollapsed: { default: false, type: Boolean },
   sidebarAgentsMode: { default: "chip", attribute: false },
@@ -100,7 +103,6 @@ export const appSidebarProperties = {
   onUpdateSidebarEntries: { default: undefined, attribute: false },
   onPairMobile: { default: undefined, attribute: false },
   onNavigate: { default: undefined, attribute: false },
-  onPreloadRoute: { default: undefined, attribute: false },
 } satisfies {
   [Key in keyof AppSidebarProps]: {
     default: AppSidebarProps[Key];
@@ -130,6 +132,7 @@ export abstract class AppSidebarBase {
   declare sessionKey: AppSidebarProps["sessionKey"];
   declare sidebarEntries: AppSidebarProps["sidebarEntries"];
   declare navigationVisible: AppSidebarProps["navigationVisible"];
+  declare connectionPending: AppSidebarProps["connectionPending"];
   declare navigationView: AppSidebarProps["navigationView"];
   declare navigationCollapsed: AppSidebarProps["navigationCollapsed"];
   declare sidebarAgentsMode: AppSidebarProps["sidebarAgentsMode"];
@@ -146,7 +149,6 @@ export abstract class AppSidebarBase {
   declare onUpdateSidebarEntries: AppSidebarProps["onUpdateSidebarEntries"];
   declare onPairMobile: AppSidebarProps["onPairMobile"];
   declare onNavigate: AppSidebarProps["onNavigate"];
-  declare onPreloadRoute: AppSidebarProps["onPreloadRoute"];
   get ownerDocument(): Document {
     return this.hostElement.ownerDocument;
   }
@@ -180,10 +182,7 @@ export abstract class AppSidebarBase {
   ) {
     for (const key of Object.keys(appSidebarProperties)) {
       Object.defineProperty(this, key, {
-        get: () =>
-          key === "sidebarAgentsMode"
-            ? (this.sidebarSnapshot?.mode ?? Reflect.get(hostElement, key))
-            : Reflect.get(hostElement, key),
+        get: () => Reflect.get(hostElement, key),
         set: (value: unknown) => {
           Reflect.set(hostElement, key, value);
         },
@@ -262,9 +261,17 @@ export abstract class AppSidebarBase {
   }
 
   abstract readonly sessionOwnerFilter: SessionOwnerFilter;
+  abstract readonly sessionData: Pick<SessionDataOwner, "sessionsResult">;
+  abstract readonly sessionsStatusFilter: SidebarSessionStatusFilter;
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);
+    if (this.sidebarSnapshot) {
+      // Keep the cached rows, but let explicit intent select the replacement query.
+      const selected = this.sessionOwnerFilter.read();
+      this.sidebarSnapshot.ownerId = selected.ownerId;
+      this.sidebarSnapshot.involvingMe = selected.involvingMe;
+    }
   };
 
   pluginNavigation() {
@@ -278,11 +285,7 @@ export abstract class AppSidebarBase {
 
   public getRouteSessionKey(): string {
     // A provisional row owns only presentation, never the saved Gateway selection.
-    return (
-      this.pendingSessionCreate()?.creation.sessionKey ||
-      this.sessionKey.trim() ||
-      this.context.gateway.snapshot.sessionKey.trim()
-    );
+    return this.pendingSessionCreate()?.creation.sessionKey || this.sessionKey.trim();
   }
 
   protected setApplicationSession(sessionKey: string, fallbackAgentId?: string): void {

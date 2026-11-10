@@ -3,7 +3,6 @@ export * from "./api.guild.js";
 export * from "./api.messages.js";
 export * from "./api.reactions.js";
 export * from "./api.users.js";
-export * from "./api.webhooks.js";
 export * from "./client.js";
 export * from "./commands.js";
 export { BaseMessageInteractiveComponent, type ComponentData } from "./components.base.js";

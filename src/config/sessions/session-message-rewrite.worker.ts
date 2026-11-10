@@ -110,7 +110,7 @@ export type SessionMessageRewriteOperations = {
     output: ReturnType<typeof prepareLockedTranscriptAppend>;
   };
   "session.transcript.lock.facts": {
-    input: LockedTranscriptTarget & { idempotencyKeys: readonly string[]; sourceRunId?: string };
+    input: LockedTranscriptTarget & Parameters<typeof readTranscriptMirrorFacts>[2];
     output: ReturnType<typeof readTranscriptMirrorFacts>;
   };
   "session.transcript.lock.commit": {
@@ -303,12 +303,10 @@ function commitLockedTranscript(
           projectionNeedsReconcile = true;
         },
       };
+      const snapshotRows = input.snapshot?.kind === "current" ? input.snapshot.rows : undefined;
       const snapshotCurrent =
-        input.snapshot?.kind === "current" &&
-        isDeepStrictEqual(
-          input.snapshot.rows,
-          readTranscriptEventRows(database, input.scope.sessionId),
-        );
+        snapshotRows !== undefined &&
+        isDeepStrictEqual(snapshotRows, readTranscriptEventRows(database, input.scope.sessionId));
       let result: TranscriptMessageAppendResult<unknown> | undefined;
       let messageSeq: number | undefined;
       let replacementRows: SqliteTranscriptSnapshotRow[] | undefined;
@@ -388,12 +386,20 @@ function commitLockedTranscript(
             )
           : undefined,
         projectionNeedsReconcile,
-        snapshot:
-          input.snapshot || input.kind === "replace"
-            ? input.kind === "replace" || snapshotCurrent
+        snapshot: replacementRows
+          ? { kind: "current", rows: replacementRows }
+          : input.snapshot
+            ? snapshotCurrent && snapshotRows
               ? {
                   kind: "current",
-                  rows: replacementRows ?? readTranscriptEventRows(database, input.scope.sessionId),
+                  // The checked prefix cannot change during this prepared append.
+                  rows: snapshotRows.concat(
+                    readTranscriptEventRows(
+                      database,
+                      input.scope.sessionId,
+                      snapshotRows.at(-1)?.seq,
+                    ),
+                  ),
                 }
               : { kind: "stale" }
             : undefined,
@@ -632,6 +638,7 @@ export function applySessionMessageRewrite<T>(
     candidate: SessionMessageRewriteCommitted,
     current: SessionMessageRewriteSnapshot | null,
   ) => T,
+  options: { touchMutation?: boolean } = {},
 ) {
   return writeTransaction(
     "session.transcript.message-rewrite",
@@ -665,7 +672,7 @@ export function applySessionMessageRewrite<T>(
                 seq: current.seq,
               },
             ],
-            { projectionCurrent: facts !== undefined },
+            { projectionCurrent: facts !== undefined, touchMutation: options.touchMutation },
           );
         } catch (error) {
           if (error instanceof SqliteTranscriptMutationConflictError) {

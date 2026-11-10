@@ -6,7 +6,7 @@ import type {
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import { loadStoredHiddenSessionCatalogIds } from "../../components/app-sidebar-session-types.ts";
 import {
   createGatewayHarness,
@@ -16,6 +16,7 @@ import {
   mountSidebar,
   successfulSessionPatch,
 } from "../app-sidebar.ts";
+import { closeArchiveUndoToast } from "../archive-undo-window.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import { menuItem } from "../session-menu.ts";
 import { waitForFast } from "../wait-for.ts";
@@ -140,8 +141,12 @@ describe("AppSidebar multi-select", () => {
     await sidebar.updateComplete;
     (await sessionMenu(sidebar)).querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
 
+    await waitForFast(() =>
+      expect(sidebar.querySelector('[data-session-key="agent:main:a"]')).toBeNull(),
+    );
+    expect(harness.patch).not.toHaveBeenCalled();
+    await closeArchiveUndoToast();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
-    await sidebar.updateComplete;
     expect(sidebar.querySelector('[data-session-key="agent:main:a"]')).toBeNull();
     expect(setSessionKeySpy).not.toHaveBeenCalled();
 
@@ -282,8 +287,8 @@ describe("AppSidebar catalog session rows", () => {
 
     await dom.click(section!.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")!);
     expect(
-      dom.text('[data-session-section="catalog:codex"] .sidebar-session-group-count')?.trim(),
-    ).toBe("2");
+      dom.query('[data-session-section="catalog:codex"] .sidebar-session-group-count'),
+    ).toBeNull();
   });
 
   it.each([true, false])(

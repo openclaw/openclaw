@@ -87,6 +87,13 @@ function retentionCommand(
   };
 }
 
+function mutate(
+  command = retentionCommand(),
+  admit: Parameters<typeof recordUpdateRunMutationInWorker>[2] = vi.fn(),
+) {
+  return recordUpdateRunMutationInWorker(command, options, admit, () => writer);
+}
+
 it.each(["progress", "required", "transient"] as const)(
   "settles %s update receipts when the host policy check exceeds commit admission",
   (kind) => {
@@ -182,42 +189,35 @@ it("keeps Gateway verification at the ordinary writer budget", () => {
   expect(getUpdateRun(runId, options)?.verification.booted).toBeUndefined();
 });
 
-it.each(["finalize:predecessor-stop:fixture"])(
-  "gives recovery-critical %s the driver's native busy budget",
-  (step) => {
-    const command = retentionCommand();
-    command.input.step.step = step;
-    const cause = busyError();
+it.each([true, false])(
+  "retains the native budget for required writes (handed off=%s)",
+  (handedOff) => {
+    const command = retentionCommand(handedOff);
+    if (handedOff) {
+      command.input.step.step = "finalize:predecessor-stop:fixture";
+    }
     const run = vi.spyOn(writer, "run").mockImplementationOnce(() => {
-      throw cause;
+      throw busyError();
     });
-    expect(() => recordUpdateRunMutationInWorker(command, options, vi.fn(), () => writer)).toThrow(
-      /database is locked.*retry `openclaw update`/,
+    expect(() => mutate(command)).toThrow(
+      handedOff ? /database is locked.*retry `openclaw update`/ : /required recovery evidence/,
     );
     expect(run).toHaveBeenCalledExactlyOnceWith(
       expect.any(Function),
       expect.objectContaining({ busyTimeoutMs: 120_000 }),
     );
-    expect(recordUpdateRunMutationInWorker(command, options, vi.fn(), () => writer)).toMatchObject({
-      kind: "recorded",
-      record: { steps: expect.arrayContaining([{ step, status: "completed" }]) },
-    });
+    if (handedOff) {
+      expect(mutate(command)).toMatchObject({
+        kind: "recorded",
+        record: {
+          steps: expect.arrayContaining([
+            { step: "finalize:predecessor-stop:fixture", status: "completed" },
+          ]),
+        },
+      });
+    }
   },
 );
-
-it("does not turn required recovery admission into optional bookkeeping", () => {
-  const command = retentionCommand(false);
-  const run = vi.spyOn(writer, "run").mockImplementationOnce(() => {
-    throw busyError();
-  });
-  expect(() => recordUpdateRunMutationInWorker(command, options, vi.fn(), () => writer)).toThrow(
-    /required recovery evidence/,
-  );
-  expect(run).toHaveBeenCalledExactlyOnceWith(
-    expect.any(Function),
-    expect.objectContaining({ busyTimeoutMs: 120_000 }),
-  );
-});
 
 it("skips a real SQLite writer lock without waiting or creating a receipt", () => {
   const command = retentionCommand();
@@ -225,7 +225,7 @@ it("skips a real SQLite writer lock without waiting or creating a receipt", () =
   const blocker = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
   try {
     blocker.exec("BEGIN IMMEDIATE");
-    expect(recordUpdateRunMutationInWorker(command, options, vi.fn(), () => writer)).toEqual({
+    expect(mutate(command)).toEqual({
       kind: "bookkeeping-skipped",
     });
     expect(blocker.isTransaction).toBe(true);
@@ -243,9 +243,7 @@ it("does not swallow a non-contention failure as bookkeeping", () => {
   vi.spyOn(writer, "run").mockImplementationOnce(() => {
     throw failure;
   });
-  expect(() =>
-    recordUpdateRunMutationInWorker(retentionCommand(), options, vi.fn(), () => writer),
-  ).toThrow(failure);
+  expect(() => mutate()).toThrow(failure);
 });
 
 it("restores the ordinary transaction wait after driver admission", () => {
@@ -264,7 +262,7 @@ it("restores the ordinary transaction wait after driver admission", () => {
       return result;
     }, current),
   );
-  recordUpdateRunMutationInWorker(retentionCommand(false), options, vi.fn(), () => writer);
+  mutate(retentionCommand(false));
   expect(timeout).toBe(5_000);
   expect(connection && readSqliteBusyTimeout(connection)).toBe(5_000);
 });
@@ -273,7 +271,7 @@ it.each([
   [
     "progress step",
     (admit: (stage: "transaction" | "commit") => void) =>
-      recordUpdateRunMutationInWorker(
+      mutate(
         {
           type: "updateRuns.recordStep",
           input: {
@@ -282,9 +280,7 @@ it.each([
             step: { step: "candidate-state-snapshot", status: "in_progress" },
           },
         },
-        options,
         admit,
-        () => writer,
       ),
     ["transaction:free", "commit:held"],
   ],
@@ -340,9 +336,7 @@ it("does not replay or discard a lock failure after transaction admission", () =
       throw cause;
     }
   });
-  expect(() =>
-    recordUpdateRunMutationInWorker(retentionCommand(), options, admit, () => writer),
-  ).toThrow(cause);
+  expect(() => mutate(retentionCommand(), admit)).toThrow(cause);
   expect(admit.mock.calls).toEqual([["transaction"], ["commit"]]);
   expect(getUpdateRun(runId, options)?.steps).toHaveLength(1);
 });

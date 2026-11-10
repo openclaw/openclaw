@@ -1,6 +1,8 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
+import { cloneTranscriptView } from "../config/sessions/transcript-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
+import { isPluginReloadingError } from "../plugins/plugin-replacement-retry.js";
 import type {
   ContextEngineFactory,
   ContextEngineFactoryContext,
@@ -10,6 +12,7 @@ import type {
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins/runtime.js";
+import { getSelectedContextEngineOwner } from "../plugins/runtime/load-context-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -48,7 +51,7 @@ import type {
 export type { ContextEngineFactory } from "../plugins/registry-contribution-types.js";
 export { listContextEngineQuarantines } from "./registry-quarantine.js";
 
-type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
+type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string | null };
 
 type RegisterContextEngineForOwnerOptions = {
   allowSameOwnerRefresh?: boolean;
@@ -87,6 +90,17 @@ function wrapResolvedContextEngine(
   let disposal: Promise<void> | undefined;
   const source = metadata.source;
   const engine = source?.wrap(rawEngine) ?? rawEngine;
+  const prepareParams = (methodName: PropertyKey, params: Record<string, unknown>) => {
+    const projected = projectContextEngineHostParams(engine, methodName, params);
+    const key = methodName === "ingest" ? "message" : "messages";
+    // Registration ownership, not the engine's display ID, defines the writable SDK boundary.
+    return metadata.owner !== CORE_CONTEXT_ENGINE_OWNER && key in projected
+      ? {
+          ...projected,
+          [key]: cloneTranscriptView(projected[key], { shareImmutablePayloads: false }),
+        }
+      : projected;
+  };
   const fallback =
     metadata.defaultEngineId && metadata.engineId !== metadata.defaultEngineId
       ? { defaultEngineId: metadata.defaultEngineId, factoryCtx: metadata.factoryCtx }
@@ -204,7 +218,7 @@ function wrapResolvedContextEngine(
         const methodName = property as GuardedContextEngineMethodName;
         if (!fallback || !getFallbackEngine) {
           return (params: Record<string, unknown>) =>
-            method.call(engine, projectContextEngineHostParams(engine, methodName, params));
+            method.call(engine, prepareParams(methodName, params));
         }
         const invokeFallback = async (
           methodParams: Record<string, unknown>,
@@ -237,10 +251,7 @@ function wrapResolvedContextEngine(
             return await invokeFallback(methodParams);
           }
           try {
-            return await method.call(
-              engine,
-              projectContextEngineHostParams(engine, methodName, methodParams),
-            );
+            return await method.call(engine, prepareParams(methodName, methodParams));
           } catch (error) {
             if (isContextEngineAbortRejection(error, abortSignal)) {
               // Abort is caller intent, not engine instability; never quarantine for it.
@@ -287,15 +298,11 @@ export async function registerContextEngineForOwner(
   id: string,
   factory: ContextEngineFactory,
   owner: string,
-  opts?: RegisterContextEngineForOwnerOptions,
+  opts?: Omit<RegisterContextEngineForOwnerOptions, "lifecycle">,
 ): Promise<ContextEngineRegistrationResult> {
   const targetRegistry = requireActivePluginRegistry();
   const result = registerContextEngineInRegistry(targetRegistry, id, factory, owner, opts);
-  if (
-    result.ok &&
-    (opts?.lifecycle ?? "runtime") === "runtime" &&
-    getActivePluginRegistry() === targetRegistry
-  ) {
+  if (result.ok && getActivePluginRegistry() === targetRegistry) {
     const assertCurrent = () => {
       if (getActivePluginRegistry() !== targetRegistry) {
         throw new Error("Context engine registration was superseded");
@@ -330,6 +337,10 @@ export function registerContextEngineInRegistry(
   ) {
     // The default fallback id is core-owned; plugins can select other ids through slots.
     return { ok: false, existingOwner: CORE_CONTEXT_ENGINE_OWNER };
+  }
+  const selectedOwner = getSelectedContextEngineOwner(pluginRegistry, id);
+  if (selectedOwner !== undefined && selectedOwner !== normalizedOwner) {
+    return { ok: false, existingOwner: selectedOwner };
   }
   if (existing && existing.owner !== normalizedOwner) {
     return { ok: false, existingOwner: existing.owner };
@@ -529,7 +540,10 @@ export async function resolveLogicalTurnContextEngines(
   try {
     return await runContextEngineFactoryResolution(async (abandon) => {
       const defaultEngineId = defaultSlotIdForKey("contextEngine");
-      const configuredEngineId = resolveEffectiveContextEngineId(config, getContextEngines());
+      const configuredEngineId = resolveEffectiveContextEngineId(
+        config,
+        requireActivePluginRegistry(),
+      );
       const factoryCtx: ContextEngineFactoryContext = {
         config,
         agentDir: options?.agentDir,
@@ -628,7 +642,7 @@ export async function resolveContextEngine(
     : undefined;
   try {
     const defaultEngineId = defaultSlotIdForKey("contextEngine");
-    const engineId = resolveEffectiveContextEngineId(config, getContextEngines());
+    const engineId = resolveEffectiveContextEngineId(config, requireActivePluginRegistry());
     const isDefaultEngine = engineId === defaultEngineId;
 
     const factoryCtx: ContextEngineFactoryContext = {
@@ -692,7 +706,13 @@ export async function resolveContextEngine(
         preparation,
       );
     } catch (error) {
-      if (isDefaultEngine || !operation || isContextEngineAbortRejection(error, abortSignal)) {
+      // A reload refusing admission is not an engine defect; its caller may wait it out.
+      if (
+        isDefaultEngine ||
+        !operation ||
+        isContextEngineAbortRejection(error, abortSignal) ||
+        isPluginReloadingError(error)
+      ) {
         throw error;
       }
       const recording = recordContextEngineQuarantine({

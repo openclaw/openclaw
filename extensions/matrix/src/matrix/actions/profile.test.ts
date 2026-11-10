@@ -1,107 +1,90 @@
-// Matrix tests cover profile plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadWebMediaMock = vi.fn();
-const syncMatrixOwnProfileMock = vi.fn<typeof import("../profile.js").syncMatrixOwnProfile>();
-const withResolvedActionClientMock = vi.fn();
+const withClientMock = vi.fn();
 
+// mock-isolation: avatar loader assertions use fixture media I/O, not a live Matrix runtime.
 vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => ({
-    media: {
-      loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
-    },
+    media: { loadWebMedia: loadWebMediaMock },
   }),
 }));
 
-vi.mock("../profile.js", () => ({
-  syncMatrixOwnProfile: syncMatrixOwnProfileMock,
-}));
-
+// mock-isolation: profile actions use the fixture client without creating a Matrix connection.
 vi.mock("./client.js", () => ({
-  withResolvedActionClient: (...args: unknown[]) => withResolvedActionClientMock(...args),
+  withResolvedActionClient: (...args: unknown[]) => withClientMock(...args),
 }));
 
 const { updateMatrixOwnProfile } = await import("./profile.js");
 
 describe("matrix profile actions", () => {
+  const actionClient = {
+    getUserId: vi.fn(async () => "@bot:example.org"),
+    getUserProfile: vi.fn(async () => ({})),
+    setDisplayName: vi.fn(async () => {}),
+    setAvatarUrl: vi.fn(async () => {}),
+    uploadContent: vi.fn(async () => "mxc://example/uploaded-avatar"),
+  };
+  const media = { buffer: Buffer.from("avatar"), contentType: "image/png", fileName: "avatar.png" };
   beforeEach(() => {
     vi.clearAllMocks();
-    loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("avatar"),
-      contentType: "image/png",
-      fileName: "avatar.png",
-    });
-    syncMatrixOwnProfileMock.mockResolvedValue({
-      skipped: false,
-      displayNameUpdated: true,
-      avatarUpdated: true,
-      resolvedAvatarUrl: "mxc://example/avatar",
-      convertedAvatarFromHttp: true,
-      uploadedAvatarSource: "http",
-    });
+    withClientMock.mockImplementation(async (_opts, run) => run(actionClient));
+    loadWebMediaMock.mockResolvedValue(media);
   });
 
   it("trims profile fields and persists through the action client wrapper", async () => {
-    const actionClient = {
-      getUserId: vi.fn(async () => "@bot:example.org"),
-    };
-    withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
-      return await run(actionClient);
-    });
-
-    await updateMatrixOwnProfile({
+    const opts = {
       accountId: "ops",
       displayName: "  Ops Bot  ",
       avatarUrl: "  mxc://example/avatar  ",
       avatarPath: "  /tmp/avatar.png  ",
-    });
-
-    expect(withResolvedActionClientMock).toHaveBeenCalledExactlyOnceWith(
-      {
-        accountId: "ops",
-        displayName: "  Ops Bot  ",
-        avatarUrl: "  mxc://example/avatar  ",
-        avatarPath: "  /tmp/avatar.png  ",
-      },
-      expect.any(Function),
-    );
-    expect(syncMatrixOwnProfileMock).toHaveBeenCalledExactlyOnceWith({
-      client: actionClient,
-      userId: "@bot:example.org",
-      displayName: "Ops Bot",
-      avatarUrl: "mxc://example/avatar",
-      avatarPath: "/tmp/avatar.png",
-      loadAvatarFromUrl: expect.any(Function),
-      loadAvatarFromPath: expect.any(Function),
-    });
-    expect(syncMatrixOwnProfileMock.mock.calls[0]?.[0].client).toBe(actionClient);
-  });
-
-  it("bridges avatar loaders through Matrix runtime media helpers", async () => {
-    withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
-      return await run({
-        getUserId: vi.fn(async () => "@bot:example.org"),
-      });
-    });
-
-    await updateMatrixOwnProfile({
-      avatarUrl: "https://cdn.example.org/avatar.png",
-      avatarPath: "/tmp/avatar.png",
-    });
-
-    const call = syncMatrixOwnProfileMock.mock.calls[0]?.[0];
-
-    if (!call?.loadAvatarFromUrl || !call.loadAvatarFromPath) {
-      throw new Error("Expected profile avatar loaders");
-    }
-
-    await call.loadAvatarFromUrl("https://cdn.example.org/avatar.png", 123);
-    await call.loadAvatarFromPath("/tmp/avatar.png", 456);
-
-    expect(loadWebMediaMock).toHaveBeenNthCalledWith(1, "https://cdn.example.org/avatar.png", 123);
-    expect(loadWebMediaMock).toHaveBeenNthCalledWith(2, "/tmp/avatar.png", {
-      maxBytes: 456,
+    };
+    const result = await updateMatrixOwnProfile({ ...opts });
+    expect(withClientMock).toHaveBeenCalledExactlyOnceWith(opts, expect.any(Function));
+    expect(actionClient.getUserProfile).toHaveBeenCalledExactlyOnceWith("@bot:example.org");
+    expect(actionClient.setDisplayName).toHaveBeenCalledExactlyOnceWith("Ops Bot");
+    expect(loadWebMediaMock).toHaveBeenCalledExactlyOnceWith("/tmp/avatar.png", {
+      maxBytes: 10 * 1024 * 1024,
       localRoots: undefined,
     });
+    expect(actionClient.uploadContent).toHaveBeenCalledExactlyOnceWith(
+      media.buffer,
+      media.contentType,
+      media.fileName,
+    );
+    expect(actionClient.setAvatarUrl).toHaveBeenCalledExactlyOnceWith(
+      "mxc://example/uploaded-avatar",
+    );
+    expect(result).toMatchObject({ displayNameUpdated: true, avatarUpdated: true });
+  });
+
+  it.each(["http", "path"])(
+    "bridges the %s avatar loader through runtime media helpers",
+    async (source) => {
+      await updateMatrixOwnProfile({
+        ...(source === "http"
+          ? { avatarUrl: "  https://cdn.example.org/avatar.png  " }
+          : { avatarPath: "  /tmp/avatar.png  " }),
+        mediaLocalRoots: ["/tmp"],
+      });
+      expect(loadWebMediaMock).toHaveBeenCalledExactlyOnceWith(
+        source === "http" ? "https://cdn.example.org/avatar.png" : "/tmp/avatar.png",
+        source === "http" ? 10 * 1024 * 1024 : { maxBytes: 10 * 1024 * 1024, localRoots: ["/tmp"] },
+      );
+      expect(actionClient.setAvatarUrl).toHaveBeenCalledExactlyOnceWith(
+        "mxc://example/uploaded-avatar",
+      );
+    },
+  );
+
+  it("skips blank desired profile values before provider or media effects", async () => {
+    expect(
+      await updateMatrixOwnProfile({ displayName: "  ", avatarUrl: "\t", avatarPath: "\n" }),
+    ).toMatchObject({ displayNameUpdated: false, avatarUpdated: false });
+    expect(actionClient.getUserProfile).not.toHaveBeenCalled();
+    expect(actionClient.setDisplayName).not.toHaveBeenCalled();
+    expect(actionClient.setAvatarUrl).not.toHaveBeenCalled();
+    expect(actionClient.uploadContent).not.toHaveBeenCalled();
+    expect(loadWebMediaMock).not.toHaveBeenCalled();
   });
 });

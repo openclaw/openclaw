@@ -1,29 +1,22 @@
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
+import { sessionTests } from "./session-entry-fixture.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionEntry } from "./types.js";
 
-let state: OpenClawTestState;
-let storePath: string;
-let options: { agentId: string; path: string };
+const test = sessionTests({ prefix: "archived-eviction-", layout: "state-only" });
 const key = "agent:main:archived-victim";
 const victim: SessionEntry = {
   sessionId: "archived-victim",
@@ -32,20 +25,9 @@ const victim: SessionEntry = {
   archiveReason: "active-session-cap",
 };
 
-beforeEach(async () => {
-  state = await createOpenClawTestState({ prefix: "archived-eviction-", layout: "state-only" });
-  storePath = path.join(state.sessionsDir(), "sessions.json");
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
-  options = { agentId: "main", path: database.path };
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawAgentDatabasesAsync();
-  await state.cleanup();
-});
-
-it("preserves archive cursor ties, page limits, and protected rows across worker batches", async () => {
+test("preserves archive cursor ties, page limits, and protected rows across worker batches", async ({
+  store: { options },
+}) => {
   runOpenClawAgentWriteTransaction((database) => {
     for (let index = 0; index < 66; index++) {
       writeSessionEntry(database, `agent:main:protected-${index}`, {
@@ -63,36 +45,27 @@ it("preserves archive cursor ties, page limits, and protected rows across worker
   await withSessionHistoryWorkerDatabase(
     options,
     async (owner) => {
-      const first = await owner.readArchivedEvictionCandidates({
-        env: process.env,
-        archived: { limit: 1, preserveRecentMs: 60_000, liveSessionKeys: ["agent:main:live"] },
-      });
+      const read = (after?: { archivedAt: number; sessionKey: string }) =>
+        owner.readArchivedEvictionCandidates({
+          env: process.env,
+          archived: {
+            after,
+            limit: 1,
+            preserveRecentMs: 60_000,
+            liveSessionKeys: ["agent:main:live"],
+          },
+        });
+      const first = await read();
       expect(first).toMatchObject({
         candidates: [{ sessionKey: "agent:main:eligible-a", entry: victim }],
         cursor: { archivedAt: 10, sessionKey: "agent:main:eligible-a" },
         exhausted: false,
       });
-      const second = await owner.readArchivedEvictionCandidates({
-        env: process.env,
-        archived: {
-          after: first.cursor,
-          limit: 1,
-          preserveRecentMs: 60_000,
-          liveSessionKeys: ["agent:main:live"],
-        },
-      });
+      const second = await read(first.cursor);
       expect(second.candidates.map((candidate) => candidate.sessionKey)).toEqual([
         "agent:main:eligible-b",
       ]);
-      const last = await owner.readArchivedEvictionCandidates({
-        env: process.env,
-        archived: {
-          after: second.cursor,
-          limit: 1,
-          preserveRecentMs: 60_000,
-          liveSessionKeys: ["agent:main:live"],
-        },
-      });
+      const last = await read(second.cursor);
       expect(last).toMatchObject({
         candidates: [],
         exhausted: true,
@@ -103,17 +76,18 @@ it("preserves archive cursor ties, page limits, and protected rows across worker
   );
 });
 
-it.each(["rebound", "admitted", "registered", "rejected", "revoked"] as const)(
+test.for(["rebound", "admitted", "registered", "rejected", "revoked"] as const)(
   "refuses stale archived eviction after a delayed batch is %s",
-  async (outcome) => {
-    runOpenClawAgentWriteTransaction(
-      (database) => writeSessionEntry(database, key, victim),
-      options,
-    );
+  async (outcome, { state, store: { options } }) => {
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const writeVictim = (entry = victim) =>
+      runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, key, entry), options);
+    writeVictim();
     const reached = createDeferred();
     const release = createDeferred();
     const createReaders = workerReaders.createSessionHistoryWorkerReaders;
-    vi.spyOn(workerReaders, "createSessionHistoryWorkerReaders").mockImplementation((run) =>
+    using readers = vi.spyOn(workerReaders, "createSessionHistoryWorkerReaders");
+    readers.mockImplementation((run) =>
       createReaders(async (...args) => {
         const input = args[0]();
         const result = await run(...args);
@@ -141,11 +115,7 @@ it.each(["rebound", "admitted", "registered", "rejected", "revoked"] as const)(
     try {
       await awaitGateBeforeSettlement(reached.promise, sweep, "Archived worker read was bypassed");
       if (outcome === "rebound") {
-        runOpenClawAgentWriteTransaction(
-          (database) =>
-            writeSessionEntry(database, key, { sessionId: "replacement", updatedAt: 20 }),
-          options,
-        );
+        writeVictim({ sessionId: "replacement", updatedAt: 20 });
       } else if (outcome === "admitted") {
         admission = await beginSessionEffect({
           scope: storePath,

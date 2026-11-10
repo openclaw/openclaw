@@ -23,7 +23,7 @@ import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
   computeFileLists,
   createFileOps,
-  extractFileOpsFromMessage,
+  extractFileOpsFromMessages,
   extractSummaryText,
   type FileOperations,
   formatFileOperations,
@@ -65,19 +65,6 @@ export interface CollectBranchPathEntriesResult<TEntry extends BranchPathEntry> 
   commonAncestorId: string | null;
 }
 
-/** Options for generating a branch summary. */
-type GenerateBranchSummaryOptions = Pick<
-  SummarizationCompletionParams,
-  "model" | "headers" | "runtime" | "streamFn" | "customInstructions"
-> & {
-  apiKey: string;
-  signal: AbortSignal;
-  /** Replace the default prompt with custom instructions instead of appending them. */
-  replaceInstructions?: boolean;
-  /** Tokens reserved for prompt and model output. Defaults to 16384. */
-  reserveTokens?: number;
-};
-
 /** Collect entries that should be summarized before navigating to a different session tree entry. */
 export function collectEntriesForBranchSummaryFromBranches<TEntry extends BranchPathEntry>(
   oldBranch: readonly TEntry[],
@@ -100,6 +87,7 @@ export function prepareBranchEntries(
 ): BranchPreparation {
   const messages: AgentMessage[] = [];
   const fileOps = createFileOps();
+  const fileMessages: AgentMessage[] = [];
   let totalTokens = 0;
   for (const entry of entries) {
     if (entry.type === "branch_summary" && !entry.fromHook && entry.details) {
@@ -111,7 +99,7 @@ export function prepareBranchEntries(
     if (!message) {
       continue;
     }
-    extractFileOpsFromMessage(message, fileOps);
+    fileMessages.push(message);
 
     // Budget the summary input, where tool output is bounded and reasoning is omitted.
     const rendered = serializeConversation(convertToLlm([message]));
@@ -128,6 +116,7 @@ export function prepareBranchEntries(
     totalTokens += tokens;
   }
 
+  extractFileOpsFromMessages(fileMessages.toReversed(), fileOps);
   return { messages: messages.toReversed(), fileOps, totalTokens };
 }
 
@@ -151,7 +140,17 @@ const BRANCH_SUMMARY_PROMPT = buildSummaryCheckpointPrompt({
 /** Generate a summary for abandoned branch entries. */
 export async function generateBranchSummary(
   entries: SessionTreeEntry[],
-  options: GenerateBranchSummaryOptions,
+  options: Pick<
+    SummarizationCompletionParams,
+    "model" | "headers" | "runtime" | "streamFn" | "customInstructions"
+  > & {
+    apiKey: string;
+    signal: AbortSignal;
+    /** Replace the default prompt with custom instructions instead of appending them. */
+    replaceInstructions?: boolean;
+    /** Tokens reserved for prompt and model output. Defaults to 16384. */
+    reserveTokens?: number;
+  },
 ): Promise<Result<BranchSummaryResult, BranchSummaryError>> {
   const {
     model,

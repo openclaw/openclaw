@@ -52,6 +52,9 @@ enum NativeClientCredentialMigration {
             "index:idx_device_identities_device",
             "table:device_auth_tokens",
             "index:idx_device_auth_tokens_updated",
+            // readOnlyCredentialSource already validates the exact native table and index shapes.
+            "table:macos_port_guardian_records",
+            "index:idx_macos_port_guardian_records_port",
         ])
         guard names.isSubset(of: allowed) else { throw self.unsupported() }
         let rows = try Rows(

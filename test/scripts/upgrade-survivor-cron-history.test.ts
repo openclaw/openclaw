@@ -1,5 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
@@ -10,17 +9,21 @@ import {
   seedCronHistory,
 } from "../../scripts/e2e/lib/upgrade-survivor/legacy-operator-cron-history.mjs";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../../src/infra/state-migrations.cron-run-logs.js";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
-const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+import {
+  readJson,
+  runProcess,
+  successSummary,
+  writeJson,
+} from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const helper = path.resolve("scripts/e2e/lib/upgrade-survivor/legacy-operator-cron-history.mjs");
 const diagnostics = path.resolve("scripts/e2e/lib/upgrade-survivor/diagnostics.mjs");
 
-function prepare(version = "2026.9.4") {
+async function prepare(version = "2026.9.4") {
   const root = tempDirs.make("survivor-cron-history-");
   const stateDir = path.join(root, "state");
   const artifacts = path.join(root, "artifacts");
@@ -52,7 +55,7 @@ function prepare(version = "2026.9.4") {
     jobs: [{ id: "retained-main" }, { id: "retained-ops" }],
   });
   const tarball = path.join(root, "candidate.tgz");
-  execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
+  await packToArchive({ pkgDir: candidate, outDir: root, outName: "candidate.tgz" });
   seedCronHistory(stateDir, artifacts, baseline, tarball);
   const entry = path.join(candidate, "openclaw.mjs");
   const updater = path.join(baseline, "openclaw.mjs");
@@ -94,7 +97,7 @@ function prepare(version = "2026.9.4") {
     importHistory: boolean,
     afterImportSql?: string,
   ) => {
-    const result = spawnSync(
+    const result = runProcess(
       process.execPath,
       [
         ...preloads,
@@ -103,19 +106,16 @@ function prepare(version = "2026.9.4") {
         ...(command === "doctor" ? ["--fix", "--non-interactive"] : ["--yes", "--no-restart"]),
       ],
       {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: observations,
-          OPENCLAW_UPGRADE_SURVIVOR_CRON_HISTORY_FIXTURE: path.join(
-            artifacts,
-            "legacy-operator-cron-history.json",
-          ),
-          FIXTURE_IMPORT: importHistory ? "1" : "0",
-          FIXTURE_AFTER_IMPORT_SQL: afterImportSql,
-        },
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: observations,
+        OPENCLAW_UPGRADE_SURVIVOR_CRON_HISTORY_FIXTURE: path.join(
+          artifacts,
+          "legacy-operator-cron-history.json",
+        ),
+        FIXTURE_IMPORT: importHistory ? "1" : "0",
+        FIXTURE_AFTER_IMPORT_SQL: afterImportSql,
       },
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -135,8 +135,8 @@ function prepare(version = "2026.9.4") {
 
 it.each(["2026.9.3", "2026.9.4"])(
   "proves %s retained-history ownership through the updater and Doctor",
-  (version) => {
-    const fixture = prepare(version);
+  async (version) => {
+    const fixture = await prepare(version);
     if (version === "2026.9.3") {
       fixture.invokeUpdater();
     } else {
@@ -156,17 +156,7 @@ it.each(["2026.9.3", "2026.9.4"])(
       expect(evidence.updater.before.tasks).toEqual([]);
       expect(evidence.updater.identity).toEqual(evidence.baseline);
       expect(evidence.doctor.before.tasks).toEqual(evidence.doctor.after.tasks);
-      writeJson(path.join(fixture.artifacts, "summary.json"), {
-        status: "passed",
-        baseline: { spec: `openclaw@${version}`, version },
-        candidate: { kind: "tarball", version: "2026.9.4" },
-        scenario: "legacy-operator-state",
-        installedVersion: "2026.9.4",
-        candidateInstallMode: "updater",
-        updateRestartMode: "manual",
-        updateOutcome: "success",
-        phases: [],
-      });
+      writeJson(path.join(fixture.artifacts, "summary.json"), successSummary(version, "2026.9.4"));
       const published = path.join(fixture.artifacts, "published");
       publishDiagnostics(fixture.artifacts, published, (text: string) => text, "passed");
       const summary = readJson(path.join(published, "summary.json"));
@@ -180,15 +170,15 @@ it.each([
   ["2026.9.3", true, "published updater never received the unchanged retained cron history"],
 ] as const)(
   "rejects successful %s Doctor with import=%s at the wrong owner",
-  (version, imported, error) => {
-    const fixture = prepare(version);
+  async (version, imported, error) => {
+    const fixture = await prepare(version);
     fixture.invoke(imported);
     expect(fixture.assert).toThrow(error);
   },
 );
 
-it("rejects parent-side import even when canonical task rows and Doctor exit are correct", () => {
-  const fixture = prepare();
+it("rejects parent-side import even when canonical task rows and Doctor exit are correct", async () => {
+  const fixture = await prepare();
   const db = new DatabaseSync(fixture.databasePath);
   migrateLegacyCronRunLogsToTaskRuns(db);
   db.close();
@@ -217,10 +207,10 @@ it("rejects parent-side import even when canonical task rows and Doctor exit are
     before: { legacyRows: 0, tasks: 2 },
     after: { legacyRows: 0, tasks: 2 },
   });
-  const captured = spawnSync(
+  const captured = runProcess(
     process.execPath,
     [diagnostics, "capture", fixture.artifacts, "assert-retained-cron-doctor", "1"],
-    { encoding: "utf8", env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir } },
+    { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
   );
   expect(captured.status, captured.stderr).toBe(0);
   const published = path.join(fixture.artifacts, "published");
@@ -241,8 +231,8 @@ it.each([
     `UPDATE migration_runs SET report_json = '{"imported":1,"alreadyMirrored":0,"malformed":0,"skipped":false}' WHERE id = 'state:cron-run-logs-to-task-runs:v1'`,
     "Expected values to be strictly deep-equal",
   ],
-])("rejects damaged %s from the 9.3 updater before Doctor", (_, sql, message) => {
-  const fixture = prepare("2026.9.3");
+])("rejects damaged %s from the 9.3 updater before Doctor", async (_, sql, message) => {
+  const fixture = await prepare("2026.9.3");
   fixture.invokeUpdater(sql);
   expect(fixture.assert).toThrow(message);
 });

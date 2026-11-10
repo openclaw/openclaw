@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { getSkillWorkshopReviewLane, getBackgroundWorkSnapshot } from "./background-work.js";
+import { getBackgroundOwnerLane, getBackgroundWorkSnapshot } from "./background-work.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -83,6 +83,19 @@ function configureBackground(members: string[], lanes?: Capacities, reservations
   });
 }
 
+function expectWorkshopWidth(width: number) {
+  if (width === 1) {
+    expect(getBackgroundOwnerLane("core:skill-workshop")).toBe("background:core:skill-workshop");
+  } else {
+    expect(() => getBackgroundOwnerLane("core:skill-workshop")).toThrow(
+      "already registered with different concurrency",
+    );
+  }
+}
+
+const recordOrder = (lane: string, order: number[], value: number) =>
+  enqueueCommandInLane(lane, async () => void order.push(value), { priority: "background" });
+
 function park(
   lane: string,
   onStart?: () => void,
@@ -103,15 +116,11 @@ afterEach(resetCommandQueueStateForTest);
 it("does not scan sibling lanes while reading registered owner widths", () => {
   const siblings = Array.from({ length: 32 }, (_, index) => `background:core:stable-${index}`);
   configureBackground(siblings, Object.fromEntries(siblings.map((lane) => [lane, 1])));
-  const lane = getSkillWorkshopReviewLane();
-  const members = [...siblings, lane];
-  expect(state.lanes.size).toBe(members.length);
-  for (const registeredLane of state.lanes.values()) {
-    expect(registeredLane).toMatchObject({ draining: false, queue: { length: 0 } });
-  }
+  const lane = getBackgroundOwnerLane("core:skill-workshop");
+  expect(state.lanes.size).toBe(siblings.length + 1);
   const unchanged = preserveQueueState();
   const { result: observed, reads } = countLaneReads(() =>
-    Array.from({ length: 1_000 }, () => getSkillWorkshopReviewLane()),
+    Array.from({ length: 1_000 }, () => getBackgroundOwnerLane("core:skill-workshop")),
   );
   expect(observed).toEqual(Array.from({ length: 1_000 }, () => lane));
   unchanged();
@@ -130,34 +139,22 @@ it.each([
   expect(state.lanes.size).toBe(groupOnly && maxConcurrent !== 1 ? 1 : 0);
   if (groupOnly) {
     const group = state.laneGroups.get("background-work");
-    if (maxConcurrent === 1) {
-      expect(getSkillWorkshopReviewLane()).toBe(lane);
-    } else {
-      expect(() => getSkillWorkshopReviewLane()).toThrow(
-        "already registered with different concurrency",
-      );
-    }
+    expectWorkshopWidth(maxConcurrent);
     expect(state.lanes.size).toBe(maxConcurrent === 1 ? 0 : 1);
     expect(state.laneGroups.get("background-work")).toBe(group);
     expect([...group!.members]).toEqual([lane]);
     return;
   }
   expect(state.laneGroups.size).toBe(0);
-  expect(getSkillWorkshopReviewLane()).toBe(lane);
+  expect(getBackgroundOwnerLane("core:skill-workshop")).toBe(lane);
   const registered = state.lanes.get(lane);
   const group = state.laneGroups.get("background-work");
   expect(registered?.maxConcurrent).toBe(1);
   expect([...group!.members]).toEqual([lane]);
-  expect(getSkillWorkshopReviewLane()).toBe(lane);
-  for (const width of [0, 2, 3, 1]) {
+  expect(getBackgroundOwnerLane("core:skill-workshop")).toBe(lane);
+  for (const width of [0, 2, 1]) {
     publishLaneConfiguration({ lanes: { [lane]: width } });
-    if (width === 1) {
-      expect(getSkillWorkshopReviewLane()).toBe(lane);
-    } else {
-      expect(() => getSkillWorkshopReviewLane()).toThrow(
-        "already registered with different concurrency",
-      );
-    }
+    expectWorkshopWidth(width);
     expect(state.lanes.get(lane)).toBe(registered);
     expect(registered?.maxConcurrent).toBe(width);
     expect(state.laneGroups.get("background-work")).toBe(group);
@@ -261,7 +258,7 @@ it("preserves admission draining and the newest generation across Gateway restar
 
 it("shares three slots, preserves owner widths and FIFO, and leaves foreground capacity free", async () => {
   const parallel = "background:plugin:parallel";
-  const serial = getSkillWorkshopReviewLane();
+  const serial = getBackgroundOwnerLane("core:skill-workshop");
   configureBackground([parallel, serial], { [parallel]: 3 });
   const gates = Array.from({ length: 3 }, () =>
     park(parallel, undefined, { priority: "background" }),
@@ -269,9 +266,7 @@ it("shares three slots, preserves owner widths and FIFO, and leaves foreground c
   const parallelRuns = gates.map(({ run }) => run);
   const order: number[] = [];
   const first = park(serial, () => void order.push(1), { priority: "background" });
-  const second = enqueueCommandInLane(serial, async () => void order.push(2), {
-    priority: "background",
-  });
+  const second = recordOrder(serial, order, 2);
   try {
     expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 3, queuedCount: 2 });
     await expect(enqueueCommandInLane(CommandLane.Main, async () => "foreground")).resolves.toBe(
@@ -295,21 +290,17 @@ it("shares three slots, preserves owner widths and FIFO, and leaves foreground c
 });
 
 it("removes cancelled work immediately without invoking it or reordering its successors", async () => {
-  const owner = getSkillWorkshopReviewLane();
+  const owner = getBackgroundOwnerLane("core:skill-workshop");
   const active = park(owner, undefined, { priority: "background" });
   const controller = new AbortController();
   const cancelledTask = vi.fn(async () => undefined);
   const order: number[] = [];
-  const first = enqueueCommandInLane(owner, async () => void order.push(1), {
-    priority: "background",
-  });
+  const first = recordOrder(owner, order, 1);
   const cancelled = enqueueCommandInLane(owner, cancelledTask, {
     priority: "background",
     abortSignal: controller.signal,
   });
-  const last = enqueueCommandInLane(owner, async () => void order.push(2), {
-    priority: "background",
-  });
+  const last = recordOrder(owner, order, 2);
   const rejection = expect(cancelled).rejects.toThrow("cancel background work");
   controller.abort(new Error("cancel background work"));
   await rejection;

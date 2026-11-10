@@ -8,6 +8,7 @@ import {
 import type { DiscordConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAtHashSlug as normalizeDiscordSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { resolveDiscordAccountConfig } from "./accounts.js";
 import {
   findDiscordChannelPolicyKey,
   findDiscordGuildPolicyKey,
@@ -72,7 +73,7 @@ function resolveDiscordPolicyScope(params: ChannelGroupContext): {
 } {
   const guilds =
     (params.accountId
-      ? params.cfg.channels?.discord?.accounts?.[params.accountId]?.guilds
+      ? resolveDiscordAccountConfig(params.cfg, params.accountId)?.guilds
       : undefined) ?? params.cfg.channels?.discord?.guilds;
   // Guild "*" is selected only after every guild candidate misses; matched guilds hide it.
   // Within the selected guild, channel fields still cascade to guild fields.

@@ -8,6 +8,7 @@ import {
   settleReplyPendingFinalDelivery,
   suppressPendingFinalDelivery,
 } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
+import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { isReplyDispatchDeliveryPending } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
 import { withReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
@@ -41,7 +42,7 @@ import { copyChannelParticipantAdmissionEvidence } from "../message-access/admis
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import { recordInboundSession } from "../session.js";
-import { bindChannelDeliveryOwner } from "./delivery-owner.js";
+import { bindChannelDeliveryOwner, bindChannelReplyOptionsOwner } from "./delivery-owner.js";
 import {
   createSuppressedChannelDeliveryResult,
   isChannelPartialDeliveryError,
@@ -143,9 +144,10 @@ function resolveAssembledReplyPipeline(
   params: AssembledChannelTurn | RoutedAssembledChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
+  const channelReplyOptions = bindChannelReplyOptionsOwner(params.replyOptions);
   let replyOptions = adoption
-    ? { ...params.replyOptions, turnAdoptionLifecycle: adoption }
-    : params.replyOptions;
+    ? { ...channelReplyOptions, turnAdoptionLifecycle: adoption }
+    : channelReplyOptions;
   if (params.routeSessionKey !== params.ctxPayload.SessionKey) {
     replyOptions = withReplySystemEventContext(replyOptions ?? {}, {
       sessionKey: params.routeSessionKey,
@@ -388,8 +390,9 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const pendingAttempts: PendingChannelDeliveryAttempt[] = [];
   const suppressedAttempts: PendingChannelDeliveryAttempt[] = [];
   let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];
-  const replyOptions: NonNullable<AssembledChannelTurn["replyOptions"]> = {
+  const replyOptions: InternalGetReplyOptions = {
     ...replyPipeline.replyOptions,
+    assertChannelAuthority: params.assertAuthority,
     ...observeAgentRunStart(replyPipeline.replyOptions, (start) => {
       agentRun = [start.runId, start.executionIdentityToken];
     }),
@@ -548,7 +551,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
           const custody = await createDirectPendingFinalCustody(effectivePayload, params.storePath);
           releaseCustody = custody?.release;
           await custody?.onPlatformSendDispatch();
-          result = await operation.deliver(effectiveValue, toCoreManagedDeliveryInfo(info));
+          result = await operation.deliver(
+            effectiveValue,
+            toCoreManagedDeliveryInfo(info, effectivePayload),
+          );
         }
       }
     } catch (error: unknown) {

@@ -190,7 +190,7 @@ it("settles asynchronous storage close after startup before service stop finishe
     releaseClose.resolve();
     await stopping;
   }
-  await expect(store.lastFrame()).rejects.toThrow();
+  await expect(store.countUnbatchedActiveFrames()).rejects.toThrow();
 });
 
 it("closes storage when startup recovery fails without publishing a running service", async () => {
@@ -387,6 +387,9 @@ it("drains an admitted standup through the registered service stop", async () =>
   captured.api.runtime.llm.complete = block(async () => completion("Accepted"), entered, release);
   plugin.register({ ...captured.api, runtimeSource });
   const service = services[0]!;
+  if (service?.apiVersion !== 2) {
+    throw new Error("Expected service API version 2");
+  }
   const context = {
     config: {},
     stateDir,
