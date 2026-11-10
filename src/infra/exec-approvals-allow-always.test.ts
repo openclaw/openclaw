@@ -26,6 +26,7 @@ describe("allow-always pattern persistence", () => {
     allowlist: Parameters<typeof evaluateShellAllowlistWithAuthorization>[0]["allowlist"],
     dir: string,
     env: NodeJS.ProcessEnv,
+    platform: string = process.platform,
   ) {
     return evaluateShellAllowlistWithAuthorization({
       command,
@@ -33,7 +34,7 @@ describe("allow-always pattern persistence", () => {
       cwd: dir,
       env,
       safeBins: resolveSafeBins(undefined),
-      platform: process.platform,
+      platform,
     });
   }
 
@@ -46,14 +47,15 @@ describe("allow-always pattern persistence", () => {
     dir: string,
     env: NodeJS.ProcessEnv,
     strictInlineEval?: boolean,
+    platform: string = process.platform,
   ) {
-    const analysis = await evaluateCommand(command, [], dir, env);
+    const analysis = await evaluateCommand(command, [], dir, env, platform);
     const decision = resolveAllowAlwaysPersistenceDecision({
       segments: analysis.segments,
       commandText: command,
       cwd: dir,
       env,
-      platform: process.platform,
+      platform,
       strictInlineEval,
       authorizationPlan: analysis.authorizationPlan,
     });
@@ -183,6 +185,58 @@ describe("allow-always pattern persistence", () => {
     expect(denied.allowlistSatisfied).toBe(false);
     expectApprovalRequired(denied);
   });
+
+  it.each([
+    ["win32", "sh -c"],
+    ["win32", "bash -c"],
+    ["win32", "pnpm exec sh -c"],
+    ["win32", "pnpm exec npm x bash -c"],
+    ["win32", "nice pnpm exec sh -c"],
+    ["linux", "pnpm exec sh -c"],
+    ["darwin", "pnpm exec bash -c"],
+  ])("keeps %s POSIX shell payloads one-shot through %s", async (platform, wrapper) => {
+    const { dir, env } = createCommandFixture();
+    for (const executable of ["sh", "bash", "pnpm", "npm", "nice", "tool"]) {
+      makeExecutable(dir, executable);
+    }
+    const command = `${wrapper} 'tool allowed'`;
+    const initial = await evaluateCommand(command, [], dir, env, platform);
+    expect(initial.analysisOk).toBe(true);
+    expectApprovalRequired(initial);
+    const { entries } = await resolvePersistedPatterns(command, dir, env, undefined, platform);
+    expect(entries).toEqual([]);
+    for (const payload of ["tool allowed", "tool other", "bash -c other"]) {
+      expectApprovalRequired(
+        await evaluateCommand(`${wrapper} '${payload}'`, [...entries], dir, env, platform),
+      );
+    }
+  });
+
+  it.each(["", "cmd /c ", "powershell -Command ", "pwsh -c "])(
+    "keeps Windows %scommand approvals bound to the inner argv",
+    async (wrapper) => {
+      const { dir, env } = createCommandFixture();
+      for (const executable of ["cmd", "powershell", "pwsh", "tool"]) {
+        makeExecutable(dir, executable);
+      }
+      const command = (payload: string) => (wrapper ? `${wrapper}'${payload}'` : payload);
+      const { entries } = await resolvePersistedPatterns(
+        command("tool allowed"),
+        dir,
+        env,
+        undefined,
+        "win32",
+      );
+      expect(entries).toHaveLength(1);
+      expect(
+        (await evaluateCommand(command("tool allowed"), [...entries], dir, env, "win32"))
+          .allowlistSatisfied,
+      ).toBe(true);
+      expectApprovalRequired(
+        await evaluateCommand(command("tool other"), [...entries], dir, env, "win32"),
+      );
+    },
+  );
 
   it("keeps Windows strict inline-eval interpreter approvals argv-bound", () => {
     const awk = "C:\\temp\\awk.exe";

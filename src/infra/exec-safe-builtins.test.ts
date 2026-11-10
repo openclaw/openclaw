@@ -239,6 +239,22 @@ describe.skipIf(process.platform === "win32")(
       expect(result.allowlistSatisfied).toBe(true);
     });
 
+    // Bash re-evaluates arithmetic text, so ANSI-C escapes can rebuild `$(...)` in a subscript.
+    it.each([
+      String.raw`: "$[ x[$'\x24\x28touch /tmp/m\x29'] ]"`,
+      String.raw`cd "$[ x[$'\x24\x28touch /tmp/m\x29'] ]"`,
+      String.raw`: "$(( x[$'\x24\x28touch /tmp/m\x29'] ))"`,
+    ])("arithmetic expansion arguments still gate: %s", async (command) => {
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command,
+        allowlist: gitAllowlist,
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(result.authorizationPlan).toMatchObject({ ok: false, reason: "dynamic-argument" });
+    });
+
     it("environment-mutating builtins still gate", async () => {
       const result = await evaluateShellAllowlistWithAuthorization({
         command: "export PATH=/tmp/bin:$PATH && git status",

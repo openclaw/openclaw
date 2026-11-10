@@ -16,6 +16,12 @@ import {
   resolveShellWrapperTransportArgv,
 } from "../shell-wrapper-resolution.js";
 import {
+  hasEscapedLineContinuation,
+  hasLineBreakEscapedWordBoundary,
+  hasExecutableLineContinuation,
+  isDynamicStandaloneAssignment,
+} from "./syntax-risks.js";
+import {
   type BashCommandParser,
   getBashParserForCommandExplanation,
 } from "./tree-sitter-runtime.js";
@@ -224,18 +230,6 @@ const COMMAND_ARGUMENT_NODE_TYPES = new Set([
   "string",
   "word",
 ]);
-
-function hasEscapedLineContinuation(text: string): boolean {
-  return /\\(?:\r\n|[\r\n])/.test(text);
-}
-
-function hasLineBreakEscapedWordBoundary(text: string): boolean {
-  return /(?:\r\n|[\r\n])\\/.test(text);
-}
-
-function hasExecutableLineContinuation(text: string): boolean {
-  return /^[^\s]*\\(?:\r\n|[\r\n])/.test(text);
-}
 
 function hasUnescapedDynamicPattern(text: string): boolean {
   for (let index = 0; index < text.length; index += 1) {
@@ -759,6 +753,8 @@ function visitNode(
     output.risks.push({ kind: "redirect", text: node.text, span });
   } else if (node.type === "ERROR") {
     output.risks.push({ kind: "syntax-error", text: node.text, span });
+  } else if (isDynamicStandaloneAssignment(node)) {
+    output.risks.push({ kind: "dynamic-assignment", text: node.text, span });
   }
 
   if (isCommandLikeNode(node)) {

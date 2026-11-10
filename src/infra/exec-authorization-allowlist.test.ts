@@ -225,4 +225,27 @@ describe("authorization-backed exec allowlist", () => {
       }),
     ).toBe(true);
   });
+  it.each(["NODE_OPTIONS=--x tool", "NODE_OPTIONS+=--x tool"])(
+    "keeps env-assignment preludes prompt-only for allowlisted executables: %s",
+    async (command) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeExecApprovalsTempDir();
+      const toolPath = makeExecutable(dir, "tool");
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command,
+        safeBins: new Set(),
+        platform: process.platform,
+        allowlist: [{ pattern: toolPath }],
+        cwd: dir,
+        env: makePathEnv(dir),
+      });
+      expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: false });
+      expect(result.authorizationPlan?.groups[0]?.candidates[0]).toMatchObject({
+        trustMode: "prompt-only",
+        reasons: ["shell-env-assignment"],
+      });
+    },
+  );
 });

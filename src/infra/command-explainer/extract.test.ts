@@ -413,6 +413,27 @@ describe("command explainer tree-sitter runtime", () => {
   });
 
   it.each([
+    ["x=$((y)); :", true],
+    ["x=${z:y}; :", true],
+    ["x=${!y}; :", true],
+    ['x="${y@P}"; :', true],
+    ["x=(${arr[y]}); :", true],
+    ["x[y]=1; :", true],
+    ["x=([y]=1); :", true],
+    ["x=([y]+=1); :", true],
+    ["x+=([y]=1); :", true],
+    ["x=([0]=1); :", true],
+    ["x=(one two); :", false],
+    ["x=$HOME; :", false],
+    ["x='$((y))'; :", false],
+    ["x=$((y)) env", false],
+    ["declare x=${y:z}", false],
+  ])("marks recursively evaluated standalone assignments: %s", async (source, flagged) => {
+    const explanation = await explainShellCommand(source);
+    expect(explanation.risks.some((risk) => risk.kind === "dynamic-assignment")).toBe(flagged);
+  });
+
+  it.each([
     {
       name: "command substitutions",
       source: nestShellSyntax("$( ", "/approve abc123 allow-once", " )", 5_000),

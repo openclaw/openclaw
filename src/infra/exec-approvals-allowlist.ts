@@ -13,6 +13,7 @@ import {
   resolveDispatchWrapperTrustPlan,
   unwrapDispatchWrappersForResolution,
 } from "./dispatch-wrapper-resolution.js";
+import { addAllowAlwaysPattern, resolveCandidateTrustPath } from "./exec-allow-always-targets.js";
 import {
   isWindowsPlatform,
   matchAllowlist,
@@ -975,31 +976,6 @@ function resolveShellWrapperPositionalArgvCandidate(params: {
   };
 }
 
-function addAllowAlwaysPattern(
-  out: AllowAlwaysPattern[],
-  pattern: string,
-  argPattern?: string,
-): void {
-  const exists = out.some(
-    (p) => p.pattern === pattern && (p.argPattern ?? undefined) === (argPattern ?? undefined),
-  );
-  if (!exists) {
-    out.push({ pattern, argPattern });
-  }
-}
-
-function resolveCandidateTrustPath(candidatePath: string | undefined): string | undefined {
-  if (!candidatePath) {
-    return undefined;
-  }
-  return resolveExecutableTrustPath({
-    kind: "executable",
-    rawExecutable: candidatePath,
-    resolvedPath: candidatePath,
-    executableName: path.basename(candidatePath),
-  });
-}
-
 function collectAllowAlwaysPatterns(
   inputSegment: ExecCommandSegment,
   params: Omit<Parameters<typeof resolveAllowAlwaysPatternEntries>[0], "segments">,
@@ -1113,7 +1089,11 @@ function collectAllowAlwaysPatterns(
     }
     return;
   }
-  if (!isWindowsPlatform(params.platform)) {
+  // POSIX inline payloads cannot use the Windows parser to mint reusable grants.
+  if (
+    !isWindowsPlatform(params.platform) ||
+    POSIX_SHELL_WRAPPERS.has(normalizeExecutableToken(segment.argv[0] ?? ""))
+  ) {
     return;
   }
   const nested = analyzeWindowsShellCommand({
@@ -1130,11 +1110,7 @@ function collectAllowAlwaysPatterns(
   }
 }
 
-/**
- * Derive persisted allowlist patterns for an "allow always" decision.
- * When a command is wrapped in a shell (for example `zsh -lc "<cmd>"`),
- * persist the inner executable(s) rather than the shell binary.
- */
+/** Derive persisted allowlist patterns for an "allow always" decision. */
 export function resolveAllowAlwaysPatternEntries(params: {
   segments: ExecCommandSegment[];
   cwd?: string;

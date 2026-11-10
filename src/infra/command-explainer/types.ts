@@ -70,6 +70,7 @@ export type CommandRisk = { text: string; span: SourceSpan } & (
   | { kind: "command-substitution" }
   | { kind: "process-substitution" }
   | { kind: "dynamic-executable" }
+  | { kind: "dynamic-assignment" }
   | {
       kind: "dynamic-argument";
       command: string;
