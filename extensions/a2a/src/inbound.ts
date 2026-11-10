@@ -18,7 +18,9 @@ export async function dispatchA2aInbound(params: {
   messageId: string;
   peerName: string;
   text: string;
+  assertAuthority: () => void;
 }): Promise<void> {
+  params.assertAuthority();
   const reportPersistenceError = (error: unknown) => {
     logError(`A2A task persistence failed: ${String(error)}`);
   };
@@ -57,6 +59,7 @@ export async function dispatchA2aInbound(params: {
     dmPolicy: "allowlist",
     allowFrom: Object.keys(params.account.config.peers ?? {}),
   });
+  params.assertAuthority();
   if (ingress.ingress.admission !== "dispatch") {
     await params.store.reject(params.taskId, "A2A peer was blocked by channel ingress policy");
     return;
@@ -68,6 +71,7 @@ export async function dispatchA2aInbound(params: {
     cfg: params.config,
     route,
   });
+  params.assertAuthority();
   const body = buildEnvelope({
     channel: "A2A",
     from: params.peerName,
@@ -131,6 +135,7 @@ export async function dispatchA2aInbound(params: {
     channel: "a2a",
     accountId: params.account.accountId,
     route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
+    assertAuthority: params.assertAuthority,
     ctxPayload,
     delivery: {
       deliver: async (payload, info) => {

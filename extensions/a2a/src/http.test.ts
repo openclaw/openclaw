@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import type { ServerResponse } from "node:http";
+import { request as requestHttp, type ServerResponse } from "node:http";
 import path from "node:path";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -109,7 +109,7 @@ async function startHttpHarness(options?: {
   a2aConfig?: Partial<A2aChannelConfig>;
   onDispatch?: (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>;
 }) {
-  const { registry, controller, ctx } = createA2aGatewayFixture({
+  const { registry, controller, ctx, runtime } = createA2aGatewayFixture({
     cfg: options?.config ?? {},
     version: VERSION,
     terminalStore: options?.terminalStore,
@@ -179,6 +179,7 @@ async function startHttpHarness(options?: {
 
   return {
     baseUrl,
+    runtime,
     stop: async () => {
       controller.abort();
       await lifecycle;
@@ -202,6 +203,123 @@ async function workingTask(harness: Awaited<ReturnType<typeof startHttpHarness>>
   const { result } = (await response.json()) as { result: { task: { id: string } } };
   return result.task.id;
 }
+
+it.each(["request body", "durable admission", "blocking result", "batch result"] as const)(
+  "rechecks peer authorization after awaiting %s",
+  async (phase) => {
+    const waitsForResult = phase === "blocking result" || phase === "batch result";
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const pending = createPendingStoreFixture();
+    const register = pending.register;
+    let originalTaskId: string | undefined;
+    pending.register = async (...args) => {
+      originalTaskId = args[0];
+      if (phase === "durable admission") {
+        entered.resolve();
+        await release.promise;
+      }
+      return register(...args);
+    };
+    const harness = await startHttpHarness({
+      pendingStore: pending,
+      onDispatch: async ({ store, taskId }) => {
+        if (waitsForResult) {
+          entered.resolve();
+          await release.promise;
+        }
+        await store.complete(taskId, "private final answer");
+      },
+    });
+    const completed =
+      phase === "batch result"
+        ? harness.taskStore.create("prior-context", "alpha", "already-completed")
+        : undefined;
+    if (completed) {
+      await harness.taskStore.complete(completed.id, "prior private artifact");
+    }
+    const request = sendRequest({ messageId: "revoked-during-await" });
+    const body = JSON.stringify(completed ? [taskRequest(completed.id), request] : request);
+    await withServer(
+      (req, res) => {
+        void harness.handler(req, res);
+        if (phase === "request body") {
+          entered.resolve();
+        }
+      },
+      async (baseUrl) => {
+        let upload: ReturnType<typeof requestHttp>;
+        const received = new Promise<{ status: number | undefined; text: string }>(
+          (resolve, reject) => {
+            upload = requestHttp(
+              `${baseUrl}/a2a/v1`,
+              {
+                method: "POST",
+                headers: { ...wireHeaders, "content-length": Buffer.byteLength(body) },
+              },
+              (response) => {
+                let text = "";
+                response.setEncoding("utf8");
+                response.on("data", (value: string) => {
+                  text += value;
+                });
+                response.once("end", () => resolve({ status: response.statusCode, text }));
+                response.once("error", reject);
+              },
+            );
+            upload.once("error", reject);
+            if (phase === "request body") {
+              upload.write(body.slice(0, 20));
+            } else {
+              upload.end(body);
+            }
+          },
+        );
+        try {
+          await entered.promise;
+          const candidate = structuredClone(harness.runtime.config.current({ clone: true }));
+          candidate.channels!.a2a!.peers!.alpha!.token = "replacement-secret";
+          vi.mocked(harness.runtime.config.current).mockReturnValue(candidate);
+          if (phase === "request body") {
+            upload!.end(body.slice(20));
+          }
+          release.resolve();
+          const response = await received;
+          expect(response.status).toBe(401);
+          expect(response.text).not.toContain("private final answer");
+          expect(response.text).not.toContain("prior private artifact");
+          expect(harness.onDispatch).toHaveBeenCalledTimes(waitsForResult ? 1 : 0);
+          if (phase === "request body") {
+            expect(originalTaskId).toBeUndefined();
+          } else {
+            await expectReply(
+              harness.post(request, "replacement-secret"),
+              taskResult({
+                id: originalTaskId,
+                status: {
+                  state:
+                    phase === "durable admission" ? "TASK_STATE_REJECTED" : "TASK_STATE_COMPLETED",
+                },
+              }),
+            );
+            expect(harness.onDispatch).toHaveBeenCalledTimes(waitsForResult ? 1 : 0);
+            if (completed) {
+              await expectReply(harness.post(taskRequest(completed.id), "replacement-secret"), {
+                result: {
+                  id: completed.id,
+                  artifacts: [{ parts: [{ text: "prior private artifact" }] }],
+                },
+              });
+            }
+          }
+        } finally {
+          release.resolve();
+          upload!.destroy();
+        }
+      },
+    );
+  },
+);
 
 function sendRequest({
   id = "send-1",

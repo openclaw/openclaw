@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
@@ -37,6 +37,11 @@ import { A2A_CHANNEL_ID, a2aChannelSetupPlugin } from "./channel-base.js";
 import { dispatchA2aInbound } from "./inbound.js";
 import { sendA2aChannelText } from "./outbound.js";
 import {
+  captureA2aPeerAuthorization,
+  A2aPeerAuthorizationError,
+  type A2aPeerAuthorization,
+} from "./peer-authorization.js";
+import {
   A2aProtocolError,
   A2aRpcRequestSchema,
   A2aSendMessageParamsSchema,
@@ -47,7 +52,7 @@ import {
 import { filterA2aReplyPayload } from "./reply-payload.js";
 import { getA2aChannelRuntime } from "./runtime.js";
 import { A2aTaskStore, openPendingStore, openTerminalStore } from "./task-store.js";
-import type { A2aChannelConfig, ResolvedA2aChannelAccount } from "./types.js";
+import type { ResolvedA2aChannelAccount } from "./types.js";
 
 const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
 const MAX_RESPONSE_BODY_BYTES = 1024 * 1024;
@@ -88,22 +93,6 @@ function writeRpcResponse(
       ? bounded.map(() => createRpcError(null, -32000, errorMessage))
       : createRpcError(null, -32000, errorMessage);
   writeJsonResponse(response, 200, fallback);
-}
-
-function resolvePeerName(request: IncomingMessage, config: A2aChannelConfig): string | undefined {
-  const authorization = request.headers.authorization;
-  const token = authorization?.match(/^Bearer\s+([^\s]+)$/i)?.[1];
-  if (!token) {
-    return undefined;
-  }
-  const presentedDigest = createHash("sha256").update(token).digest();
-  for (const [peerName, peer] of Object.entries(config.peers ?? {})) {
-    const configuredDigest = createHash("sha256").update(peer.token).digest();
-    if (timingSafeEqual(presentedDigest, configuredDigest)) {
-      return peerName;
-    }
-  }
-  return undefined;
 }
 
 function resolveRequestOrigin(request: IncomingMessage): string {
@@ -331,8 +320,9 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
 
           async function processRpcRequest(
             input: unknown,
-            peerName: string,
+            authorization: A2aPeerAuthorization,
           ): Promise<A2aRpcResponse | undefined> {
+            const { peerName } = authorization;
             const parsed = A2aRpcRequestSchema.safeParse(input);
             const candidateId = isRecord(input) ? input.id : undefined;
             const id =
@@ -353,6 +343,9 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
 
             let result: unknown;
             try {
+              if (!authorization.isCurrent()) {
+                throw new A2aProtocolError(-32000, "Peer authorization is no longer current");
+              }
               const method = resolveA2aRpcMethod(request.method);
               if (method === undefined) {
                 throw new A2aProtocolError(-32601, `Method not found: ${request.method}`);
@@ -407,9 +400,18 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                   peerName,
                   messageId,
                 );
-                if ((await store.start(task.id)) && !ctx.abortSignal.aborted) {
+                const started = await store.start(task.id);
+                if (started && !authorization.isCurrent()) {
+                  // Durable admission can outlive its credential. Keep the original identity
+                  // rejected rather than executing it or making its replay new work.
+                  await store.reject(task.id, "Peer authorization changed before dispatch");
+                } else if (started && !ctx.abortSignal.aborted) {
                   // Reserve detached work before the HTTP request releases its admission root.
                   void runDetachedWebhookWork(async () => {
+                    if (!authorization.isCurrent()) {
+                      await store.reject(task.id, "Peer authorization changed before dispatch");
+                      return;
+                    }
                     await dispatchA2aInbound({
                       account,
                       config,
@@ -420,9 +422,14 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                       messageId,
                       peerName,
                       text,
+                      assertAuthority: authorization.assertCurrent,
                     });
                   })
-                    .catch((error: unknown) => store.fail(task.id, error))
+                    .catch((error: unknown) =>
+                      error instanceof A2aPeerAuthorizationError
+                        ? store.reject(task.id, error.message)
+                        : store.fail(task.id, error),
+                    )
                     .catch((error: unknown) => {
                       ctx.log?.error(`A2A task persistence failed: ${String(error)}`);
                     });
@@ -476,8 +483,13 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
               return true;
             }
 
-            const peerName = resolvePeerName(request, a2aConfig);
-            if (!peerName) {
+            const authorization = captureA2aPeerAuthorization({
+              authorization: request.headers.authorization,
+              accountId: account.accountId,
+              readConfig: () => runtime.config.current(),
+              signal: ctx.abortSignal,
+            });
+            if (!authorization) {
               writeJsonResponse(response, 401, {
                 error: "Unauthorized; configure channels.a2a.peers with a matching Bearer token",
               });
@@ -519,6 +531,12 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
               return true;
             }
 
+            if (!authorization.isCurrent()) {
+              writeJsonResponse(response, 401, {
+                error: "Peer authorization is no longer current",
+              });
+              return true;
+            }
             let payload: unknown;
             try {
               payload = JSON.parse(body);
@@ -538,7 +556,7 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                 return true;
               }
               if (payload.length > MAX_BATCH_REQUESTS) {
-                const error = isRateLimited(peerName)
+                const error = isRateLimited(authorization.peerName)
                   ? createRpcError(null, -32000, "Peer is rate limited")
                   : createRpcError(
                       null,
@@ -549,11 +567,18 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                 return true;
               }
               const responses = (
-                await Promise.all(payload.map((entry) => processRpcRequest(entry, peerName)))
+                await Promise.all(payload.map((entry) => processRpcRequest(entry, authorization)))
               ).filter((entry): entry is A2aRpcResponse => entry !== undefined);
               result = responses.length > 0 ? responses : undefined;
             } else {
-              result = await processRpcRequest(payload, peerName);
+              result = await processRpcRequest(payload, authorization);
+            }
+            // Blocking waits and sibling batch requests can span credential publication.
+            if (!authorization.isCurrent()) {
+              writeJsonResponse(response, 401, {
+                error: "Peer authorization is no longer current",
+              });
+              return true;
             }
             if (result) {
               writeRpcResponse(response, result);

@@ -47,6 +47,10 @@ export function createA2aGatewayFixture(
     unresolvedPeers: [],
     unresolvedOutboundPeers: [],
   };
+  vi.mocked(runtime.config.current).mockReturnValue({
+    ...options.cfg,
+    channels: { ...options.cfg?.channels, a2a: account.config },
+  });
   const statusPatchSink = vi.fn();
   const ctx = createStartAccountContext({
     account,

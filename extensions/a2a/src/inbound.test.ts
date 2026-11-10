@@ -1,3 +1,4 @@
+import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createPluginRuntimeMock,
   createTestRegistry,
@@ -9,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveA2aChannelAccount } from "./accounts.js";
 import { a2aChannelPlugin } from "./channel.js";
 import { dispatchA2aInbound } from "./inbound.js";
+import { A2aPeerAuthorizationError, captureA2aPeerAuthorization } from "./peer-authorization.js";
 import { A2aTaskStore } from "./task-store.js";
 import {
   createPendingStoreFixture,
@@ -16,6 +18,17 @@ import {
 } from "./task-store.test-support.js";
 
 type InboundParams = Parameters<typeof dispatchA2aInbound>[0];
+
+// mock-isolation: Pause the real envelope preparation at its return boundary, without replacing its result.
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    createChannelInboundEnvelopeBuilderAsync: vi.fn(
+      actual.createChannelInboundEnvelopeBuilderAsync,
+    ),
+  };
+});
 type InboundTurn = Parameters<InboundParams["channelRuntime"]["inbound"]["dispatch"]>[0];
 function dispatched(turn: InboundTurn, queuedFinal = false, deferred = false) {
   return {
@@ -66,6 +79,7 @@ async function createA2aInboundFixture(peerName = "hermes") {
     messageId: "incoming-message",
     peerName,
     text: "hello from an external agent",
+    assertAuthority: () => {},
   };
   return {
     store,
@@ -84,6 +98,56 @@ beforeEach(async () => {
 });
 
 describe("A2A channel inbound dispatch", () => {
+  it.each(["ingress", "envelope"] as const)(
+    "refuses native dispatch when its credential is revoked during %s preparation",
+    async (phase) => {
+      let config = { channels: { a2a: { peers: { hermes: { token: "before" } } } } };
+      const authority = captureA2aPeerAuthorization({
+        authorization: "Bearer before",
+        accountId: "default",
+        readConfig: () => config,
+        signal: new AbortController().signal,
+      })!;
+      let enter!: () => void;
+      let resume!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      const released = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      if (phase === "ingress") {
+        const ingress = fixture.params.channelRuntime.inbound.ingress;
+        const original = ingress.resolveStable;
+        vi.spyOn(ingress, "resolveStable").mockImplementationOnce(async (...args) => {
+          const value = await original(...args);
+          enter();
+          await released;
+          return value;
+        });
+      } else {
+        const builder = vi.mocked(createChannelInboundEnvelopeBuilderAsync);
+        const original = builder.getMockImplementation()!;
+        builder.mockImplementationOnce(async (...args) => {
+          const value = await original(...args);
+          enter();
+          await released;
+          return value;
+        });
+      }
+      const pending = fixture.run({ assertAuthority: authority.assertCurrent });
+      try {
+        await entered;
+        config = { channels: { a2a: { peers: { hermes: { token: "replacement" } } } } };
+        resume();
+        await expect(pending).rejects.toBeInstanceOf(A2aPeerAuthorizationError);
+        expect(fixture.dispatch).not.toHaveBeenCalled();
+      } finally {
+        resume();
+        await pending.catch(() => {});
+      }
+    },
+  );
   it("rejects peer slash commands before dispatch even with a command allowlist", async () => {
     await fixture.run({
       text: "  / custom-command",

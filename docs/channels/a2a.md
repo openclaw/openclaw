@@ -184,6 +184,8 @@ Agent Card discovery is intentionally public: anyone who can reach the gateway c
 
 Every JSON-RPC request requires a configured peer bearer token. There is no unauthenticated mode. Each authenticated peer is also the sender identity used for normal OpenClaw channel ingress policy. Use different high-entropy tokens for each peer, keep tokens out of source control, and rotate tokens by updating the gateway environment and restarting.
 
+Peer credentials are rechecked against the active runtime configuration after request and storage waits, before dispatch, and before returning task results. Removing the account or peer, disabling A2A, or rotating its token blocks the old credential when that configuration is activated. An admitted task that loses authorization before dispatch keeps its original ID and becomes rejected; retrying its message ID does not start new work.
+
 A2A peers send tasks, not user commands. Messages beginning with `/` are rejected with `TASK_STATE_REJECTED` and an explanation. Command-like text inside an ordinary task stays literal. It cannot change session settings or resolve approvals. This also applies when the peer sets the protocol message role to `ROLE_USER`: that field does not authenticate a human user.
 
 Ordinary tasks retain the tools and permissions of their routed agent. Work requiring approval still needs an authorized operator's decision through a supported user channel or the Control UI. Existing integrations that sent slash commands over A2A must use plain-text tasks for agent work and an authorized user surface for commands. There is no peer command opt-in.
