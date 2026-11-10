@@ -101,7 +101,7 @@ it("mounts only viewport roster rows and retains the focused row while scrolling
     expect(groups().length).toBeLessThan(12);
   });
   const first = groups()[0]!;
-  const focused = first.querySelector<HTMLButtonElement>(".sidebar-agent-roster__action")!;
+  const focused = first.querySelector<HTMLButtonElement>("button.sidebar-agent-roster__action")!;
   focused.focus();
   await waitForSolid(() => expect(document.activeElement).toBe(focused));
   const height = viewport.scrollHeight;

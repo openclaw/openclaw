@@ -13,7 +13,7 @@ openclaw-sidebar-agent-roster {
   column-gap: 8px;
   /* Reclaim the section inset so the fill runs flush with the session rows. */
   margin-inline: -8px;
-  padding-inline: 8px 15px;
+  padding-inline: 16px 15px;
   border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   color: var(--muted);
@@ -232,7 +232,6 @@ openclaw-sidebar-agent-roster {
   justify-content: center;
   width: 32px;
   height: 32px;
-  padding: 4px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -300,6 +299,12 @@ openclaw-sidebar-agent-roster {
   .sidebar-agent-roster__actions {
   opacity: 1;
   pointer-events: auto;
+}
+/* The grip shares the native row-action reveal, sizing and pointer treatment. */
+.sidebar-agent-roster__grip {
+  inset-inline: 0 auto;
+  width: 12px;
+  cursor: grab;
 }
 .sidebar-session-team-state__counts {
   gap: var(--team-slot-gap);

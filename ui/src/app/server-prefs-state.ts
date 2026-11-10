@@ -1,8 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeBackgroundPreference,
-  type BackgroundPreference,
-} from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import { normalizeBackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import {
   normalizeUiAppearancePreference,
@@ -11,24 +8,22 @@ import {
 import {
   UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
   UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+  UI_SIDEBAR_AGENT_ORDER_PREFERENCE_KEY,
 } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
-import {
-  normalizePersonalSessionGroups,
-  type PersonalSessionGroup,
-} from "../lib/sessions/personal-groups.ts";
+import { normalizePersonalSessionGroups } from "../lib/sessions/personal-groups.ts";
 import {
   normalizeAccentColor,
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
+  normalizeSidebarAgentOrder,
   UI_APPEARANCE_DEFAULTS,
   type ChatSendShortcut,
   type UiPreferences,
   type UiSettings,
 } from "./settings-contract.ts";
-import type { ThemeMode, ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride } from "./typography.ts";
 
 export function isAppearancePref(key: string): key is keyof typeof UI_APPEARANCE_PREFERENCE_KEYS {
@@ -37,6 +32,7 @@ export function isAppearancePref(key: string): key is keyof typeof UI_APPEARANCE
 
 export const UI_NAVIGATION_PREFERENCE_KEYS = {
   sidebarEntries: UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+  sidebarAgentOrder: UI_SIDEBAR_AGENT_ORDER_PREFERENCE_KEY,
   personalSessionGroups: UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
 } as const;
 
@@ -56,83 +52,92 @@ type SyncedPrefSpec<T> = {
   canApply?: (value: T, settings: UiPreferences) => boolean;
 };
 
-const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
-
-const optionalPrefSpec = <
-  K extends "accent" | "fontUi" | "fontChat" | "tabIcon" | "chatFollowUpMode",
+const valuePrefSpec = <
+  K extends
+    | "theme"
+    | "themeMode"
+    | "accent"
+    | "fontUi"
+    | "fontChat"
+    | "tabIcon"
+    | "chatFollowUpMode"
+    | "background"
+    | "locale",
 >(
   key: K,
-  normalize: (value: unknown) => UiSettings[K],
+  normalize: (value: unknown) => UiSettings[K] | undefined,
   configSync = true,
-) =>
-  prefSpec<UiSettings[K]>({
-    configSync,
-    extract: normalize,
-    local: (settings) => settings[key],
-    write: (value) => ({ [key]: value }),
-  });
+  defaultValue?: UiSettings[K],
+): SyncedPrefSpec<UiSettings[K]> => ({
+  configSync,
+  extract: normalize,
+  local: (settings) => settings[key],
+  write: (value) => ({ [key]: value ?? defaultValue }),
+});
 
-const booleanPrefSpec = (local: SyncedPrefSpec<boolean>["local"]) =>
-  prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local,
-  });
+const booleanPrefSpec = (local: SyncedPrefSpec<boolean>["local"]): SyncedPrefSpec<boolean> => ({
+  extract: (value) => (typeof value === "boolean" ? value : undefined),
+  local,
+});
+
+const navigationPrefSpec = <K extends keyof typeof UI_NAVIGATION_PREFERENCE_KEYS>(
+  key: K,
+  normalize: (value: unknown) => UiSettings[K] | null,
+  defaults: NonNullable<UiSettings[K]>,
+): SyncedPrefSpec<NonNullable<UiSettings[K]>> => ({
+  configSync: false,
+  extract: (value) => normalize(value) ?? undefined,
+  local: (settings) => settings[key] ?? defaults,
+  write: (value) => ({ [key]: value ?? [...defaults] }),
+});
+
+const chatSendShortcutPref: SyncedPrefSpec<ChatSendShortcut> = {
+  extract: (value) => (value === "enter" || value === "modifier-enter" ? value : undefined),
+  local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),
+  write: (value) => ({ chatSendShortcut: value }),
+};
 
 /**
  * One descriptor per synced pref, including its profile-only storage boundary.
  * Each key owns server validation, local normalization, and applicability.
  */
 export const SYNCED_PREFS = {
-  theme: prefSpec<ThemeName>({
-    extract: (value) => (value === "custom" || isThemeId(value) ? value : undefined),
-    local: (settings) => settings.theme,
-    write: (value) => ({ theme: value ?? UI_APPEARANCE_DEFAULTS.theme }),
+  theme: {
+    ...valuePrefSpec(
+      "theme",
+      (value) => (value === "custom" || isThemeId(value) ? value : undefined),
+      true,
+      UI_APPEARANCE_DEFAULTS.theme,
+    ),
     // A server "custom" theme is only honorable once this browser imported one;
     // the imported palette itself is too large to live in config.
-    canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
-  }),
-  themeMode: prefSpec<ThemeMode>({
-    extract: normalizeThemeMode,
-    local: (settings) => settings.themeMode,
-    write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
-  }),
-  accent: optionalPrefSpec("accent", normalizeAccentColor),
-  fontUi: optionalPrefSpec("fontUi", normalizeTypefaceOverride, false),
-  fontChat: optionalPrefSpec("fontChat", normalizeTypefaceOverride, false),
-  tabIcon: optionalPrefSpec("tabIcon", normalizeTabIconPreference, false),
-  background: prefSpec<BackgroundPreference>({
-    configSync: false,
-    extract: normalizeBackgroundPreference,
-    local: (settings) => settings.background,
-    write: (value) => ({ background: value }),
-  }),
-  locale: prefSpec<string>({
-    extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
-    local: (settings) => settings.locale,
-    write: (value) => ({ locale: value }),
-  }),
+    canApply: (value: UiSettings["theme"], settings: UiPreferences) =>
+      value !== "custom" || Boolean(settings.customTheme),
+  },
+  themeMode: valuePrefSpec("themeMode", normalizeThemeMode, true, UI_APPEARANCE_DEFAULTS.themeMode),
+  accent: valuePrefSpec("accent", normalizeAccentColor),
+  fontUi: valuePrefSpec("fontUi", normalizeTypefaceOverride, false),
+  fontChat: valuePrefSpec("fontChat", normalizeTypefaceOverride, false),
+  tabIcon: valuePrefSpec("tabIcon", normalizeTabIconPreference, false),
+  background: valuePrefSpec("background", normalizeBackgroundPreference, false),
+  locale: valuePrefSpec("locale", (value) =>
+    typeof value === "string" && isSupportedLocale(value) ? value : undefined,
+  ),
   chatShowThinking: booleanPrefSpec((settings) => settings.chatShowThinking),
   chatShowToolCalls: booleanPrefSpec((settings) => settings.chatShowToolCalls),
   chatPersistCommentary: booleanPrefSpec((settings) => settings.chatPersistCommentary !== false),
-  chatSendShortcut: prefSpec<ChatSendShortcut>({
-    extract: (value) => (value === "enter" || value === "modifier-enter" ? value : undefined),
-    local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),
-    write: (value) => ({ chatSendShortcut: value }),
-  }),
+  chatSendShortcut: chatSendShortcutPref,
   // Unset uses the server-configured queue mode; clearing sends an explicit null removal.
-  chatFollowUpMode: optionalPrefSpec("chatFollowUpMode", normalizeChatFollowUpModeOverride),
-  personalSessionGroups: prefSpec<PersonalSessionGroup[]>({
-    configSync: false,
-    extract: normalizePersonalSessionGroups,
-    local: (settings) => settings.personalSessionGroups ?? [],
-    write: (value) => ({ personalSessionGroups: value ?? [] }),
-  }),
-  sidebarEntries: prefSpec<string[]>({
-    configSync: false,
-    extract: (value) => normalizeSidebarEntries(value) ?? undefined,
-    local: (settings) => settings.sidebarEntries,
-    write: (value) => ({ sidebarEntries: value ?? [...DEFAULT_SIDEBAR_ENTRIES] }),
-  }),
+  chatFollowUpMode: valuePrefSpec("chatFollowUpMode", normalizeChatFollowUpModeOverride),
+  personalSessionGroups: navigationPrefSpec(
+    "personalSessionGroups",
+    normalizePersonalSessionGroups,
+    [],
+  ),
+  sidebarAgentOrder: navigationPrefSpec("sidebarAgentOrder", normalizeSidebarAgentOrder, []),
+  sidebarEntries: navigationPrefSpec("sidebarEntries", normalizeSidebarEntries, [
+    ...DEFAULT_SIDEBAR_ENTRIES,
+  ]),
 } as const;
 
 export type SyncedPrefKey = keyof typeof SYNCED_PREFS;
@@ -199,25 +204,20 @@ export type ServerUiPrefReadiness = {
   navigationReady?: boolean;
 };
 
-export const PROFILE_UI_PREFERENCE_KEYS = [
-  ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
-  ...Object.values(UI_NAVIGATION_PREFERENCE_KEYS),
-];
+const PROFILE_PREFERENCE_KEYS = {
+  ...UI_APPEARANCE_PREFERENCE_KEYS,
+  ...UI_NAVIGATION_PREFERENCE_KEYS,
+};
+export const PROFILE_UI_PREFERENCE_KEYS = Object.values(PROFILE_PREFERENCE_KEYS);
 
 export function extractProfileUiPrefs(entries: Record<string, unknown>): ServerUiPrefs {
   const prefs: ServerUiPrefs = {};
-  for (const [key, preferenceKey] of Object.entries(UI_APPEARANCE_PREFERENCE_KEYS)) {
-    if (!isAppearancePref(key)) {
-      continue;
-    }
-    const value = normalizeUiAppearancePreference(preferenceKey, entries[preferenceKey]);
-    if (value !== undefined) {
-      Object.assign(prefs, { [key]: value });
-    }
-  }
-  for (const key of Object.keys(UI_NAVIGATION_PREFERENCE_KEYS).filter(isNavigationPref)) {
-    const preferenceKey = UI_NAVIGATION_PREFERENCE_KEYS[key];
-    const value = SYNCED_PREFS[key].extract(entries[preferenceKey]);
+  for (const [key, preferenceKey] of Object.entries(PROFILE_PREFERENCE_KEYS)) {
+    const value = isAppearancePref(key)
+      ? normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS[key], entries[preferenceKey])
+      : isNavigationPref(key)
+        ? SYNCED_PREFS[key].extract(entries[preferenceKey])
+        : undefined;
     if (value !== undefined) {
       Object.assign(prefs, { [key]: value });
     }

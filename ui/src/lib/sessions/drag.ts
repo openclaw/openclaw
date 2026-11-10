@@ -25,6 +25,7 @@ function createDragHandlers(mime: string, copyMove = false) {
 const sessionDrag = createDragHandlers(SESSION_DRAG_MIME, true);
 const sectionDrag = createDragHandlers(SIDEBAR_SECTION_DRAG_MIME);
 const routeDrag = createDragHandlers(SIDEBAR_ROUTE_DRAG_MIME);
+const agentDrag = createDragHandlers("application/x-openclaw-sidebar-agent");
 
 export const writeSessionDragData = sessionDrag.write;
 export const readSessionDragData = sessionDrag.read;
@@ -35,3 +36,6 @@ export const sidebarSectionDragActive = sectionDrag.active;
 export const writeSidebarRouteDragData = routeDrag.write;
 export const readSidebarRouteDragData = routeDrag.read;
 export const sidebarRouteDragActive = routeDrag.active;
+export const writeSidebarAgentDragData = agentDrag.write;
+export const readSidebarAgentDragData = agentDrag.read;
+export const sidebarAgentDragActive = agentDrag.active;
