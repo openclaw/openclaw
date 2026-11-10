@@ -122,7 +122,7 @@ export class TranscriptInitialRange {
         indexes.add(index);
       }
       const limit =
-        this.isReaderMoving() || this.pendingWheelDelta() !== 0
+        this.isReaderMoving() || forecast.pendingWheelDelta(this.pendingWheel) !== 0
           ? Math.max(this.preparedRowLimit, indexes.size + this.scrollPrepareRowLimit)
           : Infinity;
       for (const index of forecast.indexes(
@@ -219,19 +219,11 @@ export class TranscriptInitialRange {
       : [];
   }
 
-  private pendingWheelDelta(): number {
-    // Native scrollTop rounds fractional wheel travel. Its subpixel residue
-    // must not replace the next observed step with a stationary forecast.
-    const wheel = this.pendingWheel;
-    const now = performance.now();
-    return wheel && now - wheel.time < 100 && Math.abs(wheel.delta) > 1 ? wheel.delta : 0;
-  }
-
   private forecastViewport() {
     if (this.viewportOnly || this.preparingEnd || !this.hasRetainedRows) {
       return undefined;
     }
-    const pendingDelta = this.pendingWheelDelta();
+    const pendingDelta = forecast.pendingWheelDelta(this.pendingWheel);
     if (!pendingDelta && !this.isReaderMoving()) {
       return undefined;
     }
@@ -444,7 +436,7 @@ export class TranscriptInitialRange {
   }
 
   recordReaderMovement(delta: number): void {
-    const pendingDelta = this.pendingWheelDelta();
+    const pendingDelta = forecast.pendingWheelDelta(this.pendingWheel);
     if (this.pendingWheel) {
       this.pendingWheel.delta =
         Math.sign(delta) === Math.sign(pendingDelta)
@@ -471,15 +463,16 @@ export class TranscriptInitialRange {
     if (!this.reading || this.preparingEnd || !this.hasRetainedRows || !this.canPrepare()) {
       return;
     }
-    this.pendingWheel = {
-      delta: this.pendingWheelDelta() + delta,
-      time: performance.now(),
-    };
+    const now = performance.now();
+    const changed = delta !== 0 || !this.pendingWheel || now - this.pendingWheel.time >= 100;
+    this.pendingWheel = { delta: forecast.pendingWheelDelta(this.pendingWheel) + delta, time: now };
     this.cancelPreparation?.();
     this.cancelPreparation = undefined;
     this.preparationIsIdle = false;
-    this.refresh();
-    this.invalidate();
+    if (changed) {
+      this.refresh();
+      this.invalidate();
+    }
     this.scheduleForecastExpiry();
   }
 
@@ -544,14 +537,15 @@ export class TranscriptInitialRange {
       this.rowIndexes,
       this.rows.length,
       range,
-      this.pendingWheelDelta() || (this.isReaderMoving() ? this.scrollSample.direction : 0),
+      forecast.pendingWheelDelta(this.pendingWheel) ||
+        (this.isReaderMoving() ? this.scrollSample.direction : 0),
     );
   }
 
   private queuePreparation(afterFrame = false): void {
     if (
       this.cancelPreparation ||
-      this.pendingWheelDelta() !== 0 ||
+      forecast.pendingWheelDelta(this.pendingWheel) !== 0 ||
       !this.hasPrewarmRows ||
       (!this.hasRetainedRows && this.rows.at(-1)?.streaming) ||
       this.preparingEnd ||

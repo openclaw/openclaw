@@ -24,6 +24,7 @@ function mockAnimationFrames() {
 }
 
 function createPendingWheelRange(viewport = 300) {
+  const invalidate = vi.fn();
   const rows = Array.from({ length: 200 }, (_, index) => ({
     kind: "item" as const,
     key: String(index),
@@ -46,7 +47,7 @@ function createPendingWheelRange(viewport = 300) {
     0,
     () => virtualizer,
     defaultRangeExtractor,
-    () => {},
+    invalidate,
     () => 0,
     () => true,
     () => 120,
@@ -62,7 +63,7 @@ function createPendingWheelRange(viewport = 300) {
   range.presentation(rows);
   range.finish();
   onTestFinished(() => range.disconnect());
-  return { range, virtualizer, present: () => range.presentation(rows) };
+  return { range, virtualizer, invalidate, present: () => range.presentation(rows) };
 }
 
 it.each([
@@ -135,6 +136,37 @@ it.each([
     expect(present().forecastRowKeys).toEqual(new Set(expected));
   },
 );
+
+it("renews a consumed wheel forecast without publishing an unchanged window", () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let now = 1;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+  const { range, virtualizer, invalidate, present } = createPendingWheelRange();
+  range.recordReaderMovement(480);
+  virtualizer.scrollOffset = 6480;
+  range.recordWheel(0);
+  const forecast = present().forecastRowKeys;
+  expect(forecast.size).toBeGreaterThan(0);
+  invalidate.mockClear();
+
+  now = 51;
+  vi.advanceTimersByTime(50);
+  range.recordWheel(0);
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(present().forecastRowKeys).toEqual(forecast);
+  now = 102;
+  vi.advanceTimersByTime(51);
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(present().forecastRowKeys.size).toBe(0);
+  now = 151;
+  vi.advanceTimersByTime(49);
+  expect(invalidate).toHaveBeenCalledTimes(1);
+  expect(present().forecastRowKeys.size).toBe(0);
+});
 
 it("keeps following rows during a viewport-sized jump past shorter-than-estimated rows", () => {
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
