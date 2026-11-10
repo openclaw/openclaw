@@ -1977,7 +1977,7 @@ describe("browser observation actions and tab previews", () => {
       node: "Browser Node",
       targetId: payload.targetId,
     });
-    expect(firstResultText(result)).toBe(JSON.stringify(payload, null, 2));
+    expect(firstResultText(result)).toBe(JSON.stringify(payload));
     expect(result.details).toEqual(payload);
   });
 

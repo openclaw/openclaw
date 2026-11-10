@@ -166,7 +166,7 @@
 }
 
 .dreams__bubble-text {
-  font-size: 16px;
+  font-size: var(--control-ui-text-lg);
   color: color-mix(in srgb, var(--accent) 50%, var(--text));
   font-style: italic;
   min-width: 180px;
@@ -365,7 +365,7 @@
 .dreams-diary__date {
   display: block;
   min-height: 32px;
-  line-height: 32px;
+  line-height: calc(32px * var(--control-ui-text-scale));
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
   color: var(--text-strong);
@@ -398,7 +398,7 @@
 
 .dreams-diary__para {
   margin: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.7;
   color: var(--text);
   overflow-wrap: anywhere;
@@ -441,7 +441,7 @@
 }
 
 .dreams-diary__preview-title {
-  font-size: 16px;
+  font-size: var(--control-ui-text-lg);
   font-weight: 600;
   color: var(--text);
 }
@@ -475,7 +475,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.65;
   color: var(--text);
 }
@@ -649,7 +649,7 @@
 
   .dreams__bubble-text {
     min-width: 0;
-    font-size: clamp(14px, 4.4vw, 16px);
+    font-size: calc(clamp(14px, 4.4vw, 16px) * var(--control-ui-text-scale));
   }
 
   .dreams__bubble-dot--far {

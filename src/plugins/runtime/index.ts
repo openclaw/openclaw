@@ -3,6 +3,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { recordToolSkillUse } from "../../agents/tool-skill-use-scope.js";
+import { enqueueSessionEventForHost } from "../../auto-reply/reply/session-event-handoff.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
@@ -36,6 +37,9 @@ import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import { subscribeRuntimeSessionChanges } from "./session-changes.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
+
+// The host loader resolves this synchronous operation only when a plugin enqueues a turn.
+export { enqueueSessionEventForHost };
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
 const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/tts-request.js"));
@@ -303,7 +307,7 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
 // Loaded by path from the plugin loader, so static export analysis cannot see this contract.
 export const createPluginRuntime: PluginRuntimeFactory = (
   _options = {},
-  base = createRuntimeBase(),
+  base = createRuntimeBase(enqueueSessionEventForHost),
 ) => {
   const agent = createRuntimeAgent(base.config);
   let modelAuth = _options.modelAuth;

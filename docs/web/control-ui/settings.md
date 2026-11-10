@@ -245,7 +245,7 @@ Existing unset and hex accents keep their meaning; upgrades do not migrate or re
 
 The **Typography** block lets you choose an **Interface** face and a separate **Chat prose** face. **Theme default** for both Interface and Chat prose restore the theme’s typography; Dash and Absolutely keep their own serif chat defaults. **System** uses the system sans-serif stack without loading a webfont. Code keeps its monospace stack. Opening either picker loads the self-hosted specimens on demand; startup loads only the active faces. Font overrides follow an authenticated Gateway profile, with a browser-local mirror for instant boot. Without a profile, they stay in that browser and are never written to `openclaw.json`.
 
-Appearance also has a Text size setting. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
+Appearance also has a Text size setting. It applies to interface text across pages, dialogs, panels, bundled plugin views, and chat, including code and tables. Icons, avatars, remote desktop and browser content, and terminal cells retain their own sizing. Text inputs stay at least 16px so mobile Safari does not auto-zoom on focus.
 
 Modal dialogs honor your operating system's reduced-motion preference, opening and closing without entrance or exit animations when it is enabled.
 
@@ -656,8 +656,11 @@ Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 ## Templates (Labs)
 
 Enable **Settings → Labs → Templates** to browse official Template packages from
-ClawHub on the **Agents** page. Search the catalog, review the files and
+ClawHub on the **Templates** page. Search the catalog, review the files and
 capabilities a Template will install, then select **Add** to create its agent.
+Opening a catalog entry keeps the selected published version in its detail link,
+so the files you review and the agent you add use the same release. A detail link
+without a version opens the latest published release.
 Add creates an ordinary agent and opens its chat. It does not create a separate
 installed Template to update or remove. Delete the agent through normal agent
 controls; shared plugins and MCP servers remain installed. See

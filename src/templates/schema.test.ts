@@ -10,7 +10,7 @@ import type { TemplateManifest, TemplateOpenClawProfile, TemplateSourceIdentity 
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const minimalManifest = { schemaVersion: 1, agent: { id: "triage" } };
-const emptyGroups = "workspace: {}\npackages: []\nmcpServers: {}\ncronJobs: []";
+const emptyGroups = "workspace: {}\npackages: []\nmcpServers: {}\nautomations: []";
 const markdown = (agent = "agent: { id: triage }", body = "", groups = emptyGroups) =>
   `---\nschemaVersion: 1\n${agent}\n${groups}\n---${body}`;
 const writeJson = (path: string, value: unknown) => writeFile(path, JSON.stringify(value), "utf8");
@@ -76,7 +76,7 @@ const baseManifest = {
       timeout: 30,
     },
   },
-  cronJobs: [
+  automations: [
     {
       id: "weekday-triage",
       name: "Weekday triage",
@@ -136,7 +136,7 @@ describe("parseTemplateManifest", () => {
       workspace: { bootstrapFiles: {}, files: [] },
       packages: [],
       mcpServers: {},
-      cronJobs: [],
+      automations: [],
     });
   });
 
@@ -254,7 +254,7 @@ describe("parseTemplateManifest", () => {
 
     const duplicateCron = parseTemplateManifest({
       ...baseManifest,
-      cronJobs: [baseManifest.cronJobs[0], baseManifest.cronJobs[0]],
+      automations: [baseManifest.automations[0], baseManifest.automations[0]],
     });
     expect(duplicateCron.ok).toBe(false);
   });
@@ -271,16 +271,16 @@ describe("parseTemplateManifest", () => {
 
     const cron = parseTemplateManifest({
       ...baseManifest,
-      cronJobs: [
+      automations: [
         {
-          ...baseManifest.cronJobs[0],
+          ...baseManifest.automations[0],
           schedule: { cron: "not a cron expression", timezone: "UTC" },
         },
       ],
     });
     expect(cron.ok).toBe(false);
     expect(cron.diagnostics).toContainEqual(
-      expect.objectContaining({ path: "$.cronJobs[0].schedule.cron" }),
+      expect.objectContaining({ path: "$.automations[0].schedule.cron" }),
     );
   });
 });
@@ -389,7 +389,7 @@ describe("readTemplateManifestFile", () => {
       markdown(
         undefined,
         "\nPortable soul",
-        "workspace:\n  bootstrapFiles:\n    SOUL.md: { source: workspace/SOUL.md }\npackages: []\nmcpServers: {}\ncronJobs: []",
+        "workspace:\n  bootstrapFiles:\n    SOUL.md: { source: workspace/SOUL.md }\npackages: []\nmcpServers: {}\nautomations: []",
       ),
     );
     expectDiagnostic(result, "template_body_soul_conflict");

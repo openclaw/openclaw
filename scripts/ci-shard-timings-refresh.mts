@@ -1,5 +1,6 @@
 #!/usr/bin/env -S node --import tsx
 import { readFileSync, writeFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs, stripVTControlCharacters } from "node:util";
 import { z } from "zod";
@@ -94,7 +95,7 @@ function timingKey(log: string): string {
   );
 }
 
-function main() {
+async function main() {
   const { values } = parseArgs({
     options: {
       run: { type: "string" },
@@ -113,24 +114,39 @@ function main() {
   )
     ? ["--allow-escape-sequences"]
     : [];
-  const api = (endpoint: string) =>
-    execGhRead(
-      [
-        "api",
-        `repos/openclaw/openclaw/${endpoint}`,
-        "-H",
-        "Cache-Control: max-age=0",
-        ...(endpoint.endsWith("/logs") ? logFlags : []),
-      ],
-      {
-        encoding: "utf8",
-        timeout: 120_000,
-        maxBuffer: 32 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-  const readRun = () => runSchema.parse(JSON.parse(api(`actions/runs/${values.run}`)));
-  const run = readRun();
+  const api = async (endpoint: string) => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return execGhRead(
+          [
+            "api",
+            `repos/openclaw/openclaw/${endpoint}`,
+            "-H",
+            "Cache-Control: max-age=0",
+            ...(endpoint.endsWith("/logs") ? logFlags : []),
+          ],
+          {
+            encoding: "utf8",
+            timeout: 120_000,
+            maxBuffer: 32 * 1024 * 1024,
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+      } catch (error) {
+        if (
+          attempt >= 3 ||
+          !(error instanceof Error) ||
+          !/HTTP 50[234]|unexpected EOF/iu.test(error.message)
+        ) {
+          throw error;
+        }
+        console.error(`Transient GitHub read failure for ${endpoint}; retry ${attempt}/2`);
+        await delay(attempt * 1000);
+      }
+    }
+  };
+  const readRun = async () => runSchema.parse(JSON.parse(await api(`actions/runs/${values.run}`)));
+  const run = await readRun();
   if (String(run.id) !== values.run) {
     throw new Error("CI child run ID differs from the requested run");
   }
@@ -149,7 +165,8 @@ function main() {
         .object({ total_count: z.number().int().nonnegative(), jobs: z.array(jobSchema) })
         .parse(
           JSON.parse(
-            api(`actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100&page=${page}`),
+            // Smaller pages avoid GitHub 502s on large release job inventories.
+            await api(`actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=50&page=${page}`),
           ),
         );
       if (total !== undefined && total !== payload.total_count) {
@@ -183,7 +200,7 @@ function main() {
         if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || end > Date.now()) {
           throw new Error(`Invalid wall clock for CI timing job ${job.id}`);
         }
-        const log = api(`actions/jobs/${job.id}/logs`);
+        const log = await api(`actions/jobs/${job.id}/logs`);
         const key = timingKey(log);
         measurements.set(
           key,
@@ -198,7 +215,7 @@ function main() {
       }
     }
   }
-  if (JSON.stringify(readRun()) !== JSON.stringify(run)) {
+  if (JSON.stringify(await readRun()) !== JSON.stringify(run)) {
     throw new Error("CI child attempt changed while collecting timings; no timings written");
   }
   if (measurements.size === 0) {
@@ -225,7 +242,7 @@ function main() {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;

@@ -102,7 +102,33 @@ async function checkNavigation({ page }: { page: Page }, admin: boolean) {
   expect(pageErrors).toEqual([]);
 }
 
+async function checkPhoneTitle({ page }: { page: Page }) {
+  await installMockGateway(page, {
+    featureMethods: [...defaultControlUiFeatureMethods, "plugins.controlUi.list"],
+    methodResponses: {
+      "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
+      "plugins.controlUi.list": catalog("one"),
+    },
+  });
+  await page.route("**/__openclaw__/plugins/control-ui/ui-fixture/*/index.js", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/javascript",
+      body: pluginModule("one", false),
+    }),
+  );
+  await page.goto(`${suite.server.baseUrl}plugin?plugin=ui-fixture&id=proof`);
+  await page.getByRole("heading", { name: "Fixture revision one", exact: true }).waitFor();
+  // The shared plugin route names the page by its own label, not the generic "Plugin".
+  await expect.poll(() => page.locator(".topbar-page-title").textContent()).toBe("UI fixture");
+  await expect.poll(() => page.title()).toBe("UI fixture — OpenClaw");
+}
+
 suite.define(() => {
+  it("names a plugin page by its own label in the phone header and tab title", () =>
+    suite.withPage({ viewport: { width: 390, height: 844 }, serviceWorkers: "block" }, (fixture) =>
+      checkPhoneTitle(fixture),
+    ));
   it.each([true, false])(
     "updates native page selection and keeps reload in Plugins Advanced (admin: %s)",
     (admin) =>

@@ -492,9 +492,9 @@
   }
   .chat-processes__detail-name {
     font-family: inherit;
-    font-size: var(--mobile-panel-rail-title-size, 14px);
+    font-size: var(--mobile-panel-rail-title-size, var(--control-ui-text-md));
     font-weight: 500;
-    line-height: 20px;
+    line-height: calc(20px * var(--control-ui-text-scale));
   }
   .chat-processes__output-info {
     padding: 10px 20px 16px;

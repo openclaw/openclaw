@@ -15,17 +15,17 @@
 }
 
 .clawrouter-pool h1 {
-  font-size: 26px;
+  font-size: calc(26px * var(--control-ui-text-scale));
 }
 .clawrouter-pool h2 {
   margin-bottom: var(--space-4);
-  font-size: 20px;
+  font-size: calc(20px * var(--control-ui-text-scale));
 }
 .clawrouter-pool h3 {
-  font-size: 16px;
+  font-size: var(--control-ui-text-lg);
 }
 .clawrouter-pool h4 {
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 .clawrouter-pool p {
   margin: var(--space-2) 0;
@@ -70,7 +70,7 @@
 .clawrouter-pool__hint,
 .clawrouter-pool__stats dt {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .clawrouter-pool__summary,
@@ -120,7 +120,7 @@
   background: var(--bg);
 }
 .clawrouter-pool__window-heading {
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 .clawrouter-pool__window-heading > span {
   color: var(--text-strong);
@@ -139,7 +139,7 @@
   border-radius: var(--radius-sm);
   background: var(--bg-muted);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 .clawrouter-pool__models {
   display: grid;
@@ -154,7 +154,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 .clawrouter-pool__models li > span:first-child {
   min-width: 0;
@@ -175,7 +175,7 @@
   border-radius: var(--radius-sm);
 }
 .clawrouter-pool__traffic {
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 .clawrouter-pool__empty,
 .clawrouter-pool__error {

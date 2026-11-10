@@ -9,6 +9,64 @@ import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Sidebar rail alignment" });
 
 suite.define(() => {
+  it("matches Templates page icon ink to neighboring page icons", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+      const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+      await installMockGateway(page, {
+        methodResponses: {
+          "config.get": {
+            config,
+            sourceConfig: config,
+            hash: "icon-proof",
+            valid: true,
+            issues: [],
+          },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.locator('[data-navigation-view="pages"]').click();
+      const pages = page.locator(".sidebar-pages");
+      const templates = pages.locator('.nav-item[href$="/templates"]');
+      const systems = pages.locator('.nav-item[href$="/systems"]');
+      await templates.waitFor();
+      await systems.waitFor();
+      const ink = (link: typeof templates) =>
+        link.evaluate((element) => {
+          const svg = element.querySelector("svg")!;
+          const shape = svg.querySelector("path, rect")!;
+          const style = getComputedStyle(shape);
+          return {
+            stroke: style.stroke,
+            weight: Number.parseFloat(style.strokeWidth) * svg.getScreenCTM()!.a,
+          };
+        });
+      const expectMatchingInk = () =>
+        expect
+          .poll(async () => {
+            const reference = await ink(systems);
+            const actual = await ink(templates);
+            return {
+              stroke: actual.stroke === reference.stroke,
+              weight: actual.weight - reference.weight,
+            };
+          })
+          .toEqual({ stroke: true, weight: 0 });
+      for (const theme of ["dark", "light"] as const) {
+        await page.emulateMedia({ colorScheme: theme });
+        await page.mouse.move(1000, 700);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await captureFrame(suite.artifactDir, "templates-" + theme + ".png", pages, [
+            templates,
+            systems,
+          ]);
+        }
+        await expectMatchingInk();
+        await templates.hover();
+        await expectMatchingInk();
+      }
+    });
+  });
+
   it.each([false, true])(
     "centers rail controls and the owner toolbar (touch: %s)",
     async (hasTouch) => {
@@ -48,6 +106,70 @@ suite.define(() => {
           const rail = page.locator("openclaw-app-sidebar .sidebar-rail");
           const owner = page.locator(".sidebar-session-owner-filter .picker-select__trigger");
           await owner.waitFor();
+          await selectAllSidebarSessions(page);
+          const firstRow = page.locator(".sidebar-sessions .sidebar-recent-session").first();
+          await firstRow.waitFor();
+          // The Sessions title picker is one toolbar control among the header's
+          // buttons and mirrors the row beneath it: a plain title starts on the
+          // row glyph column; with an owner avatar, the avatar centers on that
+          // column and the label starts on the row text column.
+          const measureHeader = () =>
+            page.locator(".sidebar-session-toolbar").evaluate((toolbar) => {
+              const box = (selector: string) =>
+                toolbar.querySelector(selector)?.getBoundingClientRect() ?? null;
+              const leading = box(".picker-select__trigger .picker-select__leading");
+              return {
+                controls: [
+                  ".sidebar-session-owner-filter .picker-select__trigger",
+                  ".sidebar-session-sort",
+                  ".sidebar-session-toolbar__collapse",
+                ].map((selector) => ({
+                  selector,
+                  height: box(selector)!.height,
+                  radius: getComputedStyle(toolbar.querySelector(selector)!).borderRadius,
+                })),
+                radiusToken: getComputedStyle(document.documentElement)
+                  .getPropertyValue("--radius-md")
+                  .trim(),
+                avatarCenter: leading ? leading.x + leading.width / 2 : null,
+                labelLeft: box(".picker-select__label")!.x,
+              };
+            });
+          const row = await firstRow.evaluate((element) => {
+            const glyph = element
+              .querySelector(".sidebar-session-indicator")!
+              .getBoundingClientRect();
+            return {
+              glyphLeft: glyph.x,
+              glyphCenter: glyph.x + glyph.width / 2,
+              textLeft: element
+                .querySelector(".sidebar-recent-session__text")!
+                .getBoundingClientRect().x,
+            };
+          });
+          const allOwners = await measureHeader();
+          for (const control of allOwners.controls) {
+            expect(control.height, control.selector).toBe(28);
+            expect(control.radius, control.selector).toBe(allOwners.radiusToken);
+          }
+          expect(allOwners.avatarCenter).toBeNull();
+          expect(allOwners.labelLeft).toBe(row.glyphLeft);
+          await page.locator("#sidebar-session-owner-title").click();
+          await page
+            .locator('.sidebar-session-owner-filter [role="option"][data-value="owner:riley"]')
+            .click();
+          // The owner avatar arrives with the picker's next render.
+          await expect
+            .poll(async () => {
+              const mine = await measureHeader();
+              return mine.avatarCenter === null
+                ? null
+                : {
+                    avatarCentered: Math.abs(mine.avatarCenter - row.glyphCenter) <= 0.5,
+                    label: mine.labelLeft,
+                  };
+            })
+            .toEqual({ avatarCentered: true, label: row.textLeft });
           await selectAllSidebarSessions(page);
           await page
             .locator(".sidebar-recent-session__name")
@@ -134,10 +256,10 @@ suite.define(() => {
           );
           const columns: number[] = [];
           const measure = async (view: string, fill: string, text: string) => {
-            const row = page.locator(fill).first();
-            await row.waitFor();
-            await expect.poll(() => left(row), { message: view }).toBeCloseTo(contentLeft, 1);
-            columns.push(await left(row.locator(text)));
+            const pageRow = page.locator(fill).first();
+            await pageRow.waitFor();
+            await expect.poll(() => left(pageRow), { message: view }).toBeCloseTo(contentLeft, 1);
+            columns.push(await left(pageRow.locator(text)));
           };
           await measure(
             "sessions",

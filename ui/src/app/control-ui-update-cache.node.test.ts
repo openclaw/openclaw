@@ -152,3 +152,35 @@ it("keeps updated imports cache-stable without reusing changed immutable assets"
     }
   }
 });
+
+it("builds hoisted installs that nest one package version under several dependents", async () => {
+  // Hoisted linking copies one version under each dependent; Vite bundles each copy.
+  const root = tempDirs.make("control-ui-update-cache-hoisted-");
+  const files: Record<string, string> = {
+    "index.html": '<script type="module" src="./entry.js"></script>',
+    "entry.js": 'import "a"; import "b";',
+  };
+  for (const dependent of ["a", "b"]) {
+    files[`node_modules/${dependent}/index.js`] = 'import "dup";';
+    files[`node_modules/${dependent}/node_modules/dup/index.js`] = "globalThis.dup = 1;";
+  }
+  for (const [name, source] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
+    await fs.writeFile(path.join(root, name), source);
+  }
+  const plugins = controlUiUpdateCachePlugins();
+  const result = await build({
+    root,
+    configFile: false,
+    logLevel: "silent",
+    plugins,
+    build: { write: false },
+  });
+  const output = Array.isArray(result) || !("output" in result) ? [] : result.output;
+  const moduleIds = output.flatMap((item) => (item.type === "chunk" ? item.moduleIds : []));
+  for (const dependent of ["a", "b"]) {
+    expect(moduleIds).toContain(
+      path.join(root, `node_modules/${dependent}/node_modules/dup/index.js`),
+    );
+  }
+});
