@@ -10,6 +10,7 @@ import {
   beginGatewayRestartSignalAdmission,
   captureGatewayRootWorkAdmissionContinuationScope,
   getActiveGatewayRootWorkCount,
+  isGatewayRestartDraining,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   retainGatewayRootWorkAdmissionContinuation,
@@ -176,19 +177,18 @@ describe("gateway request suspension admission", () => {
     },
   );
 
-  it.each(["settles", "leaked", "resumed"] as const)(
+  it.each(["settles", "leaked", "resumed", "read-only", "revoked"] as const)(
     "waits within the original drain budget for late terminal writes: %s",
     async (outcome) => {
       vi.useFakeTimers();
       const log = { warn: vi.fn(), info: vi.fn() };
       const { context } = createSuspendContext({ size: 0 }, log);
-      const commitStop = vi.fn(() => markGatewayRestartDraining());
       const host = createGatewayHostLifecycle({
         processOwner: { ownsProcessLifecycle: true, supervisor: "external" },
         isCurrent: () => true,
         isServing: () => true,
         acceptStop: () => {},
-        commitExternalStop: commitStop,
+        commitExternalStop: () => markGatewayRestartDraining(),
       });
       context.hostLifecycle = host.capability;
       const prepared = await suspensionRpc(context, "prepare", {
@@ -212,12 +212,14 @@ describe("gateway request suspension admission", () => {
         write.source.adapter.projectSessionTerminalObservedAt = Date.now() - index * 1_000;
       }
       await vi.advanceTimersByTimeAsync(6_000);
+      const clientScopes = [outcome === "read-only" ? "operator.read" : "operator.admin"];
       const handoff = dispatch(
         "gateway.suspend.handoff",
         suspendHandlers["gateway.suspend.handoff"]!,
         {
           context,
           core: true,
+          clientScopes,
           requestParams: {
             suspensionId,
             commit: true,
@@ -226,10 +228,16 @@ describe("gateway request suspension admission", () => {
         },
       );
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(handoff.respond).not.toHaveBeenCalled();
+      expect(isGatewayRestartDraining()).toBe(false);
+      if (outcome !== "read-only") {
+        expect(handoff.respond).not.toHaveBeenCalled();
+      }
+      if (outcome === "revoked") {
+        clientScopes.splice(0, 1, "operator.read");
+      }
       if (outcome === "resumed") {
         resumeGatewaySuspend(suspensionId);
-      } else if (outcome === "settles") {
+      } else if (outcome === "settles" || outcome === "revoked") {
         await Promise.all(writes.map((write) => write.settle()));
       }
       await vi.advanceTimersByTimeAsync(outcome === "leaked" ? 23_000 : 250);
@@ -239,14 +247,21 @@ describe("gateway request suspension admission", () => {
           true,
           expect.objectContaining({ status: "committed" }),
         );
-        expect(commitStop).toHaveBeenCalledOnce();
+        expect(isGatewayRestartDraining()).toBe(true);
       } else {
-        expect(commitStop).not.toHaveBeenCalled();
+        expect(isGatewayRestartDraining()).toBe(false);
         expect(handoff.respond).toHaveBeenCalledWith(
           false,
           undefined,
-          expect.objectContaining({ code: "UNAVAILABLE" }),
+          expect.objectContaining({
+            code: outcome === "read-only" || outcome === "revoked" ? "FORBIDDEN" : "UNAVAILABLE",
+          }),
         );
+        if (outcome === "revoked") {
+          expect(handoff.respond.mock.calls[0]![2].message).toBe(
+            "Gateway requester authority changed",
+          );
+        }
         if (outcome === "leaked") {
           const error = handoff.respond.mock.calls[0]![2];
           expect(error.details).toMatchObject({
