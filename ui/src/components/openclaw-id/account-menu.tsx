@@ -341,6 +341,7 @@ export function selectOpenClawIdMenuValue(
     status: OpenClawIdStatusResult | null;
     client: GatewayBrowserClient | null | undefined;
     basePath: string;
+    onKeysChanged?: () => void;
   },
 ): boolean {
   if (!value.startsWith(VALUE_PREFIX) || !context.status || context.status.status.state === "off") {
@@ -390,9 +391,14 @@ export function selectOpenClawIdMenuValue(
     const signedIn = localSignedIn(status);
     const hostname = status.link.hostname;
     if (signedIn) {
-      openDialog(async () =>
-        (await import("./move-keys-dialog.tsx")).showMoveKeysDialog({ client, signedIn, hostname }),
-      );
+      openDialog(async () => {
+        const moved = await (
+          await import("./move-keys-dialog.tsx")
+        ).showMoveKeysDialog({ client, signedIn, hostname });
+        if (moved) {
+          context.onKeysChanged?.();
+        }
+      });
     }
   } else if (value === PUBLISH_KEYS && client) {
     const signedIn = localSignedIn(status);
@@ -401,8 +407,9 @@ export function selectOpenClawIdMenuValue(
         const { publishWithLinkCode } = await import("../../lib/openclaw-id/rebind.ts");
         const { publication } = await publishWithLinkCode(client, signedIn);
         if (publication?.state === "failed") {
-          throw publication;
+          throw Object.assign(new Error("OpenClaw ID publication failed"), publication);
         }
+        context.onKeysChanged?.();
         showToast({ severity: "success", message: t("openclawId.newKeysPublished") });
       }, "linkCode");
     }

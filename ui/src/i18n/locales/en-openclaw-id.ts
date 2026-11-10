@@ -104,6 +104,7 @@ const enOpenClawId = {
     roleOperator: "Operator",
     roleViewer: "Viewer",
     moveToNewKeys: "Move to new keys",
+    keyRecoverySignIn: "Sign in with OpenClaw ID from the account menu, then move to new keys.",
     keysMissing: "Remote access is off: a key file is missing",
     keysMismatch: "Remote access is off: a key file doesn't match",
     keysRefusedDetail:
