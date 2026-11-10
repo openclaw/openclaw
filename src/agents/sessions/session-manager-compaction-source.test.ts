@@ -1,8 +1,16 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
+import { getMessageFromEntryForCompaction } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
+import { serializeConversationWithinBudget } from "../../../packages/agent-core/src/harness/compaction/utils.js";
+import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { SessionCompactionSourceConsumer } from "../../config/sessions/session-compaction-source.types.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
+import { compactionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { sanitizeCompactionMessages } from "../compaction-planning.js";
 import { textStream } from "./agent-session-boundary.test-support.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
@@ -17,12 +25,82 @@ import {
   estimateCompactedRequestTokens,
 } from "./compaction/request-budget.js";
 import { setPreparedCompaction } from "./prepared-compaction.js";
-import { assistantText, withTranscriptState } from "./session-manager-fixtures.test-support.js";
+import {
+  assistantText,
+  sessionScope,
+  withTranscriptState,
+} from "./session-manager-fixtures.test-support.js";
 import { sessionManagerFromCompactionSource } from "./session-manager-view-types.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
+
+async function seedArchive(scope: Parameters<typeof SessionManager.openAsync>[0], label: string) {
+  const manager = await SessionManager.openAsync(scope);
+  await manager.appendMessageAsync(makeUserMessage(`Summarize the ${label} archive`, 1));
+  for (let index = 0; index < 24; index++) {
+    await manager.appendMessageAsync(
+      assistantText(`${label} item ${index}: ${"payload ".repeat(1024)}`),
+    );
+  }
+  await manager.appendMessageAsync(makeUserMessage(`Keep the ${label} request`, 100));
+  return manager;
+}
+
+function compactInLane(
+  scope: Parameters<typeof SessionManager.openAsync>[0] & { sessionId: string },
+  consume: SessionCompactionSourceConsumer,
+) {
+  return withSessionTranscriptReadSource(
+    scope,
+    (read) =>
+      read.owner.withCompactionSource(
+        {
+          target: scope,
+          resolvedScope: read.resolved,
+          expectedIdentity: read.expectedIdentity,
+          settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 },
+          manual: true,
+          safeguard: { recentTurnsPreserve: 3, qualityGuardEnabled: true },
+        },
+        consume,
+      ),
+    undefined,
+    compactionLane,
+  );
+}
+
+it("lets another session summarize while one summary request is pending", () =>
+  withTranscriptState("concurrent-compaction-a", async ({ scope }) => {
+    const other = sessionScope(scope.storePath, "concurrent-compaction-b");
+    await upsertSessionEntryCore(other, { sessionId: other.sessionId, updatedAt: 1 });
+    const archive = await seedArchive(scope, "alpha");
+    await seedArchive(other, "beta");
+    const aAtModel = createDeferredCore();
+    const aModel = createDeferredCore();
+    const a = compactInLane(scope, async (_plan, source) => {
+      const first = await source.history.serialize(8_000);
+      aAtModel.resolve();
+      // A's summary request is in flight; the provider has not answered.
+      await aModel.promise;
+      // A retry rereads the captured selection; history appended meanwhile stays out.
+      expect(await source.history.serialize(8_000)).toEqual(first);
+    });
+    try {
+      await aAtModel.promise;
+      expect(compactionLane.pool.getSnapshot().activeTasks).toBe(0);
+      await archive.appendMessageAsync(makeUserMessage("appended while summarizing", 200));
+      let summarized = "";
+      await compactInLane(other, async (_plan, source) => {
+        summarized = (await source.history.serialize(8_000)).text;
+      });
+      expect(summarized).toContain("Summarize the beta archive");
+    } finally {
+      aModel.resolve();
+      await a;
+    }
+  }));
 
 it("keeps old payloads in the worker while serving different summary budgets and the exact recent tail", () =>
   withTranscriptState("bounded-compaction-source", async ({ scope }) => {
@@ -79,6 +157,17 @@ it("keeps old payloads in the worker while serving different summary budgets and
             expect(plan.facts.messageCount).toBe(27);
             const full = await source.history.serialize(40_000);
             const smaller = await source.history.serialize(8_000);
+            // Rereading selected rows renders exactly what the in-memory serializer selects.
+            const history = convertToLlm(
+              sanitizeCompactionMessages(
+                (await SessionManager.openAsync(scope))
+                  .getBranch()
+                  .slice(0, 26)
+                  .flatMap((entry) => getMessageFromEntryForCompaction(entry) ?? []),
+              ),
+            );
+            expect(full).toEqual(serializeConversationWithinBudget(history, 40_000));
+            expect(smaller).toEqual(serializeConversationWithinBudget(history, 8_000));
             expect(full.text).toContain("Summarize the archive");
             expect(full.text.length).toBeLessThanOrEqual(40_000);
             expect(smaller.text.length).toBeLessThanOrEqual(8_000);
@@ -88,10 +177,9 @@ it("keeps old payloads in the worker while serving different summary budgets and
             }
             if (outcome === "abort") {
               controller.abort(new Error("cancel prepared compaction"));
-              source.signal.throwIfAborted();
+              // A cancelled compaction starts no further worker reads.
+              await source.history.serialize(8_000);
             }
-            await source.release();
-            expect(source.signal.aborted).toBe(false);
             const tail = SessionManager[sessionManagerFromCompactionSource](
               scope,
               [plan.header, ...plan.retained],
@@ -108,6 +196,10 @@ it("keeps old payloads in the worker while serving different summary budgets and
             expect(reopened.buildSessionContext().messages).toEqual(
               tail.buildSessionContext().messages,
             );
+            // A rewritten context (here, the committed compaction) is stale for a late retry.
+            await expect(source.history.serialize(8_000)).rejects.toThrow(
+              "Session transcript changed during context read",
+            );
           },
           controller.signal,
         );
@@ -116,7 +208,7 @@ it("keeps old payloads in the worker while serving different summary budgets and
     for (const maxSummaryChars of [undefined, 1_000, 48_000]) {
       await expect(run("reject", maxSummaryChars)).rejects.toThrow("stop after serialization");
     }
-    // A failed consumer must release the worker snapshot; the next read can finish normally.
+    // A failed consumer leaves no worker read behind; the next compaction can finish normally.
     await expect(run("abort")).rejects.toThrow("cancel prepared compaction");
     await run("commit");
   }));
@@ -166,7 +258,6 @@ it("keeps a previous summary as the conversation anchor for subsequent tool-only
           expect(plan.facts.safeguard.hasRealConversation).toBe(true);
           const history = await source.history.serialize(40_000);
           expect(history.text).toContain("Observed service work 1");
-          await source.release();
         },
       );
     });

@@ -51,6 +51,7 @@ const { values } = parseArgs({
     "restart-after-seed": { type: "boolean" },
     "reset-after-seed": { type: "boolean" },
     "compact-before-turn": { type: "boolean" },
+    "summary-delay-ms": { type: "string", default: "250" },
     "gateway-preload": { type: "string" },
     "shell-turns": { type: "boolean" },
     "idle-minutes": { type: "string" },
@@ -61,7 +62,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 41673 --snapshot-minutes 10,90 --module-census --coverage --idle-minutes 5]\nCompaction: --sessions 1 --large-session-events 33000 --event-chars 15000 --restart-after-seed --compact-before-turn [--reset-after-seed --seed-concurrency 4]",
+    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 41673 --snapshot-minutes 10,90 --module-census --coverage --idle-minutes 5]\nCompaction: --sessions 1 --large-session-events 33000 --event-chars 15000 --restart-after-seed --compact-before-turn [--reset-after-seed --seed-concurrency 4]\nCompaction burst: --sessions 10 --large-session-events 2000 --compact-before-turn [--summary-delay-ms 2000] compacts every seeded session at once",
   );
   process.exit(0);
 }
@@ -85,20 +86,27 @@ const sessionCount = positiveInteger(values.sessions, "sessions");
 const largeSessionEvents = values["large-session-events"]
   ? positiveInteger(values["large-session-events"], "large-session-events")
   : undefined;
-if (largeSessionEvents && sessionCount !== 1) {
-  throw new Error("--large-session-events requires --sessions 1");
+// A compaction burst seeds and compacts several large sessions at once; other workloads use one.
+if (largeSessionEvents && sessionCount !== 1 && !values["compact-before-turn"]) {
+  throw new Error("--large-session-events requires --sessions 1 unless --compact-before-turn");
+}
+if (values["reset-after-seed"] && sessionCount !== 1) {
+  throw new Error("--reset-after-seed requires --sessions 1");
 }
 if ((values["reset-after-seed"] || values["compact-before-turn"]) && !largeSessionEvents) {
   throw new Error("Compaction comparison options require --large-session-events");
 }
 const seedConcurrency = positiveInteger(values["seed-concurrency"], "seed-concurrency");
+const summaryDelayMs = positiveInteger(values["summary-delay-ms"], "summary-delay-ms");
 if (seedConcurrency > 8) {
   throw new Error("--seed-concurrency exceeds the synthetic fixture's eight-request limit");
 }
 const eventChars = positiveInteger(values["event-chars"], "event-chars");
 if (
   largeSessionEvents &&
-  (largeSessionEvents > 150000 || eventChars > 65536 || largeSessionEvents * eventChars > 600000000)
+  (largeSessionEvents > 150000 ||
+    eventChars > 65536 ||
+    sessionCount * largeSessionEvents * eventChars > 600000000)
 ) {
   throw new Error("Synthetic fixture exceeds bounded investigation budget");
 }
@@ -378,6 +386,9 @@ try {
   start(["scripts/e2e/mock-openai-server.mjs"], "mock", {
     MOCK_PORT: String(port + 1),
     MOCK_BIND_HOST: "127.0.0.1",
+    ...(values["compact-before-turn"]
+      ? { MOCK_TIMING_LOG: path.join(root, "mock-model-timing.jsonl") }
+      : {}),
   });
   start(["scripts/e2e/mock-openai-server.mjs"], "mock-utility", {
     MOCK_PORT: String(port + 2),
@@ -462,6 +473,8 @@ try {
   });
   let nextSeed = 0;
   let largeSessionId;
+  const largeSessionIds = [];
+  let anchorTurns = Promise.resolve();
   let completedLargeSessionTurns = 0;
   await Promise.all(
     Array.from({ length: Math.min(8, sessionCount) }, async () => {
@@ -476,12 +489,18 @@ try {
           if (!created.sessionId) {
             throw new Error("Large-session seed did not return a session ID");
           }
-          largeSessionId = created.sessionId;
+          largeSessionIds[index] = created.sessionId;
+          largeSessionId = largeSessionIds[0];
         }
         if (values["compact-before-turn"]) {
           // Injected assistant notes alone are not a real conversation. Anchor
           // the measured compaction with an ordinary completed user/agent turn.
-          await turnDriver.runTurn(admin.rpc, 0, { agentId, sessionKey: key, kind: "text" });
+          // The turn driver is serial, so burst seeders take turns.
+          const anchor = anchorTurns.then(() =>
+            turnDriver.runTurn(admin.rpc, 0, { agentId, sessionKey: key, kind: "text" }),
+          );
+          anchorTurns = anchor.catch(() => {});
+          await anchor;
         }
         const eventCount = largeSessionEvents ?? 1;
         // Seeding is outside the measured interval; every write still uses chat.inject.
@@ -610,21 +629,53 @@ try {
           `## Pending user asks\nBegin the report with ${marker}.`,
           `## Exact identifiers\n${marker}`,
         ].join("\n"),
-        // A slow synthetic summary makes retained host payloads observable.
-        chunkDelayMs: 250,
+        // A slow synthetic summary makes retained host payloads and summary queueing observable.
+        chunkDelayMs: summaryDelayMs,
       }),
     );
     const compactStartedAt = performance.now();
+    const compactStartedAtEpochMs = Date.now();
     const before = await readGatewayMemory(admin.rpc, compactStartedAt);
-    record({ kind: "compaction-start", hostLoad: loadavg(), ...before });
-    const result = await admin.rpc(
-      "sessions.compact",
-      { key: sessions[0].key, agentId: sessions[0].agentId },
-      300000,
+    record({ kind: "compaction-start", hostLoad: loadavg(), sessions: sessions.length, ...before });
+    // Every session compacts at once; a burst shows whether summaries wait on one another.
+    const results = await Promise.all(
+      sessions.map(async ({ key, agentId }, index) => {
+        const result = await admin.rpc("sessions.compact", { key, agentId }, 300000);
+        const elapsedMs = performance.now() - compactStartedAt;
+        if (sessions.length > 1) {
+          record({ kind: "compaction-session-end", index, elapsedMs, compacted: result.compacted });
+        }
+        return { result, elapsedMs };
+      }),
     );
+    const result = results[0].result;
+    // Summary requests reach the mock only during this window; overlap shows parallel summaries.
+    const summaryRequests = readFileSync(path.join(root, "mock-model-timing.jsonl"), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter(({ receivedAtMs }) => receivedAtMs >= compactStartedAtEpochMs);
+    let peakConcurrentSummaryRequests = 0;
+    for (const { receivedAtMs } of summaryRequests) {
+      peakConcurrentSummaryRequests = Math.max(
+        peakConcurrentSummaryRequests,
+        summaryRequests.filter(
+          (request) => request.receivedAtMs <= receivedAtMs && request.closedAtMs > receivedAtMs,
+        ).length,
+      );
+    }
+    const latencies = results.map(({ elapsedMs }) => elapsedMs).toSorted((a, b) => a - b);
     record({
       kind: "compaction-end",
       elapsedMs: performance.now() - compactStartedAt,
+      ...(sessions.length > 1
+        ? {
+            sessionLatencyMedianMs: latencies[Math.floor((latencies.length - 1) / 2)],
+            sessionLatencyMaxMs: latencies.at(-1),
+          }
+        : {}),
+      summaryRequests: summaryRequests.length,
+      peakConcurrentSummaryRequests,
       ok: result.ok,
       compacted: result.compacted,
       reason: result.reason,
@@ -633,8 +684,12 @@ try {
       qualityDegraded: result.result?.details?.qualityDegraded,
       ...(await readGatewayMemory(admin.rpc, compactStartedAt)),
     });
-    if (result.ok !== true || result.compacted !== true) {
-      throw new Error(`Synthetic manual compaction did not complete: ${JSON.stringify(result)}`);
+    for (const { result: compacted } of results) {
+      if (compacted.ok !== true || compacted.compacted !== true) {
+        throw new Error(
+          `Synthetic manual compaction did not complete: ${JSON.stringify(compacted)}`,
+        );
+      }
     }
   }
   const startedAt = performance.now();

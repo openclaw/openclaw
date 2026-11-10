@@ -308,6 +308,37 @@ function withTranscriptContextSnapshot<T>(
   );
 }
 
+/**
+ * Reread rows captured by an earlier context snapshot. The caller validates that
+ * snapshot's version in this transaction first; a generation keeps prefix rows.
+ */
+export function prepareTranscriptEntryReader(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
+): (seq: number) => SessionTreeEntry {
+  const readPayload = prepareSqliteQuerySync<{ seq: number }, { event_json: string }>(
+    database.db,
+    (parameter) =>
+      getSessionKysely(database.db)
+        .selectFrom("transcript_events")
+        .select(transcriptEventJsonSql(database.db).as("event_json"))
+        .where("session_id", "=", resolved.sessionId)
+        .where(
+          "seq",
+          "=",
+          parameter((row) => row.seq),
+        ),
+  );
+  return (seq) => {
+    const row = readPayload({ seq }).rows[0];
+    if (!row) {
+      throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+    }
+    // SAFETY: The codec owns this fresh payload; navigation-only fields do not affect messages.
+    return JSON.parse(row.event_json) as SessionTreeEntry;
+  };
+}
+
 /** Prepare lazy payload readers inside the caller-owned read snapshot. */
 export function prepareTranscriptContextSnapshot(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,

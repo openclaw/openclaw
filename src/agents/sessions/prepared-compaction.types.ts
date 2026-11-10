@@ -34,9 +34,6 @@ export type PreparedCompactionFacts = {
   fallbackError?: string;
 };
 export type PreparedCompaction = PreparedCompactionFacts & {
-  /** Release the snapshot before transcript persistence or post-compaction reads. */
-  release(): Promise<void>;
-  signal: AbortSignal;
   history: SummarizationConversationSource;
   turnPrefix: SummarizationConversationSource;
   reconciliation: SummarizationConversationSource;

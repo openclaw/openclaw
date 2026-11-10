@@ -183,6 +183,7 @@ if (
     | {
         taskId: number;
         kind: string;
+        phase?: string;
         startedAt: number;
         before: ReturnType<typeof sample>;
         observedPeakHeapUsed: number;
@@ -264,6 +265,8 @@ if (
       active = {
         taskId: message.taskId,
         kind: kinds.has(input.kind) ? input.kind : "other",
+        // Compaction plans and later summary-input renderings may be separate tasks.
+        ...("phase" in input && typeof input.phase === "string" ? { phase: input.phase } : {}),
         startedAt: performance.now(),
         before,
         observedPeakHeapUsed: before.heapUsed,
@@ -286,12 +289,18 @@ if (
         message &&
         typeof message === "object" &&
         "status" in message &&
-        message.status === "request" &&
+        (message.status === "request" || message.status === "ok") &&
         "value" in message &&
         message.value &&
         typeof message.value === "object"
       ) {
-        const value = message.value as Record<string, unknown>;
+        // Held-snapshot sources send requests; short tasks return the same reply in their result.
+        const result = message.value as Record<string, unknown>;
+        const value = (
+          message.status === "ok" && result.reply && typeof result.reply === "object"
+            ? result.reply
+            : result
+        ) as Record<string, unknown>;
         if (value.kind === "prepared" && value.plan && typeof value.plan === "object") {
           const plan = value.plan as { retained: unknown[] };
           write({
@@ -321,6 +330,7 @@ if (
         const after = sample();
         write({
           kind: active.kind,
+          ...(active.phase ? { phase: active.phase } : {}),
           status: message.status,
           elapsedMs: performance.now() - active.startedAt,
           before: active.before,

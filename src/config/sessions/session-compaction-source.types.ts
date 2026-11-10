@@ -1,5 +1,8 @@
 import type { CompactionSettings } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
-import type { BoundedConversation } from "../../../packages/agent-core/src/harness/compaction/utils.js";
+import type {
+  BoundedConversation,
+  PreparedConversationMessage,
+} from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import type { SessionTreeEntry } from "../../../packages/agent-core/src/harness/types.js";
 import type { CompactionRequestConstraints } from "../../agents/sessions/compaction/request-budget.types.js";
 import type {
@@ -15,30 +18,53 @@ import type {
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 
-export type SessionCompactionSourceRequest = CompactionRequestConstraints & {
-  requestState?: "unresolved";
+type SessionCompactionSourceRead = {
   kind: "compaction-source";
   database: { agentId: string; path: string };
   target: SessionTranscriptRuntimeTarget;
   resolvedScope: ResolvedTranscriptReadScope;
   expectedIdentity?: DatabaseFileIdentity;
   admission?: UserTurnTranscriptAdmissionReceipt;
-  settings: CompactionSettings;
-  manual: boolean;
-  safeguard: { recentTurnsPreserve: number; qualityGuardEnabled: boolean };
 };
+export type SessionCompactionPlanRequest = SessionCompactionSourceRead &
+  CompactionRequestConstraints & {
+    phase: "plan";
+    requestState?: "unresolved";
+    settings: CompactionSettings;
+    manual: boolean;
+    safeguard: { recentTurnsPreserve: number; qualityGuardEnabled: boolean };
+  };
+/**
+ * Payload-free selection facts for one summary input. Each element names the
+ * transcript row whose message renders at that serialization position.
+ */
+export type SessionCompactionSourceEntries = {
+  seqs: number[];
+  facts: PreparedConversationMessage[];
+};
+export type SessionCompactionSerializeRequest = SessionCompactionSourceRead & {
+  phase: "serialize";
+  version: SessionTranscriptContextVersion;
+  entries: SessionCompactionSourceEntries;
+  maxChars: number;
+};
+export type SessionCompactionSourceRequest =
+  | SessionCompactionPlanRequest
+  | SessionCompactionSerializeRequest;
+export type SessionCompactionSourceName = "history" | "turnPrefix" | "reconciliation";
 export type SessionCompactionSourcePlan = {
   facts: PreparedCompactionFacts;
   header: TranscriptEvent;
   retained: SessionTreeEntry[];
   version: SessionTranscriptContextVersion;
 };
-export type SessionCompactionSourceCommand =
-  | { kind: "serialize"; source: "history" | "turnPrefix" | "reconciliation"; maxChars: number }
-  | { kind: "close" };
 export type SessionCompactionSourceReply =
   | { kind: "skipped"; reason: string }
-  | { kind: "prepared"; plan: SessionCompactionSourcePlan }
+  | {
+      kind: "prepared";
+      plan: SessionCompactionSourcePlan;
+      sources: Record<SessionCompactionSourceName, SessionCompactionSourceEntries>;
+    }
   | { kind: "serialized"; conversation: BoundedConversation };
 export type SessionCompactionSourceConsumer = (
   plan: SessionCompactionSourcePlan,

@@ -32,11 +32,8 @@ export async function readSessionTranscriptHydrationRequest(
   control: WorkerTaskControl,
 ): Promise<SessionTranscriptWorkerValues[SessionTranscriptHydrationWorkerRequest["kind"]]> {
   if (request.kind === "compaction-source") {
-    if (!channel) {
-      throw new Error("Compaction source requires its host channel");
-    }
     const { runSessionCompactionSource } = await import("./session-compaction-source.worker.js");
-    return runSessionCompactionSource(request, channel, control);
+    return runSessionCompactionSource(request, control);
   }
   if (request.kind === "transcript-maintenance") {
     const { withOpenClawAgentDatabaseReadOnly } =

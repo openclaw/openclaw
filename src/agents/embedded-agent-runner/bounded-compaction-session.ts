@@ -46,7 +46,7 @@ export type BoundedCompactionSession = {
   settingsManager: SettingsManager;
 };
 
-/** Retain the transcript read owner until model requests have consumed its bounded sources. */
+/** Retain the transcript read owner; summary inputs reread its captured rows in short worker tasks. */
 export async function withBoundedCompactionSession(
   runtime: PreparedCompactionRuntime,
   sessionTarget: SessionTranscriptRuntimeTarget,
@@ -113,10 +113,7 @@ export async function withBoundedCompactionSession(
               plan.version,
               effectiveCwd,
             );
-            result = await consume(
-              { ...runtime, params: { ...params, abortSignal: source.signal } },
-              { manager, source, settingsManager },
-            );
+            result = await consume(runtime, { manager, source, settingsManager });
           },
           params.abortSignal,
           resolveCompactionTimeoutMs(params.config) * 10,

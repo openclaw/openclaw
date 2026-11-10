@@ -1,124 +1,74 @@
-import { addAbortListener } from "node:events";
-import type { BoundedConversation } from "../../../packages/agent-core/src/harness/compaction/utils.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import type {
-  SessionCompactionSourceRequest,
+  SessionCompactionPlanRequest,
   SessionCompactionSourceConsumer,
-  SessionCompactionSourceCommand,
-  SessionCompactionSourceReply,
+  SessionCompactionSourceName,
 } from "./session-compaction-source.types.js";
 import type { SessionHistoryWorkerRequestRunner } from "./session-transcript-worker.types.js";
 
-/** Budgeted text exchanges retain the read snapshot only through summary generation. */
+type PlanInput = Omit<SessionCompactionPlanRequest, "kind" | "database" | "phase">;
+
+/**
+ * One worker task plans compaction and returns payload-free selection facts.
+ * Each summary input is then rendered by its own short task that rereads only
+ * the selected rows of the captured transcript version, so no worker slot or
+ * read snapshot is held while the Gateway waits for a summary model.
+ */
 export async function withSessionCompactionSource(
   runRequest: SessionHistoryWorkerRequestRunner,
-  input: Omit<SessionCompactionSourceRequest, "kind" | "database">,
+  input: PlanInput,
   consume: SessionCompactionSourceConsumer,
   signal?: AbortSignal,
   timeoutMs = 600_000,
-) {
-  let command = createDeferredCore<SessionCompactionSourceCommand>();
-  let pending: ReturnType<typeof createDeferredCore<BoundedConversation>> | undefined;
-  let consumer: Promise<void> | undefined;
-  let consumerError: unknown;
-  let skipped: string | undefined;
-  let closed = false;
-  const taskDone = createDeferredCore();
-  const failed = new AbortController();
-  const release = async () => {
-    closed = true;
-    command.resolve({ kind: "close" });
-    await taskDone.promise;
-  };
-  try {
-    await runRequest(
-      () => ({ kind: "compaction-source", ...input }),
-      JSON.stringify(input).length * 2,
-      () => undefined,
-      signal,
-      async (raw, activeSignal) => {
-        activeSignal.throwIfAborted();
-        // SAFETY: runSessionCompactionSource alone emits these replies, checked against this union.
-        const reply = raw as SessionCompactionSourceReply;
-        if (reply.kind === "skipped") {
-          skipped = reply.reason;
-          command.resolve({ kind: "close" });
-        } else if (reply.kind === "prepared") {
-          const source = (name: "history" | "turnPrefix" | "reconciliation", length: number) => ({
-            length,
-            serialize(maxChars: number): Promise<BoundedConversation> {
-              activeSignal.throwIfAborted();
-              if (closed) {
-                throw new Error("Compaction source is closed");
-              }
-              if (pending) {
-                throw new Error("Compaction source already has a pending serialization");
-              }
-              pending = createDeferredCore<BoundedConversation>();
-              command.resolve({ kind: "serialize", source: name, maxChars });
-              return pending.promise;
-            },
-          });
-          const facts = reply.plan.facts;
-          consumer = Promise.resolve()
-            .then(() =>
-              consume(reply.plan, {
-                ...facts,
-                release,
-                signal: signal ? AbortSignal.any([signal, failed.signal]) : failed.signal,
-                history: source("history", facts.historyCount),
-                turnPrefix: source("turnPrefix", facts.turnPrefixCount),
-                reconciliation: source("reconciliation", facts.reconciliationCount),
-              }),
-            )
-            .then(
-              () => {
-                closed = true;
-                command.resolve({ kind: "close" });
-              },
-              (error: unknown) => {
-                consumerError = error;
-                closed = true;
-                command.resolve({ kind: "close" });
-              },
-            );
-        } else {
-          const waiting = pending;
-          pending = undefined;
-          waiting?.resolve(reply.conversation);
-        }
-        const abort = addAbortListener(activeSignal, () => {
-          failed.abort(activeSignal.reason);
-          pending?.reject(activeSignal.reason);
-          command.resolve({ kind: "close" });
-        });
-        try {
-          const next = await command.promise;
-          command = createDeferredCore<SessionCompactionSourceCommand>();
-          return { input: next, timeoutMs };
-        } finally {
-          abort[Symbol.dispose]();
-        }
-      },
-      timeoutMs,
-    );
-    taskDone.resolve();
-    await consumer;
-    if (consumerError !== undefined) {
-      throw consumerError instanceof Error
-        ? consumerError
-        : new Error("Compaction source consumer failed", { cause: consumerError });
-    }
-    return skipped;
-  } catch (error) {
-    closed = true;
-    failed.abort(error);
-    taskDone.resolve();
-    command.resolve({ kind: "close" });
-    pending?.reject(error);
-    await consumer;
-    throw error;
-  } finally {
-    closed = true;
+): Promise<string | undefined> {
+  const planned = await runRequest(
+    () => ({ kind: "compaction-source", phase: "plan", ...input }),
+    JSON.stringify(input).length * 2,
+    ({ reply }) => reply,
+    signal,
+    undefined,
+    timeoutMs,
+  );
+  if (planned.kind === "skipped") {
+    return planned.reason;
   }
+  if (planned.kind !== "prepared") {
+    throw new Error("Compaction source returned an unexpected plan reply");
+  }
+  const { plan, sources } = planned;
+  const read = {
+    target: input.target,
+    resolvedScope: input.resolvedScope,
+    expectedIdentity: input.expectedIdentity,
+    version: plan.version,
+  };
+  const source = (name: SessionCompactionSourceName, length: number) => {
+    const entries = sources[name];
+    // Selection facts are fixed for the plan; size them once for every rendering.
+    const inputBytes = (JSON.stringify(read).length + JSON.stringify(entries).length) * 2;
+    return {
+      length,
+      serialize: (maxChars: number) =>
+        runRequest(
+          () => ({ kind: "compaction-source", phase: "serialize", ...read, entries, maxChars }),
+          inputBytes,
+          ({ reply }) => {
+            if (reply.kind !== "serialized") {
+              throw new Error("Compaction source returned an unexpected serialization reply");
+            }
+            return reply.conversation;
+          },
+          signal,
+          undefined,
+          timeoutMs,
+        ),
+    };
+  };
+  const { facts } = plan;
+  await consume(plan, {
+    ...facts,
+    history: source("history", facts.historyCount),
+    turnPrefix: source("turnPrefix", facts.turnPrefixCount),
+    reconciliation: source("reconciliation", facts.reconciliationCount),
+  });
+  return undefined;
 }

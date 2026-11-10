@@ -502,7 +502,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
             )
           : unwrapCoreResult(result);
     }
-    await bounded?.release();
     options.onSummaryReady?.();
 
     if (options.signal.aborted) {
