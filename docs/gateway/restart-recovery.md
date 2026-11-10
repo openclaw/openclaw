@@ -248,6 +248,15 @@ also join those resources before reusing the runtime.
 Plugin-origin finalizers retain shared-state admission through this drain so
 worktree run leases and subagent settle records can persist before SDK retirement.
 Final cleanup failures are reported as shutdown failures, not startup failures.
+The failure summary names the fatal cleanup error, including nested resource-owner
+causes; earlier grace warnings are listed separately as `warnings`. An admissions
+grace warning includes a bounded pending snapshot: effect count and the first
+pending effect's phase, source phase, operation phase, interruption and settling
+status. The same facts appear in the pending close span. Session and run identifiers
+and session content are omitted; `none` means the observed owner has no such phase,
+and `null` means its boolean status is unavailable. A zero effect count does not
+mean the full admissions join has settled: it also waits for source, subagent, and
+terminal-persistence cleanup.
 
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.

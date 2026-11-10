@@ -6,20 +6,28 @@ import { assert, expect, it } from "vitest";
 import { registerRelayPrincipalRecovery } from "./grant-bindings.js";
 import { createStateFixture, grantFixture } from "./relay.test-helpers.js";
 
-it.each(["code", "approval", "legacy"] as const)(
+it.each(["code", "approval", "legacy", "delegated-code", "delegated-approval"] as const)(
   "rehydrates %s issuance and refuses same-clock replacement",
   async (origin) => {
     const fixture = createStateFixture();
+    const principal = origin.startsWith("delegated-")
+      ? {
+          kind: "delegated-person" as const,
+          profileId: "person",
+          admission: "opaque-host-admission",
+        }
+      : { kind: "owner" as const };
     const saved = grantFixture({
       grantId: "continuation",
       createdAt: 100,
       ceiling: ["operator.read"],
+      principal,
     });
     if (origin === "legacy") {
       fixture.seed({ ...saved, issuanceId: undefined }, "grant:continuation");
     }
     const issue = async (state: ReturnType<typeof fixture.open>, ceiling: string[]) => {
-      if (origin === "code") {
+      if (origin === "code" || origin === "delegated-code") {
         await state.issue("same-clock-code", 1_000, 100, undefined, {
           principal: saved.principal,
           ceiling,
@@ -62,7 +70,7 @@ it.each(["code", "approval", "legacy"] as const)(
     const initial = await owner.resume("continuation");
     assert(initial);
     expect(initial).toMatchObject({
-      principal: { kind: "owner" },
+      principal,
       operatorScopeCeiling: ["operator.read"],
     });
     const issuedId = initial.recoveryId;
@@ -76,6 +84,7 @@ it.each(["code", "approval", "legacy"] as const)(
     const recovered = await owner.resume("continuation");
     assert(recovered);
     expect(recovered.recoveryId).toBe(issuedId);
+    expect(recovered.principal).toEqual(principal);
     expect(recovered.assertCurrent).not.toThrow();
     await reloaded.revoke("continuation");
     expect(await owner.resume("continuation")).toBeUndefined();
