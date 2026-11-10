@@ -135,7 +135,7 @@ export async function readPrAutoFixFeedback(params: {
   } = params;
   const scan: Scan =
     previous?.version === 3 && isRecord(previous.scan) && previous.scan.head === head
-      ? (structuredClone(previous.scan) as Scan)
+      ? (structuredClone(previous.scan) as Scan) // SAFETY: The native v3 recipe preserves this reader's Scan.
       : {
           head,
           source: 0,
