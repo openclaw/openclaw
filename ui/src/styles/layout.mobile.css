@@ -617,13 +617,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     margin: 0 8px 10px;
   }
 
-  .agent-chat__input-btn,
-  .chat-send-btn {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-  }
-
   .agent-chat__input-btn svg,
   .chat-send-btn svg {
     width: 16px;

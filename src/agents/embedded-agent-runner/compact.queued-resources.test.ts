@@ -12,9 +12,9 @@ import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { compactEmbeddedAgentSession } from "../embedded-agent.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
-import { compactEmbeddedAgentSession } from "./compact.queued.js";
 import { createCompactionResourceProvider } from "./compact.resources.test-support.js";
 
 it("keeps an actual prepared registration alive through queued engine maintenance and disposal", async () => {

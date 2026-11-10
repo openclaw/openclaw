@@ -400,29 +400,6 @@ div.chat-thread:where(.chat-thread--annotations) {
   background: transparent;
 }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-leading,
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-trailing {
-  gap: 4px;
-  flex-wrap: nowrap;
-}
-
-/* Keep the trailing region stable while presence and session actions arrive. */
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-trailing {
-  flex-grow: 1;
-  align-self: stretch;
-  justify-self: stretch;
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {
-  display: flex;
-  flex: 0 0 auto;
-  /* Reserve the native menu's hit area before its session descriptor arrives. */
-  min-width: var(--chat-pane-header-icon-size);
-  min-height: var(--chat-pane-header-icon-size);
-  align-items: center;
-  gap: 0;
-}
-
 .chat-pane__header:not(.chat-pane__header--mobile)
   :is(
     .chat-icon-btn,
@@ -486,6 +463,29 @@ div.chat-thread:where(.chat-thread--annotations) {
   min-height: var(--desktop-header-height, calc(var(--rail-header-height) - var(--space-1)));
   padding-inline: 12px 8px;
   gap: 4px;
+
+  & .chat-pane__header-leading,
+  & .chat-pane__header-trailing {
+    gap: 4px;
+    flex-wrap: nowrap;
+  }
+
+  /* Keep the trailing region stable while presence and session actions arrive. */
+  & .chat-pane__header-trailing {
+    flex-grow: 1;
+    align-self: stretch;
+    justify-self: stretch;
+  }
+
+  & .chat-pane__identity-actions {
+    display: flex;
+    flex: 0 0 auto;
+    /* Reserve the native menu's hit area before its session descriptor arrives. */
+    min-width: var(--chat-pane-header-icon-size);
+    min-height: var(--chat-pane-header-icon-size);
+    align-items: center;
+    gap: 0;
+  }
 
   & .chat-pane__actions {
     flex-grow: 1;

@@ -148,7 +148,6 @@ function uniformTurnSpacingHtml(placement: AvatarPlacement) {
       <div class="chat-group-messages">
         <div class="chat-activity-group chat-work-group">
           <button class="chat-inline-disclosure chat-activity-group__summary" type="button">${summary}</button>
-          <div class="chat-work-group__separator"></div>
         </div>
       </div>
     </div>`;
@@ -229,7 +228,6 @@ function runBlockSpacingHtml() {
             <div class="chat-bubble" data-run-block="activity-reply"><div class="chat-text">Activity result</div></div>
             <div class="chat-activity-group chat-work-group" data-run-block="work">
               <button class="chat-inline-disclosure chat-activity-group__summary" type="button">Worked for 10s</button>
-              <div class="chat-work-group__separator"></div>
             </div>
             <div class="chat-bubble" data-run-block="reply"><div class="chat-text">Final reply</div></div>
           </div>
@@ -891,7 +889,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           toolToList: 8,
           listToReply: 8,
           replyToWork: 8,
-          workToReply: 8,
+          workToReply: 10,
           expandedTextToTool: 6,
           // Footer offset + 24px footer row + turn gap (16px, or 12px on touch).
           turn: hasTouch ? 38 : 42,
