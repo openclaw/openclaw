@@ -139,7 +139,7 @@ function assertSource(pair: PluginCohortRecoveryPair, options: CohortOptions): v
   }
 }
 
-/** Captured after the database backup, before candidate Doctor can mutate plugins. */
+/** Retain plugin preimages before database capture and candidate Doctor mutations. */
 export async function beginUpdatePluginCohort(
   params: CohortOptions & {
     runId: string;

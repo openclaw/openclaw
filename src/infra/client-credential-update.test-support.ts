@@ -1,3 +1,6 @@
+import { expect } from "vitest";
+import { readClientCredentialReceipt } from "./client-credential-readiness.js";
+import { openClientCredentialCustody } from "./client-credential-store.js";
 import { generateStoredDeviceIdentity } from "./device-identity-material.js";
 import type { EngineConnection } from "./sql-connection.js";
 
@@ -60,4 +63,30 @@ export function seedCredentials(
   db.prepare("INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)").run(
     String(sourceVersion),
   );
+}
+
+export function assertMigratedCredentials(f: { env: NodeJS.ProcessEnv; native: boolean }) {
+  using local = openClientCredentialCustody(f.env, { migration: true })!;
+  expect(readClientCredentialReceipt(local.database)?.phase).toBe("complete");
+  expect(local.database.prepare("SELECT * FROM device_identities").get()).toEqual({
+    identity_key: "primary",
+    device_id: identity.deviceId,
+    public_key_pem: identity.publicKeyPem,
+    private_key_pem: identity.privateKeyPem,
+    created_at_ms: 12,
+    updated_at_ms: 99,
+  });
+  expect(local.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
+    token: "synthetic-original-token",
+  });
+  if (!f.native) {
+    expect(
+      local.database
+        .prepare("SELECT socket_path,socket_token FROM native_exec_socket_credentials")
+        .get(),
+    ).toEqual({
+      socket_path: "/synthetic/native.sock",
+      socket_token: "synthetic-socket-token",
+    });
+  }
 }

@@ -802,7 +802,8 @@ journal discovery preserves the original SQLite WAL/SHM family. Older updaters
 can then verify their physical fingerprints without a false source-change refusal.
 
 Plugin rollback reservation acquires its lease against the existing shared-state
-schema, leaving credential migration to candidate Doctor's backed-up maintenance.
+schema, then database capture records the settled reservation writes. Credential
+migration remains owned by candidate Doctor's backed-up maintenance.
 Starting or restarting an unchanged service does not require migrating runtime-pin
 metadata; definition rewrites still preserve existing runtime intent.
 Failed split-install activation also keeps recovery results valid when restoring
