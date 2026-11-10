@@ -44,11 +44,15 @@ const repositoryScriptEntries = [
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Spawned directly by mantis-telegram-failure.test.ts.
   "test/scripts/fixtures/mantis-telegram-failure.mts",
+  // plugin-npm-cli-process.test-support.ts generates a path-based --import loader.
+  "test/scripts/plugin-npm-cli-transport.test-support.mjs",
   // Spawned directly by beam-handoff.joined.e2e.test.ts.
   "test/fixtures/beam-live-handoff-client/beam.mjs",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-ci-planner.mts!",
+  // Maintainers invoke this dependency-cache benchmark as a standalone CLI.
+  "scripts/bench-pr-dependency-cache.mjs!",
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-ios-release-note-overlap.mjs!",
   "scripts/bench-mobile-release-dependencies.mjs!",
@@ -495,6 +499,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/review-transition-recovery.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pr-lib/dependency-hold-release.mjs!",
+  // scripts/pr passes this lifetime preload through NODE_OPTIONS --require.
+  "scripts/pr-lib/dependency-lifetime-inherit.cjs!",
   // worktree.sh launches the locked cold-worktree adapter by path.
   "scripts/pr-lib/worktree-provision.mts!",
   "scripts/pre-commit/filter-staged-files.mjs!",
