@@ -122,7 +122,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     sessionRuntimeOverride: string | undefined,
   ) => {
     const candidateRun = resolveFallbackCandidateRun(params.effectiveRun, provider, model);
-    const activeEntry = runtimeSessionEntry(provider, model);
+    const binding = params.scheduledInferenceCandidates?.bindingFor(provider, model);
+    // Captured runtimes have no session harness pin; otherwise preserve the real session owner.
+    const activeEntry = binding?.runtime
+      ? undefined
+      : (params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry());
     const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
       config: params.runtimeConfig,
     });
@@ -133,9 +137,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         provider,
         model,
         agentId: turn.followupRun.run.agentId,
-        authProfileId:
-          params.scheduledInferenceCandidates?.bindingFor(provider, model)?.profileId ??
-          selectedAuthProfile.authProfileId,
+        authProfileId: binding?.profileId ?? selectedAuthProfile.authProfileId,
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(activeEntry),
       }),
