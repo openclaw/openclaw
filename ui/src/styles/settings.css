@@ -2480,8 +2480,30 @@ openclaw-settings-save-indicator:empty {
   margin-block-start: 8px;
 }
 
-/* Shares the page's grid cell, so nothing in the page moves when it appears. It rests
-   in the bottom gutter and lets clicks through; only its own buttons take them. */
+/* Failed saves occupy an intrinsic shell row, including on pages with their own
+   scroller. Transient pills still overlay content without changing its geometry. */
+.shell.shell--settings {
+  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "nav topbar"
+    "nav notice"
+    "nav content"
+    "nav save-status";
+}
+
+.shell--settings.shell--mobile-nav {
+  grid-template-areas:
+    "topbar"
+    "notice"
+    "content"
+    "save-status";
+}
+
+.shell--settings.shell--floating-header {
+  grid-template-rows: 0 auto minmax(0, 1fr) auto;
+}
+
+/* Compact feedback shares the page's grid cell and lets clicks through. */
 .settings-save-status {
   position: relative;
   z-index: 1;
@@ -2491,6 +2513,11 @@ openclaw-settings-save-indicator:empty {
   max-width: calc(100% - 32px);
   margin-block-end: calc(16px + var(--shell-safe-area-bottom, 0px));
   pointer-events: none;
+}
+
+.settings-save-status:has(.settings-save-indicator--failure) {
+  grid-area: save-status;
+  margin-block-start: 16px;
 }
 
 .settings-save-status .settings-save-indicator {
@@ -2516,8 +2543,7 @@ openclaw-settings-save-indicator:empty {
   pointer-events: auto;
 }
 
-/* The failure grows up from the same anchor as a fixed-width card, so a retry or a
-   longer reason never changes its width. It takes clicks so the reason can scroll. */
+/* A retry or longer reason keeps the card width. Its reason remains scrollable. */
 .settings-save-status .settings-save-indicator--failure {
   width: 360px;
   max-width: 100%;
