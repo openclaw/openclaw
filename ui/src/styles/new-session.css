@@ -739,6 +739,21 @@ span.new-session-page__select {
   min-height: 0;
 }
 
+.header-search.new-session-page__project-search {
+  min-width: 0;
+  min-height: 40px;
+  margin: var(--space-2) var(--space-2) 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.new-session-page__project-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
 .new-session-page__environment-picker {
   display: flex;
   flex-direction: column;
