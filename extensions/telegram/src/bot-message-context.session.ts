@@ -51,7 +51,6 @@ type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
   To: string;
   ChatType: string;
   RawBody: string;
-  ReplyToIsExternal?: boolean;
   ReplyToQuotePosition?: number;
   ReplyToQuoteEntities?: TelegramReplyTarget["quoteEntities"];
   ReplyToQuoteSourceText?: string;
