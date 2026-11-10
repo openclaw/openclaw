@@ -16,8 +16,8 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import type { GatewayRpcExtraOptions } from "./gateway-rpc.runtime.js";
 
 const transport = vi.hoisted(() => ({ request: vi.fn() }));
-// mock-isolation: Isolated state custody and RPC delivery are fixed. The CLI,
-// Template Add, native cron handlers, persistence and rollback remain real.
+// The CLI, Template Add, native cron handlers, persistence and rollback remain real.
+// mock-isolation: Isolate state custody and RPC delivery in this native CLI fixture.
 vi.mock("./local-state-owner.js", () => ({
   runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<void> }) =>
     await runLocal(),
