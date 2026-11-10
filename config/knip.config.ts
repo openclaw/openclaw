@@ -53,6 +53,9 @@ const repositoryScriptEntries = [
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/bench-plugin-catalog.ts!",
   "scripts/bench-template-detail.mts!",
+  "scripts/bench-session-source-notifications.mjs!",
+  // The Windows benchmark launches this observer with Node --import by exact path.
+  "scripts/lib/session-source-observer-preload.mjs!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",

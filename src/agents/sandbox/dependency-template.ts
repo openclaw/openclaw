@@ -34,6 +34,8 @@ const CONTAINER_PREFIX = "openclaw-deps-";
 const SCOPE_PREFIX = "worktree-dependencies:";
 const DEPENDENCY_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency";
 
+class SandboxDependencyStorageError extends Error {}
+
 type StartedBuilder = {
   containerName: string;
   containerId: string;
@@ -53,7 +55,6 @@ function dependencyDockerConfig(cfg: SandboxConfig, image: string): SandboxDocke
       XDG_CONFIG_HOME: "/tmp/openclaw-deps/config",
       XDG_DATA_HOME: "/tmp/openclaw-deps/data",
       XDG_STATE_HOME: "/tmp/openclaw-deps/state",
-      XDG_CACHE_HOME: "/tmp/openclaw-deps/cache",
       ...(storeDir !== undefined ? { PNPM_CONFIG_STORE_DIR: storeDir } : {}),
     },
     setupCommand: undefined,
@@ -332,6 +333,14 @@ export async function prepareSandboxDependencyTemplate(params: {
       if (installed.code === 0) {
         return { installed: true };
       }
+      // Detect before truncation: pnpm may emit progress after its storage error.
+      if (
+        /ENOSPC|no\s+space\s+left\s+on\s+device/iu.test(`${installed.stdout}\n${installed.stderr}`)
+      ) {
+        throw new SandboxDependencyStorageError(
+          "Sandbox dependency installation ran out of space. Check free bytes and inodes in /tmp/openclaw-deps and the workspace. For a full temporary pnpm store, set sandbox.docker.env.PNPM_CONFIG_STORE_DIR to a disk-backed workspace path, then retry.",
+        );
+      }
       // pnpm reports some failures on stdout. Redact before truncating secret context.
       const tail = redactSensitiveText(`${installed.stdout}\n${installed.stderr}`, {
         mode: "tools",
@@ -342,9 +351,12 @@ export async function prepareSandboxDependencyTemplate(params: {
         installed: false,
         reason: `pnpm install failed (exit ${installed.code})${tail ? `: ${tail}` : ""}`,
       };
-    } catch {
+    } catch (error) {
       // Exceptions may include engine invocation details; retain only the failure category.
       assertCurrent();
+      if (error instanceof SandboxDependencyStorageError) {
+        throw error;
+      }
       return {
         installed: false,
         reason: timeout?.aborted

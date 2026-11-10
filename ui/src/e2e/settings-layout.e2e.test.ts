@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { Response } from "playwright";
+import type { Page, Response } from "playwright";
 import { expect, it } from "vitest";
 import type { PresenceEntry } from "../../../packages/gateway-protocol/src/index.ts";
 import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
@@ -29,6 +29,19 @@ const suite = createControlUiE2eSuite({
 });
 
 const proofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+async function captureSettingsLayout(page: Page, filename: string) {
+  if (!proofEnabled) {
+    return;
+  }
+  const directory = path.join(suite.artifactDir, "settings-layout-audit");
+  await mkdir(directory, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(directory, filename),
+  });
+}
 
 const emptyDeviceResponses = {
   "node.list": { ts: 0, nodes: [] },
@@ -858,15 +871,7 @@ suite.define(() => {
           "Healthy automation",
         ]);
 
-        if (proofEnabled) {
-          const proofDir = path.join(suite.artifactDir, "settings-layout-audit");
-          await mkdir(proofDir, { recursive: true });
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(proofDir, `automations-toolbar-${viewport.width}.png`),
-          });
-        }
+        await captureSettingsLayout(page, `automations-toolbar-${viewport.width}.png`);
         await page.locator(".agent-select__trigger").click();
         const pickerTitle = page.locator(".agent-select__menu .oc-menu-heading__label");
         await pickerTitle.waitFor();
@@ -876,17 +881,7 @@ suite.define(() => {
             .locator(".agent-select__menu")
             .evaluate((menu) => getComputedStyle(menu).opacity),
         ).toBe("1");
-        if (proofEnabled) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
-              suite.artifactDir,
-              "settings-layout-audit",
-              `automations-agent-picker-${viewport.width}.png`,
-            ),
-          });
-        }
+        await captureSettingsLayout(page, `automations-agent-picker-${viewport.width}.png`);
         await page.keyboard.press("Escape");
         await pickerTitle.waitFor({ state: "hidden" });
       }
@@ -994,30 +989,38 @@ suite.define(() => {
       await expect.poll(() => advanced.count()).toBe(1);
       await expect.poll(() => advanced.getAttribute("open")).toBeNull();
       await expect.poll(() => advancedSummary.textContent()).toContain("Advanced settings");
-      if (proofEnabled) {
-        await mkdir(path.join(suite.artifactDir, "settings-layout-audit"), { recursive: true });
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "settings-layout-audit"),
-            "communications-messages.png",
-          ),
-        });
-      }
+      await captureSettingsLayout(page, "communications-messages.png");
 
       await advancedSummary.click();
       await expect.poll(() => advanced.getAttribute("open")).not.toBeNull();
       await expect.poll(() => page.getByText("Response prefix", { exact: true }).count()).toBe(1);
-      if (proofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "settings-layout-audit"),
-            "communications-advanced-expanded.png",
-          ),
-        });
+      await captureSettingsLayout(page, "communications-advanced-expanded.png");
+
+      const prefixRow = advanced.locator(".settings-row", {
+        has: page.getByText("Response prefix", { exact: true }),
+      });
+      for (const width of [390, 820, 1400]) {
+        await page.setViewportSize({ width, height: 900 });
+        await expect
+          .poll(() =>
+            prefixRow.evaluate((row, viewportWidth) => {
+              const title = row.querySelector(".settings-row__title")!.getBoundingClientRect();
+              const input = row.querySelector("input")!.getBoundingClientRect();
+              const summary = row.parentElement!.querySelector("summary")!;
+              const text = summary.querySelector(".settings-row__text")!.getBoundingClientRect();
+              const chevron = summary
+                .querySelector(".settings-row__control")!
+                .getBoundingClientRect();
+              return {
+                fieldLayout:
+                  viewportWidth === 390
+                    ? input.top >= title.bottom && input.width > 300
+                    : input.left > title.right,
+                summaryInline: chevron.left > text.right && chevron.top < text.bottom,
+              };
+            }, width),
+          )
+          .toEqual({ fieldLayout: true, summaryInline: true });
       }
 
       await page.locator("#config-sections-tab-tts").click();
@@ -1026,16 +1029,7 @@ suite.define(() => {
       );
       expect(await page.locator("#config-sections-tab-tts").getAttribute("active")).not.toBeNull();
       expect(await page.locator(".settings-section__help-button").count()).toBe(0);
-      if (proofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "settings-layout-audit"),
-            "communications-voice.png",
-          ),
-        });
-      }
+      await captureSettingsLayout(page, "communications-voice.png");
 
       await page.setViewportSize({ height: 844, width: 390 });
       await expect

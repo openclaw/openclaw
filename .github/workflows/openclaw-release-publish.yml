@@ -502,97 +502,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
-      - name: Validate full release validation manifest
-        id: full_manifest
-        if: ${{ inputs.release_evidence_mode == 'full-release-validation' && (inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '') }}
-        env:
-          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
-          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ steps.full_run.outputs.attempt }}
-          GH_TOKEN: ${{ github.token }}
-          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
-          EXPECTED_RELEASE_PROFILE: ${{ inputs.release_profile }}
-          PUBLICATION_CONSUMER: ${{ inputs.publish_docker_only && !inputs.publish_openclaw_npm && 'docker-only' || 'publisher' }}
-          PUBLISH_DOCKER_ONLY: ${{ inputs.publish_docker_only }}
-          PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
-          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
-          RELEASE_PLUGINS: ${{ inputs.plugins }}
-          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
-          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
-          WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
-          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
-          TRUSTED_WORKFLOW_FULL_REF: ${{ github.ref }}
-          TRUSTED_WORKFLOW_REF: ${{ github.ref_name }}
-          TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
-          RUN_JSON_FILE: ${{ runner.temp }}/full-release-validation-run.json
-          VALIDATOR_FILE: ${{ github.workspace }}/.release-validation-tooling/scripts/validate-full-release-validation-evidence.mjs
-          STRICT_VALIDATOR_FILE: ${{ github.workspace }}/.release-validation-tooling/scripts/release-ci-summary.mjs
-        run: |
-          set -euo pipefail
-          manifest="${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json"
-          if [[ ! -f "$manifest" ]]; then
-            echo "Full release validation manifest is missing." >&2
-            ls -la "${RUNNER_TEMP}/full-release-validation-manifest" >&2 || true
-            exit 1
-          fi
-          trusted_main_ref="refs/remotes/origin/main"
-          if [[ "${TRUSTED_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
-            trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
-            git fetch --no-tags origin \
-              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_publisher_ref}"
-            if [[ "$(git rev-parse "${trusted_publisher_ref}^{commit}")" != "${GITHUB_SHA}" ]]; then
-              echo "Trusted release-publish tag moved after workflow dispatch." >&2
-              exit 1
-            fi
-          fi
-          git fetch --no-tags origin \
-            "+refs/heads/main:${trusted_main_ref}"
-          TRUSTED_MAIN_REF="${trusted_main_ref}" \
-            MANIFEST_FILE="$manifest" \
-            node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"
-          node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/lib/release-publish-gates.mts" \
-            --consumer publisher --manifest "$manifest"
-          node --input-type=module <<'NODE'
-          import { appendFileSync, readFileSync } from 'node:fs';
-          import { preparedDockerEvidenceFromFullRelease } from './.release-validation-tooling/scripts/docker-release-artifacts.mjs';
-          import { validatePreparedNpmArtifactDescriptor } from './.release-validation-tooling/scripts/plugin-npm-prepared-release.mjs';
-          const env = process.env;
-          const manifest = JSON.parse(readFileSync(`${env.RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json`, 'utf8'));
-          const prepared = preparedDockerEvidenceFromFullRelease({ manifest, sourceSha: env.EXPECTED_SHA, runId: env.FULL_RELEASE_VALIDATION_RUN_ID, runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT });
-          if (prepared) {
-            appendFileSync(env.GITHUB_OUTPUT, `prepared_docker_run_id=${prepared.preparedRunId}\nprepared_docker_run_attempt=${prepared.preparedRunAttempt}\nprepared_docker_artifact_name=${prepared.preparedArtifactName}\nprepared_docker_manifest_sha256=${prepared.preparedManifestSha256}\n`);
-          }
-          if (env.PLUGIN_PUBLISH_SCOPE === 'all-publishable' && env.PUBLISH_DOCKER_ONLY !== 'true') {
-            const descriptor = manifest.publicationArtifacts?.pluginNpm;
-            if (!descriptor && manifest.sourceAdmission?.qualificationAdmission) {
-              throw new Error('Candidate-owned all-plugin publication requires the original FRV npm artifact; repacking is not allowed.');
-            }
-            if (descriptor) {
-              const npm = validatePreparedNpmArtifactDescriptor(descriptor, {
-                repository: env.GITHUB_REPOSITORY, sourceSha: env.EXPECTED_SHA, workflowSha: manifest.workflowSha,
-              });
-              appendFileSync(env.GITHUB_OUTPUT, `plugin_npm_artifact=${JSON.stringify(npm)}\n`);
-            }
-          }
-          NODE
-
-      - name: Summarize sealed npm publication decisions
-        if: ${{ steps.full_manifest.outputs.npm_decisions != '' }}
-        env:
-          NPM_PUBLICATION_DECISIONS: ${{ steps.full_manifest.outputs.npm_decisions }}
-        run: |
-          {
-            echo "### Sealed npm publication decisions"
-            echo
-            echo "Registry decisions at validation seal time; publishers recheck current registry state and exact bytes."
-            echo
-            echo '```json'
-            jq . <<< "$NPM_PUBLICATION_DECISIONS"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Download OpenClaw npm preflight manifest
         id: preflight_artifact
         if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
@@ -783,6 +692,104 @@ jobs:
           appendFileSync(env.GITHUB_OUTPUT, `name=${preflight[0].name}\n`);
           NODE
 
+      - name: Validate full release validation manifest
+        id: full_manifest
+        if: ${{ inputs.release_evidence_mode == 'full-release-validation' && (inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '') }}
+        env:
+          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ steps.full_run.outputs.attempt }}
+          GH_TOKEN: ${{ github.token }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
+          EXPECTED_RELEASE_PROFILE: ${{ inputs.release_profile }}
+          PUBLICATION_CONSUMER: ${{ inputs.publish_docker_only && !inputs.publish_openclaw_npm && 'docker-only' || 'publisher' }}
+          PUBLISH_DOCKER_ONLY: ${{ inputs.publish_docker_only }}
+          PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          RELEASE_PLUGINS: ${{ inputs.plugins }}
+          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
+          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+          WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          TRUSTED_WORKFLOW_FULL_REF: ${{ github.ref }}
+          TRUSTED_WORKFLOW_REF: ${{ github.ref_name }}
+          TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          VERIFY_NPM_PREFLIGHT_LINEAGE: ${{ steps.preflight_artifact.outputs.workflow_path == '.github/workflows/full-release-validation.yml' || steps.preflight_artifact.outputs.workflow_path == '.github/workflows/full-release-artifacts.yml' }}
+          PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_artifact.outputs.head_sha }}
+          PREFLIGHT_RUN_ID: ${{ steps.preflight_artifact.outputs.run_id }}
+          PREFLIGHT_RUN_ATTEMPT: ${{ steps.preflight_artifact.outputs.run_attempt }}
+          RUN_JSON_FILE: ${{ runner.temp }}/full-release-validation-run.json
+          VALIDATOR_FILE: ${{ github.workspace }}/.release-validation-tooling/scripts/validate-full-release-validation-evidence.mjs
+          STRICT_VALIDATOR_FILE: ${{ github.workspace }}/.release-validation-tooling/scripts/release-ci-summary.mjs
+        run: |
+          set -euo pipefail
+          manifest="${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json"
+          if [[ ! -f "$manifest" ]]; then
+            echo "Full release validation manifest is missing." >&2
+            ls -la "${RUNNER_TEMP}/full-release-validation-manifest" >&2 || true
+            exit 1
+          fi
+          trusted_main_ref="refs/remotes/origin/main"
+          if [[ "${TRUSTED_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
+            trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
+            git fetch --no-tags origin \
+              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_publisher_ref}"
+            if [[ "$(git rev-parse "${trusted_publisher_ref}^{commit}")" != "${GITHUB_SHA}" ]]; then
+              echo "Trusted release-publish tag moved after workflow dispatch." >&2
+              exit 1
+            fi
+          fi
+          git fetch --no-tags origin \
+            "+refs/heads/main:${trusted_main_ref}"
+          TRUSTED_MAIN_REF="${trusted_main_ref}" \
+            MANIFEST_FILE="$manifest" \
+            node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"
+          node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/lib/release-publish-gates.mts" \
+            --consumer publisher --manifest "$manifest"
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { preparedDockerEvidenceFromFullRelease } from './.release-validation-tooling/scripts/docker-release-artifacts.mjs';
+          import { validatePreparedNpmArtifactDescriptor } from './.release-validation-tooling/scripts/plugin-npm-prepared-release.mjs';
+          import { retainedPublicationArtifactSource } from './.release-validation-tooling/scripts/lib/release-evidence-identity.mjs';
+          const env = process.env;
+          const manifest = JSON.parse(readFileSync(`${env.RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json`, 'utf8'));
+          const prepared = preparedDockerEvidenceFromFullRelease({ manifest, sourceSha: env.EXPECTED_SHA, runId: env.FULL_RELEASE_VALIDATION_RUN_ID, runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT });
+          if (prepared) {
+            appendFileSync(env.GITHUB_OUTPUT, `prepared_docker_run_id=${prepared.preparedRunId}\nprepared_docker_run_attempt=${prepared.preparedRunAttempt}\nprepared_docker_artifact_name=${prepared.preparedArtifactName}\nprepared_docker_manifest_sha256=${prepared.preparedManifestSha256}\n`);
+          }
+          if (env.PLUGIN_PUBLISH_SCOPE === 'all-publishable' && env.PUBLISH_DOCKER_ONLY !== 'true') {
+            const descriptor = manifest.publicationArtifacts?.pluginNpm;
+            if (!descriptor && manifest.sourceAdmission?.qualificationAdmission) {
+              throw new Error('Candidate-owned all-plugin publication requires the original FRV npm artifact; repacking is not allowed.');
+            }
+            if (descriptor) {
+              // Strict authentication above binds retained artifacts to their original producer, not recovery tooling.
+              const producerSha = retainedPublicationArtifactSource(manifest)?.workflow.sha ?? manifest.workflowSha;
+              const npm = validatePreparedNpmArtifactDescriptor(descriptor, {
+                repository: env.GITHUB_REPOSITORY, sourceSha: env.EXPECTED_SHA, workflowSha: producerSha,
+              });
+              appendFileSync(env.GITHUB_OUTPUT, `plugin_npm_artifact=${JSON.stringify(npm)}\n`);
+            }
+          }
+          NODE
+
+      - name: Summarize sealed npm publication decisions
+        if: ${{ steps.full_manifest.outputs.npm_decisions != '' }}
+        env:
+          NPM_PUBLICATION_DECISIONS: ${{ steps.full_manifest.outputs.npm_decisions }}
+        run: |
+          {
+            echo "### Sealed npm publication decisions"
+            echo
+            echo "Registry decisions at validation seal time; publishers recheck current registry state and exact bytes."
+            echo
+            echo '```json'
+            jq . <<< "$NPM_PUBLICATION_DECISIONS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Validate OpenClaw npm preflight manifest
         id: manifest
         if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
@@ -864,13 +871,11 @@ jobs:
           if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/openclaw-npm-release.yml" && "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$PREFLIGHT_WORKFLOW_BRANCH" == "$expected_extended_stable_branch" && "$PREFLIGHT_WORKFLOW_SHA" == "$EXPECTED_SHA" ]]; then
             extended_stable_preflight=true
           fi
-          if [[ "$extended_stable_preflight" != "true" ]]; then
-            lineage_args=(--verify-publication-lineage)
-            if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" || "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-artifacts.yml" ]]; then
-              lineage_args+=(--full-release-manifest "${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json")
-            fi
+          # FRV lineage was checked in the full-manifest owner's process above,
+          # using its exact authenticated result and a final live authority refresh.
+          if [[ "$extended_stable_preflight" != "true" && "$PREFLIGHT_WORKFLOW_PATH" != ".github/workflows/full-release-validation.yml" && "$PREFLIGHT_WORKFLOW_PATH" != ".github/workflows/full-release-artifacts.yml" ]]; then
             node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/npm-preflight-tooling-identity.mjs" \
-              "${lineage_args[@]}" \
+              --verify-publication-lineage \
               --repository "$GITHUB_REPOSITORY" --source-sha "$EXPECTED_SHA" \
               --workflow-sha "$PREFLIGHT_WORKFLOW_SHA" --publisher-sha "$WORKFLOW_SHA" \
               --run-id "$PREFLIGHT_RUN_ID" --run-attempt "$PREFLIGHT_RUN_ATTEMPT"

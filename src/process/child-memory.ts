@@ -4,6 +4,7 @@ import { readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { parseNodeReleaseVersion } from "../../node-version.mjs";
 import { hasErrnoCode } from "../infra/errno.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -11,8 +12,34 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 const rssField = Buffer.from("\nVmRSS:");
 const swapField = Buffer.from("\nVmSwap:");
 
-// Avoid fs/promises' extra promise layers for every tiny procfs read.
-const readFile = promisify(readFileCallback);
+// Reuse the buffer API where available; Node 26.8+'s native one-shot reader is
+// faster and exposes only the final file size to V8. Leave Bun's reader intact.
+const nodeVersion = parseNodeReleaseVersion(process.versions.node);
+const reuseReadBuffer =
+  !process.versions.bun &&
+  nodeVersion &&
+  ((nodeVersion.major === 24 && nodeVersion.minor >= 19) ||
+    (nodeVersion.major === 26 && nodeVersion.minor >= 4 && nodeVersion.minor < 8));
+const nativeReadFile: (file: string) => Promise<Buffer> = promisify(readFileCallback);
+const readKernelFile: (file: string, scratch?: Buffer<ArrayBuffer>) => Promise<Buffer> =
+  reuseReadBuffer ? readSmallKernelFile : nativeReadFile;
+
+// procfs reports size zero: readFile allocates 64 KiB even for empty children.
+// Each traversal owns its scratch buffer; independent watches never share it.
+function readSmallKernelFile(file: string, buffer = Buffer.allocUnsafe(4096)): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    readFileCallback(file, { buffer }, (error, content) => {
+      if (hasErrnoCode(error, "ERR_INVALID_ARG_VALUE")) {
+        // A large thread child list must remain complete; Node already closed it.
+        nativeReadFile(file).then(resolve, reject);
+      } else if (error) {
+        reject(error);
+      } else {
+        resolve(content);
+      }
+    });
+  });
+}
 
 function readStatusNumber(buffer: Buffer, field: Buffer): number {
   // status starts with Name, so these fields always follow a newline.
@@ -165,7 +192,7 @@ function shareReads<T>(read: (pid: number) => Promise<T>): (pid: number) => Prom
 }
 
 async function readMemory(pid: number): Promise<HostExecMemoryUsage> {
-  const status = await readFile(`/proc/${pid}/status`);
+  const status = await readKernelFile(`/proc/${pid}/status`);
   return {
     memoryBytes: readStatusNumber(status, rssField) * 1024,
     swapBytes: readStatusNumber(status, swapField) * 1024,
@@ -175,8 +202,8 @@ async function readMemory(pid: number): Promise<HostExecMemoryUsage> {
 /** Durable units retain descendants even after their MainPID exits. */
 export async function readCgroupMemoryUsage(directory: string): Promise<HostExecMemoryUsage> {
   const [memory, swap] = await Promise.all([
-    readFile(`${directory}/memory.current`),
-    readFile(`${directory}/memory.swap.current`),
+    readKernelFile(`${directory}/memory.current`),
+    readKernelFile(`${directory}/memory.swap.current`),
   ]);
   const memoryBytes = Number(memory.toString().trim());
   const swapBytes = Number(swap.toString().trim());
@@ -193,10 +220,11 @@ export async function readCgroupMemoryUsage(directory: string): Promise<HostExec
 
 async function readChildren(pid: number): Promise<number[]> {
   const pids: number[] = [];
+  const buffer = reuseReadBuffer ? Buffer.allocUnsafe(4096) : undefined;
   // Complete one PID's shared discovery even if a consumer stops.
   for (const tid of await readdir(`/proc/${pid}/task`)) {
     try {
-      const children = await readFile(`/proc/${pid}/task/${tid}/children`);
+      const children = await readKernelFile(`/proc/${pid}/task/${tid}/children`, buffer);
       let childPid = 0;
       for (let offset = 0; offset <= children.length; offset++) {
         const digit = children[offset];
