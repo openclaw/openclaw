@@ -109,6 +109,9 @@ export class GuestWelcome {
     const previous = this.current;
     if (
       previous.kind === next.kind &&
+      (previous.kind !== "ready" ||
+        next.kind !== "ready" ||
+        previous.sessionKey === next.sessionKey) &&
       (previous.kind !== "failed" || next.kind !== "failed" || previous.message === next.message)
     ) {
       return;
@@ -142,6 +145,7 @@ export class GuestWelcome {
       gatewayOriginScope(gateway.connection.gatewayUrl) + "\n" + (snapshot.selfUser?.id ?? "");
     if (scope !== this.scope) {
       this.cancel();
+      this.publish({ kind: "hidden" });
       this.scope = scope;
       this.client = null;
       this.settled = false;
@@ -223,7 +227,7 @@ export class GuestWelcome {
       case "ready": {
         this.settled = true;
         this.pendingSince = null;
-        this.publish({ kind: "hidden" });
+        this.publish({ kind: "ready", sessionKey: result.sessionKey });
         const key =
           VISITED_KEY_PREFIX +
           gatewayOriginScope(this.options.gateway.connection.gatewayUrl) +
