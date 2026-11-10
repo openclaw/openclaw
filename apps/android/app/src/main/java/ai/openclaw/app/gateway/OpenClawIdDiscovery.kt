@@ -24,15 +24,15 @@ internal class OpenClawIdDiscoveryFailure(
 ) : IOException("OpenClaw ID Discovery request failed")
 
 /** The explicit deployment origin is the only HTTP destination, and redirects are never followed. */
-internal class OpenClawIdDiscovery {
-  private val client =
+internal class OpenClawIdDiscovery(
+  private val client: OkHttpClient =
     OkHttpClient
       .Builder()
       .followRedirects(false)
       .followSslRedirects(false)
       .callTimeout(15, TimeUnit.SECONDS)
-      .build()
-
+      .build(),
+) {
   suspend fun call(
     origin: String,
     path: String,

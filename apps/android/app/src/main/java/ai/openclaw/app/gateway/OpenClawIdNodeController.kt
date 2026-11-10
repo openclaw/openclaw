@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.json.JsonObject
 import kotlin.coroutines.coroutineContext
 
 internal data class OpenClawIdEnrollmentUiState(
@@ -137,24 +136,11 @@ internal class OpenClawIdNodeController(
         seed.fill(0)
       }
     signer.use {
-      return refreshTarget({ discovery.call(target.discoveryOrigin, target.descriptorPath, signer) }) { response ->
-        store.assess(stableId, response, System.currentTimeMillis() / 1_000).second
-      }
-    }
-  }
-
-  internal companion object {
-    /**
-     * A refresh's outcome. Discovery failures, including its unsigned 403, pass through unchanged
-     * and stay retryable; only a verified snapshot that no longer lists this node is removal.
-     */
-    suspend fun refreshTarget(
-      fetch: suspend () -> JsonObject,
-      assess: (JsonObject) -> OpenClawIdTrustAssessment,
-    ): OpenClawIdTrustTarget {
-      val response = fetch()
+      // Discovery's unsigned failures (including 403) stay retryable. Only verified membership
+      // evidence may report removal, after the store has durably retained its rollback facts.
+      val response = discovery.call(target.discoveryOrigin, target.descriptorPath, signer)
       coroutineContext.ensureActive()
-      val assessment = assess(response)
+      val assessment = store.assess(stableId, response, System.currentTimeMillis() / 1_000).second
       return assessment.target ?: if (assessment.failure == "node_not_admitted") throw OpenClawIdRemovedException() else error("node_evidence_refused")
     }
   }
