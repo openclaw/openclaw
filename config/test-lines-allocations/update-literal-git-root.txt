@@ -1,2 +1,2 @@
-# 7 LF: existing Git ownership table extensions; 70 LF: exact inherited baccc debt.
-77
+# Extend existing real Git root table and consumers without duplicating fixtures.
+7
