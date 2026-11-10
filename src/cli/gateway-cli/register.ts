@@ -6,6 +6,7 @@ import type { HealthSummary } from "../../commands/health.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
@@ -48,10 +49,16 @@ function gatewayCallOpts(cmd: Command): Command {
   );
 }
 
-async function callGatewayReadOnlyCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
+async function callGatewayReadOnlyCli(
+  method: string,
+  opts: GatewayRpcOpts,
+  params?: unknown,
+  signal?: AbortSignal,
+) {
   return await callGatewayFromCliWithTransport(method, opts, params, {
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
     sharedStateMode: "read-only",
+    signal,
   });
 }
 
@@ -343,11 +350,15 @@ export function registerGatewayCli(program: Command) {
       .description("Fetch Gateway health")
       .action(
         gatewayAction(async (opts, command) => {
+          const signal = getAsyncWorkSignal();
           const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
           let result: unknown;
           try {
-            result = await callGatewayReadOnlyCli("health", rpcOpts);
+            result = await callGatewayReadOnlyCli("health", rpcOpts, undefined, signal);
           } catch (error) {
+            if (signal?.aborted) {
+              return;
+            }
             const { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig } =
               await import("../../commands/health.js");
             const handled = await emitReachableGatewayAuthDiagnostic({
@@ -361,11 +372,15 @@ export function registerGatewayCli(program: Command) {
               password: rpcOpts.password,
               localPortOverride: rpcOpts.localPortOverride,
               json: Boolean(rpcOpts.json),
+              signal,
             });
             if (handled) {
               return;
             }
             throw error;
+          }
+          if (signal?.aborted) {
+            return;
           }
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);

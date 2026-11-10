@@ -8,7 +8,7 @@ import {
   NATIVE_HARD_GENERATED_I18N_RE,
 } from "./lib/ci-native-generated-scope.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
+import { ensureGitCommit, resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 import nativeProtocolInputs from "./native-protocol-inputs.json" with { type: "json" };
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runMacosNode: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
@@ -722,15 +722,17 @@ export function listChangedPaths(
   if (!base) {
     return [];
   }
+  const headCommit = ensureGitCommit(head, cwd);
   const diffBase = resolveMergeHeadDiffBase({
     base,
-    head,
+    head: headCommit,
     cwd,
     preferFirstParent: preferMergeHeadFirstParent,
   });
+  const baseCommit = ensureGitCommit(diffBase, cwd);
   const output = execFileSync(
     "git",
-    ["diff", "--no-renames", "--name-only", "-z", diffBase, head],
+    ["diff", "--no-renames", "--name-only", "-z", baseCommit, headCommit],
     {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],

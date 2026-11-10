@@ -628,7 +628,7 @@ button.sidebar-image-view__image {
 
 .sidebar-file-view--desktop .sidebar-file-view__path {
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .sidebar-file-view__edit-actions .btn {
@@ -698,8 +698,8 @@ button.sidebar-image-view__image {
 }
 
 .sidebar-file-view--desktop .cm-editor {
-  font-size: 12px;
-  line-height: 22px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(22px * var(--control-ui-text-scale));
 }
 
 .sidebar-file-view--desktop .cm-content {
@@ -967,7 +967,7 @@ button.sidebar-image-view__image {
   background: color-mix(in srgb, currentColor 10%, transparent);
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 700;
 }
 
@@ -1041,7 +1041,7 @@ button.sidebar-image-view__image {
   border-radius: 999px;
   background: color-mix(in srgb, var(--muted) 18%, transparent);
   color: var(--muted);
-  font-size: calc(var(--control-ui-text-sm) - 2px);
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .session-diff .chat-diffstat {
@@ -1188,7 +1188,7 @@ button.sidebar-image-view__image {
   border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
   background: color-mix(in srgb, var(--secondary) 45%, transparent);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
 }
 
@@ -1302,7 +1302,7 @@ button.sidebar-image-view__image {
   border-radius: 3px;
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
   font-weight: 700;
 }
 
@@ -1968,7 +1968,7 @@ openclaw-session-diff:has(> .session-diff--desktop) {
    Transcript diffs and mobile cards retain their own presentation. */
 .session-diff--desktop :is(.chat-diff, .session-diff-split) {
   background: transparent;
-  line-height: 22px;
+  line-height: calc(22px * var(--control-ui-text-scale));
 }
 
 .session-diff--desktop :is(.chat-diff__gutter, .session-diff-split__gutter) {

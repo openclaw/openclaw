@@ -1,6 +1,6 @@
-import { getRuntimeConfig } from "../../config/config.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../../config/io.plugin-metadata.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import { readRuntimeConfig as getRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureEnvironmentKey } from "../../shared/environment-key.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";

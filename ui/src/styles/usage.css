@@ -64,7 +64,7 @@
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-muted));
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   flex: 0 1 auto;
   max-width: 55%;
@@ -96,14 +96,14 @@
 
 .provider-usage-card__name {
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 700;
 }
 
 .provider-usage-card__id,
 .usage-creators-table thead {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .usage-mosaic-section,
@@ -255,7 +255,7 @@ select.usage-select {
 .legend-item,
 .usage-creators-more > summary {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .usage-query-hint {
@@ -279,24 +279,13 @@ select.usage-select {
 .usage-metric-badge strong {
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 1.375rem;
+  font-size: calc(1.375rem * var(--control-ui-text-scale));
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
   line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* The refresh button keeps its shared size, which grows on touch. */
-.usage-header .btn--icon:not(.refresh-button) {
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
-}
-
-.usage-pin-btn.active {
-  color: var(--accent);
 }
 
 .usage-query-section {
@@ -324,13 +313,6 @@ select.usage-select {
   margin-left: auto;
 }
 
-.usage-filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
 .usage-filter-select,
 .usage-export-menu {
   position: relative;
@@ -345,7 +327,7 @@ select.usage-select {
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
 }
 
@@ -402,13 +384,15 @@ select.usage-select {
   color: var(--muted);
 }
 
-.usage-value-picker__search > svg {
+.usage-value-picker__search > svg,
+.usage-filter-menu__query > svg {
   flex: none;
   width: 14px;
   height: 14px;
 }
 
-.usage-value-picker__search input {
+.usage-value-picker__search input,
+.usage-filter-menu__query input {
   flex: 1;
   min-width: 0;
   height: 100%;
@@ -421,7 +405,8 @@ select.usage-select {
   font-size: var(--control-ui-text-sm);
 }
 
-.usage-value-picker__search input::placeholder {
+.usage-value-picker__search input::placeholder,
+.usage-filter-menu__query input::placeholder {
   color: var(--text-tertiary);
 }
 
@@ -528,29 +513,6 @@ select.usage-select {
   color: var(--muted);
 }
 
-.usage-filter-menu__query > svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-}
-
-.usage-filter-menu__query input {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  padding: 0;
-  border: 0;
-  outline: 0;
-  background: none;
-  color: var(--text-strong);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-}
-
-.usage-filter-menu__query input::placeholder {
-  color: var(--text-tertiary);
-}
-
 .usage-filter-menu__suggestion {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
@@ -573,10 +535,6 @@ select.usage-select {
 
 .usage-filter-menu {
   margin-inline-start: auto;
-}
-
-.usage-filter-menu__trigger[aria-expanded="true"] {
-  background: var(--bg-hover);
 }
 
 /* Applied filters: their own row under the toolbar, one chip per field. */
@@ -707,6 +665,61 @@ select.usage-select {
   white-space: nowrap;
 }
 
+/* View settings live in one Display menu next to refresh. */
+.oc-menu.usage-display-menu__panel {
+  width: min(300px, calc(100dvw - 16px));
+  background: var(--bg-elevated);
+}
+
+.usage-display-menu__metric {
+  display: grid;
+  flex: none;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px 4px 6px;
+}
+
+.usage-display-menu__metric button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  cursor: var(--cursor-action);
+}
+
+.usage-display-menu__metric button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.usage-display-menu__metric button[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--menu-selected);
+  color: var(--text-strong);
+}
+
+.usage-display-menu__metric svg {
+  width: 15px;
+  height: 15px;
+}
+
+.usage-display-menu__value {
+  color: var(--muted);
+}
+
+/* The phone sheet trigger is a button; the desktop icon button owns its own open state. */
+.btn.usage-display-menu__trigger[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+
 .usage-filter-option {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -716,7 +729,7 @@ select.usage-select {
   min-height: var(--menu-item-height);
   border-radius: var(--menu-item-radius);
   background: transparent;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .usage-filter-option .oc-menu-item__check,
@@ -850,7 +863,7 @@ select.usage-select {
 }
 
 .usage-empty-state__title {
-  font-size: 20px;
+  font-size: calc(20px * var(--control-ui-text-scale));
   font-weight: 700;
   color: var(--text-strong);
 }
@@ -869,7 +882,7 @@ select.usage-select {
   border-radius: var(--radius-md);
   text-align: center;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .usage-empty-block--compact {
@@ -935,7 +948,7 @@ select.usage-select {
 .sessions-sort span,
 .cost-breakdown-header,
 .usage-mosaic-section-title {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
@@ -944,7 +957,7 @@ select.usage-select {
 
 .usage-summary-value,
 .session-summary-value {
-  font-size: clamp(1.4rem, 2vw, 1.85rem);
+  font-size: calc(clamp(1.4rem, 2vw, 1.85rem) * var(--control-ui-text-scale));
   line-height: 1.1;
   color: var(--text-strong);
   font-variant-numeric: tabular-nums;
@@ -952,7 +965,7 @@ select.usage-select {
 }
 
 .usage-summary-value--compact {
-  font-size: clamp(1.15rem, 1.5vw, 1.5rem);
+  font-size: calc(clamp(1.15rem, 1.5vw, 1.5rem) * var(--control-ui-text-scale));
   line-height: 1.15;
 }
 
@@ -972,7 +985,7 @@ select.usage-select {
 .session-summary-meta,
 .usage-list-sub,
 .usage-section-meta {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -990,7 +1003,7 @@ select.usage-select {
   background: transparent;
   color: var(--muted);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1;
   cursor: var(--cursor-action);
   opacity: 0.7;
@@ -1058,7 +1071,7 @@ select.usage-creator-filter {
   width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1183,7 +1196,7 @@ select.usage-creator-filter {
 .usage-heatmap__month,
 .usage-heatmap__weekday {
   fill: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .usage-heatmap__weekday {
@@ -1223,7 +1236,7 @@ select.usage-creator-filter {
   align-items: baseline;
   padding: 8px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 /* Insight rows: name and value, a share bar, then quiet detail; names never wrap mid-word. */
@@ -1323,12 +1336,12 @@ select.usage-creator-filter {
 }
 
 .session-detail-title {
-  font-size: 15px;
+  font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: 700;
 }
 
 .usage-mosaic-total {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -1353,7 +1366,7 @@ select.usage-creator-filter {
   grid-template-columns: 2.5rem minmax(0, 1fr) 4.5rem;
   align-items: center;
   gap: 10px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .usage-weekday__label {
@@ -1445,7 +1458,7 @@ select.usage-creator-filter {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 
@@ -1492,7 +1505,7 @@ select.usage-creator-filter {
 
 .cost-window__value {
   color: var(--text-strong);
-  font-size: 1.375rem;
+  font-size: calc(1.375rem * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   font-weight: 600;
   letter-spacing: -0.02em;
@@ -1809,7 +1822,7 @@ select.usage-creator-filter {
 
 .cost-breakdown-total,
 .context-total {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--text);
 }
 
@@ -1943,7 +1956,7 @@ select.usage-creator-filter {
   white-space: nowrap;
   color: var(--text-strong);
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   text-align: end;
 }
@@ -1969,7 +1982,7 @@ select.usage-creator-filter {
   align-items: center;
   gap: 8px 14px;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 /* The detail panel is a side column: its sections stack. */
@@ -2014,7 +2027,7 @@ select.usage-creator-filter {
 
 .ts-axis-label {
   fill: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .ts-bar {
@@ -2116,7 +2129,7 @@ select.usage-creator-filter {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 10px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .session-log-role {
@@ -2128,7 +2141,7 @@ select.usage-creator-filter {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
 }
 
@@ -2143,7 +2156,7 @@ select.usage-creator-filter {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--accent) 8%, var(--card));
   border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 :root[data-theme-mode="light"] .session-bar-row,
@@ -2197,7 +2210,7 @@ select.usage-creator-filter {
   }
 
   .usage-metric-badge strong {
-    font-size: 1.0625rem;
+    font-size: calc(1.0625rem * var(--control-ui-text-scale));
   }
 }
 
@@ -2245,7 +2258,6 @@ select.usage-creator-filter {
   }
 
   .usage-controls,
-  .usage-filter-row,
   .usage-filters-inline {
     align-items: stretch;
   }
@@ -2441,7 +2453,7 @@ select.usage-creator-filter {
 
   .usage-filter-sheet__facets .oc-menu-item__label > span:first-child {
     color: var(--muted);
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
     font-weight: 500;
   }
 
@@ -2454,7 +2466,7 @@ select.usage-creator-filter {
     border-radius: var(--field-radius);
     background: var(--field-bg);
     color: var(--text);
-    font-size: 16px;
+    font-size: var(--control-ui-text-lg);
     font-weight: var(--control-ui-font-weight-normal);
   }
 

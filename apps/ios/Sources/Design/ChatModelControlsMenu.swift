@@ -198,9 +198,9 @@ enum ChatVerbosityControlPresentation {
 
     static func label(levelID: String) -> String {
         switch levelID {
-        case "on": "Activity"
-        case "full": "Full"
-        default: "Off"
+        case "on": String(localized: "Activity")
+        case "full": String(localized: "Full")
+        default: String(localized: "Off")
         }
     }
 
@@ -261,7 +261,7 @@ struct ChatModelControlsMenuItems: View {
         let sections = self.viewModel.modelPickerSections
         return Group {
             ChatActionMenuSectionHeader(
-                title: "Model",
+                title: String(localized: "Model"),
                 detail: self.viewModel.modelSelectionTargetDescription)
             if self.viewModel.canSelectDefaultModel {
                 self.modelOption(
@@ -270,11 +270,11 @@ struct ChatModelControlsMenuItems: View {
                     selectionID: OpenClawChatViewModel.defaultModelSelectionID)
             }
             if !sections.pinned.isEmpty {
-                ChatActionMenuSectionHeader(title: "Pinned")
+                ChatActionMenuSectionHeader(title: String(localized: "Pinned"))
                 self.modelOptions(sections.pinned)
             }
             if !sections.recent.isEmpty {
-                ChatActionMenuSectionHeader(title: "Recent")
+                ChatActionMenuSectionHeader(title: String(localized: "Recent"))
                 self.modelOptions(sections.recent)
             }
             ForEach(sections.providers) { provider in
@@ -293,7 +293,7 @@ struct ChatModelControlsMenuItems: View {
             let isSelected = selectionID == option.id
             VStack(spacing: 0) {
                 ChatActionMenuSectionHeader(
-                    title: "Thinking",
+                    title: String(localized: "Thinking"),
                     resetAccessibilityIdentifier: selectionID == OpenClawChatViewModel.inheritedThinkingSelectionID
                         ? nil
                         : "chat-thinking-use-default",
@@ -330,7 +330,7 @@ struct ChatModelControlsMenuItems: View {
             options: options)
         return VStack(alignment: .leading, spacing: 4) {
             ChatActionMenuSectionHeader(
-                title: "Thinking",
+                title: String(localized: "Thinking"),
                 detail: valueLabel,
                 resetAccessibilityIdentifier: selectionID == OpenClawChatViewModel.inheritedThinkingSelectionID
                     ? nil

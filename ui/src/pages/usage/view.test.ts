@@ -6,7 +6,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
 import type { UsageProps } from "./types.ts";
-import { openUsageFilter, texts } from "./view-render.test-support.ts";
+import { openUsageDisplay, openUsageFilter, texts } from "./view-render.test-support.ts";
 import {
   usageMessages,
   buildAggregatesFromSessions,
@@ -78,6 +78,17 @@ function averageCostSummary(container: ParentNode) {
 }
 
 describe("renderUsage", () => {
+  it("renders the toolbar's filter, display and refresh actions as one row of icon buttons", () => {
+    const { container } = mountReactiveUsage(createUsageProps());
+    const actions = [...container.querySelectorAll(".usage-view-options button")];
+    expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Filters",
+      "Display",
+      "Refresh",
+    ]);
+    expect(actions.every((button) => button.matches(".oc-icon-button--32:not(.btn)"))).toBe(true);
+  });
+
   it("identifies each query removal action and removes only its named token", () => {
     const props = createUsageProps();
     props.filters.queryDraft = 'provider:openai "label:Team Planning"';
@@ -337,12 +348,15 @@ describe("renderUsage", () => {
     const { container, data, display, setData, setDisplay } = mountReactiveUsage(props);
     document.body.appendChild(container);
     onTestFinished(() => container.remove());
+    openUsageDisplay(container);
+    container.querySelector<HTMLButtonElement>(".usage-display-menu__trigger")!.click();
+    flush();
     const { dropdown } = openProviderFilter(container);
     const providerOptions = () =>
       dropdown.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]');
     const values = () => [...providerOptions()].map((option) => option.getAttribute("aria-label"));
     const chartModeButton = (label: string) =>
-      [...container.querySelectorAll<HTMLButtonElement>(".usage-view-options button")].find(
+      [...container.querySelectorAll<HTMLButtonElement>(".usage-display-menu__metric button")].find(
         (button) => button.textContent?.trim() === label,
       );
 

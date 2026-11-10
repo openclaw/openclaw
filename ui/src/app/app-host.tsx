@@ -6,11 +6,11 @@ import {
   pageTitleForRoute,
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
+import type { RouteId } from "../app-routes.ts";
 import "../components/app-topbar-solid.tsx";
 import "../components/assistant-panel-solid.tsx";
-import type { RouteId } from "../app-routes.ts";
-import "../components/resizable-divider.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
+import "../components/resizable-divider.ts";
 import type { CommandPaletteTargetDetail } from "../components/command-palette-contract.ts";
 import { askBrandLabel } from "../components/theme-brand-label.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -24,6 +24,7 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiKnownSelectedGlobalAgentId,
 } from "../lib/sessions/session-key.ts";
+import { pluginPageLabel } from "../pages/plugin/route.tsx";
 import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
 import type { ShellOwnedElements } from "./app-shell-components.ts";
@@ -461,7 +462,9 @@ export class ShellOwner
     let primaryContext =
       routeId === "custodian"
         ? askBrandLabel()
-        : pageTitleForRoute(routeId, context.nativeDeviceSettings?.snapshot);
+        : pageTitleForRoute(routeId, context.nativeDeviceSettings?.snapshot, () =>
+            pluginPageLabel(context, this.routeState.location),
+          );
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }

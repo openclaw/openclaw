@@ -23,7 +23,7 @@ export interface TemplateCreator {
   readonly subscribe: (listener: () => void) => () => void;
   retirePresentation(): void;
   start(agentId: string): Promise<void>;
-  open(agentId: string, draftId: string): void;
+  open(agentId: string, draftId: string, sessionKey?: string): void;
   updateChoices(next: TemplateDraftReviewChoices): void;
   publish(): Promise<void>;
   close(): void;
@@ -31,10 +31,16 @@ export interface TemplateCreator {
   retryReview(): void;
 }
 
-type PendingStart = { agentId: string; client: GatewayBrowserClient; revision: number };
+export type TemplateReviewTarget = { agentId: string; draftId: string; sessionKey: string };
+type PendingIntent = {
+  agentId: string;
+  client: GatewayBrowserClient;
+  revision: number;
+  review?: Omit<TemplateReviewTarget, "agentId">;
+};
 export type CreatorOwner = {
   flow: TemplateCreator | null;
-  pending: PendingStart | null;
+  pending: PendingIntent | null;
   loading: boolean;
   subscribe: (listener: () => void) => () => void;
   publish: () => void;

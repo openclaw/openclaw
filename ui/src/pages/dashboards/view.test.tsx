@@ -6,10 +6,16 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { DashboardGalleryFilters } from "./gallery-filters.ts";
-import { DashboardsView, type DashboardsRouteData } from "./view.tsx";
+import type { DashboardGalleryFilters, DashboardsRouteData } from "./gallery-filters.ts";
+import { DashboardsView } from "./view.tsx";
 
-const filters: DashboardGalleryFilters = { query: "", ownerIds: [], sort: "updated" };
+const filters: DashboardGalleryFilters = {
+  query: "",
+  ownerIds: [],
+  sort: "updated",
+  view: "grid",
+  group: "none",
+};
 const handlers = { onFilterChange: vi.fn() };
 
 const dashboard = {
@@ -34,6 +40,41 @@ function routeData(sessions: SessionsListResult["sessions"], basePath = ""): Das
     globalScope: false,
   };
 }
+
+it.each([
+  ["grid", "none", []],
+  ["list", "author", ["Author 0", "Author 1", "Author 2"]],
+] as const)("bounds the initial %s/%s gallery by cards", (view, group, headings) => {
+  const rows = Array.from({ length: 200 }, (_, index) => ({
+    ...dashboard,
+    key: `agent:main:dashboard:volume-${index}`,
+    displayName: `Volume ${index}`,
+    updatedAt: 200 - index,
+    createdActor: {
+      type: "human" as const,
+      id: `author-${Math.min(2, Math.floor(index / 5))}`,
+      label: `Author ${Math.min(2, Math.floor(index / 5))}`,
+    },
+  }));
+  const { container } = mountSolid(() => (
+    <DashboardsView
+      data={routeData(rows)}
+      readReady={() => undefined}
+      filters={{ ...filters, view, group }}
+      handlers={handlers}
+    />
+  ));
+
+  // Inspect the first render, before browser geometry admits virtual tracks.
+  const cards = container.querySelectorAll("[data-dashboard-session]");
+  expect(cards).toHaveLength(12);
+  expect(cards[11]?.getAttribute("data-dashboard-session")).toBe("agent:main:dashboard:volume-11");
+  expect(
+    [...container.querySelectorAll(".dashboards-group__heading > span")].map((heading) =>
+      heading.textContent?.trim(),
+    ),
+  ).toEqual(headings);
+});
 
 it.each([
   ["gallery", "[data-dashboard-session]", "Release health"],
@@ -99,7 +140,7 @@ it.each([
     <DashboardsView
       data={routeData([dashboard])}
       readReady={() => undefined}
-      filters={{ query: "", sort: selected.sort, ownerIds: [...selected.ownerIds] }}
+      filters={{ ...filters, sort: selected.sort, ownerIds: [...selected.ownerIds] }}
       handlers={handlers}
     />
   ));

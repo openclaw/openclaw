@@ -105,6 +105,31 @@ to appear. Never construct that allowlist from unreviewed snapshot strings.
 Do not substitute the ordinary two-file diff: its object labels and retaining paths are sensitive.
 Review the generated schema and output before exporting aggregates.
 
+### Measure a group of owner nodes
+
+For source-reviewed owners in one snapshot, supply a JSON object mapping reviewed
+group names to snapshot-local node IDs, for example `{"sessionOwners":[101,205]}`:
+
+```bash
+node scripts/heap-snapshot-diff.mjs --summary /path/to/capture.heapsnapshot \
+  --node-groups /path/to/reviewed-node-groups.json \
+  > /path/to/private-evidence/owner-groups.json
+```
+
+Each group's `retainedUnionBytes` unions the selected nodes' individually dominated
+subtrees. Duplicate IDs and nested selected nodes count once. Shared descendants
+dominated by none of the selected nodes are excluded: this is not the hypothetical
+memory freed by deleting all selected owners together. Different groups can overlap;
+do not sum them. The output distinguishes missing IDs, unreachable nodes, and an
+empty selection. IDs cannot be reused across independent snapshot captures.
+
+The synthetic-only `scripts/perf/idle-session-retention-owners.mjs` locates reviewed
+session, continuation, replica, and subagent owner shapes and submits complete groups
+to this analyzer. Run it with `<synthetic.heapsnapshot> <result.json>`. Its source-shape
+matches are candidates, not module provenance proofs; a missing owner is reported
+as unknown rather than zero. Per-node inspection is bounded, while group unions
+include every located ID.
+
 ### Attribute compiled code to scripts
 
 Use the aggregate-only code mode to rank compiled scripts and detect repeated

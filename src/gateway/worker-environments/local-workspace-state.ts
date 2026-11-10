@@ -17,6 +17,7 @@ import {
   selectLocalWorkspaceCheckpoint,
   stageLocalWorkspaceCheckpoint,
   createLocalWorkspaceCheckpointRejection,
+  type LocalWorkspaceSyncOptions,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
@@ -34,7 +35,7 @@ import type {
 } from "./local-workspace-manifest-scan.js";
 import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
-import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import type { LocalWorkspaceCapture, LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   loadStagedWorkspaceManifest,
@@ -210,12 +211,16 @@ export function projectionOperations(
     current();
     return snapshot;
   };
-  const scan = async (target: Direction): Promise<LocalWorkspaceManifestCheckpoint> => {
-    await assertLocalWorkspaceDirectory(sourcePath(target));
+  const scan = async (
+    target: Direction,
+    source?: LocalWorkspaceCapture,
+  ): Promise<LocalWorkspaceManifestCheckpoint> => {
+    await assertLocalWorkspaceDirectory(source?.root ?? sourcePath(target));
     const snapshot = await readManifest({
       kind: "scan",
       target,
       canonicalRoot: owner.worktree.path,
+      capture: source,
     });
     current();
     if (snapshot.kind !== "scan") {
@@ -268,17 +273,13 @@ export function projectionOperations(
       ...(selected.tree_root_digest ? { baseline_json: null } : {}),
     });
   };
-  const settle = async (
+  const settle = (...args: Parameters<typeof settlePending>) =>
+    rejection.settle(() => settlePending(...args), args[1]?.currentManifestRef);
+  const settlePending = async (
     retainAccepted = false,
     preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
-  ) =>
-    rejection.settle(
-      () => settlePending(retainAccepted, preparedSnapshot),
-      preparedSnapshot?.currentManifestRef,
-    );
-  const settlePending = async (
-    retainAccepted: boolean,
-    preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
+    afterCapture?: () => Promise<void>,
+    source?: LocalWorkspaceCapture,
   ) => {
     await recover();
     const conversionSource = current();
@@ -354,7 +355,7 @@ export function projectionOperations(
       await stageLocalWorkspaceCheckpoint(
         {
           root: owner.worktree.path,
-          stagingRoot: sourcePath(target),
+          stagingRoot: source?.root ?? sourcePath(target),
           stagedResultRef: selected.pending_ref,
           baseManifestRef: snapshot?.baseManifestRef ?? stagingBase!.manifestRef,
           currentManifestRef: snapshot?.currentManifestRef ?? legacy!.manifestRef,
@@ -372,6 +373,9 @@ export function projectionOperations(
     if (checkpoint && checkpoint.previousRoot !== selected.baseline_ref) {
       throw new Error("Local workspace checkpoint no longer matches its baseline");
     }
+    // The Git result now owns the command's bytes. Canonical-only reconciliation
+    // can run beside later guest writes; command completion still awaits acceptance.
+    await afterCapture?.();
     const refreshBaseline = refresh ? await baselineDocument() : undefined;
     let conflictPaths: string[] | undefined;
     await withStagedWorkerWorkspaceManifest(
@@ -473,13 +477,8 @@ export function projectionOperations(
       await cleanupAccepted();
     }
   };
-  const synchronize = (target: Direction, options?: { captureRejected?: true }) =>
-    rejection.synchronize({
-      target,
-      captureRejected: options?.captureRejected,
-      settle,
-      scan,
-    });
+  const synchronize = (target: Direction, options?: LocalWorkspaceSyncOptions) =>
+    rejection.synchronize({ target, ...options, settle, scan });
   const prepare = async (dependencies?: {
     sandbox: SandboxConfig;
     allocation: WorktreeAllocationGuard;

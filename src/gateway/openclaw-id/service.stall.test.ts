@@ -1,23 +1,14 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import { linkedClaw } from "./openclaw-id.test-support.js";
 import { createOpenClawIdService } from "./service.js";
 
-let stateDir: string | undefined;
-
 afterEach(() => {
   vi.restoreAllMocks();
-  if (stateDir) {
-    rmSync(stateDir, { recursive: true, force: true });
-  }
 });
 
 describe("OpenClaw ID lifecycle with a stalled Discovery", () => {
   it("turns off while a publication request never finishes, and cancels it", async () => {
-    stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-id-stall-"));
     const claw = await linkedClaw();
     await claw.authority.recordDiscovery({
       owner_account_id: "acct-owner",
@@ -42,7 +33,7 @@ describe("OpenClaw ID lifecycle with a stalled Discovery", () => {
     };
     const service = createOpenClawIdService({
       getConfig: () => config,
-      getStateDir: () => stateDir!,
+      getStateDir: () => claw.stateDir,
       getGatewayServer: () => undefined,
       log: { info: vi.fn(), warn: vi.fn() },
       createAuthority: async () => claw.authority,

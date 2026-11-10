@@ -33,6 +33,37 @@ const enLogin = {
       "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
     secretPlaceholder: "Paste the token or type the password",
     runOnHost: "Run on this computer",
+    browserPair: {
+      action: "Pair this browser",
+      open: "Pair with a code instead",
+      back: "Sign in with URL and secret",
+      intro:
+        "Pair your own browser for administrator access. This is not a guest invitation. Get a code here, then approve it on the Gateway host.",
+      runOnGatewayHost: "Run on the Gateway host",
+      reconnecting: "Connection interrupted. Retrying with the same code…",
+      cancelling: "Withdrawing the request on the Gateway…",
+      cancelled: "Pairing request withdrawn.",
+      cancelFailed:
+        "Could not confirm cancellation. The request may still be approved. Retry cancellation.",
+      retryCancel: "Retry cancellation",
+      alreadyApproved:
+        "This browser was already approved. Cancel did not revoke its access. Choose Continue to connect.",
+      continue: "Continue",
+      getCode: "Get a code",
+      starting: "Requesting a pairing code…",
+      waiting: "Waiting for approval. Keep this page open.",
+      identity: "Code {code} · Browser ID {id}",
+      failure: {
+        identityRequired:
+          "This Gateway requires a verified identity. Use its normal identity-aware sign-in instead of browser code pairing.",
+        declined: "This request was declined on the Gateway host.",
+        expired: "This code expired. Pair this browser again for a new one.",
+        busy: "Too many pairing requests right now. Wait a few minutes and try again.",
+        unavailable: "This Gateway could not start pairing. Reload the page and try again.",
+        noIdentity:
+          "This browser could not create its device key. Open this Gateway over HTTPS or localhost.",
+      },
+    },
     connection: {
       target: "Connecting to {host}",
       secretEntered: "secret entered",
@@ -122,6 +153,13 @@ const enLogin = {
         scopeTitle: "Approve the new access level",
         roleTitle: "Approve the new role",
         metadataTitle: "Re-approve this browser",
+        restoreTitle: "Approve this browser again",
+        restoreSummary:
+          "Couldn’t connect to {host} because this browser’s {role} access is no longer active. The request asks for the same access it had before, nothing new. Approve it on the computer running OpenClaw.",
+        roleSummary:
+          "Couldn’t connect to {host} because this browser is asking for the {role} role, which it doesn’t have yet. Approve the request on the computer running OpenClaw.",
+        scopeSummary:
+          "Couldn’t connect to {host} because this browser is asking for more access: {scopes}. Approve the request on the computer running OpenClaw.",
         summary:
           "Couldn’t connect to {host} until this browser is approved. Approve it on the computer running OpenClaw.",
         upgradeSummary:

@@ -390,7 +390,7 @@ export async function quiesceLocalWorkspace(params: {
       retired = true;
     },
     resume: async () => {
-      if (retired) {
+      if (retired || !paused.length) {
         return;
       }
       params.assertCurrent();
@@ -400,6 +400,7 @@ export async function quiesceLocalWorkspace(params: {
       params.assertCurrent();
       if (paused.length) {
         await params.persist([]);
+        paused = [];
       }
     },
   };

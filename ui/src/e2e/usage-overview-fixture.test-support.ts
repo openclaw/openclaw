@@ -129,3 +129,14 @@ export async function applyUsageQuery(page: Page, value: string) {
   await input.press("Enter");
   await page.locator(".usage-filter-menu__trigger").click();
 }
+
+export async function selectUsageTimeZone(page: Page, timeZone: "local" | "utc") {
+  await page.getByRole("button", { name: "Display", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Time zone", exact: true }).click();
+  const option = page.getByRole("menuitemradio", {
+    name: timeZone === "utc" ? "UTC" : "Local",
+    exact: true,
+  });
+  await option.click();
+  await option.waitFor({ state: "hidden" });
+}

@@ -198,6 +198,11 @@ disposable build/cache roots are excluded before hashing and result-size account
 their local bytes remain available to the sandbox. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
 
+Use `.openclaw/tmp/` for disposable output files that workspace file tools need
+to read or write later. Keep `TMPDIR`, `TMP`, and `TEMP` at their inherited system
+paths: native tools such as Chromium need short temporary paths for Unix sockets,
+and a deeply nested checkout can exceed that limit.
+
 pnpm can select `.openclaw/.pnpm-store/` when installing beneath a protected
 `.openclaw` mount and its home store cannot hard-link into that project.
 Managed binary installers use `.openclaw/tools/` for re-downloadable tools such as Crabbox.
@@ -315,15 +320,31 @@ are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
 from the live check. Checkpoints after commands and file mutations use the same
 check for the guest workspace: commands that leave accepted files unchanged do
-not pause the sandbox. Changed checkpoints still pause through capture and
-publication, including writes from background processes and termination handlers.
+not pause the sandbox. Small, fast workspaces capture directly into an immutable
+Git result. A probe taking at least half a second or an accepted inventory of at
+least 20,000 entries selects filesystem capture for private checkouts provisioned
+as btrfs subvolumes. These checkpoints settle pending recovery while paused, take
+a snapshot, then resume while the captured files are scanned and reconciled into
+the managed worktree. The first capture after substantial workspace growth can
+still use the direct path; later probes see the larger accepted inventory.
+Other checkouts pause until their files are stored in an immutable Git
+result. A snapshot that omits nested subvolumes is discarded and captured again
+under pause, preserving their contents. Command completion still waits for
+canonical acceptance, so a read after a completed command sees its saved changes.
+Later background writes remain in the private checkout for the next checkpoint.
+After acceptance and runtime resume, the workspace lease transfers the snapshot
+to a unique retired path for asynchronous cleanup. The next command can run while
+cleanup continues. Before another snapshot, capture admission waits for cleanup
+and retries any interrupted removal, keeping the cleanup backlog bounded.
+Snapshot creation may wait for dirty data to flush, so the short paused operation
+does not guarantee a fixed maximum pause duration.
 Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.
 Completed preparation results are not cached. Each caller retains its own
 cancellation and authority checks. OpenClaw records pending results and
-rollback journals in SQLite, and resumes
-only after settlement. New shell calls and command preparation wait for an active
+rollback journals in SQLite. Imports into the private checkout keep runtimes paused
+through settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
 hold that preparation lease for their entire lifetime. Files and assistant-media
 reads select the current backing without acquiring checkpoint custody or pausing
@@ -368,8 +389,12 @@ return to a supporting version before continuing guest work.
 With the OpenShell backend, `mirror` mode still uses the local workspace as the source of truth between exec turns, and `remote` mode uses the remote OpenShell workspace as the source of truth after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
-Later conversation turns load retained images from that same staged copy.
-Missing copies and paths outside the active sandbox remain unavailable.
+Image facts that retain a staged path load that copy on later turns; missing
+copies and paths outside the active sandbox remain unavailable. Admitted native
+attachments recorded only as managed `media://inbound/` references load their
+originals from the Gateway media store, including after a restart or workspace
+template reuse. They do not require a guessed sandbox filename. This does not
+grant file tools or image paths written in prompt text access to the host store.
 If a previously included image becomes unavailable, replay keeps a resend notice
 and stops retrying that image for the retained session decision. Resend the image
 as a new attachment to make another attempt; other attachments remain available.

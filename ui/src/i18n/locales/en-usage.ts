@@ -64,6 +64,13 @@ const enUsage = {
       isAnyOf: "is any of",
       hasErrors: "Has errors",
     },
+    display: {
+      title: "Display",
+      metric: "Metric",
+      breakdown: "Breakdown",
+      sessions: "Sessions",
+      pin: "Pin filters to top",
+    },
     query: {
       placeholder:
         "Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",

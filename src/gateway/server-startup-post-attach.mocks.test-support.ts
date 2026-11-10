@@ -2,6 +2,10 @@ import { vi } from "vitest";
 import type { PluginServicesHandle } from "../plugins/services.js";
 
 const postAttachMocks = vi.hoisted(() => {
+  const discoverResume: typeof import("./session-restart-resume.js").resumeMarkedSessions = async ({
+    onPrepared,
+  }) => onPrepared?.();
+  const resumeMarkedSessions = vi.fn(discoverResume);
   const commitInternalHooks = vi.fn(() => true);
   const startupHookEvent = { type: "gateway", action: "startup", sessionKey: "gateway:startup" };
   const updateCheck = {
@@ -32,7 +36,8 @@ const postAttachMocks = vi.hoisted(() => {
     createGatewayUpdateCheck: vi.fn(() => updateCheck),
     logGatewayStartup: vi.fn(),
     activateSubagentRegistry: vi.fn(async () => {}),
-    resumeMarkedSessions: vi.fn(async () => {}),
+    resumeMarkedSessions,
+    resetResume: () => resumeMarkedSessions.mockReset().mockImplementation(discoverResume),
     getAcpRuntimeBackend: vi.fn<(id?: string) => unknown>(() => null),
     reconcilePendingSessionIdentities: vi.fn(async () => ({ checked: 0, resolved: 0, failed: 0 })),
     isCliProvider: vi.fn(() => false),
