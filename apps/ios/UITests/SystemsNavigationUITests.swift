@@ -5,26 +5,25 @@ import XCTest
 final class SystemsNavigationUITests: XCTestCase {
     func testPinnedSystemsNavigatesToItsDashboardRoute() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "iPhone sidebar evidence")
-        let app = launchApp(pinnedPages: "overview,usage,cron,systems")
+        let app = self.launchApp(pinnedPages: "overview,usage,cron,systems")
         defer { app.terminate() }
 
         let systems = app.buttons["RootTabs.Sidebar.Destination.systems"]
         XCTAssertTrue(systems.waitForExistence(timeout: 10), app.debugDescription)
-        capture(app, named: "systems-pinned")
+        self.capture(app, named: "systems-pinned")
 
         systems.tap()
         let readiness = app.descendants(matching: .any)["RootTabs.Ready"].firstMatch
         let navigated = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value == %@", "ready:systems"),
-            object: readiness
-        )
+            object: readiness)
         XCTAssertEqual(XCTWaiter.wait(for: [navigated], timeout: 10), .completed)
-        capture(app, named: "systems-selected")
+        self.capture(app, named: "systems-selected")
     }
 
     func testSavedPinsRemainAuthoritativeAcrossUpgrade() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "iPhone sidebar evidence")
-        let app = launchApp(pinnedPages: "usage,overview,docs")
+        let app = self.launchApp(pinnedPages: "usage,overview,docs")
         defer { app.terminate() }
 
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Destination.usage"].waitForExistence(timeout: 10))
@@ -32,9 +31,8 @@ final class SystemsNavigationUITests: XCTestCase {
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Destination.docs"].exists)
         XCTAssertFalse(
             app.buttons["RootTabs.Sidebar.Destination.systems"].exists,
-            "An existing saved pin list must not gain Systems during upgrade"
-        )
-        capture(app, named: "systems-saved-pins-preserved")
+            "An existing saved pin list must not gain Systems during upgrade")
+        self.capture(app, named: "systems-saved-pins-preserved")
     }
 
     func testLiveGatewaySystemsDestinationOpensDashboard() throws {
@@ -42,8 +40,7 @@ final class SystemsNavigationUITests: XCTestCase {
         let environment = ProcessInfo.processInfo.environment
         try XCTSkipUnless(
             environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1",
-            "Requires an isolated live Gateway"
-        )
+            "Requires an isolated live Gateway")
         let setupCode = try XCTUnwrap(environment["OPENCLAW_IOS_LIVE_SETUP_CODE"])
 
         let app = XCUIApplication()
@@ -86,7 +83,7 @@ final class SystemsNavigationUITests: XCTestCase {
         XCTAssertTrue(dashboard.waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertTrue(dashboard.staticTexts["Systems"].waitForExistence(timeout: 60), app.debugDescription)
         XCTAssertFalse(app.descendants(matching: .any)["SettingsHub.Fallback"].exists)
-        capture(app, named: "systems-live-dashboard")
+        self.capture(app, named: "systems-live-dashboard")
     }
 
     private func launchApp(pinnedPages: String) -> XCUIApplication {
