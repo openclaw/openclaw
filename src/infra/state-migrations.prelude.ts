@@ -187,6 +187,14 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   ]);
   const entryStateChanges = (repaired: number) =>
     repaired > 0 ? [`Canonicalized entry state for ${repaired} durable session row(s).`] : [];
+  // Only a deferred update inspection reports warnings; Doctor --fix completes it later.
+  const entryStateResult = (report: { repaired: number; warnings?: string[] }) => ({
+    changes: entryStateChanges(report.repaired),
+    warnings: report.warnings ?? [],
+    ...(report.warnings
+      ? { warningDisposition: "recoverable" as const, outcome: "deferred" as const }
+      : {}),
+  });
 
   const sharedStep = (
     id: string,
@@ -246,10 +254,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
               inspectedEntryStatePaths = new Set(targets.map((target) => target.canonicalPath));
             },
           });
-          return {
-            changes: entryStateChanges(report.repaired),
-            warnings: [],
-          };
+          return entryStateResult(report);
         },
         undefined,
         "required",
@@ -278,7 +283,8 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
                 },
               });
               return {
-                completed: true,
+                // A deferred inspection leaves this target's media migration deferred too.
+                completed: !report.warnings,
                 changes: entryStateChanges(report.repaired),
               };
             } catch (error) {
@@ -317,10 +323,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
                 sqlitePath: target.path,
               })),
           });
-          return {
-            changes: entryStateChanges(report.repaired),
-            warnings: [],
-          };
+          return entryStateResult(report);
         },
         undefined,
         "required",

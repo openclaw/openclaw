@@ -1,0 +1,2 @@
+# Update session-entry inspection capacity: real captured WAL family, deferred activation, unchanged source, and fatal non-update/non-capacity controls.
+196

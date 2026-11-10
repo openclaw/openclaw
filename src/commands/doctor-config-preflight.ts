@@ -321,6 +321,7 @@ async function runDoctorConfigPreflightOperation(
         integrityCheck: options.integrityCheck,
       }),
     );
+    preflightWarnings.push(...(entryState.warnings ?? []));
     if (!repair && entryState.found > 0) {
       const { SessionStoreMigrationRequiredError } =
         await import("../config/sessions/migration-required.js");
@@ -456,12 +457,13 @@ async function runDoctorConfigPreflightOperation(
       ),
     );
     const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
-    await repairLegacySessionEntryStates({
+    const entryState = await repairLegacySessionEntryStates({
       apply: true,
       cfg: automaticConfigRepair?.config ?? baseConfig,
       env: process.env,
       integrityCheck: options.integrityCheck,
     });
+    preflightWarnings.push(...(entryState.warnings ?? []));
   }
   if (stateDirMigrations && options.doctorOnlyStateMigrations === true) {
     const { retireDoctorA2uiWidgets } = await import("./doctor-a2ui-widgets.js");
