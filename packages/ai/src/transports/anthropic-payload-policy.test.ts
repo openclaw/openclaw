@@ -8,6 +8,8 @@ import * as unicode from "../utils/sanitize-unicode.js";
 import {
   prepareSystemPrompt,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "../utils/system-prompt-cache-boundary.js";
 import { buildAnthropicRequest } from "./anthropic-messages.js";
 import {
@@ -159,4 +161,53 @@ it.each([
   expect(payload.context_management).toEqual({
     edits: [expect.objectContaining({ type: "clear_tool_uses_20250919", exclude_tools: excluded })],
   });
+});
+
+it("lets a new session read the dynamic system text that precedes its Runtime facts", async () => {
+  const cache_control = { type: "ephemeral" as const };
+  const systemPrompt = (session: string) =>
+    `Project context${SYSTEM_PROMPT_CACHE_BOUNDARY}## Tooling\nCall tools exactly.\n## Runtime${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime: agent=main | session=${session}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`;
+  const build = async (session: string, messages: unknown[]) =>
+    (
+      await buildAnthropicRequest(
+        anthropicModel,
+        { systemPrompt: systemPrompt(session), messages } as never,
+        { cacheRetention: "short" },
+        "transport",
+        false,
+        false,
+      )
+    ).params;
+  const user = { role: "user", content: "hello", timestamp: 0 };
+  const shared = { type: "text", text: "## Tooling\nCall tools exactly.\n## Runtime" };
+
+  // Opening request: the checkpoint sits before the session-owned Runtime facts, so the bytes it
+  // covers are the same for every session, and one history checkpoint remains for the message.
+  const [first, second] = await Promise.all([build("dm:a", [user]), build("dm:b", [user])]);
+  expect(first.system).toEqual([
+    { type: "text", text: "Project context", cache_control },
+    { ...shared, cache_control },
+    { type: "text", text: "Runtime: agent=main | session=dm:a" },
+  ]);
+  expect((second.system as unknown[]).slice(0, 2)).toEqual((first.system as unknown[]).slice(0, 2));
+  expect(JSON.stringify(first.messages).split('"cache_control"')).toHaveLength(2);
+
+  // Once the session has history, both history checkpoints return and the same blocks are sent
+  // without the extra system checkpoint.
+  const assistant = {
+    role: "assistant",
+    provider: anthropicModel.provider,
+    api: "anthropic-messages",
+    model: anthropicModel.id,
+    stopReason: "stop",
+    timestamp: 0,
+    content: [{ type: "text", text: "hi" }],
+  };
+  const later = await build("dm:a", [user, assistant, { ...user, content: "again" }]);
+  expect(later.system).toEqual([
+    { type: "text", text: "Project context", cache_control },
+    shared,
+    { type: "text", text: "Runtime: agent=main | session=dm:a" },
+  ]);
+  expect(JSON.stringify(later.messages).split('"cache_control"')).toHaveLength(3);
 });
