@@ -8,6 +8,7 @@ import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import { assertAgentDeletionWorkerPredicate } from "../state/agent-deletion.worker.js";
+import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import { createWorkspaceStateIdentity } from "./workspace-state-identity.js";
@@ -102,6 +103,7 @@ export function mergeWorkspaceSetupStateInDatabase(
   if (next.setupCompletedAt) {
     assertCanonicalTimestamp(next.setupCompletedAt, "setup completed");
   }
+  ensureColumn(database.db, "workspace_setup_state", "bootstrap_deferred INTEGER");
   const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
   const identity = resolution.identity;
   const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
