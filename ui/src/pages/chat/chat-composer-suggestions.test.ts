@@ -33,6 +33,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   resetChatViewState();
   replaceSlashCommands(buildFallbackSlashCommands());
@@ -272,7 +273,6 @@ describe("chat composer suggestion accessibility", () => {
 it("leaves mobile Return for editing even with slash suggestions open", async () => {
   const draft = "/res";
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
-  onTestFinished(() => vi.restoreAllMocks());
   replaceSlashCommands([
     { key: "reset", name: "reset", description: "Reset the session.", executeLocal: true },
   ]);
