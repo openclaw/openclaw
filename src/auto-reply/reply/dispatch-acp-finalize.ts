@@ -10,9 +10,9 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
-import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
+import { resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
 import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import type { AcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
@@ -43,7 +43,7 @@ export async function finalizeAcpTurnOutput(params: {
   });
   const accumulatedBlockTtsText = params.delivery.getAccumulatedBlockTtsText();
   const hasAccumulatedBlockText = accumulatedBlockTtsText.trim().length > 0;
-  const ttsStatus = resolveStatusTtsSnapshot({
+  const { autoMode } = resolveTtsSettingsSnapshot({
     cfg: params.cfg,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sessionAuto: params.sessionTtsAuto,
@@ -54,8 +54,8 @@ export async function finalizeAcpTurnOutput(params: {
   const canAttemptFinalTts =
     ttsMode === "final" &&
     hasAccumulatedBlockText &&
-    ttsStatus != null &&
-    !(ttsStatus.autoMode === "inbound" && !params.inboundAudio);
+    autoMode !== "off" &&
+    !(autoMode === "inbound" && !params.inboundAudio);
   const shouldDeferVisibleTextForTts = params.shouldDeferVisibleTextForTts && canAttemptFinalTts;
   const accumulatedVisibleBlockText = shouldDeferVisibleTextForTts
     ? cleanDeferredFinalText(accumulatedBlockTtsText)
