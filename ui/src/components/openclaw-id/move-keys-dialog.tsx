@@ -2,7 +2,7 @@
 // code typed here signs the new binding in this browser (lib/openclaw-id/rebind.ts), the
 // owner confirms the key fingerprints, and the Gateway stores it and publishes the new keys.
 import "./move-keys-dialog.css";
-import { createSignal, Match, Show, Switch } from "solid-js";
+import { createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
@@ -69,6 +69,19 @@ export function showMoveKeysDialog(params: {
       // Plain, not a signal: dismissal must see an operation the moment it starts. While one
       // runs the dialog stays open, so a commit's outcome is always shown, never dropped.
       let inFlight = false;
+      // Byte secrets are zeroed where they are made: signRebind zeroes the kit secret S and the
+      // derived seed, and R stays a non-extractable CryptoKey that is dropped. The typed code and
+      // the signed binding are JS strings, which cannot be overwritten: on close they are
+      // released here and scrubbed from the field, so nothing keeps them reachable.
+      let input: HTMLInputElement | undefined;
+      onSettled(() => () => {
+        if (input) {
+          input.value = "";
+          input.defaultValue = "";
+        }
+        setKit("");
+        setPlan(null);
+      });
       const run = async (operation: () => Promise<void>) => {
         inFlight = true;
         setBusy(true);
@@ -110,6 +123,7 @@ export function showMoveKeysDialog(params: {
             fail(cause);
             return;
           }
+          setPlan(null);
           showToast({ severity: "success", message: t("openclawId.moveKeysDone") });
           modal.finish(true);
         });
@@ -122,6 +136,8 @@ export function showMoveKeysDialog(params: {
         if (plan()) {
           void cancelRebind(params.client).catch(() => undefined);
         }
+        setPlan(null);
+        setKit("");
         modal.finish(false);
       };
 
@@ -173,6 +189,7 @@ export function showMoveKeysDialog(params: {
                   <label class="field">
                     <span>{t("openclawId.moveKeysKit")}</span>
                     <input
+                      ref={(element) => (input = element)}
                       type="password"
                       name="recovery-code"
                       autocomplete="off"
