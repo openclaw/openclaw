@@ -7,6 +7,7 @@ import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
@@ -19,6 +20,7 @@ import {
 } from "./file-mutation-queue.js";
 import { readRenderContext } from "./read-render.test-support.js";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.js";
+import { readToolInputSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 import { createWriteTool } from "./write.js";
 
@@ -218,6 +220,21 @@ console.log("headless-read-ok");`,
     const tool = createReadToolDefinition(tempDir);
     await expect(executeRead(tool, { path: ".", optional: true })).rejects.toThrow(
       "Read requires a file path, but . is a directory. List the directory, then read a specific file.",
+    );
+  });
+
+  it("accepts optional false and keeps missing required paths as errors", async () => {
+    expect(Value.Check(readToolInputSchema, { path: "notes.md", optional: false })).toBe(true);
+    expect(Value.Check(readToolInputSchema, { path: "notes.md", optional: true })).toBe(true);
+    expect(Value.Check(readToolInputSchema, { path: "notes.md" })).toBe(true);
+
+    const tempDir = tempDirs.make("openclaw-read-optional-false-");
+    await fs.writeFile(path.join(tempDir, "present.txt"), "hello");
+    const tool = createReadToolDefinition(tempDir);
+    const present = await executeRead(tool, { path: "present.txt", optional: false });
+    expect(textContent(present)).toContain("hello");
+    await expect(executeRead(tool, { path: "missing.txt", optional: false })).rejects.toThrow(
+      /ENOENT|no such file|not found/i,
     );
   });
 
