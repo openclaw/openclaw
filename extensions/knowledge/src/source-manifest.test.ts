@@ -93,10 +93,12 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   const newest = await plan(dir, current.output, current.output, old.output);
   expect(newest.items.changed).toEqual([]);
   expect(newest.items.unchanged).toEqual(["a", "b", "d"]);
-  const partial = await snapshot(dir, "partial", [], window, "partial");
-  const missing = await plan(dir, partial.output, current.output);
-  expect(missing.items.deleted).toEqual([]);
-  expect(missing.items.unresolved_missing).toEqual(["a", "b", "d"]);
+  for (const completeness of ["partial", "unknown"]) {
+    const partial = await snapshot(dir, completeness, [], window, completeness);
+    const missing = await plan(dir, partial.output, old.output);
+    expect(missing.items.deleted).toEqual([]);
+    expect(missing.items.unresolved_missing).toEqual(["a", "b", "c", "z"]);
+  }
   await expect(snapshot(dir, "duplicate", [rows[0], rows[0]], window)).rejects.toThrow(
     /Duplicate item id/,
   );
