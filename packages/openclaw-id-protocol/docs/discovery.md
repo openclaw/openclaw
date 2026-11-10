@@ -135,9 +135,7 @@ descriptor as one row. The request is signed by the same K_gw (a reset keeps it)
 
 ### Re-bind
 
-**Status: proposed (openclaw-bec).** The one write, the new K_gw's own signature and the
-snapshot order restart are implemented in Discovery (discovery#11); the owner-account code
-waits on a product decision.
+**Status: proposed (openclaw-bec); implementation in review (discovery#11).**
 
 After a re-bind on the machine (enrollment.md), the Gateway publishes a descriptor with the
 same root and a binding at a higher binding_seq that names a new K_srv and K_gw.
@@ -149,7 +147,7 @@ same root and a binding at a higher binding_seq that names a new K_srv and K_gw.
 - **Who may publish it.** A descriptor that keeps the stored K_gw must be signed by it. A
   descriptor that names a new K_gw must be signed by that new K_gw (the old one may be lost,
   and the Gateway proves it holds the key it moves to); the old K_gw cannot move the claw.
-- **Owner-account code (proposed, pending decision).** A descriptor that names a new K_gw must also carry `code`, a
+- **Owner-account code.** A descriptor that names a new K_gw must also carry `code`, a
   one-time enrollment code from the claw's owner account (`createEnrollmentCode`). A wrong
   account, used or expired code is `code_invalid`. Without it, anyone holding a leaked kit could
   move the claw to keys of their choosing at Discovery and lock the machine out, since an owner
@@ -161,6 +159,10 @@ same root and a binding at a higher binding_seq that names a new K_srv and K_gw.
   owner account and on the claw row version it read. A failed condition changes nothing and
   leaves the code unspent. So there is never a stored descriptor without a usable snapshot,
   and the member, owner, node and relay rows switch together.
+- **Reading the published binding.** `getPublishedDescriptor` answers the claw's stored
+  descriptor to a request carrying a live code from the owner account (any request key, so a
+  Gateway that lost every key Discovery knows can still ask). The code is not spent. The owner
+  verifies the binding with the root before using its binding_seq (enrollment.md, "Re-bind").
 - **Snapshot order restarts.** The snapshot stored with a new K_gw replaces the old one
   without the (`seq`, `issued_at`) comparison: the old one was signed by the retired key,
   which may have signed an inflated `seq` or a future `issued_at`. Later snapshots are ordered

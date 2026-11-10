@@ -84,8 +84,7 @@ devices) offer the expiry as an optional field.
 
 **Status: proposed; implementation in review.** The key rule is #196380, the ceremony and
 `openclaw id rebind` are #196388, and Discovery's one write is discovery#11. Still open: the
-owner-account code at Discovery, a cap on a retired K_gw's binding_seq, and the binding_seq
-after a backup restore. Pins already follow an R-signed ServerBinding at a higher binding_seq
+cap on a retired K_gw's binding_seq. Pins already follow an R-signed ServerBinding at a higher binding_seq
 (this package).
 
 A re-bind moves a claw to new machine keys under the **same** root R: R signs a new
@@ -152,23 +151,32 @@ Gateway cannot start at all, that is a separate repair.
    keys if they do not exist yet: K_gw' in `openclaw-id/gateway.key.next` (by the Gateway) and
    K_srv' in `openclaw-id/endpoint.key.next` (by the tunnel child in a one-shot `stage` run;
    the Gateway never reads a K_srv file). Returns `{ claw_id, hostname, root_pub, k_srv, k_gw,
-   binding_seq, root_epoch }` for the new binding, plus the current keys for display.
-   binding_seq is the stored binding's + 1, or a higher value the operator gives. Preparing
+   binding_seq, root_epoch }` for the new binding (binding_seq: the stored binding's + 1), the
+   current keys for display, and `published`: the descriptor Discovery publishes for the claw
+   (`getPublishedDescriptor`, read with the owner account's one-time code and signed by the
+   staged K_gw', since the current K_gw may be lost), or why it could not be read. Preparing
    again returns the same staged keys; cancelling deletes them. Prepare commits nothing.
 2. **Sign** (in the CLI process or the local Control UI browser). Decode the kit, derive R,
    check that fp(R) equals the claw's pinned root (else stop: "this kit is for another
-   claw"), show the old and new key fingerprints, sign the ServerBinding, drop R and S.
+   claw"). Verify Discovery's published binding with R as a fresh pin for this claw and
+   hostname. The binding_seq to sign is one above the higher of the stored binding and the
+   verified published one, so a machine restored from an older backup still moves above
+   Discovery. Published data that does not verify is an explicit error and is never used.
+   When Discovery cannot be read, the operator may give `--binding-seq`; a value at or below
+   any verified binding is refused. Show the old and new key fingerprints, sign the
+   ServerBinding, drop R and S.
 3. **Commit** (`rebind_commit`, local_operator). The authority checks, serialized with every
    other write: the binding verifies under the pinned root (`wrong_signer`, `bad_signature`);
    it names this claw and hostname and exactly the staged K_srv' and K_gw' (`target_mismatch`);
-   its binding_seq is the prepared one and above the stored one (`rollback`); both keys differ
+   its binding_seq is above the stored one (`rollback`); both keys differ
    from the stored binding's (`target_mismatch`). Accepted: the binding replaces the stored one
    in one write. From here the stored binding alone says which keys are current.
 4. **Activate.** The Gateway switches to K_gw' and restarts the tunnel child on K_srv'
    (promotion follows the key rule below, so a crash anywhere completes it on the next start).
    Every live tunnel connection closes with `shutdown` (code 0, reconnect allowed).
 5. **Publish** the descriptor and its snapshot **in one request**, signed by K_gw', with the
-   owner-account code (discovery.md, "Re-bind"). The snapshot has the new binding_seq and the
+   owner-account code (discovery.md, "Re-bind"). The Control UI gets the code from the
+   signed-in owner account, as linking does; the CLI asks for it (`--code`). The snapshot has the new binding_seq and the
    current membership `seq`. Discovery stores both or neither, so members, owners and nodes
    never see a descriptor without a matching snapshot. The Gateway keeps the code in memory
    for this publication and its retries and drops it once the publish is confirmed. If the code
@@ -238,10 +246,10 @@ claw id, fp(R) and hostname, none of the machine keys. The membership is unchang
   client whose pin moved past it (`rollback`). Only Discovery refuses an equal seq with other
   bytes (`conflict`); clients accept an equal seq, so a signer must never sign two different
   bindings at the same binding_seq (a restored or copied kit included).
-- **Restore from an older backup.** The local binding_seq can be below Discovery's.
-  Publication then fails with `stale_binding` or `conflict`; the operator re-binds again with
-  a binding_seq above Discovery's. (A restored older membership has its own seq problem,
-  outside this design.)
+- **Restore from an older backup.** The local binding_seq can be below Discovery's. The
+  re-bind signs above the binding Discovery publishes once it verified under R (step 2), so
+  no manual step is needed. (A restored older membership has its own seq problem, outside
+  this design.)
 - **Leaked old keys.** Discovery stops accepting the old K_gw at the descriptor publish, and
   no longer admits the old K_srv to the relay. A client that verified the new binding ignores
   anything signed by the old K_gw. A client still pinned to the old binding stays exposed as
