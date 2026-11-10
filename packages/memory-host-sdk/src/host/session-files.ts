@@ -582,7 +582,22 @@ export async function buildSessionEntryFromSnapshot(
         : {}),
     },
     snapshot,
-    sink,
+    {
+      ...sink,
+      // Each page and reset is a disclosure; a consumer may revoke authority mid-stream.
+      page: sink.page
+        ? (page) => {
+            assertCurrent();
+            return sink.page!(page);
+          }
+        : undefined,
+      reset: sink.reset
+        ? () => {
+            assertCurrent();
+            return sink.reset!();
+          }
+        : undefined,
+    },
   );
   assertCurrent();
   return result;
