@@ -37,13 +37,15 @@ export {
   type SystemAgentAssistantTurn,
 } from "./assistant-prompts.js";
 
+// OpenAI structured outputs in strict mode require every property to be listed in
+// `required`, so a reply-only plan expresses the absence of a command as null.
 const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
   type: "object",
   properties: {
     reply: { type: "string" },
-    command: { type: "string" },
+    command: { type: ["string", "null"] },
   },
-  required: ["reply"],
+  required: ["reply", "command"],
   additionalProperties: false,
 } as const;
 

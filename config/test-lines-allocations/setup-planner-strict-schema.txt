@@ -1,0 +1,2 @@
+# OpenAI strict mode requires every planner schema property in required.
+10
