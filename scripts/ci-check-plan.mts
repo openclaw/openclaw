@@ -31,6 +31,7 @@ type StripeRow = {
 type Matrix<Row> = { include: Row[] };
 
 export type CiCheckPlanInput = {
+  currentTarget?: boolean;
   changedBaseRef?: string;
   extensionLintMode?: "affected" | "full";
   preserveFullChecks?: boolean;
@@ -167,6 +168,13 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
         ? [
             {
               ...row,
+              // Only the qualified serial tail fits the smaller runner; root and core graphs retain capacity.
+              ...(input.currentTarget === true &&
+              hosted &&
+              row.runner_label === "blacksmith-4vcpu-ubuntu-2404" &&
+              other.every(({ name }) => name === "extensions-test" || name === "scripts")
+                ? { runner_label: "blacksmith-2vcpu-ubuntu-2404" }
+                : {}),
               core_type_graph_names_json: JSON.stringify(centralCore.map(({ name }) => name)),
               core_type_concurrency: !hosted && input.changedCoreTestPaths ? 2 : 1,
               type_graph_names_json: JSON.stringify(other.map(({ name }) => name)),
@@ -460,6 +468,7 @@ function parseInput(value: unknown): CiCheckPlanInput {
     throw new Error("Check planning requires its compiler boundary owner");
   }
   return {
+    currentTarget: value.currentTarget === true,
     ...(typeof value.changedBaseRef === "string" ? { changedBaseRef: value.changedBaseRef } : {}),
     ...(value.extensionLintMode === "affected" || value.extensionLintMode === "full"
       ? { extensionLintMode: value.extensionLintMode }

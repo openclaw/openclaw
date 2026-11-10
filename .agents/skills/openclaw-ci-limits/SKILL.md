@@ -801,6 +801,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   full seed. Keep byte, topology, runtime and exact output-path validation, the
   uncached path when no archive arrives, and existing job/worker limits.
 
+Current-target PR plans may request physical 2-vCPU runners for central type
+rows selecting only serial extension-test and script graphs. Root/core graphs,
+full-check fallbacks, and frozen/compatibility targets retain their capacity.
+Qualification uses `scripts/perf/ci-central-types-measure.py` on both sizes;
+preserve compiler limits, graph selection, and hosted routing.
+
 When changing one knob, update `docs/ci.md` and the guard test in the same PR.
 
 ## Blacksmith Outage Circuit Breaker

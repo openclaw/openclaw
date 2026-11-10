@@ -105,7 +105,12 @@ function runStep(
   });
 }
 
-function materializePlan(runnerProfile: string, rows: number, changedBaseRef?: string) {
+function materializePlan(
+  runnerProfile: string,
+  rows: number,
+  changedBaseRef?: string,
+  overrides: Partial<CiCheckPlanInput> = {},
+) {
   const input = planInput({
     ...(changedBaseRef !== undefined ? { changedBaseRef } : {}),
     typeGraphBoundaryOwner: "",
@@ -116,6 +121,7 @@ function materializePlan(runnerProfile: string, rows: number, changedBaseRef?: s
     // A null lint plan retains templates even when their runner profile disables them.
     lintCoreMatrix: stripeMatrix(rows ? 2 : 0),
     lintExtensionMatrix: stripeMatrix(rows ? 3 : 0),
+    ...overrides,
   });
   const output = join(tempDirs.make("ci-check-plan-"), "output");
   const workflow = readCiWorkflow();
@@ -306,6 +312,55 @@ it("retains the complete full-check stripe inventory", async () => {
   const plan = await createPlan({ preserveFullChecks: true });
   expect(plan.core_type_matrix).toEqual(stripeMatrix(5));
 });
+
+it.each([true, false])(
+  "preserves current-target sizing through workflow input: %s",
+  (currentTarget) => {
+    const { run, outputs } = materializePlan("hybrid", 0, undefined, {
+      currentTarget,
+      changedPaths: ["deleted.ts"],
+      typeGraphBoundaryOwner: "additional-checks",
+      coreTypeMatrix: stripeMatrix(5),
+      checkMatrix: {
+        include: [
+          { ...checks("prod-types").include[0]!, runner_label: "blacksmith-4vcpu-ubuntu-2404" },
+          { ...checks("test-types").include[0]!, runner_label: "blacksmith-4vcpu-ubuntu-2404" },
+        ],
+      },
+    });
+    expect(run.status, run.stderr).toBe(0);
+    expect(
+      JSON.parse(outputs.check_matrix).include.find(
+        (row: { task: string }) => row.task === "test-types",
+      ).runner_label,
+    ).toBe(`blacksmith-${currentTarget ? 2 : 4}vcpu-ubuntu-2404`);
+  },
+);
+
+it.each([
+  [true, "hybrid", false, "scripts", "blacksmith-2vcpu-ubuntu-2404"],
+  [true, "github", false, "scripts", "blacksmith-2vcpu-ubuntu-2404"],
+  [false, "hybrid", false, "scripts", "blacksmith-4vcpu-ubuntu-2404"],
+  [true, "hybrid", true, "scripts", "blacksmith-4vcpu-ubuntu-2404"],
+  [true, "blacksmith", false, "scripts", "blacksmith-4vcpu-ubuntu-2404"],
+  [true, "hybrid", false, "test-root-tooling", "blacksmith-4vcpu-ubuntu-2404"],
+] as const)(
+  "sizes only qualified serial type tails: %s/%s/%s/%s",
+  async (currentTarget, runnerProfile, preserveFullChecks, graph, expected) => {
+    typeSelection.graphs = resolveCiTsgoGraphs(["extensions-test", graph]);
+    const plan = await createPlan({
+      currentTarget,
+      runnerProfile,
+      preserveFullChecks,
+      checkMatrix: {
+        include: [
+          { ...checks("test-types").include[0]!, runner_label: "blacksmith-4vcpu-ubuntu-2404" },
+        ],
+      },
+    });
+    expect(plan.check_matrix.include[0]?.runner_label).toBe(expected);
+  },
+);
 
 it.each([undefined, "affected", "full"] as const)(
   "keeps broad guards and types while selecting tooling lint in %s mode",

@@ -1831,6 +1831,8 @@ const manifest = {
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
     ? JSON.stringify({
+        currentTarget:
+          !frozenTarget && !compatibilityTarget && workflowEventName !== "workflow_dispatch",
         ...(extensionLintMode
           ? {
               extensionLintMode,
