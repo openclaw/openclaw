@@ -138,6 +138,23 @@ const scenarios: UsageScenario[] = [
     },
     expectedCost: billedCost,
   })),
+  ...(
+    [
+      ["BYOK fee plus upstream inference cost", { upstream_inference_cost: 0.0009 }, 0.00095],
+      ["BYOK fee without upstream cost keeps estimate", {}, 0.000271],
+    ] as const
+  ).map(([name, cost_details, expectedCost]) => ({
+    name,
+    cost: tieredCost,
+    usage: wireUsage(101, 20, {
+      prompt_tokens_details: { cached_tokens: 76 },
+      cost: 0.00005,
+      is_byok: true,
+      cost_details,
+    }),
+    expectedUsage: tokenBuckets(25, 20, 76, 0),
+    expectedCost,
+  })),
   usageCase(
     "explicit zero reasoning tokens",
     wireUsage(10, 5, { completion_tokens_details: { reasoning_tokens: 0 } }),
