@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 
 const linuxRunnerTest = it.skipIf(process.platform === "win32");
@@ -62,32 +63,35 @@ if (args.includes("delete")) console.log(JSON.stringify({operation: {id: "bdop_"
       env: { ...env, ...extra },
       encoding: "utf8",
     });
-  const values = () =>
-    Object.fromEntries(
-      readFileSync(output, "utf8")
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+  const value = (name: "vm" | "runner" | "label") =>
+    expectDefined(
+      Object.fromEntries(
+        readFileSync(output, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+      )[name],
+      `Missing ${name} workflow output`,
     );
   const calls = () =>
     readFileSync(join(root, "calls"), "utf8")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as string[]);
-  return { run, values, calls };
+  return { run, value, calls };
 }
 
 linuxRunnerTest("publishes only public identities and cleans up both resources", () => {
   const f = fixture();
   expect(f.run("provision").status).toBe(0);
-  const vm = f.values().vm;
+  const vm = f.value("vm");
   expect(Object.keys(JSON.parse(vm)).toSorted()).toEqual(["createdAt", "id", "leaseID"]);
   expect(vm).not.toMatch(/fixture-secret|fixture-private-key/);
   expect(f.run("register", { BOAT_VM_RECEIPT: vm }).status).toBe(0);
-  expect(f.values().label).toBe(JSON.parse(f.values().runner).name);
+  expect(f.value("label")).toBe(JSON.parse(f.value("runner")).name);
   expect(
-    f.run("cleanup", { BOAT_VM_RECEIPT: vm, BOAT_RUNNER_RECEIPT: f.values().runner }).status,
+    f.run("cleanup", { BOAT_VM_RECEIPT: vm, BOAT_RUNNER_RECEIPT: f.value("runner") }).status,
   ).toBe(0);
   expect(f.calls().filter((args) => args.includes("delete"))).toHaveLength(1);
   expect(f.calls().filter((args) => args[1] === "unregister")).toHaveLength(1);
@@ -98,7 +102,7 @@ linuxRunnerTest.each(["short-ttl", "warmup-failed"])(
   (mode) => {
     const f = fixture(mode);
     expect(f.run("provision").status).not.toBe(0);
-    expect(JSON.parse(f.values().vm).id).toBe("bx_owned");
+    expect(JSON.parse(f.value("vm")).id).toBe("bx_owned");
     expect(f.calls().some((args) => args[1] === "register" && !args.includes("--help"))).toBe(
       false,
     );
@@ -108,12 +112,12 @@ linuxRunnerTest.each(["short-ttl", "warmup-failed"])(
 linuxRunnerTest("deletes the VM even when deregistration fails", () => {
   const f = fixture();
   expect(f.run("provision").status).toBe(0);
-  const vm = f.values().vm;
+  const vm = f.value("vm");
   expect(f.run("register", { BOAT_VM_RECEIPT: vm }).status).toBe(0);
   expect(
     f.run("cleanup", {
       BOAT_VM_RECEIPT: vm,
-      BOAT_RUNNER_RECEIPT: f.values().runner,
+      BOAT_RUNNER_RECEIPT: f.value("runner"),
       FIXTURE_MODE: "unregister-failed",
     }).status,
   ).not.toBe(0);
@@ -124,7 +128,7 @@ linuxRunnerTest("refuses to delete a VM whose creation identity changed", () => 
   const f = fixture();
   expect(f.run("provision").status).toBe(0);
   expect(
-    f.run("cleanup", { BOAT_VM_RECEIPT: f.values().vm, FIXTURE_MODE: "changed-vm" }).status,
+    f.run("cleanup", { BOAT_VM_RECEIPT: f.value("vm"), FIXTURE_MODE: "changed-vm" }).status,
   ).not.toBe(0);
   expect(f.calls().some((args) => args.includes("delete"))).toBe(false);
 });
