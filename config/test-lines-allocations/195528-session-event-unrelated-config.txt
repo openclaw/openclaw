@@ -1,2 +1,3 @@
-42
-# Regression coverage for unrelated-agent config publications and started exec completions.
+64
+# Regression coverage for unrelated-agent config publications, other agents' secret
+# references, and started exec completions.

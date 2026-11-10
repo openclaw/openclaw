@@ -20,6 +20,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronJobToolPolicyContext } from "../../cron/execution-context-admission.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import type { CronStoredJob } from "../../cron/types.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseConcreteConfigPathTokens } from "../../shared/dot-path.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
@@ -54,14 +55,14 @@ export function captureSessionEventConfigPolicy(
   let checkedConfig = config;
   let checkedPublication = publication;
   let changed = false;
-  let matches = captureScheduledSessionEventConfigPolicy(captured, agentId, job);
+  let matches = captureSessionEventConfigRelevance(captured, agentId, job);
   return {
     get changed() {
       return changed;
     },
     selectModel(selection: PolicySelection) {
       if (job) {
-        matches = captureScheduledSessionEventConfigPolicy(captured, agentId, job, selection);
+        matches = captureSessionEventConfigRelevance(captured, agentId, job, selection);
         // A fallback may consume auth that an earlier provider did not need.
         checkedConfig = config;
         checkedPublication = publication;
@@ -87,7 +88,7 @@ export function captureSessionEventConfigPolicy(
  * turn still owns its creator's channel ceilings and its automatic delivery route.
  * Unscheduled events use the same facts without a creator, so a publication that only
  * changes another agent does not refuse this agent's event. */
-export function captureScheduledSessionEventConfigPolicy(
+export function captureSessionEventConfigRelevance(
   config: OpenClawConfig,
   agentId: string,
   job: CronStoredJob | undefined,
@@ -231,6 +232,10 @@ export function captureScheduledSessionEventConfigPolicy(
             ? profiles.has(key)
             : tokens[1] !== "order" || relevantAuthProvider(key))
         );
+      }
+      if (tokens?.[0] === "agents" && tokens[1] === "entries" && typeof tokens[2] === "string") {
+        // Matches the projection, which keeps only this agent's entry.
+        return normalizeAgentId(tokens[2]) === normalizeAgentId(agentId);
       }
       return (
         tokens?.[0] !== "channels" ||

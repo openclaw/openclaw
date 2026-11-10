@@ -14,7 +14,7 @@ import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
-  captureScheduledSessionEventConfigPolicy,
+  captureSessionEventConfigRelevance,
   captureSessionEventConfigPolicy,
 } from "./session-event-policy.js";
 import { getSessionEventRuntimeConfig } from "./session-event-target.js";
@@ -44,6 +44,28 @@ it.each([
 );
 
 it.each([
+  ["another agent's", "other", true],
+  ["its own agent's", "main", false],
+] as const)("keeps an unscheduled event across %s env secret reference", (_owner, id, retained) => {
+  const before: OpenClawConfig = { agents: { entries: { main: {}, other: {} } } };
+  const after = structuredClone(before);
+  setConfigResolutionFacts(before, createConfigResolutionFacts([]));
+  setConfigResolutionFacts(
+    after,
+    createConfigResolutionFacts(
+      [],
+      new Map([[`agents.entries.${id}.tts.providers.voice.apiKey`, "SYNTHETIC_TTS_KEY"]]),
+    ),
+  );
+  const check = captureSessionEventConfigRelevance(
+    captureRuntimeConfigWithSource(before, before),
+    "main",
+    undefined,
+  );
+  expect(check(captureRuntimeConfigWithSource(after, after), [])).toBe(retained);
+});
+
+it.each([
   ["openclaw", false, true],
   ["openclaw", true, false],
   ["codex", false, false],
@@ -64,7 +86,7 @@ it.each([
         new Map([["mcp.servers.sentry.env.TOKEN", "SYNTHETIC_MCP_TOKEN"]]),
       ),
     );
-    const check = captureScheduledSessionEventConfigPolicy(
+    const check = captureSessionEventConfigRelevance(
       captureRuntimeConfigWithSource(before, config("${BEFORE_COMMAND}")),
       "main",
       makeCronJob({}),
@@ -152,7 +174,7 @@ it.each([
   withPluginMetadataSnapshotScope(
     metadata,
     () => {
-      const check = captureScheduledSessionEventConfigPolicy(captured, "main", makeCronJob({}), {
+      const check = captureSessionEventConfigRelevance(captured, "main", makeCronJob({}), {
         provider: scenario === "auth source expression" ? "upstream" : "route",
         model: "model",
       });
