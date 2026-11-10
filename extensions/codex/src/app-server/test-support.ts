@@ -235,7 +235,7 @@ function readCodexInjectedDeveloperText(params: unknown): string | undefined {
 export function isCodexTurnContextHandoff(params: unknown): boolean {
   return (
     readCodexInjectedDeveloperText(params)?.startsWith(
-      "OpenClaw conversation instructions for this turn, superseding earlier versions of this section delivered as developer instructions:",
+      "## OpenClaw conversation instructions\n\n",
     ) === true
   );
 }

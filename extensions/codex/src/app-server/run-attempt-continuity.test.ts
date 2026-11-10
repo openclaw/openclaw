@@ -84,9 +84,13 @@ it("retains a protected parent through private completion and owner reentry", as
       expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-1");
       const request = harness.requests.findLast(({ method }) => method === "turn/start")?.params;
       const instructions = continuity.readManagedInstructions(harness.client, request);
-      expect(instructions).toContain(
+      const conversation = instructions.match(
+        /## OpenClaw conversation instructions\n\n[^\n]+\n\n<openclaw_conversation_instructions>\n\n([\s\S]*?)\n\n<\/openclaw_conversation_instructions>$/,
+      )?.[1];
+      expect(conversation).toContain(
         text ?? "No additional conversation instructions for this turn.",
       );
+      expect(conversation).toContain("Current OpenClaw tool bindings for this turn");
       expect(instructions).not.toContain(
         index === 2 ? "Owner conversation context." : "Private completion context.",
       );
