@@ -289,6 +289,14 @@ type SessionEntryCore = SessionEntryProvenance &
       source: { packageName: string; version?: string };
       agentConfig: import("../types.agents.js").AgentEntryConfig;
       workspaceIdentity: string;
+      /** Verified intent recorded before instructions or config can change. */
+      preparing?: {
+        agentConfig: import("../types.agents.js").AgentEntryConfig;
+        planDigest: string;
+        sourceIntegrity: string;
+        /** Only previously absent files (digest) and directories (null). */
+        workspaceAdditions: Record<string, string | null>;
+      };
       configured?: { planDigest: string; sourceIntegrity: string };
     };
     /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
