@@ -462,10 +462,7 @@ function readBoard(row: Row): PersistedWorkboardBoard {
     | undefined;
   // sessions_spec holds the kind-specific column spec: Sessions columns, or Cards presentation.
   // SAFETY: Cards board registration serializes the validated columns unchanged.
-  const columns =
-    kind === "sessions"
-      ? undefined
-      : (parseJson(row.sessions_spec) as PersistedWorkboardBoard["board"]["columns"] | undefined);
+  const columns = parseJson(row.sessions_spec) as PersistedWorkboardBoard["board"]["columns"];
   return {
     version: 1,
     board: definedFields({
@@ -474,7 +471,7 @@ function readBoard(row: Row): PersistedWorkboardBoard {
       ...(kind === "sessions"
         ? { sessions: normalizeWorkboardSessionsBoardSpec(parseJson(row.sessions_spec)) }
         : {}),
-      ...(columns ? { columns } : {}),
+      ...(kind !== "sessions" && columns ? { columns } : {}),
       name: stringValue(row, "name"),
       description: stringValue(row, "description"),
       icon: stringValue(row, "icon"),

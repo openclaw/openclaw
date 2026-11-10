@@ -341,7 +341,7 @@ export type WorkboardCardsBoardColumns = {
 const MAX_COLUMN_LABEL_LENGTH = 40;
 
 function isStatus(value: unknown): value is WorkboardStatus {
-  return WORKBOARD_STATUSES.includes(value as WorkboardStatus);
+  return WORKBOARD_STATUSES.some((status) => status === value);
 }
 
 /** Validates Cards board columns at the write boundary; throws a user-facing message. */
@@ -379,16 +379,14 @@ export function parseWorkboardCardsBoardColumns(value: unknown): WorkboardCardsB
       parsedLabels[status] = trimmed;
     }
   }
-  if (
-    emptyColumnMode !== undefined &&
-    !WORKBOARD_EMPTY_COLUMN_MODES.includes(emptyColumnMode as WorkboardEmptyColumnMode)
-  ) {
+  const mode = WORKBOARD_EMPTY_COLUMN_MODES.find((candidate) => candidate === emptyColumnMode);
+  if (emptyColumnMode !== undefined && !mode) {
     throw new Error("board columns.emptyColumnMode must be show, collapse or hide.");
   }
   return {
     visible: [...visible],
     ...(Object.keys(parsedLabels).length ? { labels: parsedLabels } : {}),
-    ...(emptyColumnMode ? { emptyColumnMode: emptyColumnMode as WorkboardEmptyColumnMode } : {}),
+    ...(mode ? { emptyColumnMode: mode } : {}),
   };
 }
 
