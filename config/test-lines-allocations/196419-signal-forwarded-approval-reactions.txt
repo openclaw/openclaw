@@ -1,0 +1,4 @@
+# Signal regression for exec and plugin approvals forwarded to a Signal target: the delivered
+# prompt carries the checked reaction hint and binds 👍 to allow-once, and without reaction
+# approvers the manual text is unchanged. Exact net growth for PR #196419.
+66
