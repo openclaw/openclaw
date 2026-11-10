@@ -223,7 +223,7 @@ password, token, device, or other ingress authentication. Static non-OCE users
 retain the normal trusted-proxy behavior. OCE checks its live session and Agent
 permissions; the Gateway checks its own live profile and authorization policy.
 Credential-file replacement or removal invalidates admitted grants when the
-one-second file watcher observes the change. Reconnect with a current grant;
+one-second credential-file poll observes the change. Reconnect with a current grant;
 restoring a previous key does not revive old connections.
 
 ## Per-identity scope grants

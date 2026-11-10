@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -161,4 +162,26 @@ it("invalidates old grants through credential replacement and restoration", asyn
     { timeout: 3000 },
   );
   expect(isGatewayAuthPolicyCurrent(policy, cfg)).toBe(false);
+  const restored = await authorizeHttpGatewayConnect({
+    auth: resolveGatewayAuth({ authConfig: cfg.gateway?.auth }),
+    req: request(),
+    trustedProxies: cfg.gateway?.trustedProxies,
+  });
+  expect(restored.ok).toBe(true);
+  const restoredPolicy = captureGatewayAuthPolicy(cfg, {
+    role: "operator",
+    authMethod: restored.method,
+    verifiedIdentity: restored.user,
+    delegation: restored.delegation,
+  });
+  // An unchanged polling cycle must retain current grants, not revoke on every tick.
+  await delay(1100);
+  expect(isGatewayAuthPolicyCurrent(restoredPolicy, cfg)).toBe(true);
+  // Replacing the file is a new credential revision even when its bytes are unchanged.
+  const replacement = `${credentialFile}.next`;
+  writeFileSync(replacement, key, { mode: 0o600 });
+  renameSync(replacement, credentialFile);
+  await vi.waitFor(() => expect(isGatewayAuthPolicyCurrent(restoredPolicy, cfg)).toBe(false), {
+    timeout: 3000,
+  });
 });
