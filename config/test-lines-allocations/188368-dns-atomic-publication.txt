@@ -1,4 +1,6 @@
 # CoreDNS configuration publication: atomic staged replacement with privilege
 # fallback, destination inspection under privilege, and access-policy
-# preservation regressions for PR #188368.
-685
+# preservation regressions for PR #188368. The budget covers the publication
+# regressions, the privileged-path failure coverage and the access-policy
+# ordering contract.
+901

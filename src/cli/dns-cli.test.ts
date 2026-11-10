@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -59,10 +60,95 @@ import * as tailnet from "../infra/tailnet.js";
 import { replaceWideAreaZoneFile } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { registerDnsCli } from "./dns-cli.js";
+import { privilegedInspectionScript, registerDnsCli } from "./dns-cli.js";
+
+const nodeRequire = createRequire(import.meta.url);
 
 function spawnOk(stdout = "") {
   return { stdout, stderr: "", pid: 1, output: [], status: 0, signal: null };
+}
+
+/**
+ * List an access policy the way the system's ls does.
+ *
+ * Hosts without macOS ACL semantics have no policy to report, so the listing
+ * stays empty there instead of inventing entries.
+ */
+function listAccessPolicy(target: string): { stdout: string; stderr: string; status: number } {
+  if (realPlatform !== "darwin") {
+    return { stdout: "", stderr: "", status: 0 };
+  }
+  const listed = actualSpawnSync("/bin/ls", ["-lde", target], { encoding: "utf-8" });
+  return {
+    stdout: listed.stdout ?? "",
+    stderr: listed.stderr ?? "",
+    status: listed.status ?? 0,
+  };
+}
+
+/**
+ * Run the production inspection script in-process.
+ *
+ * The privileged inspection runs as its own root process, so the mock replays
+ * the very script the CLI runs instead of an imitation of it: the access
+ * policy it reports is the production parser's own result.
+ */
+function runInspectionScript(
+  script: string,
+  targetPath: string,
+  policy: (target: string) => { stdout: string; stderr: string; status: number } = listAccessPolicy,
+): {
+  stdout: string;
+  stderr: string;
+  status: number;
+} {
+  let stdout = "";
+  let stderr = "";
+  const fakeProcess = {
+    argv: ["node", "-e", script, targetPath],
+    stdout: {
+      write: (chunk: string) => {
+        stdout += chunk;
+      },
+    },
+    stderr: {
+      write: (chunk: string) => {
+        stderr += chunk;
+      },
+    },
+    exit: (code: number) => {
+      throw new Error(`the inspection script exited with ${code}`);
+    },
+  };
+  const fakeRequire = (id: string) => {
+    if (id === "node:child_process") {
+      return {
+        spawnSync: (cmd: string, args: string[]) =>
+          cmd === "/bin/ls"
+            ? policy(args.at(-1) ?? "")
+            : actualSpawnSync(cmd, args, { encoding: "utf-8" }),
+      };
+    }
+    return nodeRequire(id);
+  };
+  try {
+    new Function("process", "require", script)(fakeProcess, fakeRequire);
+    return { stdout, stderr, status: 0 };
+  } catch (error) {
+    return {
+      stdout,
+      stderr: stderr || (error instanceof Error ? error.message : String(error)),
+      status: 1,
+    };
+  }
+}
+
+/** The access-policy entries of an `ls -lde` listing, in their recorded order. */
+function accessPolicyEntries(listing: string): string[] {
+  return listing
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^\d+:\s/.test(line));
 }
 
 function isBrewPrefixProbe(call: unknown[]): boolean {
@@ -123,7 +209,7 @@ describe("dns-cli probe bounds", () => {
       if (isBrewPrefixProbe([cmd, args])) {
         return spawnOk(`${brewPrefix}\n`);
       }
-      if (cmd === "sudo" && args[0] === process.execPath && args[1] === "-e") {
+      if (cmd === "sudo" && args[1] === "-e") {
         const script = args[2];
         if (typeof script !== "string") {
           return spawnOk();
@@ -132,80 +218,18 @@ describe("dns-cli probe bounds", () => {
           return spawnOk();
         }
         if (script.includes("lstatSync")) {
-          const requested = args[3];
+          const requested = args.at(-1);
           if (typeof requested !== "string") {
             return spawnOk();
           }
-          try {
-            let cur = path.resolve(requested);
-            for (let hops = 0; hops < 32; hops += 1) {
-              const st = fs.lstatSync(cur, { throwIfNoEntry: false });
-              if (!st?.isSymbolicLink()) {
-                break;
-              }
-              const link = fs.readlinkSync(cur);
-              cur = path.isAbsolute(link) ? link : path.join(path.dirname(cur), link);
-            }
-            const inspected = fs.statSync(cur, { throwIfNoEntry: false });
-            let acl: string[] = [];
-            if (realPlatform === "darwin") {
-              const listed = actualSpawnSync("/bin/ls", ["-lde", cur], { encoding: "utf-8" });
-              if (listed.status !== 0) {
-                return { ...spawnOk(), status: 1, stderr: listed.stderr ?? "" };
-              }
-              acl = (listed.stdout ?? "")
-                .split("\n")
-                .map((line) => line.trim())
-                .filter((line) => /^\d+:\s/.test(line))
-                .map((line) => line.replace(/^\d+:\s*/, ""));
-            }
-            // Fresh destinations carry the parent's inherited policy in the
-            // real inspection; the emulation keeps it empty off macOS.
-            let inheritedParent: string[] = [];
-            if (realPlatform === "darwin" && !inspected) {
-              const parentListing = actualSpawnSync("/bin/ls", ["-lde", path.dirname(cur)], {
-                encoding: "utf-8",
-              });
-              inheritedParent = (parentListing.stdout ?? "")
-                .split("\n")
-                .map((line) => line.trim())
-                .filter((line) => /^\d+:\s/.test(line) && line.includes("file_inherit"))
-                .map((line) =>
-                  line
-                    .replace(/^\d+:\s*/, "")
-                    .replace(/file_inherit/g, "")
-                    .replace(/directory_inherit/g, "")
-                    .replace(/limit_inherit/g, "")
-                    .replace(/only_inherit/g, "")
-                    .replace(/\s+/g, " ")
-                    .trim(),
-                )
-                .filter((entry) => entry.length > 0);
-            }
-            return spawnOk(
-              JSON.stringify({
-                target: cur,
-                existing: inspected
-                  ? {
-                      uid: inspected.uid,
-                      gid: inspected.gid,
-                      mode: inspected.mode & 0o7777,
-                    }
-                  : undefined,
-                acl,
-                inheritedParent,
-              }),
-            );
-          } catch {
-            return spawnOk(
-              JSON.stringify({
-                target: requested,
-                existing: undefined,
-                acl: [],
-                inheritedParent: [],
-              }),
-            );
-          }
+          // The production script runs here, so the reported policy is the
+          // production parser's own result and cannot drift from it.
+          const inspected = runInspectionScript(script, requested);
+          return {
+            ...spawnOk(inspected.stdout),
+            status: inspected.status,
+            stderr: inspected.stderr,
+          };
         }
         return spawnOk();
       }
@@ -252,6 +276,38 @@ describe("dns-cli probe bounds", () => {
         } catch (error) {
           return { ...spawnOk(), status: 1, error: error as Error };
         }
+      }
+      if (cmd === "sudo" && args[0] === "/bin/chmod") {
+        // The privileged path restores the access policy and strips the
+        // inherited grants with the same tools the operator's file uses, so
+        // both have to run for real.
+        const form = args[1];
+        if (form === "+a#" || form === "+a") {
+          return actualSpawnSync("chmod", args.slice(1), { encoding: "utf-8" });
+        }
+        if (form === "-N") {
+          if (realPlatform !== "darwin") {
+            return spawnOk();
+          }
+          return actualSpawnSync("chmod", args.slice(1), { encoding: "utf-8" });
+        }
+        return spawnOk();
+      }
+      if (cmd === "sudo" && args[0] === "chown") {
+        const [owner, target] = args.slice(1);
+        if (typeof owner === "string" && typeof target === "string") {
+          const [uidText, gidText] = owner.split(":");
+          try {
+            fs.chownSync(
+              target,
+              Number.parseInt(uidText ?? "", 10),
+              Number.parseInt(gidText ?? "", 10),
+            );
+          } catch {
+            // Hosts without POSIX ownership keep the call, not the effect.
+          }
+        }
+        return spawnOk();
       }
       if (cmd === "sudo" && args[0] === "chmod") {
         const [mode, target] = args.slice(1);
@@ -331,7 +387,65 @@ describe("dns-cli probe bounds", () => {
     const failure = new Error("zone publication failed");
     vi.mocked(replaceWideAreaZoneFile).mockRejectedValueOnce(failure);
     await expect(runDnsSetup()).rejects.toBe(failure);
-    expect(spawnSyncMock.mock.calls.filter(([cmd]) => cmd === "sudo")).toEqual([]);
+    // The restart is the claim. A POSIX host publishes the configuration
+    // unprivileged, so no privileged step is attempted there either; a Windows
+    // host cannot reproduce the POSIX mode semantics and takes the privileged
+    // fallback instead.
+    expect(spawnSyncMock).not.toHaveBeenCalledWith(
+      "sudo",
+      ["brew", "services", "restart", "coredns"],
+      expect.anything(),
+    );
+    if (realPlatform !== "win32") {
+      expect(spawnSyncMock.mock.calls.filter(([cmd]) => cmd === "sudo")).toEqual([]);
+    }
+  });
+
+  // The privileged inspection runs as its own process, so the contract of its
+  // script is pinned here: the access policy travels as positional records,
+  // and the inherited entries are renumbered, because the parent's index is
+  // not the staged file's index.
+  it("reports the access policy as positional records", () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const corefilePath = path.join(etcDir, "Corefile");
+    fs.mkdirSync(etcDir, { recursive: true });
+    fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
+    const listings: Record<string, string> = {
+      [corefilePath]: "0: user:nobody deny read\n1: group:staff allow read\n",
+      [etcDir]:
+        "0: group:admin deny delete\n1: group:admin deny write,file_inherit\n2: user:alice allow read,file_inherit\n",
+    };
+    const policy = (target: string) => ({ stdout: listings[target] ?? "", stderr: "", status: 0 });
+    const script = privilegedInspectionScript();
+
+    const inspected = runInspectionScript(script, corefilePath, policy);
+    expect(inspected.status).toBe(0);
+    const parsed = JSON.parse(inspected.stdout) as {
+      target: string;
+      existing: { uid: number; gid: number; mode: number } | undefined;
+      acl: { position: number; entry: string }[];
+      inheritedParent: { position: number; entry: string }[];
+    };
+    expect(parsed.target).toBe(corefilePath);
+    expect(parsed.existing).toBeDefined();
+    expect(parsed.acl).toEqual([
+      { position: 0, entry: "user:nobody deny read" },
+      { position: 1, entry: "group:staff allow read" },
+    ]);
+    expect(parsed.inheritedParent).toEqual([]);
+
+    // A destination that does not exist yet inherits its directory's policy.
+    // The inherited entries are renumbered contiguously, because the restore
+    // inserts them at the recorded position.
+    const fresh = runInspectionScript(script, path.join(etcDir, ".server"), policy);
+    expect(fresh.status).toBe(0);
+    const freshParsed = JSON.parse(fresh.stdout) as {
+      inheritedParent: { position: number; entry: string }[];
+    };
+    expect(freshParsed.inheritedParent).toEqual([
+      { position: 0, entry: "group:admin deny write" },
+      { position: 1, entry: "user:alice allow read" },
+    ]);
   });
 
   // The privileged first creation runs the real inspection script end to end:
@@ -516,7 +630,7 @@ describe("dns-cli probe bounds", () => {
 
   // macOS carries per-file ACLs beside the mode; a replacement inode does not
   // inherit them, so the access policy has to be restored explicitly.
-  it.runIf(process.platform === "darwin")(
+  it.runIf(realPlatform === "darwin")(
     "keeps the operator's macOS access policy across a publication",
     async () => {
       const etcDir = path.join(brewPrefix, "etc", "coredns");
@@ -555,10 +669,49 @@ describe("dns-cli probe bounds", () => {
     },
   );
 
+  // The publication restores the access policy at the recorded positions:
+  // chmod +a would canonicalize the order, and an allow that moved in front
+  // of a deny would hand the excluded account its read back.
+  it.runIf(realPlatform === "darwin")(
+    "keeps the access-policy order across a publication",
+    async () => {
+      const etcDir = path.join(brewPrefix, "etc", "coredns");
+      const corefilePath = path.join(etcDir, "Corefile");
+      fs.chmodSync(brewPrefix, 0o755);
+      fs.mkdirSync(etcDir, { recursive: true });
+      fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
+      fs.chmodSync(corefilePath, 0o644);
+      // The allow is added first, so the deny ends up in front of it: that is
+      // the order the publication has to preserve.
+      const allowed = actualSpawnSync("chmod", ["+a", "group:staff allow read", corefilePath], {
+        encoding: "utf-8",
+      });
+      expect(allowed.status).toBe(0);
+      const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", corefilePath], {
+        encoding: "utf-8",
+      });
+      expect(denied.status).toBe(0);
+      const before = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
+      const beforeEntries = accessPolicyEntries(before.stdout ?? "");
+      expect(beforeEntries.length).toBe(2);
+
+      await runDnsSetup();
+
+      const after = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
+      // The same entries at the same positions: the order survived the
+      // replacement of the file.
+      expect(accessPolicyEntries(after.stdout ?? "")).toEqual(beforeEntries);
+      const asReader = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", corefilePath], {
+        encoding: "utf-8",
+      });
+      expect(asReader.status).not.toBe(0);
+    },
+  );
+
   // The same policy preservation on the symlinked managed target: the link
   // survives, the target's deny entry survives, and the excluded principal is
   // still refused after the target is replaced.
-  it.runIf(process.platform === "darwin")(
+  it.runIf(realPlatform === "darwin")(
     "keeps the managed target's access policy across a symlinked publication",
     async () => {
       const etcDir = path.join(brewPrefix, "etc", "coredns");
@@ -620,6 +773,9 @@ describe("dns-cli probe bounds", () => {
 
     expect(fs.readFileSync(corefilePath, "utf-8")).toBe(original);
     expect(fs.readdirSync(etcDir).filter((entry) => entry.startsWith("."))).toEqual([]);
+    // The privileged fallback was not attempted: a failure that is not a
+    // permission failure must not escalate into a root publication.
+    expect(spawnSyncMock.mock.calls.filter(([cmd]) => cmd === "sudo")).toEqual([]);
     // CoreDNS was not restarted.
     expect(spawnSyncMock).not.toHaveBeenCalledWith(
       "sudo",
@@ -630,7 +786,7 @@ describe("dns-cli probe bounds", () => {
 
   // A capture failure must not silently strip the operator's policy: the
   // publication aborts with the operator's file untouched.
-  it.runIf(process.platform === "darwin")(
+  it.runIf(realPlatform === "darwin")(
     "aborts the publication when the access policy cannot be captured",
     async () => {
       const etcDir = path.join(brewPrefix, "etc", "coredns");
@@ -738,6 +894,7 @@ describe("dns-cli probe bounds", () => {
       fs.mkdirSync(etcDir, { recursive: true });
       fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
       fs.chmodSync(corefilePath, 0o640);
+      const corefileStats = fs.statSync(corefilePath);
       // Model a Corefile whose group the invoking account cannot set (a real
       // POSIX refusal that unprivileged CI cannot arrange): the ordinary
       // publisher's ownership hand-off fails EPERM and publication routes
@@ -767,6 +924,16 @@ describe("dns-cli probe bounds", () => {
       const teeIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "tee");
       expect(installIndex).toBeGreaterThanOrEqual(0);
       expect(teeIndex).toBeGreaterThan(installIndex);
+      // The ownership hand-off ran with the operator's captured ids, before
+      // the rename published the staged file.
+      const chownIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "chown");
+      const moveIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "mv");
+      expect(chownIndex).toBeGreaterThan(teeIndex);
+      expect(chownIndex).toBeLessThan(moveIndex);
+      const owner = corefileStats.uid;
+      expect((sudoCalls[chownIndex]?.[1] as string[] | undefined)?.[1]).toBe(
+        `${owner}:${corefileStats.gid}`,
+      );
       // The privileged publisher flushed the staged bytes before publishing.
       // macOS `sync` ignores path operands, so the flush runs a descriptor
       // synchronization through the same runtime that owns the command.
@@ -774,16 +941,66 @@ describe("dns-cli probe bounds", () => {
         .map((call, index) => ({ call, index }))
         .filter(
           ({ call }) =>
-            (call[1] as string[])[0] === process.execPath &&
             (call[1] as string[])[1] === "-e" &&
             ((call[1] as string[])[2] ?? "").includes("fsyncSync"),
         )
         .map(({ index }) => index);
-      const moveIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "mv");
       expect(flushIndexes.length).toBeGreaterThanOrEqual(2);
-      expect(flushIndexes[0]!).toBeLessThan(moveIndex);
-      expect(flushIndexes[1]!).toBeGreaterThan(moveIndex);
+      expect(flushIndexes.at(0) ?? -1).toBeLessThan(moveIndex);
+      expect(flushIndexes.at(1) ?? -1).toBeGreaterThan(moveIndex);
       expect(fs.readdirSync(etcDir).filter((entry) => entry.startsWith(".Corefile"))).toEqual([]);
+    },
+  );
+
+  // A failure inside the privileged publication must leave the operator's file
+  // exactly as it was: the rename is the last step, and everything before it
+  // happens on the staged copy.
+  unix(
+    "leaves the operator's Corefile untouched when the privileged publication fails",
+    { timeout: 30_000 },
+    async () => {
+      const etcDir = path.join(brewPrefix, "etc", "coredns");
+      const corefilePath = path.join(etcDir, "Corefile");
+      const original = ".:53 {\n  errors\n}\n";
+      fs.mkdirSync(etcDir, { recursive: true });
+      fs.writeFileSync(corefilePath, original);
+      fs.chmodSync(corefilePath, 0o640);
+      // The ordinary publisher's ownership hand-off fails EPERM, so the
+      // publication routes through the privileged staged path.
+      const chownSpy = vi.spyOn(fs, "chownSync").mockImplementation(() => {
+        throw Object.assign(new Error("EPERM: operation not permitted, chown"), {
+          code: "EPERM",
+        });
+      });
+      // The rename is where the privileged publication can still fail.
+      const baseImplementation =
+        spawnSyncMock.getMockImplementation() ??
+        (() => {
+          throw new Error("spawnSync was called before the test primed the mock");
+        });
+      spawnSyncMock.mockImplementation((cmd: string, args: string[], opts?: { input?: string }) => {
+        if (cmd === "sudo" && args[0] === "mv") {
+          return { ...spawnOk(), status: 1, stderr: "mv: Operation not permitted" };
+        }
+        return baseImplementation(cmd, args, opts);
+      });
+
+      try {
+        await expect(runDnsSetup()).rejects.toThrow(/mv/);
+      } finally {
+        chownSpy.mockRestore();
+        spawnSyncMock.mockImplementation(baseImplementation);
+      }
+
+      // The operator's file is byte-identical, no staging sibling survived and
+      // CoreDNS was not restarted.
+      expect(fs.readFileSync(corefilePath, "utf-8")).toBe(original);
+      expect(fs.readdirSync(etcDir).filter((entry) => entry.startsWith("."))).toEqual([]);
+      expect(spawnSyncMock).not.toHaveBeenCalledWith(
+        "sudo",
+        ["brew", "services", "restart", "coredns"],
+        expect.anything(),
+      );
     },
   );
 

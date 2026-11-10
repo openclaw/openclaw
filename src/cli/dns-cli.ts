@@ -1,4 +1,5 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,7 @@ import {
 } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import {
@@ -170,11 +172,14 @@ function readInheritedMacOsAclEntries(dirPath: string): MacOsAclEntry[] {
   return readMacOsAclEntries(dirPath)
     .filter((captured) => captured.entry.includes("file_inherit"))
     .map((captured) => ({
+      // The inheritance flags are comma-separated from the access list, so the
+      // separator goes with them: the re-appliable entry must not keep a
+      // trailing comma, which the access policy parser rejects.
       entry: captured.entry
-        .replace(/\bfile_inherit\b/g, "")
-        .replace(/\bdirectory_inherit\b/g, "")
-        .replace(/\blimit_inherit\b/g, "")
-        .replace(/\bonly_inherit\b/g, "")
+        .replace(/,?\s*\bfile_inherit\b/g, "")
+        .replace(/,?\s*\bdirectory_inherit\b/g, "")
+        .replace(/,?\s*\blimit_inherit\b/g, "")
+        .replace(/,?\s*\bonly_inherit\b/g, "")
         .replace(/\s+/g, " ")
         .trim(),
     }))
@@ -307,20 +312,54 @@ function publishConfigFile(filePath: string, content: string): void {
 }
 
 /**
+ * Resolve the JavaScript runtime that runs the privileged helper scripts.
+ *
+ * The helper scripts run as root, so the runtime has to be able to evaluate a
+ * script. The standalone build runs the CLI as a single executable, and that
+ * executable cannot evaluate a script at all, so a system runtime is used
+ * there instead of running the CLI itself as root. The runtime stays the
+ * operator's own: an account that can replace it could already run it with
+ * sudo, so the accepted risk is the operator's toolchain, not another account.
+ */
+function privilegedRuntime(): string {
+  const candidates = [
+    process.execPath,
+    "/usr/local/bin/node",
+    "/opt/homebrew/bin/node",
+    "/usr/bin/node",
+    "/usr/local/bin/bun",
+    "/opt/homebrew/bin/bun",
+    "/usr/bin/bun",
+  ];
+  for (const candidate of candidates) {
+    if (!isNodeRuntime(candidate) && !isBunRuntime(candidate)) {
+      continue;
+    }
+    const stats = fs.statSync(candidate, { throwIfNoEntry: false });
+    if (stats && !stats.isDirectory()) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    "the privileged publication needs a Node or Bun runtime to run its helper scripts: install one (for example `brew install node`) or publish the CoreDNS configuration as root",
+  );
+}
+
+/**
  * Flush a path's data as root before it is published.
  *
- * macOS `sync` ignores pathname operands and only schedules a global sync that
- * may return before the flush completes, so the descriptor has to be
+ * macOS `sync` ignores pathname operands and only schedules a global sync
+ * that may return before the flush completes, so the descriptor has to be
  * synchronized explicitly. The repository's atomic writer does the same for
  * unprivileged publication.
  */
 function flushPrivileged(targetPath: string): void {
   const script = [
     'const fs = require("node:fs");',
-    'const fd = fs.openSync(process.argv[1], "r");',
+    'const fd = fs.openSync(process.argv[process.argv.length - 1], "r");',
     "try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }",
   ].join("");
-  const flushed = spawnSync("sudo", [process.execPath, "-e", script, targetPath], {
+  const flushed = spawnSync("sudo", [privilegedRuntime(), "-e", script, targetPath], {
     encoding: "utf-8",
     stdio: ["ignore", "ignore", "inherit"],
   });
@@ -342,13 +381,21 @@ export function privilegedInspectionScript(): string {
   return [
     'const fs = require("node:fs");',
     'const path = require("node:path");',
-    "let cur = path.resolve(process.argv[1]);",
-    "for (let hops = 0; hops < 32; hops += 1) {",
+    "const targetPath = process.argv[process.argv.length - 1];",
+    "let cur = path.resolve(targetPath);",
+    "let hops = 0;",
+    "for (; hops < 32; hops += 1) {",
     "  let st;",
     '  try { st = fs.lstatSync(cur); } catch (error) { if (error && error.code === "ENOENT") break; throw error; }',
     "  if (!st.isSymbolicLink()) break;",
     "  const link = fs.readlinkSync(cur);",
     "  cur = path.isAbsolute(link) ? link : path.join(path.dirname(cur), link);",
+    "}",
+    // A chain that does not resolve is not a destination to publish through:
+    // continuing would replace the link with a regular file.
+    "if (hops >= 32) {",
+    '  process.stderr.write("CoreDNS configuration symlink chain is too deep to publish through\\n");',
+    "  process.exit(1);",
     "}",
     "let existing;",
     "let inheritedParent = [];",
@@ -356,12 +403,21 @@ export function privilegedInspectionScript(): string {
     "  const st = fs.statSync(cur);",
     "  existing = { uid: st.uid, gid: st.gid, mode: st.mode & 0o7777 };",
     "} catch (error) {",
+    // Only a missing destination is a first creation; any other failure means
+    // the destination could not be read, and its metadata must not be guessed.
+    '  if (!error || error.code !== "ENOENT") {',
+    '    process.stderr.write("could not read the destination metadata: " + String(error && error.message ? error.message : error) + "\\n");',
+    "    process.exit(1);",
+    "  }",
     '  const parent = require("node:child_process").spawnSync("/bin/ls", ["-lde", path.dirname(cur)], { encoding: "utf-8" });',
     "  if (parent.status !== 0) {",
     '  process.stderr.write((parent.stderr || "ls -lde failed") + "\\n");',
     "    process.exit(1);",
     "  }",
-    '  inheritedParent = String(parent.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line) && line.includes("file_inherit")).map((line) => ({ position: Number.parseInt(line, 10), entry: line.replace(/^\\d+:\\s*/, "").replace(/\\bfile_inherit\\b/g, "").replace(/\\bdirectory_inherit\\b/g, "").replace(/\\blimit_inherit\\b/g, "").replace(/\\bonly_inherit\\b/g, "").replace(/\\binherited\\b/g, "").replace(/\\s+/g, " ").trim() })).filter((item) => item.entry.length > 0);',
+    // The inherited entries are renumbered contiguously: the parent's index is
+    // not the staged file's index, and the restore inserts at the recorded
+    // position, so the parent's numbering would place them wrongly.
+    '  inheritedParent = String(parent.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line) && line.includes("file_inherit")).map((line) => line.replace(/^\\d+:\\s*/, "").replace(/,?\\s*\\bfile_inherit\\b/g, "").replace(/,?\\s*\\bdirectory_inherit\\b/g, "").replace(/,?\\s*\\blimit_inherit\\b/g, "").replace(/,?\\s*\\bonly_inherit\\b/g, "").replace(/\\binherited\\b/g, "").replace(/\\s+/g, " ").trim()).filter((entry) => entry.length > 0).map((entry, index) => ({ position: index, entry }));',
     "}",
     // A destination that does not exist yet is a privileged first creation:
     // there is no policy to capture, and ls would fail on the missing path.
@@ -385,7 +441,7 @@ function inspectPrivilegedDestination(filePath: string): {
   inheritedParentEntries: MacOsAclEntry[];
 } {
   const script = privilegedInspectionScript();
-  const inspected = spawnSync("sudo", [process.execPath, "-e", script, filePath], {
+  const inspected = spawnSync("sudo", [privilegedRuntime(), "-e", script, filePath], {
     encoding: "utf-8",
   });
   assertSpawnSucceeded("privileged destination inspection", inspected);
@@ -412,9 +468,12 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
   // cannot reach a root-owned parent, and ordinary publication captures it
   // directly.
   const inheritedEntries = existing ? [] : inheritedParentEntries;
+  // The staging name carries a random component: the destination directory can
+  // be writable by other accounts, and a predictable name would let one of
+  // them place a file at the staging path before the privileged steps run.
   const tempPath = path.join(
     path.dirname(target),
-    `.${path.basename(target)}.openclaw-${process.pid}.tmp`,
+    `.${path.basename(target)}.openclaw-${process.pid}-${randomUUID()}.tmp`,
   );
   try {
     // Stage privately before any configuration byte exists: the staging file
