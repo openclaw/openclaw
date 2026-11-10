@@ -1,0 +1,3 @@
+# Raw-base64 and data-URL regressions for buffer-only Discord thread-reply (issue #196689).
+# Exact net test-line growth.
+23

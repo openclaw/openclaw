@@ -214,6 +214,29 @@ describe("handleDiscordMessageAction", () => {
     await expectRejected(error, "upload-file", { to: "channel:123", ...params });
   });
 
+  const threadReplyBufferError =
+    'Use action: "send" for base64 buffer attachments; thread-reply requires filePath, path, or media.';
+  it.each([
+    ["raw base64", Buffer.from("monthly-close").toString("base64")],
+    ["data-URL", `data:application/pdf;base64,${Buffer.from("monthly-close").toString("base64")}`],
+  ] as const)(
+    "rejects buffer-only thread-reply (%s) before any Discord send",
+    async (_kind, buffer) => {
+      await expectRejected(
+        threadReplyBufferError,
+        "thread-reply",
+        {
+          threadId: "channel-1",
+          message: "monthly close",
+          filename: "a.pdf",
+          mimeType: "application/pdf",
+          buffer,
+        },
+        { cfg: discordConfig({ threads: true }), ...threadContext },
+      );
+    },
+  );
+
   it.each(["thread-reply", "send"] as const)(
     "classifies %s only in the active adopted thread",
     async (action) => {

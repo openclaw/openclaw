@@ -262,6 +262,12 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       readStringParam(actionParams, "media", { trim: false }) ??
       readStringParam(actionParams, "path", { trim: false }) ??
       readStringParam(actionParams, "filePath", { trim: false });
+    // Buffer attachments are send-only; thread-reply covers existing file/media sources.
+    if (!mediaUrl && readStringParam(actionParams, "buffer", { trim: false })) {
+      throw new Error(
+        'Use action: "send" for base64 buffer attachments; thread-reply requires filePath, path, or media.',
+      );
+    }
     const replyTo = readStringParam(actionParams, "replyTo");
 
     // `message.thread-reply` (tool) uses `threadId`, while the CLI historically used `to`/`channelId`.
