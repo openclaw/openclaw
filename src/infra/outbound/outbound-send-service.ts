@@ -138,6 +138,8 @@ export async function executeSendAction(params: SendActionParams): Promise<{
   payload: unknown;
   /** Exact text handed to the direct transport after core normalization and hooks. */
   deliveredText?: string;
+  /** Confirmed visible content after adapter preparation and delivery hooks. */
+  deliveredPayloads?: ReplyPayload[];
   toolResult?: AgentToolResult<unknown>;
   sendResult?: MessageSendResult;
 }> {
@@ -251,7 +253,10 @@ export async function executeSendAction(params: SendActionParams): Promise<{
       throw error;
     }
     if (pluginHandled) {
-      return pluginHandled;
+      return {
+        ...pluginHandled,
+        deliveredPayloads: [{ ...defaultPayload, text: pluginMessage }],
+      };
     }
   }
 
@@ -340,6 +345,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     handledBy: "core",
     payload: result,
     ...(deliveredText ? { deliveredText } : {}),
+    deliveredPayloads,
     sendResult: result,
   };
 }

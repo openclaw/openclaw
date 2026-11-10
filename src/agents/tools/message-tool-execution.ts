@@ -31,6 +31,7 @@ import { withChannelReadAuthority } from "../../shared/channel-read-authority.js
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
+import { resolveMessageToolSourceReplyFinal } from "../embedded-agent-message-tool-source-reply.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
@@ -304,6 +305,8 @@ function* createMessageToolSteps(
       // not be dispatched to a provider or participate in idempotency.
       const requestedSourceReplyFinal =
         typeof params.final === "boolean" ? params.final : undefined;
+      const sourceReplyFinal =
+        action === "send" ? resolveMessageToolSourceReplyFinal(params) : requestedSourceReplyFinal;
       delete params.final;
 
       const suppressedVisiblePayloadReason = sanitizeMessageToolVisiblePayload(
@@ -553,7 +556,6 @@ function* createMessageToolSteps(
         : params;
       const hasExactSourceTurn =
         action === "send" &&
-        sourceReplySinkDeliveryMode === "message_tool_only" &&
         normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
       return await withChannelReadAuthority(
         action === "download-file" || scheduledRead || assertDashboardReadCurrent
@@ -600,8 +602,10 @@ function* createMessageToolSteps(
                   // Only an admitted channel source can arm terminal restart reconciliation.
                   // Source-less scheduled and ambient sends remain ordinary message actions.
                   sourceReplyFinal: hasExactSourceTurn
-                    ? (requestedSourceReplyFinal ?? true)
-                    : undefined,
+                    ? sourceReplyFinal
+                    : action === "send" && sourceReplyFinal === false
+                      ? false
+                      : undefined,
                   sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
                   onActionDenied: (error, channel, receiptDiscriminator) =>
                     decisions.recordTypedDenial(
@@ -666,7 +670,7 @@ function* createMessageToolSteps(
             sessionKey: options?.agentSessionKey,
             toolContext,
             deliveredPayload: result.payload,
-            sourceReplyFinal: requestedSourceReplyFinal,
+            sourceReplyFinal,
             replyToIsExplicit: Boolean(readToolStringParam(actionParams, "replyTo")),
           };
           const currentSourceReply =
@@ -693,11 +697,11 @@ function* createMessageToolSteps(
             result,
             currentSourceReply,
           );
-          groupThread.record(result, sourceReply, currentSourceReply, requestedSourceReplyFinal);
+          groupThread.record(result, sourceReply, currentSourceReply, sourceReplyFinal);
           if (
             messageDelivery?.status === "settled" &&
             !messageDelivery.partialDelivery &&
-            requestedSourceReplyFinal !== false &&
+            sourceReplyFinal !== false &&
             !result.dryRun &&
             currentSourceReply
           ) {

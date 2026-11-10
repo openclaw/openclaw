@@ -22,6 +22,7 @@ import {
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
@@ -30,6 +31,7 @@ import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citati
 import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import {
   messageActionRequesterMediaContext,
@@ -62,6 +64,12 @@ import {
   materializeMessagePresentationFallback,
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import {
+  isDeliveredCurrentSourceReply,
+  mirrorDeliveredSourceReplyToTranscript,
+} from "./source-reply-mirror.js";
+
+const log = createSubsystemLogger("outbound/message-action");
 
 function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["type"] {
   return value === "image" || value === "audio" || value === "video" || value === "file"
@@ -557,6 +565,28 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
 
+  const sourceReplyMirror = {
+    action,
+    channel,
+    actionParams: params,
+    cfg,
+    accountId,
+    agentId,
+    currentAccountId: input.messageActionAuthorization?.requesterAccountId,
+    sessionKey: input.sourceReplySessionKey ?? input.sessionKey,
+    sessionId: input.sessionId,
+    toolContext: input.messageActionAuthorization?.toolContext,
+    idempotencyKey: ctx.idempotencyKey,
+    sourceReplyFinal: input.sourceReplyFinal,
+    toolCallId: input.sourceReplyToolCallId,
+    replyToIsExplicit: reply?.source === "explicit",
+  };
+  // Baseline destination mirroring predates the source-reply receipt owner.
+  // A matching source gets one source-aware row, not a second generic mirror.
+  // This is only routing selection; actual receipt matching still follows delivery.
+  const sourceOwnsTranscript =
+    input.sourceReplyFinal !== undefined && isDeliveredCurrentSourceReply(sourceReplyMirror);
+
   const send = await executeSendAction({
     ctx: {
       ...ctx,
@@ -574,7 +604,10 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
               text: sendPayload.message,
               mediaUrls: sendPayload.mediaUrls,
             }
-          : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
+          : outboundRoute &&
+              !dryRun &&
+              !sourceOwnsTranscript &&
+              input.suppressTranscriptMirror !== true
             ? {
                 sessionKey: outboundRoute.sessionKey,
                 agentId,
@@ -628,6 +661,29 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     sendResult: send.sendResult,
     dryRun,
   };
+  const delivery = projectPluginMessageDeliveryFact(send.payload);
+  // Both local plugin actions and prepared core sends reach this settlement.
+  // Gateway-owned calls already mirror at their RPC boundary. Use the delivered
+  // payload, not tool arguments that may predate adapter preparation or hooks.
+  if (
+    !dryRun &&
+    !input.gatewayOwnedDelivery &&
+    sourceOwnsTranscript &&
+    send.deliveredPayloads?.length &&
+    delivery?.status === "settled" &&
+    !delivery.partialDelivery
+  ) {
+    try {
+      await mirrorDeliveredSourceReplyToTranscript({
+        ...sourceReplyMirror,
+        deliveredPayload: send.payload,
+        deliveredPayloads: send.deliveredPayloads,
+      });
+    } catch (error) {
+      // Delivery is already committed; a transcript failure must not resend it.
+      log.warn(`Source reply transcript commit failed: ${formatErrorMessage(error)}`);
+    }
+  }
   return await annotateSourceDelivery(
     withSendNormalization(result, sendPayload.normalization),
     ctx,
