@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { SessionCatalogSession } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
+  foldWorktreeCheckoutPath,
   groupCatalogSessionsByPerson,
   groupCatalogSessionsByProject,
   normalizeCatalogProjectGrouping,
@@ -41,11 +42,51 @@ it.each([
       ]),
     ).toEqual([
       ["custom:Release", "custom:Release", "Release", ["grouped"]],
-      [`project:${cwd}`, cwd, "openclaw", ["project", "worktree"]],
+      [
+        cwd.startsWith("C:") ? "project:c:/users/dev/openclaw" : `project:${cwd}`,
+        cwd,
+        "openclaw",
+        ["project", "worktree"],
+      ],
     ]);
     expect(result.ungrouped.map((item) => item.threadId)).toEqual(["missing", "blank"]);
   },
 );
+
+it("groups Windows aliases without changing display spelling or POSIX identity", () => {
+  const result = groupCatalogSessionsByProject([
+    session("drive", "C:\\Work\\Notes"),
+    session("slash", "c:/work/notes/"),
+    session("worktree", "C:/WORK/Notes/.CLAUDE/WORKTREES/fix/src"),
+    session("posix-upper", "//mnt/Repo"),
+    session("posix-lower", "//mnt/repo"),
+    session("absolute", "C:\\"),
+    session("relative", "C:"),
+  ]);
+  expect(result.groups.map((group) => group.sessions.map((item) => item.threadId))).toEqual([
+    ["drive", "slash", "worktree"],
+    ["posix-upper"],
+    ["posix-lower"],
+    ["absolute"],
+    ["relative"],
+  ]);
+  expect(result.groups[0]).toMatchObject({ label: "Notes", title: "C:\\Work\\Notes" });
+});
+
+it("keeps the ordinary sidebar section ids that saved collapse state was written with", () => {
+  // The ordinary sidebar persists this helper's result as its section id and
+  // compares it exactly, so Windows aliasing must stay out of it: otherwise an
+  // upgrade resolves a different id and every collapsed project expands.
+  expect(foldWorktreeCheckoutPath("C:\\Work\\Notes\\.CLAUDE\\WORKTREES\\fix")).toBe(
+    "C:\\Work\\Notes\\.CLAUDE\\WORKTREES\\fix",
+  );
+  expect(foldWorktreeCheckoutPath("C:\\Work\\Notes\\.claude\\worktrees\\fix")).toBe(
+    "C:\\Work\\Notes",
+  );
+  expect(foldWorktreeCheckoutPath("C:\\")).toBe("C:");
+  expect(foldWorktreeCheckoutPath("c:/work/notes/")).toBe("c:/work/notes");
+  expect(foldWorktreeCheckoutPath("/work/openclaw/.claude/worktrees/fix")).toBe("/work/openclaw");
+});
 
 it("keeps creator namespaces separate, combines profile aliases, and leaves native rows ungrouped", () => {
   expect(normalizeCatalogProjectGrouping("person")).toBe("person");

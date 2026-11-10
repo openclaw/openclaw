@@ -28,6 +28,9 @@ export function sessionActorGroupId(owner: SessionCreatedActor | undefined): str
 // folding any cwd at or under `.claude/worktrees/<name>` into the origin repo
 // (the lazy prefix picks the outermost repo root). Returns null for separator-only
 // paths or worktrees with no origin repo.
+// Ordinary sidebar section ids persist this helper's result, so it keeps the
+// exact folding those ids were written with; Windows aliasing lives in the
+// catalog-only helper below.
 export function foldWorktreeCheckoutPath(path: string): string | null {
   const trimmed = path.replace(/[\\/]+$/, "");
   if (!trimmed) {
@@ -35,6 +38,34 @@ export function foldWorktreeCheckoutPath(path: string): string | null {
   }
   const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
   return match ? match[1] || null : trimmed;
+}
+
+// Catalog groups and their collapse aliases own the Windows equivalences: fold
+// case-insensitively for drive paths and keep the separator of a bare drive root
+// so `C:` with either separator lands in one group. Private, so ordinary sidebar
+// section ids never inherit it.
+function foldCatalogWorktreeCheckoutPath(path: string): string | null {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  if (!trimmed) {
+    return null;
+  }
+  const pattern = /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/;
+  const match = trimmed.match(isWindowsProjectPath(path) ? new RegExp(pattern, "i") : pattern);
+  const folded = match ? match[1] || null : trimmed;
+  return folded && /^[a-z]:$/i.test(folded) && /^[a-z]:[\\/]/i.test(path)
+    ? `${folded}${path[2]}`
+    : folded;
+}
+
+function isWindowsProjectPath(path: string): boolean {
+  return /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\");
+}
+
+function projectPathKey(path: string): string {
+  if (/^[a-z]:$/i.test(path)) {
+    return `drive-relative:${path.toLowerCase()}`;
+  }
+  return isWindowsProjectPath(path) ? path.replaceAll("\\", "/").toLowerCase() : path;
 }
 
 type CatalogProjectGroup = {
@@ -47,6 +78,38 @@ type CatalogProjectGroup = {
   title: string;
   sessions: SessionCatalogSession[];
 };
+
+export function catalogProjectSectionAliases(
+  group: CatalogProjectGroup,
+  catalogId: string,
+  hostId: string,
+  collapsed: ReadonlySet<string>,
+): string[] {
+  const prefix = `catalog-project:${catalogId}:${hostId}:`;
+  const aliases = group.legacySectionKey ? [`${prefix}${group.legacySectionKey}`] : [];
+  if (group.kind !== "project") {
+    return aliases;
+  }
+  // Old drive-root ids lost their separator. Keep actual drive-relative roots
+  // in their own namespace instead of inheriting that ambiguous preference.
+  if (/^[a-z]:$/i.test(group.title)) {
+    return [];
+  }
+  if (!isWindowsProjectPath(group.title)) {
+    return aliases;
+  }
+  for (const id of collapsed) {
+    if (!id.startsWith(prefix)) {
+      continue;
+    }
+    const suffix = id.slice(prefix.length).replace(/^project:/, "");
+    const path = /^[a-z]:$/i.test(suffix) ? `${suffix}/` : foldCatalogWorktreeCheckoutPath(suffix);
+    if (path && `project:${projectPathKey(path)}` === group.key) {
+      aliases.push(id);
+    }
+  }
+  return aliases;
+}
 
 function collectCatalogGroups(
   sessions: readonly SessionCatalogSession[],
@@ -90,11 +153,11 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       }
       // Missing project identities stay in the flat tail, including worktrees with no origin.
       const trimmedPath = session.cwd?.trim();
-      const projectPath = trimmedPath ? foldWorktreeCheckoutPath(trimmedPath) : null;
+      const projectPath = trimmedPath ? foldCatalogWorktreeCheckoutPath(trimmedPath) : null;
       return projectPath
-        ? (groups.get(`project:${projectPath}`) ?? {
+        ? (groups.get(`project:${projectPathKey(projectPath)}`) ?? {
             kind: "project",
-            key: `project:${projectPath}`,
+            key: `project:${projectPathKey(projectPath)}`,
             legacySectionKey: projectPath,
             label: pathDisplayName(projectPath),
             title: projectPath,

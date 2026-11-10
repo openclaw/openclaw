@@ -1,0 +1,4 @@
+# Windows project comparison and persisted collapse-alias regressions for #111595.
+# 86 covered the original fold/alias tests; +16 for the ordinary-sidebar id
+# regression split (2500ae9), matching the branch's exact net test-line growth.
+102
