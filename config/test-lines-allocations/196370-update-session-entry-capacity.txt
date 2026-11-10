@@ -1,0 +1,2 @@
+# Update-time session-entry snapshot capacity deferral: defer, refuse-outside-update, refuse-other-failure, and prelude receipt proof.
+187
