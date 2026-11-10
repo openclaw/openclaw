@@ -51,7 +51,7 @@ it("keeps an explicit callbackBaseUrl authoritative over callbackOrigin", () => 
 });
 
 it("removes an origin the shipped setting rejected without echoing it", () => {
-  const secret = "https://user:s3cret@events.example.com";
+  const secret = "https://s3cret@events.example.com";
   const emptied = migrate({ enabled: false, config: { callbackOrigin: secret } });
   // No config object left, so the disabled entry passes schema validation.
   expect(emptied.entry).toEqual({ enabled: false });

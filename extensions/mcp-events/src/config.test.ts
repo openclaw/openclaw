@@ -17,7 +17,7 @@ describe("MCP Events callback base URL", () => {
 
   it.each([
     "http://proxy.example.com/prefix",
-    "https://user:pass@proxy.example.com/prefix",
+    "https://user@proxy.example.com/prefix",
     "https://proxy.example.com/prefix?tenant=a",
     "https://proxy.example.com/prefix#a",
     "proxy.example.com/prefix",
