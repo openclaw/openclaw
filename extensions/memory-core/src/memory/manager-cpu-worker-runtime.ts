@@ -61,6 +61,15 @@ const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
   sharedCompute: true,
   maxPendingBytes: MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES,
 });
+// Session chunking runs in lockstep with its export, whose transcript worker already holds the
+// pipeline's shared compute permit while it waits for each page to be taken. A second permit would
+// deadlock on one-permit hosts, so this stage runs under the export's permit. One worker bounds it.
+const sessionIndexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
+  workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.index),
+  workerClass: "compute",
+  maxWorkers: 1,
+  maxPendingBytes: MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES,
+});
 
 type MemoryReadTarget = { databasePath: string; agentId: string };
 
@@ -367,48 +376,75 @@ export async function prepareSessionIndexInWorker(
 ): Promise<{ chunks: IndexedMemoryChunk[] } | null> {
   const chunks: IndexedMemoryChunk[] = [];
   const handoff = new SessionIndexPageHandoff();
-  const exported = streamExport({
-    onPage: (page) => handoff.offer(sessionIndexPages(page)),
-    onReset: () => handoff.offer([{ lines: [], done: false, reset: true }]),
-  }).then(
-    (summary) => {
-      handoff.close();
-      return summary;
+  let indexed: Promise<void> | undefined;
+  // Dispatch the chunker only once its export runs, so a queued chunker never waits on an export
+  // that is itself queued behind another chunker.
+  const startIndexing = () => {
+    if (!indexed) {
+      indexed = chunkSessionPages(input, handoff, chunks).catch((error: unknown) => {
+        handoff.abort(error);
+        throw error;
+      });
+      // Observed below; a failure must not surface as unhandled while the export settles.
+      indexed.catch(() => undefined);
+    }
+    return indexed;
+  };
+  const summary = await streamExport({
+    onPage: (page) => {
+      void startIndexing();
+      return handoff.offer(sessionIndexPages(page));
     },
-    (error: unknown) => {
+    onReset: () => {
+      void startIndexing();
+      return handoff.offer([{ lines: [], done: false, reset: true }]);
+    },
+  }).then(
+    (exported) => {
+      handoff.close();
+      return exported;
+    },
+    async (error: unknown) => {
       handoff.close(error);
+      // A chunker failure aborts the export; report that cause.
+      await indexed;
       throw error;
     },
   );
-  try {
-    const result = await indexing.run(
-      { kind: "prepare-session", input },
-      {
-        inputBytes: SESSION_INDEX_PAGE_INPUT_BYTES,
-        onRequest: async (value) => {
-          // The worker exchanges a completed chunk batch for the next export page.
-          // SAFETY: only the paired prepare-session worker sends requests on this task.
-          const progress = value as SessionIndexProgress;
-          for (const chunk of progress.chunks) {
-            chunks.push(chunk);
-          }
-          const page = (await handoff.take()) ?? { lines: [], done: true };
-          if (page.reset) {
-            chunks.length = 0;
-          }
-          return { input: page, timeoutMs: 60_000 };
-        },
-      },
-    );
-    if (result.kind !== "prepared") {
-      throw new Error("Invalid memory indexing worker result");
-    }
-  } catch (error) {
-    handoff.abort(error);
-    await exported.catch(() => undefined);
-    throw error;
+  if (!summary && !indexed) {
+    return null;
   }
-  return (await exported) ? { chunks } : null;
+  await startIndexing();
+  return summary ? { chunks } : null;
+}
+
+async function chunkSessionPages(
+  input: SessionIndexPreparation,
+  handoff: SessionIndexPageHandoff,
+  chunks: IndexedMemoryChunk[],
+) {
+  const result = await sessionIndexing.run(
+    { kind: "prepare-session", input },
+    {
+      inputBytes: SESSION_INDEX_PAGE_INPUT_BYTES,
+      onRequest: async (value) => {
+        // The worker exchanges a completed chunk batch for the next export page.
+        // SAFETY: only the paired prepare-session worker sends requests on this task.
+        const progress = value as SessionIndexProgress;
+        for (const chunk of progress.chunks) {
+          chunks.push(chunk);
+        }
+        const page = (await handoff.take()) ?? { lines: [], done: true };
+        if (page.reset) {
+          chunks.length = 0;
+        }
+        return { input: page, timeoutMs: 60_000 };
+      },
+    },
+  );
+  if (result.kind !== "prepared") {
+    throw new Error("Invalid memory indexing worker result");
+  }
 }
 
 /** Startup scans use the background indexing pool under the shared compute limit. */
