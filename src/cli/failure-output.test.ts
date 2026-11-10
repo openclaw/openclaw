@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createInvalidConfigError } from "../config/io.invalid-config.js";
+import { createConfigReadError, createInvalidConfigError } from "../config/io.invalid-config.js";
 import { GatewayCredentialsRequiredError, GatewayTransportError } from "../gateway/call.js";
 import {
   StateDatabaseMaintenanceScopeError,
@@ -182,6 +182,11 @@ it.each([
     ),
     "Invalid config at /custom/openclaw.json:\n- gateway.port: Expected a number",
     true,
+  ],
+  [
+    createConfigReadError({ path: "/c.json", issues: [{ path: "", message: "gone" }] }),
+    "Config could not be read at /c.json:\n- <root>: gone",
+    false,
   ],
 ])("keeps actionable refusal details without leaking diagnostics: %s", (error, reason, doctor) => {
   Object.assign(error, {
