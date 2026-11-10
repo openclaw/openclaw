@@ -629,6 +629,15 @@ describe("candidate-owned publish consumer chain", () => {
       },
       {
         ...f.client,
+        verifyRetainedPublicationArtifacts() {
+          throw new Error("Qualification fixture does not recover publication artifacts");
+        },
+        downloadArtifactArchive() {
+          throw new Error("Qualification fixture does not download artifact archives");
+        },
+        getRunArtifacts() {
+          throw new Error("Qualification fixture does not list run artifacts");
+        },
         loadManifest: () => {
           manifestReads += 1;
           return f.client.loadManifest();
@@ -697,6 +706,15 @@ describe("candidate-owned publish consumer chain", () => {
         },
         {
           ...f.client,
+          verifyRetainedPublicationArtifacts() {
+            throw new Error("Qualification fixture does not recover publication artifacts");
+          },
+          downloadArtifactArchive() {
+            throw new Error("Qualification fixture does not download artifact archives");
+          },
+          getRunArtifacts() {
+            throw new Error("Qualification fixture does not list run artifacts");
+          },
           loadManifest: () => {
             manifestReads += 1;
             return f.client.loadManifest();

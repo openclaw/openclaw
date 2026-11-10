@@ -4,11 +4,14 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 function record(value) {
-  appendFileSync(process.env.NPM_CLI_REQUEST_LOG, JSON.stringify({
-    invocation: process.env.NPM_CLI_INVOCATION,
-    pid: process.pid,
-    ...value,
-  }) + "\n");
+  appendFileSync(
+    process.env.NPM_CLI_REQUEST_LOG,
+    JSON.stringify({
+      invocation: process.env.NPM_CLI_INVOCATION,
+      pid: process.pid,
+      ...value,
+    }) + "\n",
+  );
 }
 
 function response(route, transport) {
@@ -34,14 +37,14 @@ export function runGh(args) {
   }
   const method = args.indexOf("--method");
   if (method >= 0 && args[method + 1] !== "GET") throw new Error("Unexpected GitHub mutation");
-  const route = args[0] === "run"
-    ? "run view " + args[2]
-    : args[1]?.replace(/^repos\/openclaw\/openclaw\//u, "");
+  const route =
+    args[0] === "run"
+      ? "run view " + args[2]
+      : args[1]?.replace(/^repos\/openclaw\/openclaw\//u, "");
   process.stdout.write(response(route, "gh"));
 }
 
-if (process.env.NPM_CLI_ENTRYPOINT &&
-    import.meta.url !== pathToFileURL(process.argv[1]).href) {
+if (process.env.NPM_CLI_ENTRYPOINT && import.meta.url !== pathToFileURL(process.argv[1]).href) {
   if (process.argv[1] === process.env.NPM_CLI_ENTRYPOINT) {
     record({ kind: "entrypoint" });
   }
@@ -52,9 +55,10 @@ if (process.env.NPM_CLI_ENTRYPOINT &&
     if (url.origin !== "https://api.github.com") {
       throw new Error("Unexpected external fixture host: " + url.origin);
     }
-    return new Response(Uint8Array.from(response(
-      url.pathname.replace(/^\/repos\/openclaw\/openclaw\//u, "") + url.search,
-      "fetch",
-    )));
+    return new Response(
+      Uint8Array.from(
+        response(url.pathname.replace(/^\/repos\/openclaw\/openclaw\//u, "") + url.search, "fetch"),
+      ),
+    );
   };
 }

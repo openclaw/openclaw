@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
+import { verifyRetainedPublicationArtifacts } from "./full-release-artifacts.mjs";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
 import {
   decodePublicationDispatchEnvelope,
@@ -53,7 +54,6 @@ import {
   validateReleaseChildRunProvenance,
   validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
-import { verifyRetainedPublicationArtifacts } from "./full-release-artifacts.mjs";
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,

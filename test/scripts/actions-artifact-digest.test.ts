@@ -158,7 +158,10 @@ describe("exact artifact streaming digest verification", () => {
     const payload = JSON.parse(preview.serialize());
     params.fetchImpl.mockClear();
     const replay = () => createReleaseEvidenceReplay(binding, payload);
-    const result = await downloadExactActionsArtifactArchive({ ...params, immutableReads: replay() });
+    const result = await downloadExactActionsArtifactArchive({
+      ...params,
+      immutableReads: replay(),
+    });
     expect(result.archiveBytes).toEqual(Buffer.alloc(4, 7));
     expect(params.fetchImpl.mock.calls.map(([url]) => String(url))).toEqual([
       "https://api.github.com/repos/openclaw/openclaw/actions/artifacts/777",

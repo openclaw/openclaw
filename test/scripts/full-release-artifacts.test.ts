@@ -710,7 +710,12 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     );
     for (const { metadata } of test.archives) {
       expect(
-        reused.apiCalls[`repos/${REPOSITORY}/actions/artifacts/${metadata.id}`],
+        (reused.apiCalls[`repos/${REPOSITORY}/actions/artifacts/${metadata.id}`] ?? 0) +
+          reused.calls.filter(
+            ([kind, endpoint]) =>
+              kind === "fetch" &&
+              endpoint === `repos/${REPOSITORY}/actions/artifacts/${metadata.id}`,
+          ).length,
       ).toBeGreaterThan(0);
     }
     for (const authenticatedPayloads of [

@@ -264,9 +264,7 @@ else: fail('Unexpected call: ' + json.dumps(args))
       const state: {
         events?: string[];
         beforeVerification?: { output: string; env: string; summary: string }[];
-      } = JSON.parse(
-        readFileSync(join(root, "state.json"), "utf8"),
-      );
+      } = JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
       return {
         ...result,
         calls,

@@ -86,14 +86,17 @@ function fixture() {
       pluginNpm: { runId: "902", runAttempt: 1 },
     },
   };
+  const { executionPlanSha256: _plan, qualificationCoverage: _coverage, ...originalManifest } =
+    old.manifest;
   const manifest = {
-    ...old.manifest,
+    ...originalManifest,
     runId: producer.runId,
     workflowSha: producer.sha,
     workflowFullRef: producer.fullRef,
     workflowRef: "main",
     sourceAdmission: source,
     receiptRecovery: recovery,
+    publicationArtifacts: recovery.publicationArtifacts,
   };
   return { old, producer, source, recovery, manifest };
 }
@@ -132,13 +135,13 @@ function aggregateFixture() {
       observations.collectionCompletedAt,
       { workflowPath: RECEIPT_RECOVERY_WORKFLOW },
     ),
-    childRuns: Object.fromEntries(roles.map((role) => [role, recovery.children[role].runId])),
+    childRuns: Object.fromEntries(
+      roles.map((role) => [role, expectDefined(recovery.children[role], "recovery child").runId]),
+    ),
     retainedPublicationPayloads: [],
     waivers: [],
     advisoryJobs: [],
   });
-  delete manifest.executionPlanSha256;
-  delete manifest.qualificationCoverage;
   const steps = [
     "Authenticate retained qualification and collect fresh admission",
     "Upload fresh publication observations",
@@ -163,17 +166,23 @@ function aggregateFixture() {
   // Authority is independently covered; these tests exercise seal ordering and bytes.
   vi.spyOn(toolingAuthority, "verifyReleaseToolingIdentity").mockImplementation(vi.fn());
   vi.spyOn(toolingAuthority, "verifyReleaseWorkflowRun").mockReturnValue(run);
-  vi.spyOn(qualificationAuthority, "verifyReleaseQualificationOperator").mockImplementation(vi.fn());
+  vi.spyOn(qualificationAuthority, "verifyReleaseQualificationOperator").mockReturnValue({
+    id: 1,
+    login: "fixture-operator",
+  });
   const originalRead = vi.fn().mockRejectedValue(new Error("original qualification reached"));
   const downloads: string[] = [];
   vi.stubEnv("GH_TOKEN", "fixture-token");
-  vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    downloads.push(url.pathname);
-    if (url.pathname.endsWith("/artifacts/444/zip")) return new Response(new Uint8Array(bytes));
-    if (url.pathname.endsWith("/artifacts/444")) return Response.json(observationArtifact);
-    throw new Error("Unexpected fixture fetch: " + url.pathname);
-  }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      downloads.push(url.pathname);
+      if (url.pathname.endsWith("/artifacts/444/zip")) return new Response(new Uint8Array(bytes));
+      if (url.pathname.endsWith("/artifacts/444")) return Response.json(observationArtifact);
+      throw new Error("Unexpected fixture fetch: " + url.pathname);
+    }),
+  );
   const client = {
     ...old.client,
     getRunAttempt: originalRead,
@@ -188,13 +197,24 @@ function aggregateFixture() {
       },
     ],
   };
-  const authenticate = () => authenticateReceiptRecovery({
-    manifest,
-    run,
-    client,
-    artifact: { created_at: observations.collectionCompletedAt },
-  });
-  return { ...test, steps, observations, observationArtifact, originalRead, downloads, authenticate };
+  const authenticate = () =>
+    authenticateReceiptRecovery({
+      manifest,
+      run,
+      client,
+      artifact: { created_at: observations.collectionCompletedAt },
+      verifier: undefined,
+      expectedRunAttempts: undefined,
+    });
+  return {
+    ...test,
+    steps,
+    observations,
+    observationArtifact,
+    originalRead,
+    downloads,
+    authenticate,
+  };
 }
 
 afterEach(() => {
@@ -229,11 +249,14 @@ describe("receipt-backed aggregate recovery", () => {
           digest: test.observationArtifact.digest,
           sizeInBytes: changed.length,
         });
-        vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) =>
-          String(input).endsWith("/zip")
-            ? new Response(new Uint8Array(changed))
-            : Response.json(test.observationArtifact),
-        ));
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: string | URL | Request) =>
+            String(input).endsWith("/zip")
+              ? new Response(new Uint8Array(changed))
+              : Response.json(test.observationArtifact),
+          ),
+        );
       }
       await expect(test.authenticate()).rejects.toThrow(
         {
@@ -419,7 +442,11 @@ describe("receipt-backed aggregate recovery", () => {
       "package-candidate.json": "{}",
     });
     binding.package.packageSha256 = digest("qualified candidate tgz");
-    const candidateBytes = [Buffer.from("shared image"), Buffer.from("plugin registry"), packageBytes];
+    const candidateBytes = [
+      Buffer.from("shared image"),
+      Buffer.from("plugin registry"),
+      packageBytes,
+    ];
     const candidateArtifacts = [
       binding.sharedImage.artifact,
       binding.prepublishPluginRegistry.artifact,
@@ -441,7 +468,7 @@ describe("receipt-backed aggregate recovery", () => {
         workflow_run: { id: runId, head_sha: old.q },
       });
     };
-    addMetadata("904", recovery.publicationArtifacts.pluginNpm.artifactName, 902, manifestBytes);
+    addMetadata("904", "plugin-npm-prepared-fixture", 902, manifestBytes);
     addMetadata("905", pluginPackage.artifactName, 902, pluginPackageBytes);
     candidateArtifacts.forEach((artifact, index) => {
       const bytes = candidateBytes[index]!;
@@ -461,13 +488,16 @@ describe("receipt-backed aggregate recovery", () => {
       ...fields,
     });
     const downloads: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
-      const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
-      const id = expectDefined(path.split("/")[6], "artifact URL");
-      if (!path.endsWith("/zip")) return Response.json(metadata.get(id));
-      downloads.push(id);
-      return new Response(new Uint8Array(expectDefined(archives.get(id), "archive")));
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+        const id = expectDefined(path.split("/")[6], "artifact URL");
+        if (!path.endsWith("/zip")) return Response.json(metadata.get(id));
+        downloads.push(id);
+        return new Response(new Uint8Array(expectDefined(archives.get(id), "archive")));
+      }),
+    );
     const inventoryClient = {
       ...client,
       getRunArtifacts: vi.fn(async () => [expectDefined(metadata.get("905"), "plugin metadata")]),
@@ -536,7 +566,9 @@ describe("receipt-backed aggregate recovery", () => {
       Object.assign(packageMetadata, original);
     }
     downloads.length = 0;
-    const produced = await verifyOriginalReceiptQualification(recovery, { client: inventoryClient });
+    const produced = await verifyOriginalReceiptQualification(recovery, {
+      client: inventoryClient,
+    });
     expect(produced.publication.payloads).toEqual(expectedPayloads);
     expect(downloads).toEqual(["904", "905", "103", "102", "101"]);
   });

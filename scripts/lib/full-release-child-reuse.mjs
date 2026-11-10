@@ -432,9 +432,7 @@ async function validateEvidence(selection, request, deps) {
   requireEvidence(
     composite.jobs.length > 0 &&
       composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion)) &&
-      Object.entries(composite).every(
-        ([key, value]) => canonical(receipt[key]) === canonical(value),
-      ),
+      Object.entries(composite).every(([key, value]) => canonical(receipt[key]) === canonical(value)),
     "receipt does not match the complete live composite workload",
   );
   if (deps.immutableReads) {
