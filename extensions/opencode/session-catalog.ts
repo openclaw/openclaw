@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import type {
@@ -55,37 +55,39 @@ const SAFE_ENV_KEYS = [
   "XDG_STATE_HOME",
 ] as const;
 
-type OpenCodeQueryCacheEntry = {
-  expiresAt: number;
-  result: Promise<unknown>;
-};
-
 type OpenCodeQueryCacheOptions = {
   forceRefresh?: boolean;
 };
 
 // Queries depend on the CLI environment and SQL, not the OpenClaw config object.
 // Retain results across sidebar polls; expiry and explicit refresh control freshness.
-const openCodeQueryCache = new Map<string, OpenCodeQueryCacheEntry>();
+const openCodeQueryCache = createStaleWhileRevalidateCache<unknown>({
+  ttlMs: OPENCODE_QUERY_CACHE_TTL_MS,
+  maxEntries: OPENCODE_QUERY_CACHE_MAX_ENTRIES,
+  maxPending: Infinity,
+});
+const cliVersionCache = createStaleWhileRevalidateCache<boolean>({
+  ttlMs: OPENCODE_QUERY_CACHE_TTL_MS,
+  maxEntries: 1,
+  maxPending: Infinity,
+});
 const log = createSubsystemLogger("opencode/session-catalog");
-let cliVersion: { key: string; expiresAt: number; result: Promise<boolean> } | undefined;
 
 export async function isOpenCodeV2(): Promise<boolean> {
   const key = SAFE_ENV_KEYS.map((name) => process.env[name] ?? "").join("\0");
-  if (!cliVersion || cliVersion.key !== key || cliVersion.expiresAt <= Date.now()) {
-    const result = runOpenCode(["--version"]).then((output) => {
+  const { value } = await cliVersionCache.read(
+    key,
+    async () => {
+      const output = await runOpenCode(["--version"]);
       const major = /^(?:opencode v)?(\d+)\./.exec(output.trim())?.[1];
       if (major !== "1" && major !== "2") {
         throw new Error("Unsupported OpenCode CLI version");
       }
       return major === "2";
-    });
-    cliVersion = { key, expiresAt: Date.now() + OPENCODE_QUERY_CACHE_TTL_MS, result };
-    result.catch(() => {
-      cliVersion = undefined;
-    });
-  }
-  return cliVersion.result;
+    },
+    { allowStale: false },
+  );
+  return value;
 }
 
 function openCodeQueryCacheKey(query: string): string {
@@ -207,14 +209,14 @@ async function queryOpenCodeSessions(query: string, count: number): Promise<unkn
   }
   const sessions: unknown[] = [];
   let cursor: string | undefined;
-  const deadline = Date.now() + CLI_TIMEOUT_MS;
+  const deadline = performance.now() + CLI_TIMEOUT_MS;
   while (sessions.length < count) {
     const limit = Math.max(OPENCODE_SESSION_CATALOG_MAX_PAGE_LIMIT, count - sessions.length);
     const parsed: unknown = JSON.parse(
       await runOpenCodeApi(
         "session.list",
         [`limit=${limit}`, ...(cursor ? [`cursor=${cursor}`] : ["order=desc", "parentID=null"])],
-        deadline - Date.now(),
+        deadline - performance.now(),
       ),
     );
     if (!isRecord(parsed) || !Array.isArray(parsed.data) || parsed.data.length > limit) {
@@ -255,27 +257,12 @@ async function queryCachedOpenCodeSessions(
   count: number,
   options: OpenCodeQueryCacheOptions,
 ): Promise<unknown> {
-  const key = openCodeQueryCacheKey(query);
-  const cached = openCodeQueryCache.get(key);
-  if (options.forceRefresh !== true && cached && cached.expiresAt > Date.now()) {
-    openCodeQueryCache.delete(key);
-    openCodeQueryCache.set(key, cached);
-    return await cached.result;
-  }
-  openCodeQueryCache.delete(key);
-  const result = queryOpenCodeSessions(query, count);
-  const entry: OpenCodeQueryCacheEntry = {
-    expiresAt: Date.now() + OPENCODE_QUERY_CACHE_TTL_MS,
-    result,
-  };
-  openCodeQueryCache.set(key, entry);
-  pruneMapToMaxSize(openCodeQueryCache, OPENCODE_QUERY_CACHE_MAX_ENTRIES);
-  try {
-    return await result;
-  } catch (error) {
-    openCodeQueryCache.delete(key);
-    throw error;
-  }
+  const { value } = await openCodeQueryCache.read(
+    openCodeQueryCacheKey(query),
+    () => queryOpenCodeSessions(query, count),
+    { allowStale: false, refresh: options.forceRefresh },
+  );
+  return value;
 }
 
 export async function exportOpenCodeSession(threadId: string): Promise<unknown> {
@@ -396,7 +383,7 @@ export async function listLocalOpenCodeSessionPage(
   if (!Array.isArray(parsed) || parsed.length > MAX_CLI_LIST_SESSIONS) {
     throw new Error("OpenCode returned an invalid session list");
   }
-  const needle = params.searchTerm?.toLocaleLowerCase();
+  const needle = params.searchTerm?.toLocaleLowerCase().normalize("NFC");
   const sessions = parsed
     .flatMap((entry) => {
       const session = parseOpenCodeSession(entry);
@@ -407,7 +394,7 @@ export async function listLocalOpenCodeSessionPage(
         return true;
       }
       return [session.threadId, session.name, session.cwd].some((field) =>
-        field?.toLocaleLowerCase().includes(needle),
+        field?.toLocaleLowerCase().normalize("NFC").includes(needle),
       );
     });
   const page = sessions.slice(offset, offset + params.limit);
@@ -433,10 +420,10 @@ export async function requireLocalOpenCodeSession(
   return session;
 }
 
-function jsonText(value: unknown, maxLength = 20_000): string | undefined {
+function jsonText(value: unknown): string | undefined {
   try {
     const text = JSON.stringify(value);
-    return text.length > maxLength ? `${truncateUtf16Safe(text, maxLength)}…` : text;
+    return text.length > 20_000 ? `${truncateUtf16Safe(text, 20_000)}…` : text;
   } catch {
     return undefined;
   }

@@ -125,7 +125,7 @@ struct GatewaySettings: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("No Gateways saved")
                 Text("""
-                Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever you want another window for it.
+                Add a Gateway here, then use File → New Gateway Window… whenever you want another window for it.
                 """)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)

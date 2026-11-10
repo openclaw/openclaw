@@ -8,10 +8,8 @@ import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sd
 import { isPidAlive, prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
 import { ensurePortAvailable, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { CONFIG_DIR, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
-import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
+import { CONFIG_DIR } from "openclaw/plugin-sdk/text-utility-runtime";
+import { hasChromeProxyControlArg } from "./browser-proxy-mode.js";
 import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   CHROME_BOOTSTRAP_EXIT_POLL_MS,
@@ -20,11 +18,11 @@ import {
   CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS,
   CHROME_LAUNCH_READY_POLL_MS,
   CHROME_REACHABILITY_TIMEOUT_MS,
-  CHROME_STDERR_HINT_MAX_CHARS,
   CHROME_STOP_PROBE_TIMEOUT_MS,
   CHROME_STOP_TIMEOUT_MS,
   CHROME_WS_READY_TIMEOUT_MS,
   MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
+  resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
 import {
   assertCdpEndpointAllowed,
@@ -50,6 +48,8 @@ import {
   processCommandUsesHeadlessChrome,
   resolveBrowserExecutableForPlatform,
 } from "./chrome.executables.js";
+import { buildChromeLaunchEnv } from "./chrome.launch-env.js";
+import { createChromeLaunchStderrDiagnostics } from "./chrome.launch-stderr.js";
 import {
   headlessShellProfileInUseReason,
   isHeadlessShellExecutable,
@@ -62,13 +62,7 @@ import {
   sameManagedChromeIdentity,
   type ManagedChromeProcessIdentity,
 } from "./chrome.process-ownership.js";
-import {
-  decorateOpenClawProfile,
-  ensureProfileCleanExit,
-  ensureProfileNetworkPredictionDisabled,
-  isProfileDecorated,
-  usesOpenClawMockKeychain,
-} from "./chrome.profile-decoration.js";
+import { prepareOpenClawProfile, usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
 import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
 import type { BrowserGraphicsDiagnostics } from "./client.types.js";
 import {
@@ -83,6 +77,10 @@ import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.
 import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import type { ManagedBrowserHeadlessSource } from "./profile.types.js";
+import {
+  CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
+  CDP_READY_AFTER_LAUNCH_POLL_MS,
+} from "./server-context.constants.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
 const CHROME_SINGLETON_LOCK_PATHS = [
@@ -90,56 +88,7 @@ const CHROME_SINGLETON_LOCK_PATHS = [
   "SingletonSocket",
   "SingletonCookie",
 ] as const;
-const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
-const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
 const CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS = 500;
-const CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES = 64 * 1024;
-const CHROME_STDERR_MARKER_SCAN_TAIL_CHARS = 256;
-const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
-  "ssrf_blocked",
-  "http_unreachable",
-  "http_status_failed",
-  "invalid_json",
-]);
-
-type ChromeLaunchStderrSignals = {
-  singletonInUse: boolean;
-  missingDisplay: boolean;
-};
-
-function createChromeLaunchStderrDiagnostics() {
-  const tail = createBoundedUtf8Tail(CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES);
-  const signals: ChromeLaunchStderrSignals = {
-    singletonInUse: false,
-    missingDisplay: false,
-  };
-  let markerScanTail = "";
-
-  return {
-    append(chunk: Buffer | string) {
-      tail.append(chunk);
-      const chunkText = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
-      if (chunkText.length > 0) {
-        const scanText = `${markerScanTail}${chunkText}`;
-        signals.singletonInUse ||= CHROME_SINGLETON_IN_USE_PATTERN.test(scanText);
-        signals.missingDisplay ||= CHROME_MISSING_DISPLAY_PATTERN.test(scanText);
-        markerScanTail = scanText.slice(-CHROME_STDERR_MARKER_SCAN_TAIL_CHARS);
-      }
-    },
-    toString() {
-      return tail.text();
-    },
-    signals(): ChromeLaunchStderrSignals {
-      return { ...signals };
-    },
-    clear() {
-      tail.clear();
-      signals.singletonInUse = false;
-      signals.missingDisplay = false;
-      markerScanTail = "";
-    },
-  };
-}
 
 type ChromeSingletonLock =
   | { status: "missing" }
@@ -318,8 +267,8 @@ async function terminateChromeForRetry(proc: ChildProcess, userDataDir: string):
 }
 
 async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (!isPidAlive(pid)) {
       return true;
     }
@@ -479,41 +428,6 @@ async function ensureManagedChromePortAvailable(
   await probeManagedChromePorts(profile, signal);
 }
 
-function chromeLaunchHints(params: {
-  stderrOutput: string;
-  stderrSignals?: ChromeLaunchStderrSignals;
-  resolved: ResolvedBrowserConfig;
-  profile: ResolvedBrowserProfile;
-  launchOptions?: ManagedBrowserHeadlessOptions;
-}): string {
-  const hints: string[] = [];
-  if (process.platform === "linux" && !params.resolved.noSandbox) {
-    hints.push("If running in a container or as root, try setting browser.noSandbox: true.");
-  }
-  const headlessMode = resolveManagedBrowserHeadlessMode(
-    params.resolved,
-    params.profile,
-    params.launchOptions,
-  );
-  const missingDisplay =
-    params.stderrSignals?.missingDisplay ??
-    CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput);
-  if (missingDisplay && !headlessMode.headless) {
-    hints.push(
-      "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
-    );
-  }
-  const singletonInUse =
-    params.stderrSignals?.singletonInUse ??
-    CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput);
-  if (singletonInUse) {
-    hints.push(
-      `The Chromium profile "${params.profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${params.profile.name}/user-data.`,
-    );
-  }
-  return hints.length > 0 ? `\nHint: ${hints.join("\nHint: ")}` : "";
-}
-
 export type RunningChrome = {
   pid: number;
   exe: BrowserExecutable;
@@ -551,58 +465,6 @@ function resolveBrowserExecutable(
 
 export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
   return path.join(CONFIG_DIR, "browser", profileName, "user-data");
-}
-
-function buildOpenClawChromeLaunchArgs(params: {
-  resolved: ResolvedBrowserConfig;
-  profile: ResolvedBrowserProfile;
-  userDataDir: string;
-  headlessOverride?: boolean;
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  useMockKeychain?: boolean;
-}): string[] {
-  const { resolved, profile, userDataDir } = params;
-  const platform = params.platform ?? process.platform;
-  const headlessMode = resolveManagedBrowserHeadlessMode(resolved, profile, params);
-  const args: string[] = [
-    `--remote-debugging-port=${profile.cdpPort}`,
-    `--user-data-dir=${userDataDir}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-sync",
-    "--disable-background-networking",
-    "--disable-component-update",
-    "--disable-features=Translate,MediaRouter",
-    "--disable-session-crashed-bubble",
-    "--hide-crash-restore-bubble",
-    "--password-store=basic",
-  ];
-
-  if (platform === "darwin" && params.useMockKeychain) {
-    // This is an isolated OpenClaw-owned profile, not the user's Chrome profile.
-    // Keep its basic password store non-interactive so headless Chrome can
-    // encrypt and persist cookies without login-keychain prompts.
-    args.push("--use-mock-keychain");
-  }
-  if (headlessMode.headless) {
-    args.push("--headless=new");
-    args.push("--disable-gpu");
-  }
-  if (resolved.noSandbox) {
-    args.push("--no-sandbox");
-  }
-  if (platform === "linux") {
-    args.push("--disable-dev-shm-usage");
-  }
-  if (!hasChromeProxyControlArg(resolved.extraArgs)) {
-    args.push("--no-proxy-server");
-  }
-  if (resolved.extraArgs.length > 0) {
-    args.push(...resolved.extraArgs);
-  }
-
-  return args;
 }
 
 export type ChromeWebSocketEndpoint = {
@@ -833,37 +695,50 @@ async function launchOpenClawChromeLocked(
     process.platform === "darwin" &&
     (usesOpenClawMockKeychain(userDataDir) || (profileIsNew && headlessMode.headless));
 
-  const needsDecorate = !isProfileDecorated(
-    userDataDir,
-    profile.name,
-    profile.color.toUpperCase(),
-    DEFAULT_DOWNLOAD_DIR,
-  );
-
   // Headless profiles are seeded directly; headed profiles retain Chrome's first-run bootstrap.
   const spawnOnce = async (onStderr?: (chunk: Buffer | string) => void) => {
     signal?.throwIfAborted();
-    const args = buildOpenClawChromeLaunchArgs({
-      resolved,
-      profile,
-      userDataDir,
-      ...headlessOptions,
-      useMockKeychain,
-    });
-    const env: NodeJS.ProcessEnv = {
-      ...omitChromeProxyEnv(process.env),
-      // Reduce accidental sharing with the user's env.
-      HOME: os.homedir(),
-    };
-    if (process.platform === "linux") {
-      const chromiumStateDir = path.join(resolvePreferredOpenClawTmpDir(), ".chromium");
-      env.XDG_CONFIG_HOME ??= chromiumStateDir;
-      env.XDG_CACHE_HOME ??= chromiumStateDir;
+    const platform = headlessOptions.platform ?? process.platform;
+    const spawnHeadlessMode = resolveManagedBrowserHeadlessMode(resolved, profile, headlessOptions);
+    const args: string[] = [
+      `--remote-debugging-port=${profile.cdpPort}`,
+      `--user-data-dir=${userDataDir}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-sync",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-features=Translate,MediaRouter",
+      "--disable-session-crashed-bubble",
+      "--hide-crash-restore-bubble",
+      "--password-store=basic",
+    ];
+    if (platform === "darwin" && useMockKeychain) {
+      // This is an isolated OpenClaw-owned profile, not the user's Chrome profile.
+      // Keep its basic password store non-interactive so headless Chrome can
+      // encrypt and persist cookies without login-keychain prompts.
+      args.push("--use-mock-keychain");
+    }
+    if (spawnHeadlessMode.headless) {
+      args.push("--headless=new");
+      args.push("--disable-gpu");
+    }
+    if (resolved.noSandbox) {
+      args.push("--no-sandbox");
+    }
+    if (platform === "linux") {
+      args.push("--disable-dev-shm-usage");
+    }
+    if (!hasChromeProxyControlArg(resolved.extraArgs)) {
+      args.push("--no-proxy-server");
+    }
+    if (resolved.extraArgs.length > 0) {
+      args.push(...resolved.extraArgs);
     }
     // stdio tuple: discard stdout to prevent buffer saturation in constrained
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
     const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
-      env,
+      env: buildChromeLaunchEnv(),
     });
     const proc = spawn(preparedSpawn.command, preparedSpawn.args, {
       stdio: ["ignore", "ignore", "pipe"],
@@ -921,8 +796,8 @@ async function launchOpenClawChromeLocked(
     const { pid: bootstrapPid, proc: bootstrap, releaseAbort } = await spawnOnce();
     let bootstrapError: Error | undefined;
     try {
-      const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
-      while (Date.now() < deadline) {
+      const deadline = performance.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
+      while (performance.now() < deadline) {
         signal?.throwIfAborted();
         if (fs.existsSync(localStatePath) && fs.existsSync(preferencesPath)) {
           break;
@@ -951,30 +826,15 @@ async function launchOpenClawChromeLocked(
 
   signal?.throwIfAborted();
 
-  if (needsDecorate) {
-    try {
-      decorateOpenClawProfile(userDataDir, {
-        name: profile.name,
-        color: profile.color,
-        downloadDir: DEFAULT_DOWNLOAD_DIR,
-        mockKeychain: useMockKeychain,
-      });
-      log.info(`🦞 openclaw browser profile decorated (${profile.color})`);
-    } catch (err) {
-      log.warn(`openclaw browser profile decoration failed: ${String(err)}`);
-    }
-  }
-
   try {
-    ensureProfileNetworkPredictionDisabled(userDataDir);
+    await prepareOpenClawProfile(userDataDir, {
+      name: profile.name,
+      color: profile.color,
+      downloadDir: DEFAULT_DOWNLOAD_DIR,
+      mockKeychain: useMockKeychain,
+    });
   } catch (err) {
-    log.warn(`openclaw browser network-prediction prefs failed: ${String(err)}`);
-  }
-
-  try {
-    ensureProfileCleanExit(userDataDir);
-  } catch (err) {
-    log.warn(`openclaw browser clean-exit prefs failed: ${String(err)}`);
+    log.warn(`openclaw browser profile preparation failed: ${String(err)}`);
   }
   signal?.throwIfAborted();
 
@@ -982,40 +842,48 @@ async function launchOpenClawChromeLocked(
     // Keep a bounded stderr tail for diagnostics in case Chrome fails to start.
     // Attach before awaiting spawn so immediate diagnostics cannot be lost.
     const stderrDiagnostics = createChromeLaunchStderrDiagnostics();
-    const onStderr = (chunk: Buffer | string) => {
-      stderrDiagnostics.append(chunk);
-    };
+    const onStderr = stderrDiagnostics.append;
     let proc: ChildProcess | undefined;
     let releaseSpawnAbort: (() => void) | undefined;
+    let started = false;
+    const detachStderr = () => {
+      proc?.stderr?.off("data", onStderr);
+      stderrDiagnostics.clear();
+    };
 
     try {
       const spawned = await spawnOnce(onStderr);
       proc = spawned.proc;
       releaseSpawnAbort = spawned.releaseAbort;
-      const readyDeadline = Date.now() + resolved.localLaunchTimeoutMs;
+      const hasExited = () => spawned.proc.exitCode != null || spawned.proc.signalCode != null;
+      const readyDeadline = performance.now() + resolved.localLaunchTimeoutMs;
       let launchHttpReachable = false;
-      // Full CDP WebSocket readiness is handled by the caller's
-      // waitForCdpReadyAfterLaunch() budget; launch only owns process discovery.
-      while (Date.now() < readyDeadline) {
+      while (performance.now() < readyDeadline) {
         signal?.throwIfAborted();
-        if (
-          await isChromeReachable(
-            profile.cdpUrl,
-            MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
-            undefined,
-            signal,
-          )
-        ) {
+        if (hasExited()) {
+          break;
+        }
+        const reachable = await isChromeReachable(
+          profile.cdpUrl,
+          MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
+          undefined,
+          signal,
+        );
+        // Discovery may finish after the exact child exits. A response from
+        // that endpoint must not turn a dead launch into a running handle.
+        if (hasExited()) {
+          break;
+        }
+        if (reachable) {
           launchHttpReachable = true;
           break;
         }
         await waitForManagedLaunchPoll(CHROME_LAUNCH_READY_POLL_MS, signal);
       }
 
-      if (!launchHttpReachable) {
-        signal?.throwIfAborted();
-        let finalDiagnostic: ChromeCdpDiagnostic | null = null;
-        let diagnosticErrorText: string | null = null;
+      let finalDiagnostic: ChromeCdpDiagnostic | null = null;
+      let diagnosticErrorText: string | null = null;
+      if (!launchHttpReachable && !hasExited()) {
         try {
           finalDiagnostic = await diagnoseChromeCdp(
             profile.cdpUrl,
@@ -1027,63 +895,118 @@ async function launchOpenClawChromeLocked(
         } catch (err) {
           diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
         }
+      }
+      signal?.throwIfAborted();
+      launchHttpReachable ||=
+        finalDiagnostic !== null &&
+        (finalDiagnostic.ok ||
+          !["ssrf_blocked", "http_unreachable", "http_status_failed", "invalid_json"].includes(
+            finalDiagnostic.code,
+          ));
+      if (launchHttpReachable) {
+        // Keep the child and its stderr until CDP commands work, not just HTTP discovery.
+        const cdpDeadline = performance.now() + resolved.localCdpReadyTimeoutMs;
+        while (!finalDiagnostic?.ok && !hasExited() && performance.now() < cdpDeadline) {
+          const timeoutMs = Math.max(
+            CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
+            Math.min(MANAGED_CDP_READY_HTTP_TIMEOUT_MS, cdpDeadline - performance.now()),
+          );
+          const { httpTimeoutMs, wsTimeoutMs } = resolveCdpReachabilityTimeouts({
+            profileIsLoopback: profile.cdpIsLoopback,
+            timeoutMs,
+            remoteHttpTimeoutMs: resolved.remoteCdpTimeoutMs,
+            remoteHandshakeTimeoutMs: resolved.remoteCdpHandshakeTimeoutMs,
+          });
+          finalDiagnostic = await diagnoseChromeCdp(
+            profile.cdpUrl,
+            httpTimeoutMs,
+            wsTimeoutMs,
+            undefined,
+            signal,
+          );
+          signal?.throwIfAborted();
+          if (hasExited() || finalDiagnostic.ok) {
+            break;
+          }
+          await waitForManagedLaunchPoll(CDP_READY_AFTER_LAUNCH_POLL_MS, signal);
+        }
+        launchHttpReachable = !hasExited() && finalDiagnostic?.ok === true;
+      }
+
+      if (!launchHttpReachable) {
         signal?.throwIfAborted();
-        if (
-          finalDiagnostic &&
-          (finalDiagnostic.ok || !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(finalDiagnostic.code))
-        ) {
-          launchHttpReachable = true;
+        if (hasExited()) {
+          // Exit can precede the last stderr delivery. Drain for at most one
+          // existing poll interval; inherited pipes must not hold failure open.
+          if (proc.stderr && !proc.stderr.destroyed && !proc.stderr.readableEnded) {
+            const drain = new AbortController();
+            const timer = setTimeout(() => drain.abort(), CHROME_LAUNCH_READY_POLL_MS);
+            try {
+              await once(proc.stderr, "close", {
+                signal: signal ? AbortSignal.any([signal, drain.signal]) : drain.signal,
+              });
+            } catch {
+              signal?.throwIfAborted();
+            } finally {
+              clearTimeout(timer);
+            }
+          }
+          signal?.throwIfAborted();
+          finalDiagnostic = null;
+          diagnosticErrorText = `Chrome process exited before CDP became ready (code ${spawned.proc.exitCode}, signal ${spawned.proc.signalCode}).`;
         }
         const diagnosticText = finalDiagnostic
           ? formatChromeCdpDiagnostic(finalDiagnostic)
           : (diagnosticErrorText ?? "CDP diagnostic failed.");
-        if (launchHttpReachable) {
-          log.debug(diagnosticText);
-        } else {
-          const stderrOutput = normalizeOptionalString(stderrDiagnostics.toString()) ?? "";
-          const stderrSignals = stderrDiagnostics.signals();
-          const redactedStderrOutput = redactToolPayloadText(stderrOutput);
-          if (
-            allowSingletonRecovery &&
-            stderrSignals.singletonInUse &&
-            clearStaleChromeSingletonLocks(userDataDir)
-          ) {
-            log.warn(
-              `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
+        const stderrSignals = stderrDiagnostics.signals();
+        if (
+          allowSingletonRecovery &&
+          stderrSignals.singletonInUse &&
+          clearStaleChromeSingletonLocks(userDataDir)
+        ) {
+          log.warn(
+            `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
+          );
+          if (!(await terminateChromeForRetry(proc, userDataDir))) {
+            throw new ManagedChromeCleanupError(
+              `Managed Chrome process ${spawned.pid} survived singleton recovery.`,
+              runningForProcess(proc, spawned.pid),
             );
-            if (!(await terminateChromeForRetry(proc, userDataDir))) {
-              throw new ManagedChromeCleanupError(
-                `Managed Chrome process ${spawned.pid} survived singleton recovery.`,
-                runningForProcess(proc, spawned.pid),
-              );
-            }
-            releaseSpawnAbort();
-            releaseSpawnAbort = undefined;
-            return await launchOnceAndWait(false);
           }
-          const stderrHint = redactedStderrOutput
-            ? `\nChrome stderr:\n${sliceUtf16Safe(redactedStderrOutput, -CHROME_STDERR_HINT_MAX_CHARS)}`
-            : "";
-          const launchHints = chromeLaunchHints({
-            stderrOutput,
-            stderrSignals,
-            resolved,
-            profile,
-            launchOptions: headlessOptions,
-          });
-          try {
-            proc.kill("SIGKILL");
-          } catch {
-            // ignore
-          }
-          throw new Error(
-            `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}". ${diagnosticText}${launchHints}${stderrHint}`,
+          releaseSpawnAbort();
+          releaseSpawnAbort = undefined;
+          return await launchOnceAndWait(false);
+        }
+        const hints: string[] = [
+          "Check the browser executable and browser.extraArgs, then retry. If it still fails, use another browser profile or an alternative tool.",
+        ];
+        if (process.platform === "linux" && !resolved.noSandbox) {
+          hints.push("If running in a container or as root, try setting browser.noSandbox: true.");
+        }
+        const hintHeadlessMode = resolveManagedBrowserHeadlessMode(
+          resolved,
+          profile,
+          headlessOptions,
+        );
+        if (stderrSignals.missingDisplay && !hintHeadlessMode.headless) {
+          hints.push(
+            "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
           );
         }
+        if (stderrSignals.singletonInUse) {
+          hints.push(
+            `The Chromium profile "${profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${profile.name}/user-data.`,
+          );
+        }
+        const launchHints = `\nHint: ${hints.join("\nHint: ")}`;
+        const errorMessage = `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}". ${diagnosticText}${launchHints}${stderrDiagnostics.hint()}`;
+        log.error(errorMessage);
+        throw new Error(redactToolPayloadText(errorMessage));
       }
 
       signal?.throwIfAborted();
       const pid = spawned.pid;
+      started = true;
       log.info(
         `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
       );
@@ -1108,11 +1031,20 @@ async function launchOpenClawChromeLocked(
       }
       throw err;
     } finally {
-      // Chrome started successfully or launch failed — detach the stderr listener
-      // and release the bounded tail buffer.
       releaseSpawnAbort?.();
-      proc?.stderr?.off("data", onStderr);
-      stderrDiagnostics.clear();
+      if (started && proc) {
+        // Chromium can answer CDP before its GPU fails; keep bounded diagnostics until close.
+        proc.once("close", (code, exitSignal) => {
+          if (!proc?.killed && (code !== 0 || exitSignal)) {
+            log.error(
+              `Managed Chrome for profile "${profile.name}" exited (code ${code}, signal ${exitSignal}). Check the browser executable and browser.extraArgs before retrying.${stderrDiagnostics.hint()}`,
+            );
+          }
+          detachStderr();
+        });
+      } else {
+        detachStderr();
+      }
     }
   };
 

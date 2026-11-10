@@ -3,11 +3,12 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
 import { resolveChatRunExpiresAtMs } from "../chat-abort.js";
-import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
+import type { DedupeEntry } from "../server-shared.js";
 import { readPreRegisteredRun, writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import type { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import { chatSendRequestConflictError } from "./chat-send-retry-comparison.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -29,7 +30,6 @@ export function createPendingChatSendReservationAccess(params: {
     readPreRegisteredRun({
       key,
       entry: params.context.dedupe.get(key),
-      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
   return {
     read,
@@ -78,9 +78,6 @@ export function createPendingChatSendReservationAccess(params: {
       }
     },
     markInputAccepted: () => {
-      if (params.requestIdentity === undefined) {
-        return;
-      }
       const accepted = params.context.dedupe.get("chat:" + runId);
       if (
         accepted?.ok !== true ||
@@ -101,12 +98,7 @@ export function readChatSendDedupeResponse(
   runId: string,
 ): DedupeEntry | undefined {
   const entry = dedupe.get(`chat:${runId}`);
-  return entry?.requestIdentity &&
-    entry.ok &&
-    entry.payload === undefined &&
-    entry.error === undefined
-    ? undefined
-    : entry;
+  return entry?.ok && entry.payload === undefined && entry.error === undefined ? undefined : entry;
 }
 
 /** Consume prepared receipts and current RAM ownership without yielding before reservation. */
@@ -115,11 +107,9 @@ export function inspectGoalChatSendRetry({
   session,
   respond,
   context,
-  durableClaimAccepted,
   assertCurrent,
   prepared,
 }: ChatSendPreAdmissionParams & {
-  durableClaimAccepted?: boolean;
   prepared: Awaited<ReturnType<typeof prepareGoalChatSendRetry>>;
 }) {
   assertCurrent?.();
@@ -138,9 +128,20 @@ export function inspectGoalChatSendRetry({
     const pending = readPreRegisteredRun({
       key: pendingChatSendKey,
       entry: context.dedupe.get(pendingChatSendKey),
-      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
     const retainedIdentity = context.dedupe.get(`chat:${clientRunId}`)?.requestIdentity;
+    const submitted = prepared?.comparison?.submitted;
+    const submittedIdentity = submitted?.["__openclaw"]?.chatRequestIdentity;
+    // Goal custody retains its operation fingerprint; ordinary input retains the
+    // transcript's message fingerprint after the pending reservation is cleared.
+    const retainedGoalIdentity =
+      retainedIdentity !== undefined &&
+      typeof submittedIdentity === "string" &&
+      retainedIdentity !== submittedIdentity;
+    if (submitted && !pending?.payload.goalFingerprint && !retainedGoalIdentity) {
+      respond(false, undefined, chatSendRequestConflictError());
+      return { kind: "settled" } as const;
+    }
     const identityConflict =
       retainedIdentity !== undefined &&
       retainedIdentity !== request.goalOperation.requestFingerprint;
@@ -154,9 +155,7 @@ export function inspectGoalChatSendRetry({
       !identityConflict &&
       (pending?.payload.goalFingerprint === request.goalOperation.requestFingerprint ||
         newlyPublishedResponse ||
-        (!pending &&
-          !durableClaimAccepted &&
-          getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)))
+        (!pending && getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)))
     ) {
       respond(
         false,
@@ -170,7 +169,6 @@ export function inspectGoalChatSendRetry({
     if (
       identityConflict ||
       pending ||
-      durableClaimAccepted ||
       cachedResponse ||
       context.chatRunState.hasAbortMarker(clientRunId) ||
       getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)

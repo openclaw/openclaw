@@ -1,4 +1,3 @@
-import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
@@ -18,36 +17,6 @@ import { applyFeatherlessConnectionConfig, FEATHERLESS_DEFAULT_MODEL_REF } from 
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_ID = "featherless";
-
-function resolveFeatherlessDynamicModel(ctx: ProviderResolveDynamicModelContext) {
-  const modelId = ctx.modelId.trim();
-  if (!modelId || isFeatherlessCatalogModelId(modelId)) {
-    return undefined;
-  }
-
-  return resolveFamilyForwardCompatModel({
-    providerId: PROVIDER_ID,
-    modelId,
-    ctx,
-    cases: [
-      {
-        match: () => true,
-        templateIds: [FEATHERLESS_DEFAULT_MODEL_ID],
-        patch: ({ template }) =>
-          template ? undefined : { api: "openai-completions", baseUrl: FEATHERLESS_BASE_URL },
-      },
-    ],
-    patch: {
-      provider: PROVIDER_ID,
-      reasoning: false,
-      input: ["text"],
-      contextWindow: FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
-      maxTokens: FEATHERLESS_DYNAMIC_MAX_TOKENS,
-      compat: FEATHERLESS_DYNAMIC_COMPAT,
-    },
-    synthesize: true,
-  });
-}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -92,7 +61,35 @@ export default defineSingleProviderPluginEntry({
       dropReasoningFromHistory: false,
     }),
     ...buildProviderToolCompatFamilyHooks("openai"),
-    resolveDynamicModel: resolveFeatherlessDynamicModel,
+    resolveDynamicModel: (ctx) => {
+      const modelId = ctx.modelId.trim();
+      if (!modelId || isFeatherlessCatalogModelId(modelId)) {
+        return undefined;
+      }
+
+      return resolveFamilyForwardCompatModel({
+        providerId: PROVIDER_ID,
+        modelId,
+        ctx,
+        cases: [
+          {
+            match: () => true,
+            templateIds: [FEATHERLESS_DEFAULT_MODEL_ID],
+            patch: ({ template }) =>
+              template ? undefined : { api: "openai-completions", baseUrl: FEATHERLESS_BASE_URL },
+          },
+        ],
+        patch: {
+          provider: PROVIDER_ID,
+          reasoning: false,
+          input: ["text"],
+          contextWindow: FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
+          maxTokens: FEATHERLESS_DYNAMIC_MAX_TOKENS,
+          compat: FEATHERLESS_DYNAMIC_COMPAT,
+        },
+        synthesize: true,
+      });
+    },
     isModernModelRef: () => true,
   },
 });

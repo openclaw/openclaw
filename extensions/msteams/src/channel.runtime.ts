@@ -43,7 +43,7 @@ export const msTeamsChannelRuntime = {
   unreactMessageMSTeams,
   listMSTeamsDirectoryGroupsLive,
   listMSTeamsDirectoryPeersLive,
-  msteamsOutbound: { ...msteamsOutbound },
+  msteamsOutbound,
   probeMSTeams,
   sendAdaptiveCardMSTeams,
   sendMessageMSTeams,

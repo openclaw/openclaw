@@ -1,29 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { collectEventTypes } from "../transports/openai-stream-cases.test-support.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
-import type { Context } from "../types.js";
+import { streamOpenAICodexResponses } from "./openai-chatgpt-responses.js";
 import {
-  closeOpenAICodexWebSocketSessions,
-  resetOpenAICodexWebSocketStateForTest,
-  streamOpenAICodexResponses,
-} from "./openai-chatgpt-responses.js";
+  chatgptContext as context,
+  createJwt,
+  resetChatgptTransport,
+  sseResponse,
+} from "./openai-chatgpt-responses.test-helpers.js";
 import { makeOpenAIProviderModel } from "./openai-provider.test-support.js";
-
-function createJwt(payload: Record<string, unknown>): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${header}.${body}.signature`;
-}
 
 const apiKey = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } });
 const sseOptions = { apiKey, transport: "sse" as const };
-
-function sseResponse(payload: object): Response {
-  return new Response(`data: ${JSON.stringify(payload)}\n\n`, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
-}
 
 function installSse(payload: object) {
   const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(sseResponse(payload));
@@ -96,14 +85,7 @@ async function collectEvents(stream: ReturnType<typeof streamOpenAICodexResponse
 }
 
 describe("OpenAI ChatGPT Responses inference streaming", () => {
-  afterEach(() => {
-    closeOpenAICodexWebSocketSessions();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-    resetOpenAICodexWebSocketStateForTest();
-    configureAiTransportHost({});
-  });
+  afterEach(resetChatgptTransport);
 
   const model = makeOpenAIProviderModel("openai-chatgpt-responses", {
     id: "gpt-5.6-luna",
@@ -111,10 +93,6 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     baseUrl: "https://chatgpt.test/backend-api",
     maxTokens: 16_000,
   });
-
-  const context = {
-    messages: [{ role: "user", content: "hi", timestamp: 1 }],
-  } satisfies Context;
 
   it("preserves incomplete SSE terminals without exposing truncated tool calls", async () => {
     const payload = responseEvent("incomplete", "resp_incomplete", {
@@ -258,9 +236,7 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     const options = withProviderAcceptanceObserver({ apiKey }, acceptanceObserver);
 
     const stream = streamOpenAICodexResponses(model, context, options);
-    for await (const event of stream) {
-      order.push(event.type);
-    }
+    await collectEventTypes(stream, order);
 
     expect(order).toEqual(["accepted", "start", "done"]);
     expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });

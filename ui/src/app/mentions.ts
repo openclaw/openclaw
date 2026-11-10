@@ -4,13 +4,12 @@ import type {
   MentionInboxItem,
   MentionsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { registerListener } from "../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import {
   GatewayRequestError,
   resolveGatewayErrorDetailCode,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../api/gateway.ts";
+} from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveGatewayReadRetryDelayMs } from "../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -55,12 +54,10 @@ export function createMentionsCapability(
   };
   let connection: MentionConnection | null = null;
   let disposed = false;
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   const publish = (patch: Partial<MentionsSnapshot>) => {
     snapshot = { ...snapshot, ...patch };
-    for (const listener of listeners) {
-      listener();
-    }
+    listeners.publish();
   };
   const isCurrent = (owner: MentionConnection) =>
     !disposed &&
@@ -303,7 +300,7 @@ export function createMentionsCapability(
         }
       }
     },
-    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
     dispose() {
       disposed = true;
       clearTimeout(connection?.retryTimer);

@@ -1,4 +1,3 @@
-import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import { SESSION_ENTRY_PRIVATE_CLEAR_PATCH } from "./session-entry-projection.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -15,6 +14,10 @@ function generationValidPrivateFieldsForSameSession(
     return undefined;
   }
   const state: Partial<InternalSessionEntry> = {
+    ...(existingEntry.localWorkspaceHandoff
+      ? { localWorkspaceHandoff: existingEntry.localWorkspaceHandoff }
+      : {}),
+    ...(existingEntry.priorWorkspace ? { priorWorkspace: existingEntry.priorWorkspace } : {}),
     ...(existingEntry.cliHistoryBoundary
       ? { cliHistoryBoundary: existingEntry.cliHistoryBoundary }
       : {}),
@@ -33,12 +36,8 @@ function generationValidPrivateFieldsForSameSession(
     ...(existingEntry.sessionDiffBaselineCapture
       ? { sessionDiffBaselineCapture: existingEntry.sessionDiffBaselineCapture }
       : {}),
-    ...(existingEntry.mainRestartRecovery
-      ? {
-          abortedLastRun: existingEntry.abortedLastRun,
-          restartRecoveryRuns: existingEntry.restartRecoveryRuns,
-          mainRestartRecovery: existingEntry.mainRestartRecovery,
-        }
+    ...(existingEntry.resumeAfterRestart
+      ? { resumeAfterRestart: existingEntry.resumeAfterRestart }
       : {}),
   };
   return Object.keys(state).length > 0 ? state : undefined;
@@ -55,7 +54,6 @@ function clearGenerationPrivateFieldsForRotatedSessionPatch(
     ? {
         ...publicPatch,
         ...SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
-        ...MAIN_SESSION_RECOVERY_CLEAR_PATCH,
       }
     : publicPatch;
 }

@@ -2,11 +2,11 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelStatus } from "../../api/types.ts";
-import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { resolveChannelAccounts } from "../../lib/channels/index.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ChannelsProps } from "./view.types.ts";
@@ -52,9 +52,55 @@ export function resolveChannelDisplayState(key: string, props: ChannelsProps) {
     configured,
     running,
     connected,
-    defaultAccount,
     status,
   };
+}
+
+const CHANNEL_HEALTH = {
+  running: { kind: "ok", labelKey: "channels.hub.stateRunning" },
+  configured: { kind: "muted", labelKey: "channels.hub.stateConfigured" },
+  attention: { kind: "danger", labelKey: "channels.hub.stateAttention" },
+  notConfigured: { kind: "muted", labelKey: "channels.hub.stateNotConfigured" },
+} as const;
+type ChannelHealth = keyof typeof CHANNEL_HEALTH;
+
+/** The last connection check, when this read asked for one. */
+export function channelProbe(key: string, props: ChannelsProps) {
+  // SAFETY: Channel plugins publish the probe summary under this schema-light status field.
+  return resolveChannelDisplayState(key, props).status?.probe as ChannelStatus["probe"];
+}
+
+/** One answer to "does it work", shared by the channel's list row and its dialog. */
+export function resolveChannelHealth(key: string, props: ChannelsProps): ChannelHealth {
+  const snapshot = props.channels.channelsSnapshot;
+  const display = resolveChannelDisplayState(key, props);
+  const failed =
+    snapshot?.statusIssues?.some((issue) => issue.channel === key) ||
+    (typeof display.status?.lastError === "string" && display.status.lastError.trim()) ||
+    resolveChannelAccounts(snapshot?.channelAccounts, key).some((account) => account.lastError) ||
+    channelProbe(key, props)?.ok === false;
+  if (failed) {
+    return "attention";
+  }
+  if (display.running === true || display.connected === true) {
+    return "running";
+  }
+  return channelSnapshotEntryIsActive(snapshot ?? null, key) ? "configured" : "notConfigured";
+}
+
+export function ChannelHealthStatus(params: { health: ChannelHealth }) {
+  const state = () => CHANNEL_HEALTH[params.health];
+  return <SettingsStatus kind={state().kind} label={t(state().labelKey)} />;
+}
+
+export function channelLastActivity(key: string, props: ChannelsProps): string | null {
+  const lastInbound = resolveChannelAccounts(
+    props.channels.channelsSnapshot?.channelAccounts,
+    key,
+  ).reduce((latest, account) => Math.max(latest, account.lastInboundAt ?? 0), 0);
+  return lastInbound
+    ? t("channels.hub.lastMessageAgo", { ago: formatRelativeTimestamp(lastInbound) })
+    : null;
 }
 
 export function booleanChannelFact(
@@ -69,7 +115,7 @@ export function booleanChannelFact(
 }
 
 /** Status kind for boolean facts: dot signals on, quiet dot signals off. */
-export function boolStatusKind(value: boolean | null | undefined): ChannelStatusKind {
+function boolStatusKind(value: boolean | null | undefined): ChannelStatusKind {
   return value === true ? "ok" : "muted";
 }
 
@@ -92,44 +138,9 @@ export function ChannelFacts(params: { rows: readonly ChannelStatusRow[] }) {
   );
 }
 
-export function ChannelError(params: { message: unknown }) {
-  return (
-    <SettingsRow
-      title={<SettingsStatus kind={"danger"} label={t("channels.lastError")} />}
-      description={<>{formatUiError(params.message)}</>}
-    />
-  );
-}
-
-export function ChannelProbe(params: { probe: NonNullable<ChannelStatus["probe"]> }) {
-  const detail = createMemo(() =>
-    formatUiExternalText(
-      [params.probe.status ?? "", params.probe.error ?? ""].filter(Boolean).join(" "),
-    ),
-  );
-  return (
-    <SettingsRow
-      title={
-        <SettingsStatus
-          kind={params.probe.ok ? "ok" : "danger"}
-          label={params.probe.ok ? t("common.probeOk") : t("common.probeFailed")}
-        />
-      }
-      description={detail()}
-    />
-  );
-}
-
-export function ChannelActions(params: { children: JSX.Element }) {
-  return (
-    <div class="settings-row settings-row--actions">
-      <div class="settings-row__control">{params.children}</div>
-    </div>
-  );
-}
-
 export function ChannelRefresh(params: {
   updatedAt?: number | null;
+  busy: boolean;
   disabled: boolean;
   onRefresh: () => void;
 }) {
@@ -139,53 +150,51 @@ export function ChannelRefresh(params: {
       : t("common.na"),
   );
   return (
-    <openclaw-tooltip prop:content={updatedLabel()}>
-      <button
-        type="button"
-        class="btn btn--xs btn--icon"
-        aria-label={t("common.refresh")}
-        disabled={params.disabled}
-        onClick={() => params.onRefresh()}
-      >
-        <Icon name="refresh" />
-      </button>
-    </openclaw-tooltip>
+    <RefreshButton
+      class="channels-refresh"
+      label={t("common.refresh")}
+      tooltip={updatedLabel()}
+      busy={params.busy}
+      disabled={params.disabled}
+      onClick={() => params.onRefresh()}
+    />
   );
 }
 
-export function ChannelAccount(params: {
-  title: JSX.Element;
-  accountId: string;
-  facts?: readonly string[];
-  status: { kind: ChannelStatusKind; label: JSX.Element };
-  lastInboundAt?: number | null;
-  lastError?: string | null;
-}) {
-  const factLine = () => [params.accountId, ...(params.facts ?? [])].join(" · ");
+export function ChannelAccount(params: { title: JSX.Element; account: ChannelAccountSnapshot }) {
+  const account = () => params.account;
+  const health = (): ChannelHealth =>
+    account().lastError
+      ? "attention"
+      : account().running
+        ? "running"
+        : account().configured
+          ? "configured"
+          : "notConfigured";
+  const factLine = () =>
+    [
+      // A row titled by its id doesn't need the id again.
+      params.title === account().accountId ? "" : account().accountId,
+      account().lastInboundAt
+        ? t("channels.hub.lastMessageAgo", {
+            ago: formatRelativeTimestamp(account().lastInboundAt ?? null),
+          })
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
   return (
     <div class="settings-row">
       <div class="settings-row__text">
         <span class="settings-row__title">{params.title}</span>
         <span class="settings-row__desc">{factLine()}</span>
-        {params.lastError ? (
-          <span class="settings-row__desc">{formatUiExternalText(params.lastError)}</span>
+        {account().lastError ? (
+          <span class="settings-row__desc">{formatUiExternalText(account().lastError)}</span>
         ) : undefined}
       </div>
       <div class="settings-row__control">
-        <SettingsStatus {...params.status} />
-        <span class="settings-row__value">
-          {params.lastInboundAt ? formatRelativeTimestamp(params.lastInboundAt) : t("common.na")}
-        </span>
+        <ChannelHealthStatus health={health()} />
       </div>
     </div>
   );
-}
-
-/** Multi-account channels surface the account count next to the heading. */
-export function resolveChannelAccountCount(
-  key: string,
-  channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null,
-): number | undefined {
-  const count = resolveChannelAccounts(channelAccounts, key).length;
-  return count >= 2 ? count : undefined;
 }

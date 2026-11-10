@@ -1,4 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
@@ -27,7 +28,9 @@ type SkippedInstall = {
 };
 
 function summarizeInstallFailure(message: string): string | undefined {
-  const cleaned = message.replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "").trim();
+  const cleaned = terminalText`${message}`
+    .replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "")
+    .trim();
   if (!cleaned) {
     return undefined;
   }
@@ -38,7 +41,7 @@ function summarizeInstallFailure(message: string): string | undefined {
 function formatSkillHint(skill: Pick<SkillStatusEntry, "description" | "install">): string {
   const desc = skill.description?.trim();
   const installLabel = skill.install[0]?.label?.trim();
-  const combined = desc && installLabel ? `${desc} — ${installLabel}` : desc || installLabel;
+  const combined = terminalText`${desc && installLabel ? `${desc} — ${installLabel}` : desc || installLabel || ""}`;
   if (!combined) {
     return "install";
   }
@@ -51,27 +54,6 @@ const SKIP_REASON_LABELS = {
   go: `Go toolchain (${MIN_AUTO_GO_VERSION}+)`,
   uv: "uv",
 } satisfies Record<SkillInstallSkipReason, string>;
-
-function formatSkillNames(names: string[]): string {
-  const visible = names.slice(0, SKIPPED_INSTALL_NAME_LIMIT);
-  const suffix = names.length > visible.length ? ` (+${names.length - visible.length} more)` : "";
-  return `${visible.join(", ")}${suffix}`;
-}
-
-function formatSkippedInstallNote(skipped: SkippedInstall[]): string {
-  const lines = [t("wizard.skills.manualPrereqsIntro")];
-  for (const reason of ["brew", "go", "uv"] as const) {
-    const names = skipped.filter((item) => item.reason === reason).map((item) => item.skill.name);
-    if (names.length > 0) {
-      lines.push(`${SKIP_REASON_LABELS[reason]}: ${formatSkillNames(names)}`);
-    }
-  }
-  for (const item of skipped.filter((entry) => entry.detail).slice(0, SKIPPED_INSTALL_NAME_LIMIT)) {
-    lines.push(`${item.skill.name}: ${item.detail}`);
-  }
-  lines.push(t("wizard.skills.manualPrereqsDoctorHint"));
-  return lines.join("\n");
-}
 
 /** Runs the interactive skills setup step and returns the updated config. */
 export async function setupSkills(
@@ -169,7 +151,7 @@ export async function setupSkills(
         },
         ...candidateInstallable.map((skill) => ({
           value: skill.name,
-          label: `${skill.emoji ?? "🧩"} ${skill.name}`,
+          label: terminalText`${skill.emoji ?? "🧩"} ${skill.name}`,
           hint: formatSkillHint(skill),
         })),
       ],
@@ -220,7 +202,9 @@ export async function setupSkills(
       // Onboarding installs the primary recipe only; alternative recipes remain
       // visible through `openclaw skills list --verbose`.
       await options.beforePersistentEffect?.();
-      const spin = prompter.progress(t("wizard.skills.installing", { name: target.name }));
+      const spin = prompter.progress(
+        t("wizard.skills.installing", { name: terminalText`${target.name}` }),
+      );
       const result = await installSkill({
         workspaceDir,
         skillName: target.name,
@@ -231,11 +215,11 @@ export async function setupSkills(
       if (result.ok) {
         spin.stop(
           warnings.length > 0
-            ? t("wizard.skills.installedWithWarnings", { name: target.name })
-            : t("wizard.skills.installed", { name: target.name }),
+            ? t("wizard.skills.installedWithWarnings", { name: terminalText`${target.name}` })
+            : t("wizard.skills.installed", { name: terminalText`${target.name}` }),
         );
       } else if (result.skipReason) {
-        spin.stop(t("wizard.skills.installSkipped", { name: target.name }));
+        spin.stop(t("wizard.skills.installSkipped", { name: terminalText`${target.name}` }));
         const detail = summarizeInstallFailure(result.message);
         selectedSkippedInstallable.push({
           skill: target,
@@ -247,7 +231,7 @@ export async function setupSkills(
         const detail = summarizeInstallFailure(result.message);
         spin.stop(
           t("wizard.skills.installFailed", {
-            name: target.name,
+            name: terminalText`${target.name}`,
             code,
             detail: detail ? ` - ${detail}` : "",
           }),
@@ -285,10 +269,26 @@ export async function setupSkills(
       );
     }
     if (selectedSkippedInstallable.length > 0) {
-      await prompter.note(
-        formatSkippedInstallNote(selectedSkippedInstallable),
-        t("wizard.skills.manualPrereqsTitle"),
-      );
+      const skipped = selectedSkippedInstallable;
+      const lines = [t("wizard.skills.manualPrereqsIntro")];
+      for (const reason of ["brew", "go", "uv"] as const) {
+        const names = skipped
+          .filter((item) => item.reason === reason)
+          .map((item) => item.skill.name);
+        if (names.length > 0) {
+          const visible = names.slice(0, SKIPPED_INSTALL_NAME_LIMIT);
+          const suffix =
+            names.length > visible.length ? ` (+${names.length - visible.length} more)` : "";
+          lines.push(terminalText`${SKIP_REASON_LABELS[reason]}: ${visible.join(", ")}${suffix}`);
+        }
+      }
+      for (const item of skipped
+        .filter((entry) => entry.detail)
+        .slice(0, SKIPPED_INSTALL_NAME_LIMIT)) {
+        lines.push(terminalText`${item.skill.name}: ${item.detail}`);
+      }
+      lines.push(t("wizard.skills.manualPrereqsDoctorHint"));
+      await prompter.note(lines.join("\n"), t("wizard.skills.manualPrereqsTitle"));
     }
   }
 

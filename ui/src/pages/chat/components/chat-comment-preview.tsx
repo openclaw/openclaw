@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, useContext } from "solid-js";
+import { For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -50,7 +50,7 @@ export function CommentPreviewRow(props: { comment: CommentPreview; children?: J
   );
 }
 
-type ChipProps = {
+export function CommentPreviewChip(props: {
   count: number;
   children?: JSX.Element;
   onReveal?: () => void;
@@ -58,16 +58,19 @@ type ChipProps = {
   elementRef?: (element: Element | undefined) => void;
   previewRef?: (element: HTMLElement) => void;
   triggerRef?: (element: HTMLButtonElement) => void;
-};
-
-export function CommentPreviewChip(props: ChipProps) {
+}) {
   const ref = scrollRef();
+  const label = () =>
+    t(props.count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", {
+      count: String(props.count),
+    });
   let trigger: HTMLButtonElement | undefined;
+  // Wide previews need the full inline area to flip without covering their trigger.
   return (
     <openclaw-tooltip
       ref={props.previewRef}
       class={["chat-comment-preview", { "chat-comment-preview--editable": Boolean(props.removal) }]}
-      prop:placement="top-start"
+      prop:placement="top"
       prop:autoSize={true}
       prop:describe={false}
       prop:descriptionTarget={props.removal ? () => trigger ?? null : undefined}
@@ -75,10 +78,13 @@ export function CommentPreviewChip(props: ChipProps) {
       prop:hoverDismissDelay={props.removal ? 200 : undefined}
     >
       <AttachmentPreviewChip
-        label={t(
-          props.count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount",
-          { count: String(props.count) },
-        )}
+        label={
+          <For each={label().split(/(\s+)/u)}>
+            {(part) =>
+              /^\s+$/u.test(part) ? <span class="chat-comment-count-gap">{part}</span> : part
+            }
+          </For>
+        }
         icon={<Icon name="messageSquare" />}
         onReveal={props.onReveal}
         onClick={props.onReveal}

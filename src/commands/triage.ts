@@ -6,8 +6,11 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
+import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
+import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
+import { isDefaultInstallIdentity } from "../config/paths.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { HealthFinding, HealthFindingSeverity } from "../flows/health-checks.js";
@@ -28,11 +31,7 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { resolveWindowsSpawnProgramCandidate } from "../plugin-sdk/windows-spawn.js";
 import { ExitError, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import {
-  TRIAGE_EXTERNAL_AGENTS,
-  formatTriageHandoffCommands,
-  type TriageExternalAgent,
-} from "./triage-handoff.js";
+import { TRIAGE_EXTERNAL_AGENTS, type TriageExternalAgent } from "./triage-handoff.js";
 import {
   renderTriagePrompt,
   type TriageBundle,
@@ -114,8 +113,15 @@ async function collectTriageBundle(
           defaultTimeoutMs: 3000,
           sharedStateMode: "read-only",
         }),
-      readStatusSnapshot: async () =>
-        await gatherDaemonStatus({ rpc, probe: true, requireRpc: false, deep: false }),
+      readGatewayCapabilities: async () =>
+        await callGatewayFromCliWithTransport("diagnostics.capabilities", rpc, undefined, {
+          defaultTimeoutMs: 3000,
+          sharedStateMode: "read-only",
+        }),
+      // Custom state/config selectors do not select the account's native service.
+      readStatusSnapshot: isDefaultInstallIdentity(redaction.env)
+        ? async () => await gatherDaemonStatus({ rpc, probe: true, requireRpc: false, deep: false })
+        : undefined,
     });
     return { kind: "available", path: result.path };
   } catch (error) {
@@ -123,13 +129,37 @@ async function collectTriageBundle(
   }
 }
 
+type AutomaticTriage = { failure: TriageFailureContext; signal: AbortSignal } & (
+  | { diagnosticOnly: true }
+  | { diagnosticOnly?: false; assertCurrent: () => void }
+);
+
 export async function triageCommand(
   runtime: RuntimeEnv,
   options: TriageOptions = {},
-  automatic?: { failure: TriageFailureContext; signal: AbortSignal } & (
-    | { diagnosticOnly: true }
-    | { diagnosticOnly?: false; assertCurrent: () => void }
-  ),
+  automatic?: AutomaticTriage,
+): Promise<void> {
+  if (automatic) {
+    return runTriage(runtime, options, automatic);
+  }
+  // An accepted SIGINT, SIGTERM or hangup stops standalone triage at its next step,
+  // before it can start a repair agent; the signal drain waits for this unwind.
+  const stopped = new AbortController();
+  const finished = Promise.withResolvers<void>();
+  const releaseGate = registerSignalExitGate(finished.promise, () => stopped.abort());
+  try {
+    return await runTriage(runtime, options, undefined, stopped.signal);
+  } finally {
+    releaseGate();
+    finished.resolve();
+  }
+}
+
+async function runTriage(
+  runtime: RuntimeEnv,
+  options: TriageOptions,
+  automatic?: AutomaticTriage,
+  stopped?: AbortSignal,
 ): Promise<void> {
   if (
     !automatic &&
@@ -167,6 +197,9 @@ export async function triageCommand(
     }
   }
   const isCurrent = () => {
+    if (stopped?.aborted) {
+      return false;
+    }
     automatic?.signal.throwIfAborted();
     if (automatic && !automatic.diagnosticOnly) {
       automatic.assertCurrent();
@@ -293,14 +326,52 @@ export async function triageCommand(
     return;
   }
   const promptPath = promptArtifact.ok ? promptArtifact.value : null;
-  const handoffCommands = formatTriageHandoffCommands({
-    target,
-    env: targetEnv,
-    prompt,
-    promptPath,
-    updateResultPath,
-    agent: options.agent,
-  });
+  const handoffAgent = options.agent;
+  // Keep executable manual commands and the complete JSON handoff pinned to the same target.
+  const format = (argv: string[], stdinPath?: string | null) =>
+    formatInstallationTargetCommand(argv, target, {
+      env: targetEnv,
+      ...(stdinPath ? { stdinPath } : {}),
+    });
+  const external = {
+    // agy takes its initial prompt in argv, not plain-text stdin. Keep native approvals.
+    agy: format([
+      "agy",
+      "--prompt-interactive",
+      promptPath
+        ? `Read the debugging prompt at ${promptPath} and follow its repair and verification instructions.`
+        : prompt,
+    ]),
+    claude: format(["claude", "-p", ...(promptPath ? [] : [prompt])], promptPath),
+    codex: format(
+      ["codex", "exec", "--skip-git-repo-check", promptPath ? "-" : prompt],
+      promptPath,
+    ),
+    cursor: format(["cursor-agent", "--print", ...(promptPath ? [] : [prompt])], promptPath),
+    grok: format(["grok", ...(promptPath ? ["--prompt-file", promptPath] : ["--single", prompt])]),
+    kimi: format([
+      "kimi",
+      "--prompt",
+      promptPath
+        ? `Read the debugging prompt at ${promptPath} and follow its repair and verification instructions.`
+        : prompt,
+    ]),
+    muse: format(["muse", "exec", ...(promptPath ? ["--prompt-file", promptPath] : [prompt])]),
+    opencode: format(["opencode", "run", ...(promptPath ? [] : [prompt])], promptPath),
+    pi: format(["pi", "--print", ...(promptPath ? [] : [prompt])], promptPath),
+    qwen: format(["qwen", ...(promptPath ? [] : [prompt])], promptPath),
+  };
+  const failureArgs = updateResultPath ? ["--update-result", updateResultPath] : [];
+  const handoffCommands = {
+    external,
+    embedded: format(["openclaw", "triage", "--run", ...failureArgs]),
+    retry: format([
+      "openclaw",
+      "triage",
+      ...(handoffAgent ? ["--agent", handoffAgent] : []),
+      ...failureArgs,
+    ]),
+  };
   const suggestedCommands = [
     ...TRIAGE_EXTERNAL_AGENTS.map((agent) => handoffCommands.external[agent]),
     handoffCommands.embedded,

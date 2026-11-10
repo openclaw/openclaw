@@ -9,12 +9,7 @@ import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { resolveRootPath } from "../infra/boundary-path.js";
 import { toErrorObject } from "../infra/errors.js";
-import {
-  canonicalPathFromExistingAncestor,
-  findExistingAncestor,
-  root as fsRoot,
-  FsSafeError,
-} from "../infra/fs-safe.js";
+import { findExistingAncestor, root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import {
   classifyMediaReferenceSource,
@@ -36,6 +31,11 @@ import {
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import {
+  type ApplyPatchContainmentSource,
+  isSandboxRootEscapeError,
+  withWorkspaceRecoveryHint,
+} from "./apply-patch-containment-hint.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { writeHostFile } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -49,6 +49,7 @@ import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath, normalizeFileReferencePrefix } from "./sandbox-paths.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { withFileMutationQueueKeyResolution } from "./sessions/tools/file-mutation-queue.js";
 import {
   createEditTool,
   createReadTool,
@@ -64,12 +65,18 @@ import {
 } from "./sessions/tools/read-page.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./sessions/tools/truncate.js";
+import {
+  createAlreadyDeliveredSkillResult,
+  rememberSkillInstructionDelivery,
+} from "./skill-instruction-result.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 import {
   resolveToolResultBudget,
   toolResultFitsBudget,
   type ToolResultBudget,
 } from "./tool-result-limits.js";
+import { toCanonicalRelativeWorkspacePath, writeHostWorkspaceFile } from "./workspace-file-ops.js";
+import { resolveHostWorkspaceRoot, resolveHostRootAsync } from "./workspace-write-scope.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to sanitize oversized images before they hit providers.
@@ -121,7 +128,7 @@ function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
 type ReadTruncationDetails = {
   truncated: boolean;
   outputLines: number;
-  totalLines: number;
+  totalLines?: number;
   continuation?: ReadToolContinuation;
 };
 
@@ -269,7 +276,9 @@ async function executeReadWithAdaptivePaging(params: {
     const truncation = extractReadTruncationDetails(pageResult);
     const pageEndLine = next.offset - 1 + (truncation?.outputLines ?? 0);
     const reachedEof =
-      Boolean(truncation?.truncated) && pageEndLine >= (truncation?.totalLines ?? 0);
+      truncation !== null &&
+      truncation.totalLines !== undefined &&
+      pageEndLine >= truncation.totalLines;
     const pageContinuation = truncation?.continuation;
     const pageText =
       pageContinuation || reachedEof ? stripReadContinuationNotice(rawText) : rawText;
@@ -310,7 +319,7 @@ async function executeReadWithAdaptivePaging(params: {
         content: pageContent,
         startLine: next.offset,
         endLine: next.offset + lineCount - 1,
-        totalLines: truncation?.totalLines ?? next.offset + lineCount - 1,
+        totalLines: truncation ? truncation.totalLines : next.offset + lineCount - 1,
         continuation: pageContinuation,
         ...(next.kind === "cursor" ? { cursor: next.cursor } : {}),
         limit: next.limit,
@@ -551,41 +560,39 @@ async function appendMemoryFlushContent(params: {
   signal?: AbortSignal;
   assertCurrent: ReturnType<typeof captureAgentToolSourceExecutionGuard>;
 }) {
-  if (!params.sandbox) {
-    const root = await fsRoot(params.root);
-    await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
+  await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
+    const sandbox = params.sandbox;
+    if (!sandbox) {
+      const root = await fsRoot(params.root);
       params.assertCurrent();
       await root.append(params.relativePath, params.content, {
         mkdir: true,
         prependNewlineIfNeeded: true,
         assertBeforeMutation: params.assertCurrent,
       });
-    });
-    return;
-  }
-
-  const existing = await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
-    const content = await readOptionalUtf8File({
-      absolutePath: params.absolutePath,
-      relativePath: params.relativePath,
-      sandbox: params.sandbox,
-      signal: params.signal,
-    });
-    params.assertCurrent();
-    return content;
-  });
-  const separator =
-    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
-  const next = `${existing}${separator}${params.content}`;
-  const sandbox = params.sandbox;
-  await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
-    params.assertCurrent();
-    await sandbox.bridge.writeFile({
-      filePath: params.relativePath,
+      return;
+    }
+    // Share write/edit ordering; the bridge has no cross-process append primitive.
+    const queueKey = resolveSandboxFileMutationQueueKey({
+      ...sandbox,
+      filePath: params.absolutePath,
       cwd: sandbox.root,
-      data: next,
-      mkdir: true,
       signal: params.signal,
+    });
+    await withFileMutationQueueKeyResolution(queueKey, async () => {
+      const existing = await readOptionalUtf8File(params);
+      const separator =
+        existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n")
+          ? "\n"
+          : "";
+      params.assertCurrent();
+      await sandbox.bridge.writeFile({
+        filePath: params.relativePath,
+        cwd: sandbox.root,
+        data: `${existing}${separator}${params.content}`,
+        mkdir: true,
+        signal: params.signal,
+      });
     });
   });
 }
@@ -677,24 +684,11 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   };
 }
 
-function isSandboxRootEscapeError(error: unknown): error is Error {
-  return error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message);
-}
-
-function withWorkspaceSafeTempHint(error: unknown): unknown {
-  if (!isSandboxRootEscapeError(error)) {
-    return error;
-  }
-  const message = error.message.includes(".openclaw/tmp/")
-    ? error.message
-    : `${error.message}. Use a relative path under \`.openclaw/tmp/\` inside the workspace for scratch/temp/meta files that file tools need to read or write later.`;
-  return new Error(message, { cause: error });
-}
-
 async function assertSandboxPathWithinAnyRoot(params: {
   cwd?: string;
   filePath: string;
   roots: readonly string[];
+  allowLinkedWorktrees?: boolean;
 }) {
   let firstRootEscapeError: unknown;
   const seen = new Set<string>();
@@ -712,6 +706,7 @@ async function assertSandboxPathWithinAnyRoot(params: {
         filePath: params.filePath,
         cwd: index === 0 ? (params.cwd ?? root) : root,
         root,
+        ...(index === 0 && params.allowLinkedWorktrees ? { allowLinkedWorktrees: true } : {}),
       });
     } catch (error) {
       if (!isSandboxRootEscapeError(error)) {
@@ -732,6 +727,7 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
   root: string,
   options?: {
     additionalRoots?: readonly string[];
+    allowLinkedWorktrees?: boolean;
     containerMounts?: readonly {
       containerRoot: string;
       hostRoot: string;
@@ -740,6 +736,7 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
     resolutionCwd?: string;
+    containmentSource?: ApplyPatchContainmentSource;
     bridge?: SandboxFsBridge;
     readPathValidation?: "bridge";
   },
@@ -806,10 +803,15 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
               cwd: !workspaceMapping ? options?.resolutionCwd : undefined,
               filePath: sandboxPath,
               roots: [guardedRoot, ...additionalRoots],
+              allowLinkedWorktrees: !options?.bridge && options?.allowLinkedWorktrees,
             });
           }
         } catch (error) {
-          throw withWorkspaceSafeTempHint(error);
+          throw withWorkspaceRecoveryHint(
+            error,
+            !options?.bridge && mounts.length === 0,
+            options?.containmentSource,
+          );
         }
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
@@ -1013,14 +1015,6 @@ export function wrapReadToolWithSkillContent(
     return tool;
   }
   const instructionDeliveryCache = options?.instructionDeliveryCache;
-  const alreadyDeliveredResult = (): AgentToolResult<ReadToolDetails> => {
-    const text =
-      "Skill instructions were already served whole earlier in the current model context. Reuse that content; the full document will be served again if compaction removes it.";
-    return {
-      content: [{ type: "text", text }],
-      details: { kind: "text", content: text },
-    };
-  };
   const readContent = (filePath: string): string => {
     const content = instructionContent.get(filePath);
     if (content === undefined) {
@@ -1052,7 +1046,7 @@ export function wrapReadToolWithSkillContent(
           continue;
         }
         if (delivered) {
-          return alreadyDeliveredResult();
+          return createAlreadyDeliveredSkillResult(priorDelivery);
         }
         instructionDeliveryCache?.delete(instructionPath);
       }
@@ -1112,6 +1106,9 @@ export function wrapReadToolWithSkillContent(
           resetDelivery();
           return result;
         }
+        if (!signal?.aborted) {
+          rememberSkillInstructionDelivery(result, details.content, delivery);
+        }
         settleDelivery(true);
         return result;
       } catch (error) {
@@ -1152,14 +1149,12 @@ function createSandboxMutationOperations(params: SandboxToolParams) {
     {
       resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
         resolveSandboxFileQueueKey(params, absolutePath, signal),
-      mkdir: async (dir: string) => {
-        await params.bridge.mkdirp({ filePath: dir, cwd: params.root, signal: params.abortSignal });
-      },
       writeFile: async (absolutePath: string, content: string) => {
         await params.bridge.writeFile({
           filePath: absolutePath,
           cwd: params.root,
           data: content,
+          mkdir: true,
           signal: params.abortSignal,
         });
       },
@@ -1222,27 +1217,6 @@ async function statHostFile(absolutePath: string) {
   }
 }
 
-async function writeWorkspaceFile(
-  root: string,
-  getRoot: () => ReturnType<typeof fsRoot>,
-  absolutePath: string,
-  content: string,
-  abortSignal?: AbortSignal,
-) {
-  const assertCurrent = captureAgentToolSourceExecutionGuard(abortSignal);
-  // Reject lexical escapes before opening the lazily created workspace root.
-  const relative = toRelativeWorkspacePath(root, absolutePath);
-  const rootHandle = await getRoot();
-  // Absolute admitted paths preserve literal "~" workspace directories.
-  await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-    await rootHandle.write(path.resolve(rootHandle.rootReal, relative), content, {
-      mkdir: true,
-      mutationSymlinks: "follow-parents-within-root",
-      assertBeforeMutation: assertCurrent,
-    });
-  });
-}
-
 function createHostMutationOperations(
   root: string,
   options?: {
@@ -1281,17 +1255,25 @@ function createHostMutationOperations(
   // root lazily on first use: constructing the tool (e.g. doctor projecting tool
   // schemas) must not open an fs handle, and a missing workspace dir must not
   // orphan a rejecting promise as "Unhandled promise rejection: root dir not found".
-  let rootPromise: ReturnType<typeof fsRoot> | undefined;
-  const getRoot = () => (rootPromise ??= fsRoot(root));
+  const roots = new Map<string, ReturnType<typeof fsRoot>>();
+  const getRoot = (selectedRoot: string) => {
+    let pending = roots.get(selectedRoot);
+    if (!pending) {
+      pending = fsRoot(selectedRoot);
+      roots.set(selectedRoot, pending);
+    }
+    return pending;
+  };
   return withMemoryWriteProvenance(
     {
       mkdir: async (dir: string) => {
         const assertCurrent = captureAgentToolSourceExecutionGuard(options?.abortSignal);
-        const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
+        const selectedRoot = await resolveHostRootAsync(root, dir);
+        const relative = toRelativeWorkspacePath(selectedRoot, dir, { allowRoot: true });
         // mkdir receives the file's parent, including directory links to the root itself.
         const resolved = await resolveRootPath({
-          absolutePath: path.resolve(root, relative),
-          rootPath: root,
+          absolutePath: path.resolve(selectedRoot, relative),
+          rootPath: selectedRoot,
           boundaryLabel: "workspace root",
         });
         const ancestor = await findExistingAncestor(resolved.rootCanonicalPath);
@@ -1304,7 +1286,7 @@ function createHostMutationOperations(
             });
           });
         }
-        const rootHandle = await getRoot();
+        const rootHandle = await getRoot(selectedRoot);
         const canonicalRelative = toRelativeWorkspacePath(
           rootHandle.rootReal,
           resolved.canonicalPath,
@@ -1312,7 +1294,10 @@ function createHostMutationOperations(
         );
         const mutationOptions = {
           mutationSymlinks: "reject" as const,
-          assertBeforeMutation: assertCurrent,
+          assertBeforeMutation: () => {
+            assertCurrent();
+            toRelativeWorkspacePath(resolveHostWorkspaceRoot(root, dir), dir, { allowRoot: true });
+          },
         };
         await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
           if (canonicalRelative) {
@@ -1323,22 +1308,25 @@ function createHostMutationOperations(
         });
       },
       writeFile: (absolutePath: string, content: string) =>
-        writeWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
+        writeHostWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
       readFile: async (absolutePath: string) => {
         // Reads retain the workspace contract of following only symlink parents.
-        const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
-        const rootHandle = await getRoot();
+        const selectedRoot = await resolveHostRootAsync(root, absolutePath);
+        const relative = await toCanonicalRelativeWorkspacePath(selectedRoot, absolutePath);
+        const rootHandle = await getRoot(selectedRoot);
         return (await rootHandle.read(path.resolve(rootHandle.rootReal, relative))).buffer;
       },
       statFile: async (absolutePath: string) => {
-        const relative = toRelativeWorkspacePath(root, absolutePath);
-        return statHostFile(path.resolve(root, relative));
+        const selectedRoot = await resolveHostRootAsync(root, absolutePath);
+        const relative = toRelativeWorkspacePath(selectedRoot, absolutePath);
+        return statHostFile(path.resolve(selectedRoot, relative));
       },
       access: async (absolutePath: string) => {
+        const selectedRoot = await resolveHostRootAsync(root, absolutePath);
         let relative: string;
         try {
           // Canonicalized like readFile so in-workspace symlink parents pass.
-          relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+          relative = await toCanonicalRelativeWorkspacePath(selectedRoot, absolutePath);
         } catch {
           // Path escapes workspace root.  Don't throw here – the upstream
           // library replaces any `access` error with a misleading "File not
@@ -1348,7 +1336,7 @@ function createHostMutationOperations(
           return;
         }
         try {
-          const rootHandle = await getRoot();
+          const rootHandle = await getRoot(selectedRoot);
           const opened = await rootHandle.open(path.resolve(rootHandle.rootReal, relative));
           await opened.handle.close().catch(() => {});
         } catch (error) {
@@ -1366,21 +1354,6 @@ function createHostMutationOperations(
     } as const,
     options?.memoryWriteProvenance,
   );
-}
-
-async function toCanonicalRelativeWorkspacePath(
-  root: string,
-  absolutePath: string,
-): Promise<string> {
-  const lexicalRelative = toRelativeWorkspacePath(root, absolutePath);
-  const lexicalPath = path.resolve(root, lexicalRelative);
-  const parentPath = path.dirname(lexicalPath);
-  const [rootReal, canonicalParentPath] = await Promise.all([
-    fs.realpath(root),
-    canonicalPathFromExistingAncestor(parentPath),
-  ]);
-  const canonicalPath = path.join(canonicalParentPath, path.basename(lexicalPath));
-  return toRelativeWorkspacePath(rootReal, canonicalPath);
 }
 
 function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {

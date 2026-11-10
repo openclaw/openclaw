@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { existsSync, linkSync, renameSync, writeFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { parentPort, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Generated } from "kysely";
@@ -13,6 +14,8 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "./sqlite-worker-binding.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
+  SQLITE_WORKER_CLOSE_RECEIPT,
+  type SqliteWorkerCloseReceipt,
   type SqliteWorkerPreparedBackend,
 } from "./sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
@@ -45,6 +48,7 @@ if (parentPort) {
 }
 
 export type FixtureOpenInput =
+  | { type: "retirement" }
   | { type: "disk-full" }
   | { type: "link"; existingPath: string }
   | { type: "observe"; markerPath: string }
@@ -60,45 +64,28 @@ type Receipt = {
     execution: SqliteReaderOwner | undefined;
   };
 };
+type Operation<Input, Output> = { input: Input; output: Output };
+type Value = { value: string };
+type DomainCommand = {
+  type: "session.actor.appendTranscriptEvent" | "session.private-customer-command";
+  input: Value;
+};
 export type FixtureOperations = {
-  append: { input: { value: string }; output: Receipt };
-  "database.domain.execute": {
-    input: {
-      command: {
-        type: "session.actor.appendTranscriptEvent" | "session.private-customer-command";
-        input: { value: string };
-      };
-    };
-    output: Receipt;
-  };
-  read: { input: undefined; output: string[] };
-  takeReplyOwnership: { input: undefined; output: ReplyOwnership[] };
-  commitThenExit: { input: { value: string }; output: never };
-  commitWithoutReceipt: {
-    input: { value: string; mode: "native" | "schema-maintenance" };
-    output: never;
-  };
-  commitUnserializable: { input: { value: string }; output: symbol };
-  failClose: { input: undefined; output: undefined };
-  delayClose: { input: { markerPath: string; reject: boolean }; output: undefined };
-  illegalAsync: {
-    input: { value: string; gatePath: string; reject: boolean };
-    output: Promise<Receipt>;
-  };
+  append: Operation<Value, Receipt>;
+  "database.domain.execute": Operation<{ command: DomainCommand }, Receipt>;
+  read: Operation<undefined, string[]>;
+  takeReplyOwnership: Operation<undefined, ReplyOwnership[]>;
+  commitThenExit: Operation<Value, never>;
+  commitWithoutReceipt: Operation<Value & { mode: "native" | "schema-maintenance" }, never>;
+  commitUnserializable: Operation<Value, symbol>;
+  delayClose: Operation<{ markerPath: string; reject: boolean }, undefined>;
+  illegalAsync: Operation<Value & { gatePath: string; reject: boolean }, Promise<Receipt>>;
 };
 
-function waitForFile(file: string): Promise<void> {
-  return new Promise((resolve) => {
-    const check = () => {
-      if (existsSync(file)) {
-        clearInterval(poll);
-        resolve();
-      }
-    };
-    // Worker watch notifications can be missed or coalesced; observe the persistent gate.
-    const poll = setInterval(check, 50);
-    check();
-  });
+async function waitForFile(file: string): Promise<void> {
+  while (!existsSync(file)) {
+    await delay(50);
+  }
 }
 
 export function createSqliteWorkerBackend(
@@ -137,42 +124,42 @@ function createFixtureBackend(
     db.exec("CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
   }
   const query = getNodeSqliteKysely<{ entries: { id: Generated<number>; value: string } }>(db);
+  const insert = (value: string) =>
+    executeSqliteQuerySync(db, query.insertInto("entries").values({ value }));
   const actor = randomUUID();
   let writes = 0;
+  let retirementReceipt: SqliteWorkerCloseReceipt | undefined;
   let prepared = false;
   const preparationOwners: (SqliteReaderOwner | undefined)[] = [];
-  let failClose = false;
   let delayedClose: { markerPath: string; reject: boolean } | undefined;
   function append(value: string): Receipt {
     runSqliteImmediateTransactionSync(db, () => {
       if (input?.type === "prepare" && input.guarded) {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       }
-      executeSqliteQuerySync(db, query.insertInto("entries").values({ value }));
+      insert(value);
       if (input?.type === "prepare" && input.guarded) {
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       }
     });
-    writes += 1;
-    return {
-      actor,
-      writes,
-      threadId,
-      ...(input?.type === "prepare"
-        ? {
-            readerOwnership: {
-              preparation: [...preparationOwners],
-              execution: captureSqliteReaderOwner(),
-            },
-          }
-        : {}),
-    };
+    const receipt: Receipt = { actor, writes: ++writes, threadId };
+    if (input?.type === "prepare") {
+      receipt.readerOwnership = {
+        preparation: [...preparationOwners],
+        execution: captureSqliteReaderOwner(),
+      };
+    }
+    return receipt;
   }
   function closeNative(): undefined {
+    retirementReceipt = undefined;
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
-    if (failClose) {
-      throw new Error("Fixture native database closed with a cleanup failure");
+    if (input?.type === "retirement") {
+      retirementReceipt = {
+        identity: { key: "fixture", canonicalPath: databasePath },
+        incarnation: actor,
+      };
     }
   }
   if (input?.type === "disk-full") {
@@ -188,6 +175,9 @@ function createFixtureBackend(
     });
   }
   return {
+    ...(input?.type === "retirement"
+      ? { [SQLITE_WORKER_CLOSE_RECEIPT]: () => retirementReceipt }
+      : {}),
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (input?.type !== "prepare" || commandType !== "append" || prepared) {
         return undefined;
@@ -217,10 +207,6 @@ function createFixtureBackend(
         }
         return waitForFile(command.input.gatePath).then(() => append(command.input.value));
       }
-      if (command.type === "failClose") {
-        failClose = true;
-        return undefined;
-      }
       if (command.type === "read") {
         return executeSqliteQuerySync(
           db,
@@ -238,10 +224,7 @@ function createFixtureBackend(
         };
         const write = () =>
           runSqliteImmediateTransactionSync(db, () => {
-            executeSqliteQuerySync(
-              db,
-              query.insertInto("entries").values({ value: command.input.value }),
-            );
+            insert(command.input.value);
           });
         if (command.input.mode === "schema-maintenance") {
           withStateDatabaseSchemaMaintenance({ databasePath }, write);

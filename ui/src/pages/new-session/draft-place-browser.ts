@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   FsListDirResult,
   ProjectRecord,
@@ -8,6 +9,8 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
@@ -17,7 +20,18 @@ import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
 import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
-import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
+
+type ProjectSearchOutcome = { result: ProjectsSearchRemoteResult } | { error: unknown } | null;
+
+type ProjectSearchRead = Readonly<{
+  query: string;
+  completed: Promise<ProjectSearchOutcome>;
+}>;
+
+export type BrowserProjectRegistration = Readonly<{
+  retired: Promise<void>;
+  isCurrent: () => boolean;
+}>;
 
 type DraftPickerKind = "where" | "project" | "checkout";
 export type ProjectBrowserFocus = Partial<Record<"browse" | "path", HTMLElement>>;
@@ -56,7 +70,11 @@ export class DraftPlaceBrowser {
   // Empty lists the Gateway host; otherwise the paired device whose folders are listed.
   private browserNodeIdValue = "";
   private browserProjectPathValue: string | null = null;
-  private browserRegistration: object | null = null;
+  private browserRegistration: {
+    retire: () => void;
+    client: GatewayBrowserClient;
+    epoch: number;
+  } | null = null;
   private openPopoverValue: DraftPickerKind | null = null;
   private focusRequestId = 0;
   private projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
@@ -64,19 +82,18 @@ export class DraftPlaceBrowser {
   readonly browser: PlaceBrowserState;
 
   private projectSearchArgs: readonly unknown[] = [];
-  private projectSearchStatus: "initial" | "pending" | "complete" | "error" = "initial";
-  private projectSearchValue: ProjectsSearchRemoteResult | null = null;
-  private projectSearchFailure: unknown;
+  private projectSearchReadValue: ProjectSearchRead | null = null;
+  private finishProjectSearch: ((outcome: ProjectSearchOutcome) => void) | undefined;
   private readonly projectSearchRequest = createPageRequest(() => this.callbacks.changed(), {
     task: ([client, query]: readonly [GatewayBrowserClient, string], { signal }) =>
       client.request<ProjectsSearchRemoteResult>("projects.searchRemote", { query }, { signal }),
     onComplete: (result) => {
-      this.projectSearchStatus = "complete";
-      this.projectSearchValue = result;
+      this.finishProjectSearch?.({ result });
+      this.finishProjectSearch = undefined;
     },
     onError: (error) => {
-      this.projectSearchStatus = "error";
-      this.projectSearchFailure = error;
+      this.finishProjectSearch?.({ error });
+      this.finishProjectSearch = undefined;
     },
   });
 
@@ -105,15 +122,18 @@ export class DraftPlaceBrowser {
         }
         this.callbacks.onApprovedListing(listing);
         const snapshot = this.read();
-        const client = snapshot.context?.gateway.snapshot.client;
-        if (!snapshot.isAdmin || !client) {
+        const applicationGateway = snapshot.context?.gateway;
+        if (!snapshot.isAdmin || !applicationGateway?.snapshot.client) {
           return;
         }
-        void client
-          .request<WorktreesBranchesResult>("worktrees.branches", {
+        void requestCheckoutSnapshot<WorktreesBranchesResult>(
+          applicationGateway,
+          "worktrees.branches",
+          {
             repoRoot: listing.path,
             includeRepositoryStatus: true,
-          })
+          },
+        )
           .then((branches) => {
             // Typing keeps this listing valid; replacement or reset retires its probe.
             if (this.browser.listing === listing && branches.repositoryStatus === "git") {
@@ -127,6 +147,15 @@ export class DraftPlaceBrowser {
   }
 
   synchronize() {
+    const registration = this.browserRegistration;
+    if (
+      registration &&
+      (!this.gateway.connected ||
+        registration.client !== this.gateway.client ||
+        registration.epoch !== this.gateway.connectionEpoch)
+    ) {
+      this.retireRegistration();
+    }
     this.bindProjectCatalog();
     const args = this.projectSearchInput();
     if (!args.every((arg, index) => Object.is(arg, this.projectSearchArgs[index]))) {
@@ -150,14 +179,17 @@ export class DraftPlaceBrowser {
   private searchProjects(args = this.projectSearchInput()) {
     this.projectSearchArgs = args;
     this.projectSearchRequest.cancel();
-    this.projectSearchStatus = "initial";
-    this.projectSearchValue = null;
-    this.projectSearchFailure = undefined;
+    // A cancelled transport may never settle; retire its presentation immediately.
+    this.finishProjectSearch?.(null);
+    this.finishProjectSearch = undefined;
+    this.projectSearchReadValue = null;
     const [client, advertised, query] = args;
     if (!client || !advertised || query.length < 2 || projectCloneInput(query)) {
       return;
     }
-    this.projectSearchStatus = "pending";
+    const completion = Promise.withResolvers<ProjectSearchOutcome>();
+    this.projectSearchReadValue = { query, completed: completion.promise };
+    this.finishProjectSearch = completion.resolve;
     void this.projectSearchRequest.run([client, query]);
   }
 
@@ -169,8 +201,16 @@ export class DraftPlaceBrowser {
     return this.projectCatalog?.snapshot.ready ?? false;
   }
 
+  get projectCatalogError(): unknown {
+    return this.projectCatalog?.snapshot.error ?? null;
+  }
+
   get projectsLoading(): boolean {
     return this.projectCatalog?.loading ?? false;
+  }
+
+  get projectRead(): Promise<void> | null {
+    return this.projectCatalog?.pendingRead ?? null;
   }
 
   get projectRecents(): readonly ProjectRecent[] | undefined {
@@ -200,6 +240,11 @@ export class DraftPlaceBrowser {
     return this.projectSelection?.kind === "local" ? this.projectSelection.id : "";
   }
 
+  /** Remote and pasted repositories open through operator.write projectGitUrl. */
+  get canOpenRemoteProjects(): boolean {
+    return hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null);
+  }
+
   get remoteProject(): DraftRemoteProject | null {
     return this.projectSelection?.kind === "remote" ? this.projectSelection.project : null;
   }
@@ -217,29 +262,10 @@ export class DraftPlaceBrowser {
     this.callbacks.changed();
   }
 
-  get projectSearchResult(): ProjectsSearchRemoteResult | null {
-    return this.projectSearchStatus === "complete" &&
-      this.debouncedProjectQuery === this.projectQueryValue.trim()
-      ? this.projectSearchValue
+  get projectSearchRead(): ProjectSearchRead | null {
+    return this.projectSearchReadValue?.query === this.projectQueryValue.trim()
+      ? this.projectSearchReadValue
       : null;
-  }
-
-  get projectSearchLoading(): boolean {
-    return (
-      this.debouncedProjectQuery.length >= 2 &&
-      this.debouncedProjectQuery === this.projectQueryValue.trim() &&
-      this.projectSearchStatus === "pending"
-    );
-  }
-
-  get projectSearchError(): string | null {
-    if (
-      this.projectSearchStatus !== "error" ||
-      this.debouncedProjectQuery !== this.projectQueryValue.trim()
-    ) {
-      return null;
-    }
-    return formatUiError(this.projectSearchFailure);
   }
 
   get browserOpen(): boolean {
@@ -330,7 +356,13 @@ export class DraftPlaceBrowser {
   }
 
   resolveProjectRecents(params: {
-    sessions: readonly RecentPlaceSource[];
+    sessions: readonly {
+      deviceFolder?: unknown;
+      execCwd?: unknown;
+      execNode?: unknown;
+      spawnedCwd?: string;
+      worktree?: { repoRoot?: unknown } | null;
+    }[];
     workspace: string;
     workspaceRoots: readonly string[];
     isAdmin: boolean;
@@ -342,17 +374,37 @@ export class DraftPlaceBrowser {
         ? this.projects.some((project) => project.id === recent.projectId)
         : recent.kind === "repository" || (!recent.execNode && allowGatewayFolder(recent.folder)),
     );
-    return (
-      serverRecents ??
-      recentPlaces(params.sessions, {
-        workspace: params.workspace,
-        allowGatewayFolder,
-      }).map<ProjectRecent>((recent) => ({
-        kind: "folder",
-        folder: recent.folder,
-        displayName: pathDisplayName(recent.folder),
-      }))
-    );
+    if (serverRecents !== undefined) {
+      return serverRecents;
+    }
+    const folders = new Set<string>();
+    for (const row of params.sessions) {
+      // Host sessions persist their task cwd in spawnedCwd; device-folder paths
+      // live on the paired device, not this host, so they stay off folder chips.
+      const folder =
+        normalizeOptionalString(row.execCwd) ??
+        normalizeOptionalString(row.worktree?.repoRoot) ??
+        row.spawnedCwd?.trim();
+      const execNode = normalizeOptionalString(row.execNode);
+      if (
+        !folder ||
+        execNode ||
+        row.deviceFolder ||
+        folder === params.workspace ||
+        !allowGatewayFolder(folder)
+      ) {
+        continue;
+      }
+      folders.add(folder);
+      if (folders.size >= 4) {
+        break;
+      }
+    }
+    return Array.from(folders, (folder): ProjectRecent => ({
+      kind: "folder",
+      folder,
+      displayName: pathDisplayName(folder),
+    }));
   }
 
   changeProjectQuery(query: string) {
@@ -434,7 +486,10 @@ export class DraftPlaceBrowser {
     this.focusProjectView("path");
   }
 
-  async registerBrowserProject(path: string) {
+  async registerBrowserProject(
+    path: string,
+    onStarted?: (registration: BrowserProjectRegistration) => void,
+  ) {
     const snapshot = this.read();
     const gatewaySnapshot = snapshot.context?.gateway.snapshot;
     const client = gatewaySnapshot?.client;
@@ -448,15 +503,23 @@ export class DraftPlaceBrowser {
       return;
     }
     const listing = this.browser.listing;
-    const operation = {};
+    const retirement = Promise.withResolvers<void>();
+    const epoch = this.gateway.connectionEpoch;
+    const operation = { retire: retirement.resolve, client, epoch };
     this.browserRegistration = operation;
-    const isCurrentRegistration = () =>
-      this.browserRegistration === operation &&
+    const isCurrentBrowser = () =>
+      this.gateway.connected &&
       this.browser.listing === listing &&
       this.browserProjectPath === path &&
-      client === this.gateway.client;
+      client === this.gateway.client &&
+      epoch === this.gateway.connectionEpoch;
+    const isCurrentRegistration = () =>
+      this.browserRegistration === operation && isCurrentBrowser();
     this.browser.error = null;
+    // Retire the preceding directory error without hiding reads started during registration.
+    this.browser.readCompletion = null;
     this.callbacks.changed();
+    onStarted?.({ retired: retirement.promise, isCurrent: isCurrentBrowser });
     try {
       const project = await client.request<ProjectsRegisterResult>("projects.register", { path });
       if (!isCurrentRegistration()) {
@@ -500,6 +563,7 @@ export class DraftPlaceBrowser {
     this.focusRequestId += 1;
     this.environmentQueryValue = "";
     this.browser.reset();
+    this.retireRegistration();
     this.clearProjectSearchTimer();
     this.projectCatalogCleanup?.();
     this.projectCatalogCleanup = undefined;
@@ -514,11 +578,16 @@ export class DraftPlaceBrowser {
     this.browserOpenValue = false;
     this.browserNodeIdValue = "";
     this.browserProjectPathValue = null;
-    this.browserRegistration = null;
+    this.retireRegistration();
     if (closePopover) {
       this.openPopoverValue = null;
     }
     this.callbacks.changed();
+  }
+
+  private retireRegistration() {
+    this.browserRegistration?.retire();
+    this.browserRegistration = null;
   }
 
   private clearProjectSearchTimer() {

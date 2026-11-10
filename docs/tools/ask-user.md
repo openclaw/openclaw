@@ -12,12 +12,13 @@ wait for the answers. It is for decisions that genuinely belong to the user,
 not routine confirmation or information the agent can derive from the request,
 code, or a sensible default.
 
-The tool is available only in the main session on a surface that supports
-question input: Discord, Slack, Telegram, and WebChat (including the Control UI
-and native OpenClaw clients). Subagents and other non-primary runs do not
+The tool is available in primary sessions, including visible sessions created
+with `sessions_spawn`, on a surface that supports question input: Discord,
+Slack, Telegram, and WebChat (including the Control UI and native OpenClaw
+clients). Hidden subagents, ACP sessions, and other non-primary runs do not
 receive it, and an explicit tool denial still takes precedence.
 
-On iMessage, Mattermost, Signal, WhatsApp, and other channels without declared
+On the ACP bridge, iMessage, Mattermost, Signal, WhatsApp, and other surfaces without
 question input, the agent asks in ordinary plain text instead of calling
 `ask_user`. Approval reactions are separate and remain available. Native agent
 runtimes can have their own question tools; this availability rule applies to
@@ -32,6 +33,11 @@ You can answer from any supported conversation surface:
   through a short stepper. After resolution, the panel closes and the chat
   keeps the full question alongside your answer in a compact summary. Skipped
   or expired questions keep their wording alongside the outcome.
+  A pending question from a direct child session also docks in the parent
+  chat, marked **Asked by** with a link to the child's session. The parent's
+  composer stays available, including its draft and attachments. Collapsing the
+  panel does not cancel the question. Answering in either session resolves the
+  same question; its history stays in the child's transcript.
   Switching between pending questions preserves both selected choices and typed
   answers, even when typed text matches an option label.
   Use number keys to choose an option and Ctrl+Enter (Cmd+Enter on macOS) to
@@ -111,8 +117,8 @@ and the current question visible. New messages, the question's own completed
 turn, and collapsed work history do not dismiss the question or reopen a minimized
 panel. When a later run completes successfully, older reminders leave the dock.
 Overlapping runs, commentary, interruptions, and failed runs do not retire a
-question. Successful restart recovery also moves older reminders into history;
-restarting alone does not.
+question. A later successful turn can move older reminders into history; restarting alone
+does not.
 The transcript keeps the question with **No longer pending** and an **Answer**
 button to reopen it. Reopening preserves the draft until you submit, skip, or a
 later run completes. Moving a reminder into history never answers it, grants

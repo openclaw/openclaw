@@ -1,28 +1,14 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { createStageTimingTracker, formatStageTimings } from "openclaw/plugin-sdk/time-runtime";
-
-type CodexThreadLifecycleTimingLogger = {
-  isEnabled?: (level: "trace") => boolean;
-  trace: (message: string, meta?: Record<string, unknown>) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-};
-
-export type CodexThreadLifecycleTimingOptions = {
-  enabled?: boolean;
-  now?: () => number;
-  log?: CodexThreadLifecycleTimingLogger;
-};
+import type { CodexAppServerContextEngineBinding } from "./session-binding-record-codec.js";
 
 export type CodexThreadLifecycleTimingTracker = ReturnType<
   typeof createCodexThreadLifecycleTimingTracker
 >;
 
-export function createCodexThreadLifecycleTimingTracker(
-  options: CodexThreadLifecycleTimingOptions = {},
-) {
-  const log = options.log ?? embeddedAgentLog;
-
-  const timing = createStageTimingTracker(options.now ?? Date.now);
+export function createCodexThreadLifecycleTimingTracker(enabled: boolean) {
+  const timing = createStageTimingTracker();
   let didLog = false;
   return {
     measure: timing.measure,
@@ -42,12 +28,12 @@ export function createCodexThreadLifecycleTimingTracker(
         return;
       }
       const { totalMs, stages: spans } = timing.snapshot();
-      const detailed = options.enabled || log.isEnabled?.("trace");
+      const detailed = enabled || embeddedAgentLog.isEnabled("trace");
       const totalThresholdMs = detailed ? 1_000 : 10_000;
       const stageThresholdMs = detailed ? 500 : 5_000;
       const shouldWarn =
         totalMs >= totalThresholdMs || spans.some((span) => span.durationMs >= stageThresholdMs);
-      if (!shouldWarn && !log.isEnabled?.("trace")) {
+      if (!shouldWarn && !embeddedAgentLog.isEnabled("trace")) {
         return;
       }
       didLog = true;
@@ -65,10 +51,41 @@ export function createCodexThreadLifecycleTimingTracker(
         spans,
       };
       if (shouldWarn) {
-        log.warn(message, meta);
+        embeddedAgentLog.warn(message, meta);
       } else {
-        log.trace(message, meta);
+        embeddedAgentLog.trace(message, meta);
       }
     },
   };
+}
+
+/** Logs a ready thread's context-engine binding write and closes the lifecycle timing summary. */
+export function recordCodexThreadReady(
+  params: {
+    params: Pick<AgentHarnessSessionRuntimeParamsV1, "runId" | "sessionId" | "sessionKey">;
+  },
+  context: {
+    contextEngineBinding?: CodexAppServerContextEngineBinding;
+    lifecycleTiming: Pick<CodexThreadLifecycleTimingTracker, "mark" | "logSummary">;
+  },
+  threadId: string,
+  action: "resumed" | "rotated" | "started",
+): void {
+  const { contextEngineBinding, lifecycleTiming } = context;
+  const event = {
+    sessionId: params.params.sessionId,
+    sessionKey: params.params.sessionKey,
+    threadId,
+    action,
+  };
+  if (contextEngineBinding) {
+    embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
+      ...event,
+      engineId: contextEngineBinding.engineId,
+      epoch: contextEngineBinding.projection?.epoch,
+      fingerprint: contextEngineBinding.projection?.fingerprint,
+    });
+  }
+  lifecycleTiming.mark("thread-ready");
+  lifecycleTiming.logSummary({ runId: params.params.runId, ...event });
 }

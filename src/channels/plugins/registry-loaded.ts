@@ -4,18 +4,14 @@ import type {
   ActivePluginChannelRegistry,
   ActivePluginChannelRegistration,
 } from "../../plugins/channel-registry-state.types.js";
-import {
-  getActivePluginChannelRegistrySnapshotFromState,
-  type ActivePluginChannelRegistrySnapshot,
-} from "../../plugins/runtime-channel-state.js";
-import { CHAT_CHANNEL_ORDER } from "../registry.js";
+import { CHAT_CHANNEL_ORDER } from "../ids.js";
+import { resolveRegisteredChannelPluginLookup } from "../registry-lookup.js";
 import type { AnyChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
 type ChannelPluginView = {
-  snapshot: ActivePluginChannelRegistrySnapshot;
+  lookup: ReturnType<typeof resolveRegisteredChannelPluginLookup>;
   sorted: ActiveChannelPluginRuntimeShape[];
-  entriesById: Map<string, ActivePluginChannelRegistration>;
 };
 
 let cachedChannelPluginView: ChannelPluginView | undefined;
@@ -34,32 +30,19 @@ export function compareChannelPlugins(
 }
 
 function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelPluginView {
-  const snapshot = getActivePluginChannelRegistrySnapshotFromState();
-  const currentRegistry = registry === undefined || registry === snapshot.registry;
-  if (currentRegistry && cachedChannelPluginView?.snapshot === snapshot) {
+  const lookup = resolveRegisteredChannelPluginLookup(registry);
+  if (cachedChannelPluginView?.lookup === lookup) {
     return cachedChannelPluginView;
   }
-  const selectedRegistry = registry ?? snapshot.registry;
-
-  const entriesById = new Map<string, ActivePluginChannelRegistration>();
-  for (const entry of selectedRegistry?.channels ?? []) {
-    // Registration already normalizes ids. Retain the first row so its
-    // implementation and provenance cannot come from different plugins.
-    if (!entriesById.has(entry.plugin.id)) {
-      entriesById.set(entry.plugin.id, entry);
-    }
-  }
-
-  const sorted = [...entriesById.values()]
+  const sorted = [...lookup.byExactId.values()]
     .map((entry) => entry.plugin)
     .toSorted(compareChannelPlugins);
 
   const view = {
-    snapshot: currentRegistry ? snapshot : { registry: selectedRegistry, version: 0 },
+    lookup,
     sorted,
-    entriesById,
   };
-  if (currentRegistry) {
+  if (lookup.currentRegistry) {
     // Runtime snapshots invalidate the single process-root registry view.
     cachedChannelPluginView = view;
   }
@@ -96,5 +79,5 @@ export function getLoadedChannelPluginEntryById(
   if (!resolvedId) {
     return undefined;
   }
-  return resolveChannelPlugins(registry).entriesById.get(resolvedId);
+  return resolveRegisteredChannelPluginLookup(registry).byExactId.get(resolvedId);
 }

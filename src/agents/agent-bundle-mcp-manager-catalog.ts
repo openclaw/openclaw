@@ -1,11 +1,13 @@
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
-import { compareMcpCatalogTools, mcpCatalogToolsSignature } from "./agent-bundle-mcp-names.js";
-import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
-import { SESSION_MCP_MAX_LIVE_RUNTIMES } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
+} from "./agent-bundle-mcp-catalog.types.js";
+import { compareMcpCatalogTools, mcpCatalogToolsSignature } from "./agent-bundle-mcp-names.js";
+import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
+import { SESSION_MCP_MAX_LIVE_RUNTIMES } from "./agent-bundle-mcp-runtime-shared.js";
+import type {
   RequesterScopedMcpRuntimeHandle,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
@@ -117,7 +119,6 @@ export function createSessionMcpCatalogStore(
       // A reset, replacement or reload must not resurrect a late discovery result.
       if (
         publication &&
-        catalogByRuntimeKey.get(runtimeKey) === publication &&
         runtimes.get(runtimeKey) === runtime &&
         sessionMcpRuntimeOwners.get(runtime)?.isCurrent() !== false
       ) {

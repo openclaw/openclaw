@@ -17,6 +17,42 @@ import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 
 const run = runner.runCommandBuffersWithTimeout;
 
+const removalDirs = useAutoCleanupTempDirTracker(afterEach);
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "removes owned captures with read-only directories without changing linked live workspaces",
+  async () => {
+    const root = removalDirs.make("openclaw-native-removal-");
+    const capture = path.join(root, "capture");
+    const readonly = path.join(capture, "readonly");
+    const ignored = path.join(capture, ".openclaw", "tmp", "ignored");
+    const live = path.join(root, "live-workspace");
+    for (const directory of [readonly, ignored, live]) {
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "payload"), "retained", { mode: 0o400 });
+    }
+    await fs.symlink(live, path.join(ignored, "live-link"), "dir");
+    await fs.chmod(readonly, 0o555);
+    await fs.chmod(ignored, 0);
+    await fs.chmod(live, 0o555);
+    try {
+      await nativeWorktreeFilesystem.remove(capture, { commitGuard: () => {} });
+      await expect(fs.lstat(capture)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fs.stat(live)).mode & 0o777).toBe(0o555);
+      expect((await fs.stat(path.join(live, "payload"))).mode & 0o777).toBe(0o400);
+      expect(await fs.readFile(path.join(live, "payload"), "utf8")).toBe("retained");
+    } finally {
+      // Restore only fixture-owned permissions if the removal regression fails.
+      for (const directory of [readonly, ignored, live]) {
+        await fs.chmod(directory, 0o700).catch((error: unknown) => {
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+            throw error;
+          }
+        });
+      }
+    }
+  },
+);
+
 describe.skipIf(process.platform !== "darwin")("isolated native worktree operations", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const options: WorktreeFilesystemOptions = { commitGuard: () => {} };
@@ -79,31 +115,39 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["copy", "createSource"])("revalidates %s authority before input", async (operation) => {
-    await fs.mkdir(source);
-    await fs.writeFile(path.join(source, "payload"), "source");
-    const authority = new AbortController();
-    let childPid: number | undefined;
-    vi.spyOn(runner, "runCommandBuffersWithTimeout").mockImplementation((argv, commandOptions) => {
-      assert(typeof commandOptions !== "number", "Native writes need guarded input");
-      return run(argv, {
-        ...commandOptions,
-        beforeInput(pid) {
-          childPid = pid;
-          authority.abort(new Error("allocation lease lost"));
-          commandOptions.beforeInput?.(pid);
+  it.each(["copy", "createSource", "remove"])(
+    "revalidates %s authority before input",
+    async (operation) => {
+      await fs.mkdir(source);
+      await fs.writeFile(path.join(source, "payload"), "source");
+      const authority = new AbortController();
+      let childPid: number | undefined;
+      vi.spyOn(runner, "runCommandBuffersWithTimeout").mockImplementation(
+        (argv, commandOptions) => {
+          assert(typeof commandOptions !== "number", "Native writes need guarded input");
+          return run(argv, {
+            ...commandOptions,
+            beforeInput(pid) {
+              childPid = pid;
+              authority.abort(new Error("allocation lease lost"));
+              commandOptions.beforeInput?.(pid);
+            },
+          });
         },
-      });
-    });
-    const writeOptions = { commitGuard: () => authority.signal.throwIfAborted() };
-    await expect(
-      operation === "copy"
-        ? copy(writeOptions)
-        : nativeWorktreeFilesystem.createSource(destination, writeOptions),
-    ).rejects.toThrow("allocation lease lost");
-    expect(childPid).toBeGreaterThan(0);
-    await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+      );
+      const writeOptions = { commitGuard: () => authority.signal.throwIfAborted() };
+      await expect(
+        operation === "copy"
+          ? copy(writeOptions)
+          : operation === "remove"
+            ? nativeWorktreeFilesystem.remove(source, writeOptions)
+            : nativeWorktreeFilesystem.createSource(destination, writeOptions),
+      ).rejects.toThrow("allocation lease lost");
+      expect(childPid).toBeGreaterThan(0);
+      await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(path.join(source, "payload"), "utf8")).toBe("source");
+    },
+  );
 
   it("joins a canceled write child before cleanup", async ({ signal }) => {
     const receipts = await openFixtureReceiptChannel();

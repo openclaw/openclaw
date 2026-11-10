@@ -6,19 +6,58 @@ import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import { runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import {
+  isBenignUncaughtExceptionError,
+  isUncaughtExceptionHandled,
+} from "../infra/unhandled-rejections.js";
+import { defaultRuntime, restoreRuntimeTerminalState } from "../runtime.js";
 import {
   UpdateSchemaRefusalError,
   type UpdateSchemaRefusalDatabase,
 } from "../state/openclaw-update-schema-refusal.js";
 import { formatCliCommand } from "./command-format.js";
 import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { isJsonOutputModeActive } from "./json-output-mode.js";
+import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
+
+export { ExpectedCliError } from "./expected-cli-error.js";
+
+export function handleCliUncaughtException(error: unknown, argv?: string[]): void {
+  if (isUncaughtExceptionHandled(error)) {
+    return;
+  }
+  if (isBenignUncaughtExceptionError(error)) {
+    console.warn(
+      "[openclaw] Non-fatal uncaught exception (continuing):",
+      formatUncaughtError(error),
+    );
+    return;
+  }
+  if (isJsonOutputModeActive(argv ?? process.argv)) {
+    defaultRuntime.writeJson(formatCliJsonFailure(error));
+  }
+  for (const line of formatCliFailureLines({
+    title: "OpenClaw hit an unexpected runtime error.",
+    error,
+    argv: argv ?? process.argv,
+  })) {
+    console.error(line);
+  }
+  for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
+    console.error("[openclaw]", message);
+  }
+  restoreRuntimeTerminalState("uncaught exception");
+  exitAfterSignalExitBarriers(1, "uncaught exception");
+}
 
 type FormatCliFailureOptions = {
   title: string;
   error: unknown;
   argv?: string[];
   env?: NodeJS.ProcessEnv;
-  includeDoctorHint?: boolean;
 };
 
 type CliFailureDebugOptions = Pick<FormatCliFailureOptions, "argv" | "env">;
@@ -55,33 +94,6 @@ export function readCliGatewayRunFailure(error: unknown): CliGatewayRunFailure |
   return error instanceof Error ? gatewayRunFailures.get(error) : undefined;
 }
 
-export class ExpectedCliError extends Error {
-  readonly humanOutput: string;
-  readonly humanOutputWritten: boolean;
-  readonly machineOutput: string;
-  readonly matches?: readonly CronCliJobMatch[];
-
-  constructor(params: {
-    message: string;
-    humanOutput: string;
-    humanOutputWritten?: boolean;
-    machineOutput: string;
-    matches?: readonly CronCliJobMatch[];
-    cause?: unknown;
-  }) {
-    super(params.message, params.cause === undefined ? undefined : { cause: params.cause });
-    this.name = "ExpectedCliError";
-    this.humanOutput = params.humanOutput;
-    this.humanOutputWritten = params.humanOutputWritten ?? false;
-    this.machineOutput = params.machineOutput;
-    this.matches = params.matches;
-  }
-}
-
-export function throwExpectedCliError(message: string): never {
-  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-}
-
 export function isGatewayCredentialsCliError(
   error: unknown,
 ): error is Error & { method: string; configPath: string } {
@@ -107,6 +119,8 @@ const EXPECTED_CLI_ERROR_NAMES = new Set([
   "ConfigReadOnlyError",
   "NixModeConfigMutationError",
   "LocalStateOwnerError",
+  "CompletionCacheMissingError",
+  "CompletionProfileEncodingError",
 ]);
 
 export function isExpectedCliError(error: unknown): error is Error {
@@ -191,24 +205,20 @@ export function formatCliJsonFailure(
   };
 }
 
-function hasDebugArg(argv: string[] | undefined): boolean {
+function shouldShowDebugDetails(
+  argv: string[] | undefined = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   for (const arg of argv ?? []) {
     // Arguments after the terminator belong to the child, not root stack-trace policy.
     if (arg === "--") {
-      return false;
+      break;
     }
     if (arg === "--debug" || arg === "--verbose") {
       return true;
     }
   }
-  return false;
-}
-
-function shouldShowDebugDetails(
-  argv: string[] | undefined = process.argv,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return hasDebugArg(argv) || isTruthyEnvValue(env.OPENCLAW_DEBUG);
+  return isTruthyEnvValue(env.OPENCLAW_DEBUG);
 }
 
 export function formatCliOperatorError(
@@ -219,14 +229,6 @@ export function formatCliOperatorError(
   const value =
     !includeCause && error instanceof Error ? error.message || error.name || "Error" : error;
   return formatErrorMessage(value);
-}
-
-function pushPrefixed(out: string[], value: string): void {
-  for (const line of value.split("\n")) {
-    if (line.trim().length > 0) {
-      out.push(`[openclaw] ${line}`);
-    }
-  }
 }
 
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
@@ -269,12 +271,14 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
   );
   // Names survive worker transport without loading the state owner's runtime here.
-  const stateRefusal = errors.find(
-    (error): error is Error =>
-      error instanceof Error &&
-      (error.name === "StateDatabaseAccessError" ||
-        error.name === "StateDatabaseMaintenanceScopeError"),
-  );
+  const stateRefusal =
+    findStartupMaintenanceRequiredError(options.error) ??
+    errors.find(
+      (error): error is Error =>
+        error instanceof Error &&
+        (error.name === "StateDatabaseAccessError" ||
+          error.name === "StateDatabaseMaintenanceScopeError"),
+    );
   const reason = (error: unknown) =>
     `[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;
   if (!showDebugDetails && !showUpdateDiagnostics) {
@@ -295,27 +299,31 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
       ? !options.error.diagnosticEmitted
       : isUpdateCommand ||
         isPluginUpdateCommand ||
+        (options.error instanceof Error && options.error.name === "GatewayClientRequestError") ||
         isNodeRunCommand ||
+        commandPath[0] === "connect" ||
         isForegroundGatewayRunArgv(argv);
     return [
       `[openclaw] ${options.title}`,
       ...(showReason ? [reason(options.error)] : []),
       stateBusy
         ? "[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again."
-        : options.includeDoctorHint === false
-          ? `[openclaw] For details, open Settings → Logs in the Control UI or run \`${formatCliCommand("openclaw logs --follow", env)}\`.`
-          : `[openclaw] For help, run \`${formatCliCommand("openclaw doctor", env)}\`.`,
+        : `[openclaw] For help, run \`${formatCliCommand("openclaw doctor", env)}\`.`,
     ];
   }
   const lines = [`[openclaw] ${options.title}`, reason(options.error)];
 
   if (showDebugDetails) {
     lines.push("[openclaw] Stack:");
-    pushPrefixed(lines, formatUncaughtError(options.error));
+    for (const line of formatUncaughtError(options.error).split("\n")) {
+      if (line.trim().length > 0) {
+        lines.push(`[openclaw] ${line}`);
+      }
+    }
   }
 
   // Doctor needs the same state owner; inspect wrappers without loading the SQLite runtime.
-  if (options.includeDoctorHint !== false && !stateBusy) {
+  if (!stateBusy) {
     lines.push(`[openclaw] Try: ${formatCliCommand("openclaw doctor", env)}`);
   }
   lines.push(`[openclaw] Help: ${formatCliCommand("openclaw --help", env)}`);

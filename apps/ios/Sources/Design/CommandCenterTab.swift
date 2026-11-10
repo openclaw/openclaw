@@ -709,24 +709,34 @@ struct CommandCenterTab: View {
 enum SessionStatusScope: String, CaseIterable {
     case active
     case snoozed
+    case automations
     case archived
 
     static func available(isConnected: Bool) -> [Self] {
-        isConnected ? self.allCases : [.active, .snoozed]
+        isConnected ? self.allCases : [.active, .snoozed, .automations]
     }
 
     var title: String {
         switch self {
         case .active: String(localized: "Active")
         case .snoozed: String(localized: "Snoozed")
+        case .automations: String(localized: "Automations")
         case .archived: String(localized: "Archived")
         }
     }
 
-    func includes(_ session: OpenClawChatSessionEntry, at now: Date) -> Bool {
+    func includes(
+        _ session: OpenClawChatSessionEntry,
+        at now: Date,
+        currentSessionKey: String? = nil) -> Bool
+    {
         switch self {
-        case .active: session.archived != true && !session.isSnoozed(at: now)
+        case .active:
+            session.archived != true && !session.isSnoozed(at: now) &&
+                (session.key == currentSessionKey || !OpenClawChatSessionListVisibility.isAutomationSession(session))
         case .snoozed: session.archived != true && session.isSnoozed(at: now)
+        case .automations:
+            session.archived != true && OpenClawChatSessionListVisibility.isAutomationSession(session)
         case .archived: session.archived == true
         }
     }
@@ -746,6 +756,11 @@ struct CommandSessionsScreen: View {
     @State private var sessions: [OpenClawChatSessionEntry] = []
     @State private var isLoading = false
     @State private var loadErrorText: String?
+    @State private var actionErrorText: String?
+    /// Notice for a partially loaded roster; rendered alongside the retained rows, never instead of them.
+    @State private var partialLoadText: String?
+    /// Bumped by the partial-load retry button; part of `refreshID` so `.task(id:)` refetches.
+    @State private var refreshNonce = 0
     @State private var statusScope: SessionStatusScope = .active
     @State private var now: Date = .now
     @State private var knownGroups = SessionGroupStore.load()
@@ -885,6 +900,41 @@ struct CommandSessionsScreen: View {
                     .padding(.vertical, 8)
                 }
 
+                if let actionErrorText {
+                    Text(verbatim: actionErrorText)
+                        .font(OpenClawType.captionMedium)
+                        .foregroundStyle(OpenClawBrand.warn)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                }
+
+                if let partialLoadText {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(OpenClawType.captionBold)
+                            .foregroundStyle(OpenClawBrand.warn)
+                        // Identified for UI tests: the leading sidebar shows the same copy
+                        // without an identifier, so the banner notice carries its own. A
+                        // container identifier here would clobber the Refresh button's.
+                        Text(verbatim: partialLoadText)
+                            .font(OpenClawType.captionMedium)
+                            .foregroundStyle(OpenClawBrand.warn)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("Sessions.PartialLoad.Notice")
+                        Button {
+                            self.refreshNonce += 1
+                        } label: {
+                            Text(String(localized: "Refresh"))
+                                .font(OpenClawType.subheadSemiBold)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("Sessions.PartialLoad.Refresh")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                }
+
                 if let loadErrorText {
                     CommandEmptyStateRow(
                         icon: "exclamationmark.triangle.fill",
@@ -929,6 +979,7 @@ struct CommandSessionsScreen: View {
             switch self.statusScope {
             case .active: return String(localized: "Loading recent sessions")
             case .snoozed: return String(localized: "Loading snoozed sessions")
+            case .automations: return String(localized: "Loading automation sessions")
             case .archived: return String(localized: "Loading archived sessions")
             }
         }
@@ -946,7 +997,12 @@ struct CommandSessionsScreen: View {
                 $0.key,
                 defaultSessionKey: self.appModel.mainSessionKey) }
             // A stale list must still obey the selected scope while its replacement loads.
-            .filter { self.statusScope.includes($0, at: self.now) }
+            .filter {
+                self.statusScope.includes(
+                    $0,
+                    at: self.now,
+                    currentSessionKey: self.appModel.chatSessionKey)
+            }
     }
 
     private var sessionSections: [CommandSessionSection] {
@@ -972,6 +1028,7 @@ struct CommandSessionsScreen: View {
         switch self.statusScope {
         case .active: return String(localized: "No recent sessions")
         case .snoozed: return String(localized: "No snoozed sessions")
+        case .automations: return String(localized: "No automations")
         case .archived: return String(localized: "No archived sessions")
         }
     }
@@ -980,6 +1037,7 @@ struct CommandSessionsScreen: View {
         switch self.statusScope {
         case .active: String(localized: "Start a chat and it will appear here.")
         case .snoozed: String(localized: "Snoozed sessions will appear here until they wake.")
+        case .automations: String(localized: "Automation sessions will appear here.")
         case .archived: String(localized: "Archived sessions will appear here.")
         }
     }
@@ -988,12 +1046,13 @@ struct CommandSessionsScreen: View {
         switch self.statusScope {
         case .active: String(localized: "Recent sessions")
         case .snoozed: String(localized: "Snoozed sessions")
+        case .automations: String(localized: "Automation sessions")
         case .archived: String(localized: "Archived sessions")
         }
     }
 
     private var refreshID: String {
-        "\(self.appModel.chatViewModelIdentityID):\(self.statusScope.rawValue)"
+        "\(self.appModel.chatViewModelIdentityID):\(self.statusScope.rawValue):\(self.refreshNonce)"
     }
 
     @ViewBuilder
@@ -1165,7 +1224,7 @@ struct CommandSessionsScreen: View {
                 await self.refreshSessions()
                 self.openSessionKey(key)
             } catch {
-                self.loadErrorText = error.localizedDescription
+                self.actionErrorText = error.localizedDescription
             }
         }
     }
@@ -1182,7 +1241,7 @@ struct CommandSessionsScreen: View {
                 }
                 await self.refreshSessions()
             } catch {
-                self.loadErrorText = error.localizedDescription
+                self.actionErrorText = error.localizedDescription
             }
         }
     }
@@ -1197,6 +1256,7 @@ struct CommandSessionsScreen: View {
         let sourceAgentID = self.appModel.chatDeliveryAgentId
         self.isLoading = true
         self.loadErrorText = nil
+        self.actionErrorText = nil
         defer {
             if requestedScope == self.statusScope { self.isLoading = false }
         }
@@ -1207,10 +1267,12 @@ struct CommandSessionsScreen: View {
                 archived: requestsArchived)
             guard !Task.isCancelled, requestedScope == self.statusScope else { return }
             self.sessions = roster.sessions
+            self.partialLoadText = roster.incompleteLoadMessage
         } catch is CancellationError {
             return
         } catch {
             guard !Task.isCancelled, requestedScope == self.statusScope else { return }
+            self.partialLoadText = nil
             let cached = requestsArchived ? [] : await self.appModel.loadCachedChatSessions(
                 gatewayID: sourceGatewayID,
                 agentID: sourceAgentID)

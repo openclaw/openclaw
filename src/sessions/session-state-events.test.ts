@@ -161,7 +161,13 @@ describe("session state events", () => {
   it.each(
     [
       { change: "ownership", key: child, field: "lifecycleRunId", records: false },
-      { change: "metadata", key: child, field: "completionOwnerSessionKey", records: true },
+      {
+        change: "completion ownership",
+        key: child,
+        field: "completionOwnerSessionKey",
+        records: false,
+      },
+      { change: "display metadata", key: child, field: "label", records: true },
       { change: "another session", key: watcher, field: "lifecycleRunId", records: true },
     ].flatMap(({ change, key, field, records }) =>
       [1, 2].map((verdict) => ({ change, key, field, records, verdict })),

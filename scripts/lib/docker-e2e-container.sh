@@ -26,6 +26,12 @@ docker_e2e_timeout_cmd() {
   local timeout_value="$1"
   shift
   local timeout_bin
+  local owner_args=()
+  # A retained CID belongs to the scheduler's bounded group. Keep the launcher
+  # there too, so group settlement cannot precede a delayed CID write/start.
+  if [ -n "${DOCKER_E2E_CONTAINER_CIDFILE:-}" ]; then
+    owner_args=(--foreground)
+  fi
   if ! timeout_bin="$(docker_e2e_timeout_bin)"; then
     if command -v node >/dev/null 2>&1; then
       echo "timeout command not found; using Node watchdog for Docker command timeout ${timeout_value}" >&2
@@ -47,9 +53,9 @@ await runWatchdog('docker', timeoutValue, args);
     return 127
   fi
   if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
-    "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
+    "$timeout_bin" ${owner_args[@]+"${owner_args[@]}"} --kill-after=30s "$timeout_value" "$@"
   else
-    "$timeout_bin" "$timeout_value" "$@"
+    "$timeout_bin" ${owner_args[@]+"${owner_args[@]}"} "$timeout_value" "$@"
   fi
 }
 
@@ -77,6 +83,36 @@ docker_e2e_docker_with_timeout() {
 docker_e2e_cleanup_container_run() {
   docker_e2e_docker_cmd rm -f "$1" >/dev/null 2>&1 || true
   rm -f "$2"
+}
+
+docker_e2e_settle_container_cidfile() {
+  # Call only inside a bounded process owner (scheduler finalizer or lane).
+  # Direct Docker children stay in that group; a nested watchdog could escape it.
+  local cidfile="$1" container_id remaining
+  if [ -L "$cidfile" ] || { [ -e "$cidfile" ] && [ ! -f "$cidfile" ]; }; then
+    echo "Docker producer CID must be a host-owned regular file" >&2
+    return 1
+  fi
+  # Docker writes the CID before ContainerStart. After its host group joins,
+  # a retained missing/empty CID means this invocation never started a writer.
+  [ -s "$cidfile" ] || return 0
+  if [ "$(wc -c < "$cidfile")" -ne 64 ]; then
+    echo "Docker producer CID is incomplete" >&2
+    return 1
+  fi
+  container_id="$(cat "$cidfile")" || return 1
+  if ! [[ "$container_id" =~ ^[a-f0-9]{64}$ ]]; then
+    echo "Docker producer CID is invalid" >&2
+    return 1
+  fi
+  docker rm -f "$container_id" >/dev/null 2>&1 || true
+  # A failed inspect is not absence. Require a successful daemon query after
+  # removal, including when another cleanup already removed this exact ID.
+  remaining="$(docker ps -a --no-trunc --filter "id=$container_id" --format '{{.ID}}')" || return 1
+  if [ -n "$remaining" ]; then
+    echo "Docker producer remains after cleanup; evidence publication refused" >&2
+    return 1
+  fi
 }
 
 docker_e2e_resource_limits_disabled() {

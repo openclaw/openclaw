@@ -99,7 +99,7 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
       expect(await readDepth("target", options)).toBe(2);
       expect(
         await withPreparedSessionCapabilityRead(() => readCapabilities(childSessionKey, options)),
-      ).toMatchObject({ depth: 2, canSpawn: true });
+      ).toMatchObject({ depth: 2, role: "orchestrator" });
       expect(await policy()).toMatchObject({
         spawnedBy: "agent:main:main",
         inheritedToolAllow: ["read"],

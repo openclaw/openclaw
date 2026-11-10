@@ -15,6 +15,7 @@ import {
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { GitHubConnections } from "./github-connections.tsx";
+import { createMutationRunner } from "./github-identity-harness.test-support.ts";
 
 const system: ToolsGitHubStatusResult["effective"] = {
   ...disconnectedGitHub.system,
@@ -28,7 +29,7 @@ const system: ToolsGitHubStatusResult["effective"] = {
 };
 const disconnected = disconnectedGitHub.personal;
 const personalStatus = { personal: disconnected, system };
-const unavailable = "Connection status unavailable";
+const unavailable = "Couldn’t load account status. Try again.";
 const statusParams = (agentId: string) => ({ agentId, selectedScope: "system" as const });
 const status = (agentId = "main", effective = system): ToolsGitHubStatusResult => ({
   ...statusParams(agentId),
@@ -40,8 +41,13 @@ const statusRequest = (effective = system) =>
     method === "users.github.status" ? personalStatus : status("main", effective),
   );
 function expectText(element: Element | null, present: string[], absent: string[] = []) {
-  present.forEach((text) => expect(element?.textContent).toContain(text));
-  absent.forEach((text) => expect(element?.textContent).not.toContain(text));
+  // Row buttons show a short verb; their full name is what tells them apart.
+  const names = [...(element?.querySelectorAll("button[aria-label]") ?? [])].map((button) =>
+    button.getAttribute("aria-label"),
+  );
+  const content = [element?.textContent, ...names].join(" ");
+  present.forEach((text) => expect(content).toContain(text));
+  absent.forEach((text) => expect(content).not.toContain(text));
 }
 function mount(
   scopes: readonly string[],
@@ -89,7 +95,9 @@ function mount(
   });
   const query = element.querySelector.bind(element);
   const button = (label: string) =>
-    [...element.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === label)!;
+    [...element.querySelectorAll("button")].find(
+      (entry) => (entry.getAttribute("aria-label") ?? entry.textContent?.trim()) === label,
+    )!;
   const text = (present: string[], absent: string[] = []) => expectText(element, present, absent);
   return {
     element,
@@ -127,7 +135,7 @@ it.each([
   const { text, waitText, query, button, openPat } = harness;
   await waitText(["@admin-only-account"]);
   openPat();
-  const input = () => query<HTMLInputElement>('input[aria-label="Author Name"]');
+  const input = () => query<HTMLInputElement>('input[aria-label="Author name"]');
   const token = () => query<HTMLInputElement>(".settings-secret input");
   expect(input()).not.toBeNull();
   input()!.value = "Draft author";
@@ -236,10 +244,10 @@ it("shows one status failure during setup and retries without reconnecting the a
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
   ui.text(
     ["Retry", unavailable],
-    ["Change System GitHub", "Not verified", "Connect My GitHub", "Not connected"],
+    ["Change System GitHub", "Not verified", "Connect My GitHub", "Disconnected"],
   );
   expectText(ui.row("system"), [unavailable]);
-  ui.button("Manage connections").click();
+  ui.button("Manage accounts").click();
   await waitForFast(() => expect(ui.query("[data-github-setup]")).not.toBeNull());
   expect(ui.element.querySelectorAll('[role="alert"]')).toHaveLength(1);
   ui.button("Retry").click();
@@ -253,11 +261,11 @@ it("shows one status failure during setup and retries without reconnecting the a
 });
 
 it.each(["available", "unavailable"] as const)("loads native %s", async (credentialState) => {
-  const label = credentialState === "available" ? "Verified" : "No credentials";
+  const label = credentialState === "available" ? "Verified" : "No account";
   const pending = createDeferredCore<typeof personalStatus>();
   const request = vi.fn(() => pending.promise);
   const { text, waitText, context, row } = mount(["operator.read"], "profile-a", request);
-  await waitText(["Checking connection…"]);
+  await waitText(["Loading account status…"]);
   text([], ["Not verified", "Connect My GitHub"]);
   pending.resolve({
     personal: disconnected,
@@ -269,15 +277,15 @@ it.each(["available", "unavailable"] as const)("loads native %s", async (credent
       account: credentialState === "available" ? system.account : null,
     },
   });
-  await waitText(["Not connected"]);
-  text(["Connect My GitHub"], ["Checking connection…"]);
+  await waitText(["Disconnected"]);
+  text(["Connect My GitHub"], ["Loading account status…"]);
   await waitForFast(() => expectText(row("system"), [label]));
   expectText(row("system"), [], ["OS account running the Gateway"]);
   if (credentialState !== "unavailable") {
-    expectText(row("system"), [], ["No credentials"]);
+    expectText(row("system"), [], ["No account"]);
   }
   text(
-    ["Connect My GitHub", "Admin managed"],
+    ["Connect My GitHub", "Managed by admins"],
     [unavailable, "Change System GitHub", "Use a PAT instead"],
   );
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
@@ -286,7 +294,8 @@ it.each(["available", "unavailable"] as const)("loads native %s", async (credent
 
 it("closes setup and resets its purpose when the same Gateway snapshot changes profile", async () => {
   const { query, button, replaceProfile } = mount(["operator.admin"], "profile-a", statusRequest());
-  const purpose = () => query<HTMLInputElement>('input[type="radio"]:checked')?.value;
+  const setupRow = () => query("[data-github-setup]")?.closest("[data-github-connection]");
+  const purpose = () => setupRow()?.getAttribute("data-github-connection");
   await waitForFast(() => expect(button("Change System GitHub").disabled).toBe(false));
   button("Change System GitHub").click();
   await waitForFast(() => expect(purpose()).toBe("system"));
@@ -294,8 +303,70 @@ it("closes setup and resets its purpose when the same Gateway snapshot changes p
   await waitForFast(() => expect(query(".settings-secret input")).not.toBeNull());
   replaceProfile("profile-b");
   await waitForFast(() => expect(query("[data-github-setup]")).toBeNull());
-  await waitForFast(() => expect(button("Manage connections").disabled).toBe(false));
-  button("Manage connections").click();
+  await waitForFast(() => expect(button("Connect My GitHub").disabled).toBe(false));
+  button("Connect My GitHub").click();
   await waitForFast(() => expect(purpose()).toBe("personal"));
   expect(query(".settings-secret input")).toBeNull();
+});
+
+it("disables connection controls while a PAT save is pending", async () => {
+  const stored = createDeferredCore<{ ok: boolean }>();
+  const request = vi.fn(async (method: string) =>
+    method === "secrets.store.set"
+      ? stored.promise
+      : method === "users.github.status"
+        ? personalStatus
+        : status(),
+  );
+  const ui = mount(["operator.admin"], "profile-a", request);
+  vi.mocked(ui.context.runtimeConfig.runExternalMutation).mockImplementation(
+    createMutationRunner(ui.context.gateway.snapshot.client!),
+  );
+  await ui.waitText(["@system-account"]);
+  ui.openPat();
+  const token = ui.query<HTMLInputElement>(".settings-secret input")!;
+  token.value = "synthetic-pending-pat";
+  token.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  ui.button("Save account").click();
+  flush();
+  try {
+    await waitForFast(() => expect(ui.button("Saving…").disabled).toBe(true));
+    expect(ui.button("Verify").disabled).toBe(true);
+    expect(ui.button("Change System GitHub").disabled).toBe(true);
+  } finally {
+    stored.resolve({ ok: true });
+  }
+  await waitForFast(() => expect(ui.button("Verify").disabled).toBe(false));
+});
+
+it("opens setup under the connection it changes, with that connection's own actions", async () => {
+  const request = vi.fn(async (method: string) =>
+    method === "users.github.status"
+      ? {
+          personal: { ...disconnected, state: "connected", account: { login: "personal-account" } },
+          system,
+        }
+      : status(),
+  );
+  const ui = mount(["operator.admin"], "profile-a", request);
+  await ui.waitText(["@personal-account", "@system-account"]);
+  ui.text([], ["Disconnect My GitHub", "Use GitHub CLI", "Manage accounts"]);
+  await waitForFast(() => expect(ui.button("Change My GitHub").disabled).toBe(false));
+
+  ui.button("Change My GitHub").click();
+  await waitForFast(() =>
+    expect(ui.row("personal")?.querySelector("[data-github-setup]")).not.toBeNull(),
+  );
+  expectText(ui.row("personal"), ["Disconnect My GitHub"], ["Use GitHub CLI"]);
+
+  ui.button("Change System GitHub").click();
+  await waitForFast(() =>
+    expect(ui.row("system")?.querySelector("[data-github-setup]")).not.toBeNull(),
+  );
+  expect(ui.row("personal")?.querySelector("[data-github-setup]")).toBeNull();
+  expectText(ui.row("system"), ["Use GitHub CLI"], ["Disconnect My GitHub"]);
+
+  ui.button("Close").click();
+  await waitForFast(() => expect(ui.query("[data-github-setup]")).toBeNull());
 });

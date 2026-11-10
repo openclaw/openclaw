@@ -1,19 +1,20 @@
 import type { JSX } from "@solidjs/web";
-import { For } from "solid-js";
+import { createMemo, Errored, For, latest, Loading } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   LearnMoreLink,
-  SettingsDefaultDescription,
   SettingsRow,
   SettingsSection,
-  SettingsSegmented,
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
@@ -25,14 +26,13 @@ import {
   type MemoryTab,
 } from "./memory-schema.ts";
 
+registerRouteSubtitlesEnglish();
+
 registerEnglishCatalog(registerSettingsEnglish);
 
 registerEnglishCatalog(registerPluginManagementEnglish);
 
 registerEnglishCatalog(registerMemoryImportEnglish);
-
-/** One installed plugin that can claim the exclusive `plugins.slots.memory` slot. */
-type MemoryEngineOption = ReturnType<typeof buildMemoryEngineOptions>[number];
 
 /**
  * Enablement as the page actually knows it, shared by the engine row and the
@@ -46,10 +46,7 @@ export type MemoryCatalogState =
   | { kind: "unavailable" }
   | { kind: "ready"; plugins: readonly PluginCatalogItem[]; mutationAllowed: boolean };
 
-export function buildMemoryEngineOptions(
-  catalog: MemoryCatalogState,
-  selection: MemoryEngineSelection,
-) {
+function buildMemoryEngineOptions(catalog: MemoryCatalogState, selection: MemoryEngineSelection) {
   if (catalog.kind !== "ready") {
     return [];
   }
@@ -112,13 +109,12 @@ export function findMemoryCatalogPlugin(catalog: MemoryCatalogState, pluginId: s
 /** Additive memory plugin: no `kind`, so it layers on top of whichever engine wins the slot. */
 type MemoryAddonRow = ReturnType<typeof buildMemoryAddonRows>[number];
 
-export function buildMemoryAddonRows(
+function buildMemoryAddonRows(
   catalog: MemoryCatalogState,
   state: {
-    busy: ReadonlySet<string>;
-    errors: ReadonlyMap<string, string>;
-    notices: ReadonlyMap<string, { message: string }>;
-    refreshWarnings: ReadonlyMap<string, string>;
+    errors: Readonly<Partial<Record<string, string>>>;
+    notices: Readonly<Partial<Record<string, { message: string }>>>;
+    refreshWarnings: Readonly<Partial<Record<string, string>>>;
   },
 ) {
   return memoryAddonPresentations.map((addon) => {
@@ -128,10 +124,9 @@ export function buildMemoryAddonRows(
       label: t(addon.labelKey),
       description: entry?.description ?? addon.id,
       state: resolveMemoryPluginState(catalog, entry),
-      busy: state.busy.has(addon.id),
-      error: state.errors.get(addon.id) ?? null,
+      error: state.errors[addon.id] ?? null,
       notice:
-        [state.notices.get(addon.id)?.message, state.refreshWarnings.get(addon.id)]
+        [state.notices[addon.id]?.message, state.refreshWarnings[addon.id]]
           .filter(Boolean)
           .join(" ") || null,
     };
@@ -143,19 +138,19 @@ export type MemoryEngineOutcome = { kind: "error" | "warning"; message: string }
 type MemoryViewProps = {
   activeTab: MemoryTab;
   onTabChange: (tab: MemoryTab) => void;
-  engineOptions: readonly MemoryEngineOption[];
+  catalog: MemoryCatalogState;
+  catalogScope?: object | null;
+  addonOutcomes: Parameters<typeof buildMemoryAddonRows>[1];
+  /** Read optimistic state at the control, outside held catalog and parent snapshots. */
+  readAddonExpected: (id: string) => boolean | undefined;
+  readAddonBusy: (id: string) => boolean;
   engineSelection: MemoryEngineSelection;
-  /**
-   * What the catalog says about the plugin the slot names. The slot and plugin
-   * enablement are independent config surfaces, so the named owner can be
-   * disabled and memory silently off; only `enabled` means it is running.
-   */
-  engineState: MemoryPluginState;
-  engineBusy: boolean;
+  enginePending?: boolean;
+  engineDisabled: boolean;
+  engineSaving: boolean;
   /** Distinguishes a rejected write from a committed write with a failed refresh. */
   engineOutcome: MemoryEngineOutcome | null;
   onEngineChange: (engineId: string | null) => void;
-  addons: readonly MemoryAddonRow[];
   canToggleAddons: boolean;
   onAddonChange: (pluginId: string, enabled: boolean) => void;
   pluginsHref: string;
@@ -176,34 +171,39 @@ const MEMORY_DOCS_URL = "https://docs.openclaw.ai/concepts/memory";
 
 const MEMORY_ENGINE_OFF = "";
 
-function engineHintKey(selection: MemoryEngineSelection): string {
-  switch (selection.kind) {
-    case "default":
-      return "memoryPage.engine.autoHint";
-    case "off":
-      return "memoryPage.engine.offHint";
-    default:
-      return "memoryPage.engine.explicitHint";
-  }
+/** Row to a page in Settings; a link so it keeps open-in-new-tab, drawn like the other nav rows. */
+function SettingsLinkRow(props: { title: string; description?: string; href: string }) {
+  return (
+    <a class="settings-row settings-row--nav memory-page__nav-row" href={props.href}>
+      <span class="settings-row__text">
+        <span class="settings-row__title">{props.title}</span>
+        {props.description ? (
+          <span class="settings-row__desc">{props.description}</span>
+        ) : undefined}
+      </span>
+      <span class="settings-row__control">
+        <span class="settings-row__chevron">
+          <Icon name="chevronRight" />
+        </span>
+      </span>
+    </a>
+  );
 }
 
 function EngineSection(props: MemoryViewProps) {
   // The slot is exclusive (resolveMemorySlotDecisionShared): only one memory-kind
-  // plugin loads. A segmented control states that up front instead of leaving it
-  // to a post-save toast.
+  // plugin loads. Plugins can add any number of engines with long names, so this
+  // is a select; the section's description states the exclusivity up front.
   const engineId = () => selectedEngineId(props.engineSelection);
-  const defaultEngine = () =>
-    props.engineOptions.find((option) => option.id === DEFAULT_MEMORY_ENGINE_ID)?.label ??
-    t("memoryPage.engine.openClawMemory");
-  const defaultDescription = (
-    <SettingsDefaultDescription
-      value={defaultEngine()}
-      overridden={props.engineSelection.kind !== "default"}
-    />
+  const value = () => engineId() ?? MEMORY_ENGINE_OFF;
+  const engineOptions = createMemo(() =>
+    buildMemoryEngineOptions(props.catalog, props.engineSelection),
   );
-  const available = () => props.engineOptions.length > 0;
+  const blocked = () =>
+    props.engineDisabled || (props.catalog.kind === "ready" && !props.catalog.mutationAllowed);
+  const available = () => engineOptions().length > 0;
   const options = () => [
-    ...props.engineOptions.map((option) => ({
+    ...engineOptions().map((option) => ({
       value: option.id,
       label: option.available
         ? option.label
@@ -219,29 +219,30 @@ function EngineSection(props: MemoryViewProps) {
       <>
         <SettingsRow
           title={t("memoryPage.engine.rowTitle")}
-          description={
-            <>
-              {" "}
-              {!available() && t("memoryPage.engine.catalogUnavailable")}
-              {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
-            </>
-          }
-          stacked={available()}
+          description={<>{!available() && t("memoryPage.engine.catalogUnavailable")}</>}
           control={
             available() ? (
-              <SettingsSegmented
-                value={engineId() ?? MEMORY_ENGINE_OFF}
+              <SettingsSelect
+                aria-label={t("memoryPage.engine.rowTitle")}
+                aria-busy={props.engineSaving ? "true" : undefined}
+                value={value()}
                 options={options()}
-                disabled={props.engineBusy}
-                ariaLabel={t("memoryPage.engine.rowTitle")}
-                onChange={(value) => props.onEngineChange(value || null)}
+                disabled={blocked()}
+                onChange={(event) => {
+                  if (props.engineSaving) {
+                    // A busy select keeps focus, so put back what the write is still applying.
+                    event.currentTarget.value = value();
+                    return;
+                  }
+                  props.onEngineChange(event.currentTarget.value || null);
+                }}
               />
             ) : (
               <SettingsValue mono={true} value={engineId() ?? t("memoryPage.engine.off")} />
             )
           }
         />
-        {available() ? <DisabledEngineRow {...props} /> : undefined}
+        {available() ? <DisabledEngineRow {...props} engineDisabled={blocked()} /> : undefined}
         {!available() || props.engineOutcome === null ? undefined : (
           <SettingsRow
             title={t(
@@ -268,22 +269,24 @@ function EngineSection(props: MemoryViewProps) {
 }
 
 /**
- * The segmented control shows the slot owner, which stays selected even when
+ * The select shows the slot owner, which stays selected even when
  * that plugin is disabled — so re-picking it fires no change event and there
  * would be no way back. This row is the only path that re-enables the owner.
  */
 function DisabledEngineRow(props: MemoryViewProps) {
   const engineId = () => selectedEngineId(props.engineSelection);
+  const state = () =>
+    resolveMemoryPluginState(props.catalog, findMemoryCatalogPlugin(props.catalog, engineId()));
   return (
     <>
-      {engineId() !== null && props.engineState === "disabled" && (
+      {!props.enginePending && engineId() !== null && state() === "disabled" && (
         <SettingsRow
           title={t("memoryPage.engine.disabledTitle")}
           description={t("memoryPage.engine.disabledHint")}
           control={
             <button
               class="btn btn--sm"
-              disabled={props.engineBusy}
+              disabled={props.engineDisabled || props.engineSaving}
               onClick={() => props.onEngineChange(engineId())}
             >
               {t("memoryPage.engine.enable")}
@@ -311,16 +314,21 @@ function AddonStatus(props: { state: MemoryPluginState }) {
 }
 
 function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
+  // Read optimistic affordances at the control, outside the held catalog row snapshot.
+  // A retry dismisses the old error ahead of its action's held catalog update.
+  const error = () => (props.owner.readAddonBusy(props.addon.id) ? null : props.addon.error);
   return (
     <>
       {props.owner.canToggleAddons &&
+      props.owner.catalog.kind === "ready" &&
+      props.owner.catalog.mutationAllowed &&
       (props.addon.state === "enabled" || props.addon.state === "disabled") ? (
         <SettingsToggleRow
           title={props.addon.label}
           ariaLabel={t("memoryPage.addons.toggleAriaLabel", { plugin: props.addon.label })}
           description={props.addon.description}
-          checked={props.addon.state === "enabled"}
-          disabled={props.addon.busy}
+          checked={props.owner.readAddonExpected(props.addon.id) ?? props.addon.state === "enabled"}
+          saving={props.owner.readAddonBusy(props.addon.id)}
           onChange={(enabled) => props.owner.onAddonChange(props.addon.id, enabled)}
         />
       ) : (
@@ -330,10 +338,10 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
           control={<AddonStatus state={props.addon.state} />}
         />
       )}
-      {props.addon.error === null ? undefined : (
+      {latest(error) === null ? undefined : (
         <SettingsRow
           title={t("memoryPage.addons.changeFailed", { plugin: props.addon.label })}
-          description={props.addon.error}
+          description={error()}
           control={<SettingsStatus kind="danger" label={t("common.failed")} />}
         />
       )}
@@ -349,56 +357,64 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
 }
 
 function AddonsSection(props: MemoryViewProps) {
+  const addons = createMemo(() => buildMemoryAddonRows(props.catalog, props.addonOutcomes));
   return (
     <SettingsSection
       title={t("memoryPage.addons.title")}
       description={t("memoryPage.addons.description")}
     >
-      <For each={props.addons} keyed={(addon) => addon.id}>
+      <For each={addons()} keyed={(addon) => addon.id}>
         {(addon) => <AddonRow addon={addon()} owner={props} />}
       </For>
-      <SettingsRow
-        title={t("memoryPage.addons.manage")}
-        control={
-          <a class="memory-page__link" href={props.pluginsHref}>
-            {t("memoryPage.addons.manageLink")}
-          </a>
-        }
-      />
+      <SettingsLinkRow title={t("memoryPage.addons.manage")} href={props.pluginsHref} />
     </SettingsSection>
   );
 }
 
+function MemoryCatalogSections(props: MemoryViewProps) {
+  return (
+    <>
+      <EngineSection {...props} />
+      <AddonsSection {...props} />
+    </>
+  );
+}
+
 function SettingsTab(props: MemoryViewProps) {
+  const catalogScope = createMemo(() => props.catalogScope);
   return (
     <ShellLayoutBoundary traits={{ settingsPage: true }}>
       <div class="settings-page">
-        <EngineSection {...props} /> <AddonsSection {...props} />
-        <p class="settings-page__intro">{t("memoryPage.search.intro")}</p>
+        <Errored
+          fallback={(_error) => (
+            <MemoryCatalogSections {...props} catalog={{ kind: "unavailable" }} />
+          )}
+        >
+          <Loading
+            on={catalogScope()}
+            fallback={<MemoryCatalogSections {...props} catalog={{ kind: "loading" }} />}
+          >
+            <MemoryCatalogSections {...props} />
+          </Loading>
+        </Errored>
       </div>
       {props.editor}
       <div class="settings-page">
         {props.dreamingSettings}
-        <SettingsSection
-          title={t("memoryPage.import.title")}
-          description={t("memoryPage.import.description")}
-        >
-          <SettingsRow
-            title={t("tabs.memoryImport")}
-            description={t("subtitles.memoryImport")}
-            control={
-              props.canImportMemory ? (
-                <>
-                  {" "}
-                  <a class="memory-page__link" href={props.memoryImportHref}>
-                    {t("memoryPage.import.link")}
-                  </a>{" "}
-                </>
-              ) : (
-                <SettingsValue value={t("memoryImport.adminRequired")} />
-              )
-            }
-          />
+        <SettingsSection title={t("memoryPage.import.title")}>
+          {props.canImportMemory ? (
+            <SettingsLinkRow
+              title={t("tabs.memoryImport")}
+              description={t("subtitles.memoryImport")}
+              href={props.memoryImportHref}
+            />
+          ) : (
+            <SettingsRow
+              title={t("tabs.memoryImport")}
+              description={t("subtitles.memoryImport")}
+              control={<SettingsValue value={t("memoryImport.adminRequired")} />}
+            />
+          )}
         </SettingsSection>
       </div>
     </ShellLayoutBoundary>
@@ -407,13 +423,20 @@ function SettingsTab(props: MemoryViewProps) {
 
 export function Memory(props: MemoryViewProps) {
   return (
-    <ShellLayoutBoundary traits={{ memoryPage: true, toolbarHeader: true }}>
+    <ShellLayoutBoundary
+      traits={{
+        memoryPage: true,
+        toolbarHeader: true,
+        settingsPage: true,
+        settingsWorkspace: true,
+      }}
+    >
       <section class="memory-page">
-        <section class="content-header content-header--settings content-header--page hub-page-header">
+        <section class="content-header content-header--settings content-header--page hub-page-header hub-page-header--stacked">
           <div class="hub-page-header__title">
-            <div class="page-title">{t("tabs.memory")}</div>
+            <h1 class="page-title">{t("tabs.memory")}</h1>
             <div class="page-subtitle">
-              {t("memoryPage.intro")} <LearnMoreLink url={MEMORY_DOCS_URL} />
+              {t("subtitles.memory")} <LearnMoreLink url={MEMORY_DOCS_URL} />
             </div>
           </div>
           <div class="hub-page-header__tabs">

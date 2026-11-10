@@ -10,6 +10,8 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({
   name: "Tool output fidelity",
+  // Native clipboard contents are shared across contexts in the same browser.
+  browserLaunchOptions: { headless: true },
   startServerBeforeBrowser: true,
 });
 const timestamp = Date.UTC(2026, 8, 19, 12);
@@ -50,8 +52,13 @@ const history = prepareChatHistoryFixture([
   },
   { role: "assistant", content: "Output is ready for inspection.", timestamp: timestamp + 3 },
 ]);
-const capture = (page: Page, dir: string, name: string) =>
-  page.screenshot({ path: path.join(dir, name + ".png"), animations: "disabled" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const capture = (page: Page, dir: string | undefined, name: string) => {
+  if (dir && captureUiProof) {
+    return page.screenshot({ path: path.join(dir, name + ".png"), animations: "disabled" });
+  }
+  return undefined;
+};
 async function expandGroups(page: Page, reply: string) {
   await page.getByText(reply, { exact: true }).waitFor();
   for (const group of await page
@@ -63,7 +70,9 @@ async function expandGroups(page: Page, reply: string) {
 
 suite.define(() => {
   it("renders native Code Mode results without transport envelopes", async () => {
-    const artifacts = createControlUiE2eArtifactDir("code-mode-output");
+    const artifacts = captureUiProof
+      ? createControlUiE2eArtifactDir("code-mode-output")
+      : undefined;
     const source =
       'text(await tools.exec_command({cmd: "check-service", max_output_tokens: 1000}));';
     const payload =
@@ -164,15 +173,16 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         await expandOutput();
         await capture(page, artifacts, "01-output-preview");
-        const historyRequests = (await gateway.getRequests()).filter(
-          (request) => request.method === "chat.history" || request.method === "chat.startup",
-        );
-        expect(historyRequests.length).toBeGreaterThan(0);
-        expect(
-          historyRequests.every(
-            (request) => asOptionalRecord(request.params)?.toolResultMaxChars === 2_000,
-          ),
-        ).toBe(true);
+        const historyParams = (await gateway.getRequests()).flatMap((request) => {
+          const params = asOptionalRecord(request.params);
+          return request.method === "chat.history" || request.method === "chat.startup"
+            ? [params]
+            : request.method === "sessions.messages.subscribe" && params?.initialHistory
+              ? [asOptionalRecord(params.initialHistory)]
+              : [];
+        });
+        expect(historyParams.length).toBeGreaterThan(0);
+        expect(historyParams.every((params) => params?.toolResultMaxChars === 2_000)).toBe(true);
         expect(await page.locator(".chat-tool-msg-body").textContent()).not.toContain("TAIL:");
         await page.getByRole("button", { name: "Show full output", exact: true }).click();
         const request = await gateway.waitForRequest("chat.message.get");

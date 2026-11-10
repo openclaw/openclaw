@@ -45,28 +45,20 @@ export async function withFileMutationQueueKeysResolution<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const scope = getAgentToolExecutionContext()?.assistantMessage ?? keyAdmissions.fallbackScope;
-  const previousAdmission = keyAdmissions.tails.get(scope) ?? Promise.resolve();
   void keysResolution.catch(() => undefined);
   let operation!: Promise<T>;
-  const admission = previousAdmission.then(async () => {
-    const keys = await keysResolution;
-    operation = enqueueKeyedTask({
-      tails: fileMutationTails,
-      keys: [...new Set(keys)].toSorted(),
-      task: fn,
-    });
+  const admission = enqueueKeyedTask({
+    tails: keyAdmissions.tails,
+    key: scope,
+    task: async () => {
+      const keys = await keysResolution;
+      operation = enqueueKeyedTask({
+        tails: fileMutationTails,
+        keys: [...new Set(keys)].toSorted(),
+        task: fn,
+      });
+    },
   });
-  const tail = admission.then(
-    () => undefined,
-    () => undefined,
-  );
-  keyAdmissions.tails.set(scope, tail);
-  const cleanup = () => {
-    if (keyAdmissions.tails.get(scope) === tail) {
-      keyAdmissions.tails.delete(scope);
-    }
-  };
-  tail.then(cleanup, cleanup);
   await admission;
   return await operation;
 }

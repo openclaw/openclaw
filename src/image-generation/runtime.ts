@@ -1,21 +1,22 @@
+import {
+  buildMediaGenerationNormalizationMetadata,
+  resolveMediaGeometryOverrides,
+} from "../../packages/media-generation-core/src/normalization.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveMediaGeometryOverrides } from "../media-generation/geometry-normalization.js";
-import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getImageGenerationProvider,
   listImageGenerationProviders,
   withImageGenerationProviders,
 } from "../media-generation/registry.js";
 import {
-  buildMediaGenerationNormalizationMetadata,
   resolveMediaProviderRequestTimeoutMs,
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
+import { createCapabilityProviderLookup } from "../plugins/provider-registry-shared.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
-import { resolveImageGenerationMaxInputImages } from "./capabilities.js";
 import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 import type { ImageGenerationIgnoredOverride, ImageGenerationResult } from "./types.js";
 
@@ -47,7 +48,7 @@ export async function generateImage(
     return runImageGeneration(params, deps);
   }
   return withImageGenerationProviders(params.cfg, (providers) => {
-    const lookup = createMediaProviderLookup(providers);
+    const lookup = createCapabilityProviderLookup(providers);
     return runImageGeneration(params, {
       ...deps,
       getProvider: deps.getProvider ?? lookup.getProvider,
@@ -80,10 +81,23 @@ async function runImageGeneration(
     },
     prepareCandidate(candidate, provider) {
       const inputImageCount = params.inputImages?.length ?? 0;
-      const maxInputImages = resolveImageGenerationMaxInputImages({
-        provider,
-        model: candidate.model,
-      });
+      const model = candidate.model.trim();
+      let prefixLimit: number | undefined;
+      let prefixLength = -1;
+      if (model) {
+        for (const [prefix, limit] of Object.entries(
+          provider.capabilities.edit.maxInputImagesByModelPrefix ?? {},
+        )) {
+          if (prefix.length > prefixLength && model.startsWith(prefix)) {
+            prefixLimit = limit;
+            prefixLength = prefix.length;
+          }
+        }
+      }
+      const maxInputImages =
+        (model ? provider.capabilities.edit.maxInputImagesByModel?.[model] : undefined) ??
+        prefixLimit ??
+        provider.capabilities.edit.maxInputImages;
       const referenceImageError = resolveReferenceImageCapabilityError({
         candidateRef: `${candidate.provider}/${candidate.model}`,
         inputImageCount,
@@ -155,6 +169,7 @@ async function runImageGeneration(
           cfg: params.cfg,
           agentDir: params.agentDir,
           authStore: params.authStore,
+          signal: params.signal,
           count: params.count,
           size: sanitized.size,
           aspectRatio: sanitized.aspectRatio,

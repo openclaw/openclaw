@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import type {
-  AgentMessage,
-  ContextEngineProjection,
+import {
+  isTranscriptOnlyOpenClawAssistantMessage,
+  type AgentMessage,
+  type ContextEngineProjection,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -20,15 +21,16 @@ import {
 } from "./context-engine-projection.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
-import type { CodexAppServerBindingIdentity, CodexBindingAuthority } from "./session-binding.js";
+import {
+  hashCodexAppServerBindingFingerprint,
+  type CodexAppServerBindingIdentity,
+  type CodexBindingAuthority,
+} from "./session-binding.js";
 import {
   buildContextEngineBinding,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-context-engine.js";
-import {
-  codexDynamicToolsFingerprint,
-  codexLegacyDynamicToolsFingerprint,
-} from "./thread-fingerprints.js";
+import { codexLegacyDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import type { CodexThreadRequestContext } from "./thread-lifecycle-preflight.js";
 import type {
@@ -73,7 +75,7 @@ export async function prepareCodexContextEngineHistory(params: {
   };
   runtimeParams: CodexAttemptContext["runtime"]["runtimeParams"];
   startupBinding: CodexAttemptContext["runtime"]["connection"]["mutable"]["startupBinding"];
-  toolSpecs: Parameters<typeof codexDynamicToolsFingerprint>[0];
+  toolSpecs: Parameters<typeof codexLegacyDynamicToolsFingerprint>[0];
   hasContinuation: boolean;
   continuationMessages: AgentMessage[] | undefined;
   preserveToolPayload: boolean;
@@ -87,7 +89,9 @@ export async function prepareCodexContextEngineHistory(params: {
 }) {
   const { assembled, projectionParams, startupBinding, assertCurrent } = params;
   const prepareSeed = params.runtimeParams.hostCapabilities.prepareBoundedSeed;
+  // Exclude bookkeeping before fingerprinting so local-only appends cannot rotate history.
   const includeMessage = (message: AgentMessage) =>
+    !isTranscriptOnlyOpenClawAssistantMessage(message) &&
     (message.role !== "custom" || isCodexDurableCustomMessage(message)) &&
     !(
       message.role === "user" &&
@@ -110,15 +114,18 @@ export async function prepareCodexContextEngineHistory(params: {
     ? undefined
     : (selection?.projection ??
       readContextEngineThreadBootstrapProjection(assembled.contextProjection));
-  const projectionDecision =
-    contextEngineProjection && !params.hasContinuation
-      ? resolveContextEngineBootstrapProjectionDecision({
-          startupBinding,
-          expectedBinding: buildContextEngineBinding(params.runtimeParams, contextEngineProjection),
-          dynamicToolsFingerprint: codexDynamicToolsFingerprint(params.toolSpecs),
-          legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(params.toolSpecs),
-        })
-      : { project: true, reason: "per-turn-projection" };
+  let projectionDecision;
+  if (contextEngineProjection && !params.hasContinuation) {
+    const legacyDynamicToolsFingerprint = codexLegacyDynamicToolsFingerprint(params.toolSpecs);
+    projectionDecision = resolveContextEngineBootstrapProjectionDecision({
+      startupBinding,
+      expectedBinding: buildContextEngineBinding(params.runtimeParams, contextEngineProjection),
+      dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint(legacyDynamicToolsFingerprint),
+      legacyDynamicToolsFingerprint,
+    });
+  } else {
+    projectionDecision = { project: true, reason: "per-turn-projection" };
+  }
   const renderProjection = (includeAttachments: boolean) =>
     projectContextEngineAssemblyForCodex({
       ...projectionParams,

@@ -1,5 +1,4 @@
 import {
-  isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
   sanitizeEmbeddingCacheHeaders,
   type MemoryEmbeddingProviderAdapter,
@@ -25,8 +24,6 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   transport: "remote",
   authProviderId: "openai",
   autoSelectPriority: 20,
-  allowExplicitWhenConfiguredAuto: true,
-  shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
     const resolvedProvider = options.provider ?? "openai";
     const { createOpenAiEmbeddingProvider } = await import("./embedding-provider.js");

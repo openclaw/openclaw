@@ -1,4 +1,6 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { IMAGE_BLOCK_TOKENS } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import { estimateTokens } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.js";
@@ -10,11 +12,12 @@ import {
   resolveMaxActiveTranscriptBytes,
 } from "../../context-engine/transcript-byte-limit.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { requireCompactionWriterEntry } from "../embedded-agent-runner/compaction-successor.js";
+import { log } from "../embedded-agent-runner/logger.js";
 import { attachCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
-import { normalizeContextTokenBudget } from "../embedded-agent-runner/utils.js";
 import {
   createCompactionRequestBudget,
   estimateCompactionHistoryTokens,
@@ -57,7 +60,7 @@ export function bindBoundedSeed(
     return undefined;
   }
   const hostTokenBudget =
-    normalizeContextTokenBudget(input.contextTokenBudget) || DEFAULT_CONTEXT_TOKENS;
+    floorPositiveFiniteNumber(input.contextTokenBudget) || DEFAULT_CONTEXT_TOKENS;
   const sessionTarget = { ...target, agentId, sessionId, sessionKey, storePath };
   const attempt = {
     ...input,
@@ -82,9 +85,24 @@ export function bindBoundedSeed(
       assertSource();
       assertCurrent();
     };
+    const emitCompactionProgress = async (data: {
+      phase: "start" | "end" | "context_bounded";
+      completed?: boolean;
+      qualityDegraded?: true;
+      summaryRefused?: true;
+    }) => {
+      assert();
+      // The host observer is advisory. Its failure must not abort the turn.
+      try {
+        await attempt.onAgentEvent?.({ stream: "compaction", data });
+      } catch (error) {
+        log.warn(`bounded seed observer failed: ${formatErrorMessage(error)}`);
+      }
+      assert();
+    };
     assert();
     const admission = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
-    const requested = normalizeContextTokenBudget(requestedTokenBudget);
+    const requested = floorPositiveFiniteNumber(requestedTokenBudget);
     const tokenBudget = requested && requested < hostTokenBudget ? requested : hostTokenBudget;
     const maxSeedBytes = Math.min(maxBytes, tokenBudget * 4);
     const admittedKey =
@@ -138,7 +156,7 @@ export function bindBoundedSeed(
       const additionalBytes = new Map<AgentMessage, number>();
       if (prepareMedia) {
         for (const message of activeCount ? [...bounded.messages, ...active] : bounded.messages) {
-          if (message.role !== "user") {
+          if (message.role !== "user" && message.role !== "assistant") {
             continue;
           }
           const prepared = await prepareMedia({ message, maxChars: tokenBudget * 4 });
@@ -238,46 +256,63 @@ export function bindBoundedSeed(
       const { compactEmbeddedAgentSessionDirect } =
         await import("../embedded-agent-runner/compact.js");
       assert();
-      await withOwnedSessionTranscriptWrites(
-        {
-          sessionTarget: writeTarget,
-          assertCommitAllowed: assert,
-          withTranscriptWrite: async (run) => run(),
-        },
-        () =>
-          compactEmbeddedAgentSessionDirect(
-            {
-              ...attempt,
-              sessionId: sessionTarget.sessionId,
-              sessionKey: sessionTarget.sessionKey,
-              sessionFile: sessionTarget.sessionKey,
-              sessionTarget,
-              workspaceDir,
-              model: attempt.modelId,
-              senderId: attempt.senderId ?? undefined,
-              senderName: attempt.senderName ?? undefined,
-              senderUsername: attempt.senderUsername ?? undefined,
-              senderE164: attempt.senderE164 ?? undefined,
-              contextEngineRuntimeContext: runtimeContext,
-              trigger: "budget",
-              abortSignal: signal,
-            },
-            (prepared) =>
-              persistCompactionBoundaryWithSessionEntryAsync(
-                writeTarget,
-                { prepared, transcriptByteCompactionLatch: null },
-                assert,
-              ),
-          ),
-      );
+      let end: Parameters<typeof emitCompactionProgress>[0] = {
+        phase: "end",
+        completed: false,
+      };
+      await emitCompactionProgress({ phase: "start" });
+      try {
+        const result = await withOwnedSessionTranscriptWrites(
+          {
+            sessionTarget: writeTarget,
+            assertCommitAllowed: assert,
+            withTranscriptWrite: async (run) => run(),
+          },
+          () =>
+            compactEmbeddedAgentSessionDirect(
+              {
+                ...attempt,
+                sessionId: sessionTarget.sessionId,
+                sessionKey: sessionTarget.sessionKey,
+                sessionFile: sessionTarget.sessionKey,
+                sessionTarget,
+                workspaceDir,
+                model: attempt.modelId,
+                senderId: attempt.senderId ?? undefined,
+                senderName: attempt.senderName ?? undefined,
+                senderUsername: attempt.senderUsername ?? undefined,
+                senderE164: attempt.senderE164 ?? undefined,
+                contextEngineRuntimeContext: runtimeContext,
+                trigger: "budget",
+                abortSignal: signal,
+              },
+              (prepared) =>
+                persistCompactionBoundaryWithSessionEntryAsync(
+                  writeTarget,
+                  { prepared, transcriptByteCompactionLatch: null },
+                  assert,
+                ),
+            ),
+        );
+        if (result.ok && result.compacted) {
+          const details = parseCompactionDetails(result.result?.details);
+          end = {
+            phase: "end",
+            completed: true,
+            ...(details?.qualityDegraded ? { qualityDegraded: true } : {}),
+            ...(details?.summaryRefused ? { summaryRefused: true } : {}),
+          };
+        }
+      } finally {
+        await emitCompactionProgress(end);
+      }
       assert();
       messages = await read();
       bounded = await select(messages);
     }
     assert();
     if (cut) {
-      await attempt.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
-      assert();
+      await emitCompactionProgress({ phase: "context_bounded" });
     }
     return bounded;
   };

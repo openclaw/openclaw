@@ -1,9 +1,10 @@
 import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { resolveConfiguredModelPolicyAllow } from "../agents/model-selection-shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { applyModelAllowlist } from "../flows/model-picker-allowlist.js";
 import {
-  applyModelAllowlist,
   applyModelFallbacksFromSelection,
   promptDefaultModel,
   promptModelAllowlist,
@@ -31,41 +32,6 @@ type ProviderChoiceModelPrompt = {
   message?: string;
   loadCatalog?: boolean;
 };
-
-async function resolveProviderChoiceModelPrompt(params: {
-  authChoice: string;
-  config: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<ProviderChoiceModelPrompt | undefined> {
-  const { resolvePluginProviders, resolveProviderPluginChoice } =
-    await import("../plugins/provider-auth-choice.runtime.js");
-  const providers = resolvePluginProviders({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    mode: "setup",
-  });
-  const resolved = resolveProviderPluginChoice({
-    providers,
-    choice: params.authChoice,
-    manifestChoice: resolveManifestProviderAuthChoice(params.authChoice, {
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      includeUntrustedWorkspacePlugins: false,
-    }),
-  });
-  const wizard = resolved?.provider.wizard?.setup;
-  if (!wizard) {
-    return resolved?.provider.id ? { provider: resolved.provider.id } : undefined;
-  }
-  return {
-    provider: resolved.provider.id,
-    ...wizard.modelAllowlist,
-    ...(wizard.modelSelection?.promptWhenAuthChoiceProvided === true ? { loadCatalog: true } : {}),
-  };
-}
 
 function hasConfiguredProviderModels(cfg: OpenClawConfig, provider: string | undefined): boolean {
   if (!provider) {
@@ -111,33 +77,6 @@ function resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
   }
   const canonical = `openai/${modelId}`;
   return selectedModels.find((model) => model.trim() === canonical);
-}
-
-function resolveConfiguredProviderFromAuthChange(params: {
-  before: OpenClawConfig;
-  after: OpenClawConfig;
-  preferredProvider?: string;
-}): string | undefined {
-  if (hasConfiguredProviderModels(params.after, params.preferredProvider)) {
-    return params.preferredProvider;
-  }
-
-  const beforeProviders = params.before.models?.providers ?? {};
-  const configuredProviders = listConfiguredModelProviders(params.after);
-  const changedProviders = configuredProviders.filter((provider) => {
-    const beforeCount = beforeProviders[provider]?.models?.length ?? 0;
-    const afterCount = params.after.models?.providers?.[provider]?.models?.length ?? 0;
-    return afterCount > beforeCount;
-  });
-
-  if (changedProviders.length === 1) {
-    return changedProviders[0];
-  }
-
-  return (
-    params.preferredProvider ??
-    (configuredProviders.length === 1 ? configuredProviders[0] : undefined)
-  );
 }
 
 /** Prompt for model provider credentials and explicit default model policy settings. */
@@ -224,24 +163,61 @@ export async function promptAuthConfig(
     ) {
       next = applyOnboardingPrimaryModel(next, target, applied.agentModelOverride);
     }
-    preferredProvider = resolveConfiguredProviderFromAuthChange({
-      before: beforeAuthConfig,
-      after: next,
-      preferredProvider,
-    });
+    if (!hasConfiguredProviderModels(next, preferredProvider)) {
+      const beforeProviders = beforeAuthConfig.models?.providers ?? {};
+      const configuredProviders = listConfiguredModelProviders(next);
+      const changedProviders = configuredProviders.filter((provider) => {
+        const beforeCount = beforeProviders[provider]?.models?.length ?? 0;
+        const afterCount = next.models?.providers?.[provider]?.models?.length ?? 0;
+        return afterCount > beforeCount;
+      });
+      preferredProvider =
+        changedProviders.length === 1
+          ? changedProviders[0]
+          : (preferredProvider ??
+            (configuredProviders.length === 1 ? configuredProviders[0] : undefined));
+    }
     if (applied.retrySelection) {
       continue;
     }
     break;
   }
 
+  // Configure never creates a model allowlist. Judge from the saved config: wizard steps
+  // add model metadata that an unmarked in-memory config would read as a legacy allowlist.
+  const hasAllowlist =
+    resolveConfiguredModelPolicyAllow({ cfg, agentId: target.agentId }).refs.length > 0;
+
   if (authChoice !== "custom-api-key") {
-    const modelPrompt = await resolveProviderChoiceModelPrompt({
-      authChoice,
-      config: next,
-      workspaceDir: target.workspaceDir,
-      env: process.env,
+    const config = next;
+    const workspaceDir = target.workspaceDir;
+    const env = process.env;
+    let modelPrompt: ProviderChoiceModelPrompt | undefined;
+    const { resolvePluginProviders, resolveProviderPluginChoice } =
+      await import("../plugins/provider-auth-choice.runtime.js");
+    const providers = resolvePluginProviders({ config, workspaceDir, env, mode: "setup" });
+    const resolved = resolveProviderPluginChoice({
+      providers,
+      choice: authChoice,
+      manifestChoice: resolveManifestProviderAuthChoice(authChoice, {
+        config,
+        workspaceDir,
+        env,
+        includeUntrustedWorkspacePlugins: false,
+      }),
     });
+    const wizard = resolved?.provider.wizard?.setup;
+    if (!wizard) {
+      modelPrompt = resolved?.provider.id ? { provider: resolved.provider.id } : undefined;
+    } else {
+      modelPrompt = {
+        provider: resolved.provider.id,
+        ...wizard.modelAllowlist,
+        ...(wizard.modelSelection?.promptWhenAuthChoiceProvided === true
+          ? { loadCatalog: true }
+          : {}),
+      };
+    }
     const promptProvider =
       modelPrompt?.provider ?? preferredProvider ?? resolveSingleConfiguredProvider(next);
     const hasPromptProviderConfiguredModels = hasConfiguredProviderModels(next, promptProvider);
@@ -271,6 +247,7 @@ export async function promptAuthConfig(
       preferredProvider: promptProvider,
       providerScopedCatalog: useProviderScopedCatalog,
       loadCatalog: shouldLoadModelCatalog,
+      restrictsPicker: hasAllowlist,
     });
     if (allowlistSelection.models) {
       const selectedModels = allowlistSelection.models;
@@ -282,15 +259,21 @@ export async function promptAuthConfig(
       if (canonicalPrimary) {
         next = applyOnboardingPrimaryModel(next, target, canonicalPrimary);
       }
-      next = applyAgentModelDefaults(next, target, (projected) =>
-        applyModelAllowlist(
-          applyModelFallbacksFromSelection(projected, selectedModels, {
-            scopeKeys: allowlistSelection.scopeKeys,
-          }),
-          selectedModels,
-          { scopeKeys: allowlistSelection.scopeKeys },
-        ),
-      );
+      const { scopeKeys } = allowlistSelection;
+      next = applyAgentModelDefaults(next, target, (projected) => {
+        // An unscoped selection edits the saved policy as a whole; its entries can be
+        // wildcards, which are not fallback models.
+        const withFallbacks =
+          hasAllowlist && !scopeKeys
+            ? projected
+            : applyModelFallbacksFromSelection(projected, selectedModels, {
+                scopeKeys,
+                fallbacksOnly: !hasAllowlist,
+              });
+        return hasAllowlist
+          ? applyModelAllowlist(withFallbacks, selectedModels, { scopeKeys })
+          : withFallbacks;
+      });
     }
   }
 

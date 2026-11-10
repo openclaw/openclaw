@@ -122,15 +122,6 @@ export async function resolveBackupConfigCapture(
       throw captureError(sourcePath, "file identity could not be pinned", error);
     }
   }
-  // Watch paths include both lexical and canonical names. Every one must belong
-  // to a successfully resolved, hash-pinned file, not a partially visited graph.
-  for (const includePath of snapshot.includedPaths ?? []) {
-    if (
-      !capture.some((file) => file.sourcePath === includePath || file.canonicalPath === includePath)
-    ) {
-      throw captureError(includePath, "include inventory is incomplete");
-    }
-  }
   return {
     files: capture,
     assertRootAlias,

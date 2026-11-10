@@ -1,5 +1,5 @@
 import { createMemo } from "@solidjs/signals";
-import { For } from "solid-js";
+import { createDeferred, Errored, For, isPending, latest, Loading } from "solid-js";
 import type {
   ExecutionIdentityContextV1,
   PrincipalRefV1,
@@ -33,6 +33,10 @@ type RunInspectorProps = {
   basePath: string;
   connected?: boolean;
   state: RunInspectorState;
+  request?: {
+    kind: "executions" | "decisions" | "refresh";
+    completion: { promise: Promise<void> };
+  };
   selector: RunInspectorSelector | null;
   selectorId: string | null;
   onLoadMoreDecisions: () => void;
@@ -391,6 +395,10 @@ function renderPanel(
 }
 
 export function renderRunInspector(props: RunInspectorProps) {
+  const request = createMemo(() => props.request);
+  // Pagination readiness must not hold accepted receipts or a new inspection scope.
+  const read = createDeferred(() => request()?.completion.promise);
+  const initialRequest = createMemo(() => (props.state.status === "ready" ? undefined : request()));
   const identity = createMemo(() => {
     const state = props.state;
     return state.status === "ready" && state.result.identity.state === "present"
@@ -399,7 +407,25 @@ export function renderRunInspector(props: RunInspectorProps) {
   });
   const content = createMemo(() => {
     const state = props.state;
-    return state.status === "ready" ? renderReady(props, state) : renderPanel(props, state);
+    if (state.status !== "ready") {
+      return renderPanel(props, state);
+    }
+    const pending = isPending(read);
+    return renderReady(props, {
+      ...state,
+      executionPageStatus:
+        props.request?.kind === "executions" && pending
+          ? "loading"
+          : state.executionPageStatus === "error"
+            ? "error"
+            : undefined,
+      decisionPageStatus:
+        props.request?.kind === "decisions" && pending
+          ? "loading"
+          : state.decisionPageStatus === "error"
+            ? "error"
+            : undefined,
+    });
   });
 
   return (
@@ -419,7 +445,9 @@ export function renderRunInspector(props: RunInspectorProps) {
       <div class="run-inspector__warning" role="note">
         {t("activity.runInspector.bestEffortWarning")}
       </div>
-      {content()}
+      <Loading on={initialRequest()} fallback={renderPanel(props, { status: "loading" })}>
+        <Errored fallback={() => content()}>{(latest(read), content())}</Errored>
+      </Loading>
     </section>
   );
 }

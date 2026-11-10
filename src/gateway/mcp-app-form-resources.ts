@@ -21,19 +21,18 @@ import {
   type McpAppFormOrigin,
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
-import { readRetainedSessionEntryFacts } from "../config/sessions/session-entry-read-facts.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { readArtifactBase64Payload } from "./artifacts-base64.js";
 import { resolveMcpAppRequesterId, callMcpAppToolWithElicitation } from "./mcp-app-operations.js";
 import { canSelectQuestion } from "./question-access.js";
 import {
   prepareQuestionAuthorization,
   withPreparedQuestionSessions,
 } from "./question-session-access.js";
-import { readArtifactBase64Payload } from "./server-methods/artifacts-base64.js";
+import { withSessionFileRoot } from "./server-methods/session-files-root.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
-import { withSessionFileRoot } from "./server-methods/sessions-files.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createWorkspaceUploadBatch } from "./server-methods/workspace-fs.js";
 import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";
@@ -496,7 +495,7 @@ export function createMcpAppWorkspaceUploadProvider(params: {
     withSessionFileRoot(
       params,
       request.options.context.getRuntimeConfig(),
-      async (loaded, assertSourceCurrent) => {
+      async (loaded, assertSourceCurrent, readEntry) => {
         const assertCurrent = () => {
           params.assertCurrent();
           assertSourceCurrent();
@@ -511,19 +510,7 @@ export function createMcpAppWorkspaceUploadProvider(params: {
               throw new Error("Form upload session generation changed");
             }
           }
-          const current = metadata
-            ? metadata.readCurrent()
-            : readRetainedSessionEntryFacts(
-                {
-                  agentId: loaded.readSource?.agentId ?? params.agentId,
-                  path: loaded.readSource?.path ?? loaded.storePath,
-                },
-                {
-                  sessionKeys: [loaded.canonicalKey],
-                  projection: "exact",
-                  snapshotFields: ["skillsSnapshot"],
-                },
-              )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry;
+          const current = metadata ? metadata.readCurrent() : readEntry();
           if (!current || current.execNode || loaded.root !== params.workspaceDir) {
             throw new Error("Form upload workspace authority changed");
           }

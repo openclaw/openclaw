@@ -42,6 +42,12 @@ function withCredential(
 }
 
 const credentialRef = (id = "KEY") => ({ source: "store", provider: "default", id });
+const fixtureId = "source-fixture";
+const resolvedCredential = "resolved-fixture-key";
+const invalidCredential = "invalid-plaintext-fixture";
+const hydrationError = "paired runtime config was not hydrated";
+const descriptor = { name: fixtureId, description: "Fixture command", hasSubcommands: false };
+const secretInputs = { paths: [{ path: "credential", expected: "string" }] };
 const credentialSchema = {
   type: "object",
   required: ["source", "provider", "id"],
@@ -66,9 +72,9 @@ function createRecordWithBuildVersion(openclawVersion: unknown) {
     source: manifestRecord.source,
     rootDir: manifestRecord.rootDir,
     origin: manifestRecord.origin,
-    packageManifest: {
-      build: { openclawVersion },
-    } as unknown as NonNullable<PluginCandidate["packageManifest"]>,
+    packageManifest: { build: { openclawVersion } } as unknown as NonNullable<
+      PluginCandidate["packageManifest"]
+    >,
   } satisfies PluginCandidate;
 
   const cfg = { plugins: { entries: { example: { enabled: true } } } };
@@ -107,11 +113,13 @@ it("createPluginCandidatesFromManifestRegistry preserves child identity and owne
     plugins: [childRecord],
     diagnostics: [],
   })[0];
-  expect(candidate).toMatchObject({
-    idHint: "example/child",
-    effectivePluginId: "example/child",
-  });
+  expect(candidate).toMatchObject({ idHint: "example/child", effectivePluginId: "example/child" });
   expect(resolvePluginCandidateInstallOwner(candidate!)).toBe("example");
+  expect(
+    Reflect.set(candidate!, Symbol.for("openclaw.pluginCandidateInstallOwner"), "replacement"),
+  ).toBe(false);
+  expect(resolvePluginCandidateInstallOwner({ ...candidate })).toBe("example");
+  expect(() => recordPluginManifestInstallOwner(childRecord, "replacement")).toThrow(TypeError);
 });
 it("does not accept a null source through the empty-schema fast path", () => {
   expect(validatePluginConfig({ schema: emptyObjectSchema, sourceValue: null, value: {} }).ok).toBe(
@@ -139,9 +147,7 @@ it("validates pattern properties instead of requiring empty config", () => {
     ok: true,
     value: { S_SETTING: "configured" },
   });
-  expect(validatePluginConfig({ schema, value: { S_SETTING: 42 } })).toMatchObject({
-    ok: false,
-  });
+  expect(validatePluginConfig({ schema, value: { S_SETTING: 42 } })).toMatchObject({ ok: false });
 });
 
 afterAll(cleanupPluginLoaderFixturesForTest);
@@ -154,17 +160,11 @@ it.each(
   ),
 )(
   "$surface validates the exact source for declared secretInputs ($scenario)",
-  async ({ surface, scenario }) => {
-    await withOpenClawTestState(
+  ({ surface, scenario }) =>
+    withOpenClawTestState(
       { label: "plugin-source-validation", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
-        const id = "source-fixture";
-        const configId = scenario === "mixed-case" ? "Source-Fixture" : id;
-        const descriptor = {
-          name: "source-fixture",
-          description: "Fixture command",
-          hasSubcommands: false,
-        };
+        const configId = scenario === "mixed-case" ? "Source-Fixture" : fixtureId;
         const configSchema = {
           type: "object",
           properties: {
@@ -184,33 +184,28 @@ it.each(
           "fixture/index.cjs",
           `
 require("node:fs").writeFileSync(${JSON.stringify(marker)}, "imported");
-module.exports = { id: "source-fixture", register(api) {
-  if (api.pluginConfig.credential !== "resolved-fixture-key" || api.pluginConfig.retries !== 2) {
-    throw new Error("paired runtime config was not hydrated");
+module.exports = { id: ${JSON.stringify(fixtureId)}, register(api) {
+  if (api.pluginConfig.credential !== ${JSON.stringify(resolvedCredential)} || api.pluginConfig.retries !== 2) {
+    throw new Error(${JSON.stringify(hydrationError)});
   }
   api.registerCli(() => {}, { descriptors: [{ ...${JSON.stringify(descriptor)}, description: api.pluginConfig.description }] });
 } };`,
         );
         await state.writeJson("fixture/openclaw.plugin.json", {
-          id,
+          id: fixtureId,
           configSchema,
           cliCommands: [descriptor],
-          configContracts:
-            scenario === "undeclared"
-              ? undefined
-              : {
-                  secretInputs: { paths: [{ path: "credential", expected: "string" }] },
-                },
+          configContracts: scenario === "undeclared" ? undefined : { secretInputs },
         });
         const runtime = withCredential(
-          { plugins: { allow: [id], load: { paths: [entry] } } },
+          { plugins: { allow: [fixtureId], load: { paths: [entry] } } },
           configId,
-          "resolved-fixture-key",
+          resolvedCredential,
         );
         const source = withCredential(
           runtime,
           configId,
-          scenario === "invalid-source" ? "invalid-plaintext-fixture" : credentialRef(),
+          scenario === "invalid-source" ? invalidCredential : credentialRef(),
         );
         const before = structuredClone({ runtime, source });
         setRuntimeConfigSnapshot(runtime, source);
@@ -228,21 +223,13 @@ module.exports = { id: "source-fixture", register(api) {
               config,
               env: state.env,
               activate: false,
-              logger: {
-                info() {},
-                warn() {},
-                error(message: string) {
-                  messages.push(message);
-                },
-              },
+              logger: { info() {}, warn() {}, error: (message: string) => messages.push(message) },
             };
-            const load = (overrides: PluginLoadOptions) =>
+            const load = (overrides: PluginLoadOptions = {}) =>
               loadOpenClawPlugins({ ...options, ...overrides });
             const registry =
-              surface === "runtime"
-                ? loadOpenClawPlugins(options)
-                : await loadOpenClawPluginCliRegistry(options);
-            expect(registry.plugins.find((plugin) => plugin.id === id)?.status).toBe(
+              surface === "runtime" ? load() : await loadOpenClawPluginCliRegistry(options);
+            expect(registry.plugins.find((plugin) => plugin.id === fixtureId)?.status).toBe(
               accepted ? "loaded" : "error",
             );
             expect(cliDescriptors(registry)).toEqual(accepted ? [descriptor] : []);
@@ -253,13 +240,13 @@ module.exports = { id: "source-fixture", register(api) {
                 expect(load(overrides) === expected).toBe(true);
               const unpaired = load({ config: candidate });
               expect
-                .soft(unpaired.plugins.find((plugin) => plugin.id === id)?.status)
+                .soft(unpaired.plugins.find((plugin) => plugin.id === fixtureId)?.status)
                 .toBe("error");
               // Identity failures must not expand the registries' lazy runtime properties.
               expect.soft(unpaired === registry).toBe(false);
               expectCached({ config: candidate, activationSourceConfig: structuredClone(source) });
 
-              const alternateSource = withCredential(source, id, credentialRef("OTHER"));
+              const alternateSource = withCredential(source, fixtureId, credentialRef("OTHER"));
               const alternateOptions = {
                 ...options,
                 config: candidate,
@@ -281,25 +268,22 @@ module.exports = { id: "source-fixture", register(api) {
               });
               expect(cliDescriptors(replacement)).toEqual(alternateDescriptors);
               for (const [change, enabled, secret, error] of [
-                ["source-invalid", true, "resolved-fixture-key", "invalid config"],
-                [
-                  "resolved-secret",
-                  true,
-                  "rotated-fixture-key",
-                  "paired runtime config was not hydrated",
-                ],
-                ["disabled", false, "resolved-fixture-key", "disabled"],
+                ["source-invalid", true, resolvedCredential, "invalid config"],
+                ["resolved-secret", true, "rotated-fixture-key", hydrationError],
+                ["disabled", false, resolvedCredential, "disabled"],
               ] as const) {
                 const nextSource =
-                  change === "resolved-secret" ? source : withCredential(source, id, null, enabled);
+                  change === "resolved-secret"
+                    ? source
+                    : withCredential(source, fixtureId, null, enabled);
                 const rejected = load({
-                  config: withCredential(runtime, id, secret, enabled),
+                  config: withCredential(runtime, fixtureId, secret, enabled),
                   activationSourceConfig: nextSource,
                   cache: false,
                   previousRegistry: registry,
                 });
                 expect(rejected.cliRegistrars).toHaveLength(0);
-                expect(rejected.plugins.find((plugin) => plugin.id === id)).toMatchObject({
+                expect(rejected.plugins.find((plugin) => plugin.id === fixtureId)).toMatchObject({
                   status: enabled ? "error" : "disabled",
                   error: expect.stringContaining(error),
                 });
@@ -310,8 +294,8 @@ module.exports = { id: "source-fixture", register(api) {
               expectCached({ config: runtime });
             }
             const output = JSON.stringify({ messages, diagnostics: registry.diagnostics });
-            expect(output).not.toContain("resolved-fixture-key");
-            expect(output).not.toContain("invalid-plaintext-fixture");
+            expect(output).not.toContain(resolvedCredential);
+            expect(output).not.toContain(invalidCredential);
           }
           expect({ runtime, source }).toEqual(before);
         } finally {
@@ -320,6 +304,5 @@ module.exports = { id: "source-fixture", register(api) {
           expect(failures, "Plugin cache retirement failed during cleanup").toEqual([]);
         }
       },
-    );
-  },
+    ),
 );

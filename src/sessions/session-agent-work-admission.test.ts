@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { createEnteredGate as gate } from "../agents/entered-gate.test-support.js";
 import { runExclusiveSqliteSessionWrite as writeSession } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import {
@@ -28,26 +29,22 @@ function fixture(state: string, scope = "agent:worker") {
 
 it("refuses queued session writes when deletion closes admission before their FIFO turn", async () => {
   const { target, write: runWrite } = fixture("/agent-write-admission");
-  const entered = createDeferred();
-  const release = createDeferred();
-  const holding = runWrite(async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  await awaitGateBeforeSettlement(entered.promise, holding, "writer did not reserve its FIFO");
+  const barrier = gate();
+  const holding = runWrite(barrier.wait);
+  await awaitGateBeforeSettlement(barrier.entered, holding, "writer did not reserve its FIFO");
   const write = vi.fn(async () => {});
   const queued = runWrite(write);
   const reason = new Error("agent deletion began");
   const refused = expect(queued).rejects.toBe(reason);
   const reopen = closeAgent({ ...target, reason });
   try {
-    release.resolve();
+    barrier.release();
     await holding;
     await refused;
     expect(write).not.toHaveBeenCalled();
     await expect(runWrite(async () => "saved", "kept")).resolves.toBe("saved");
   } finally {
-    release.resolve();
+    barrier.release();
     await Promise.allSettled([holding, queued]);
     reopen();
   }
@@ -62,18 +59,14 @@ it("fences unseen agent sessions and joins exact admitted work without blocking 
   const active = await begin("sessionless-run", { onInterrupt: () => interrupted.resolve() });
   const releaseActive = createDeferred();
   const activeWork = active.run(async () => await releaseActive.promise);
-  const pendingStarted = createDeferred();
-  const releasePending = createDeferred();
+  const pendingBarrier = gate();
   const pending = begin("pending-run", {
-    assertAllowed: async () => {
-      pendingStarted.resolve();
-      await releasePending.promise;
-    },
+    assertAllowed: pendingBarrier.wait,
     revalidateAllowed: () => {},
   });
   const reason = new Error("agent deletion began");
   const pendingOutcome = expect(pending).rejects.toBe(reason);
-  await pendingStarted.promise;
+  await pendingBarrier.entered;
   const reopen = closeAgent({ ...target, reason });
   let other: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   try {
@@ -99,7 +92,7 @@ it("fences unseen agent sessions and joins exact admitted work without blocking 
     await expect(active.run(forbiddenWork)).rejects.toBe(reason);
     expect(forbiddenWork).not.toHaveBeenCalled();
     expect(settled).not.toHaveBeenCalled();
-    releasePending.resolve();
+    pendingBarrier.release();
     await pendingOutcome;
     active.release();
     await Promise.resolve();
@@ -109,7 +102,7 @@ it("fences unseen agent sessions and joins exact admitted work without blocking 
     await drain.released;
     expect(other.isActive()).toBe(true);
   } finally {
-    releasePending.resolve();
+    pendingBarrier.release();
     releaseActive.resolve();
     await pending.catch(() => {});
     await activeWork;

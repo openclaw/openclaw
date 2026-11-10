@@ -4,9 +4,13 @@ import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry"
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
-import { ownsGrant, type RelayCaller } from "./caller.js";
+import { ownsGrant, relayPrincipalForDisplay, type RelayCaller } from "./caller.js";
 import type { GatewayRequest } from "./gateway-request.js";
-import { GrantBindings, isRetiredBindingError } from "./grant-bindings.js";
+import {
+  registerRelayPrincipalRecovery,
+  GrantBindings,
+  isRetiredBindingError,
+} from "./grant-bindings.js";
 import {
   capResult,
   codeHash,
@@ -77,8 +81,12 @@ export class RelayService {
     this.#ingress = options.controlUiIngress;
   }
 
-  start(): void {
-    this.#options.scheduler.schedule({ id: "connect", delayMs: 0, run: () => this.#connect() });
+  async start(): Promise<void> {
+    const { scheduler } = this.#options;
+    scheduler.signal.throwIfAborted();
+    await registerRelayPrincipalRecovery(this.#ingress, this.#options.state, scheduler.signal);
+    scheduler.signal.throwIfAborted();
+    scheduler.schedule({ id: "connect", delayMs: 0, run: () => this.#connect() });
   }
 
   async stop(): Promise<void> {
@@ -126,9 +134,18 @@ export class RelayService {
   async grants(caller?: RelayCaller) {
     const grants = await this.#options.state.grants();
     return {
-      grants:
-        caller && !caller.canAdmin ? grants.filter((grant) => ownsGrant(caller, grant)) : grants,
-      ...(caller ? { caller, relayUrl: this.#options.relayUrl } : {}),
+      grants: (caller && !caller.canAdmin
+        ? grants.filter((grant) => ownsGrant(caller, grant))
+        : grants
+      ).map((grant) =>
+        Object.assign({}, grant, { principal: relayPrincipalForDisplay(grant.principal) }),
+      ),
+      ...(caller
+        ? {
+            caller: { ...caller, principal: relayPrincipalForDisplay(caller.principal) },
+            relayUrl: this.#options.relayUrl,
+          }
+        : {}),
     };
   }
 
@@ -157,7 +174,7 @@ export class RelayService {
     await this.#request("pair.offer", {
       codeHash: hash,
       expiresAt,
-      principal: selected.principal.kind,
+      principal: selected.principal.kind === "owner" ? "owner" : "person",
       ...(selected.principalLabel ? { principalLabel: selected.principalLabel } : {}),
       ceiling: selected.ceiling,
     });
@@ -285,7 +302,7 @@ export class RelayService {
       await this.#request("authorize.approve", {
         requestId,
         grantId,
-        principal: authority.principal.kind,
+        principal: authority.principal.kind === "owner" ? "owner" : "person",
         principalLabel:
           authority.principalLabel ??
           (authority.principal.kind === "owner" ? "Gateway owner" : "Gateway user"),
@@ -492,15 +509,14 @@ export class RelayService {
         return;
       }
       if (typeof frame.type === "string" && frame.type.startsWith("ui.")) {
-        const uiStatus = this.#uiStatus();
-        if (this.#ui && uiStatus.available) {
+        if (this.#ui) {
           this.#ui.receive(frame);
         } else if (typeof frame.sid === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(frame.sid)) {
           sendControlFrame({
             type: "ui.error",
             sid: frame.sid,
             code: "unavailable",
-            message: uiStatus.reason,
+            message: this.#uiStatus().reason,
           });
         } else {
           socket.close(4400, "Invalid UI frame");

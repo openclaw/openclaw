@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { constants as fsConstants, cpSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   buildCrabboxGateCommand,
   crabboxGatePlanDigest,
@@ -21,9 +21,11 @@ const headSha = "b".repeat(40);
 const bootstrapSha256 = "c".repeat(64);
 const workflowSha = "d".repeat(40);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const uiTemplates = useAutoCleanupTempDirTracker(afterAll);
+let uiTemplate: string | undefined;
 
-function createTrackedFixture(files: Record<string, string>) {
-  const cwd = tempDirs.make("pr-crabbox-ui-plan-");
+function createTrackedFixture(files: Record<string, string>, dirs = tempDirs) {
+  const cwd = dirs.make("pr-crabbox-ui-plan-");
   for (const [file, contents] of Object.entries(files)) {
     const absolute = path.join(cwd, file);
     mkdirSync(path.dirname(absolute), { recursive: true });
@@ -53,22 +55,29 @@ const ordinaryUiTests = [
 ];
 
 function createUiFixture() {
-  return createTrackedFixture({
-    "ui/src/presenter.ts": "export const value = 1;\n",
-    "ui/src/theme.css": ".example { color: red; }\n",
-    "ui/src/catalog.json": '{"label":"Example"}\n',
-    "extensions/example/browser/view.ts": "export const view = 1;\n",
-    ...Object.fromEntries(ordinaryUiTests.map((file) => [file, "export {};\n"])),
-    "ui/src/e2e/example.e2e.test.ts": "export {};\n",
-    "ui/src/ignored.live.test.ts": "export {};\n",
-    "ui/src/vendor/ignored.test.ts": "export {};\n",
-    "ui/src/node_modules/ignored.test.ts": "export {};\n",
-    "ui/src/._ignored.test.ts": "export {};\n",
-    "src/ui-consumer.test.ts": 'import "../ui/src/presenter.js";\n',
-    "test/scripts/ui-catalog-reader.test.ts":
-      'import { readFileSync } from "node:fs"; readFileSync("ui/src/catalog.json", "utf8");\n',
-    "src/unrelated.test.ts": "export {};\n",
-  });
+  uiTemplate ??= createTrackedFixture(
+    {
+      "ui/src/presenter.ts": "export const value = 1;\n",
+      "ui/src/theme.css": ".example { color: red; }\n",
+      "ui/src/catalog.json": '{"label":"Example"}\n',
+      "extensions/example/browser/view.ts": "export const view = 1;\n",
+      ...Object.fromEntries(ordinaryUiTests.map((file) => [file, "export {};\n"])),
+      "ui/src/e2e/example.e2e.test.ts": "export {};\n",
+      "ui/src/ignored.live.test.ts": "export {};\n",
+      "ui/src/vendor/ignored.test.ts": "export {};\n",
+      "ui/src/node_modules/ignored.test.ts": "export {};\n",
+      "ui/src/._ignored.test.ts": "export {};\n",
+      "src/ui-consumer.test.ts": 'import "../ui/src/presenter.js";\n',
+      "test/scripts/ui-catalog-reader.test.ts":
+        'import { readFileSync } from "node:fs"; readFileSync("ui/src/catalog.json", "utf8");\n',
+      "src/unrelated.test.ts": "export {};\n",
+    },
+    uiTemplates,
+  );
+  const cwd = tempDirs.make("pr-crabbox-ui-plan-");
+  // Plans read each case's private index; case mutations never reach the seed.
+  cpSync(uiTemplate, cwd, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+  return cwd;
 }
 
 describe("Crabbox PR-derived gate plan", () => {

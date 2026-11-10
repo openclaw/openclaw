@@ -8,6 +8,7 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createPendingPromiseTracker } from "../../shared/pending-promises.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   assertPublishedOpenClawStateDatabaseLifecycle,
@@ -102,7 +103,7 @@ export async function createWorkerEnvironmentStore(
   async function snapshot(ids?: readonly string[]) {
     const reply = await executeExistingOpenClawStateRead(
       { path: pathname },
-      { type: "workerEnvironments.snapshot", ids },
+      { type: "workerEnvironments.snapshot", input: { ids } },
     );
     assertActive();
     if (!reply) {
@@ -110,14 +111,7 @@ export async function createWorkerEnvironmentStore(
     }
     return reply.facts;
   }
-  function track<T>(operation: Promise<T>): Promise<T> {
-    operations.add(operation);
-    void operation.then(
-      () => operations.delete(operation),
-      () => operations.delete(operation),
-    );
-    return operation;
-  }
+  const track = createPendingPromiseTracker(operations);
   function mutate<Key extends keyof Operations>(
     type: Key,
     input: Omit<Operations[Key]["input"], "publicationIncarnation">,
@@ -449,6 +443,21 @@ export async function createWorkerEnvironmentStore(
     },
     createIntent: (input: Input<"createIntent">, assertCurrent?: () => void) =>
       mutate("workerEnvironments.createIntent", { input }, assertCurrent),
+    recordResourceReceipt({ assertCurrent, ...input }: Input<"recordResourceReceipt">) {
+      return mutate("workerEnvironments.recordResourceReceipt", { input }, assertCurrent);
+    },
+    beginRetentionOperation({ assertCurrent, ...input }: Input<"beginRetentionOperation">) {
+      return mutate("workerEnvironments.beginRetentionOperation", { input }, assertCurrent);
+    },
+    recordRetentionObservation({ assertCurrent, ...input }: Input<"recordRetentionObservation">) {
+      return mutate("workerEnvironments.recordRetentionObservation", { input }, assertCurrent);
+    },
+    setRetentionRuntimeAdmission({
+      assertCurrent,
+      ...input
+    }: Input<"setRetentionRuntimeAdmission">) {
+      return mutate("workerEnvironments.setRetentionRuntimeAdmission", { input }, assertCurrent);
+    },
     ensureNodeEnrollment: (input: string) =>
       mutate("workerEnvironments.ensureNodeEnrollment", { input }),
     async revokeEnvironmentCredential(
@@ -503,6 +512,9 @@ export async function createWorkerEnvironmentStore(
     },
     ensurePreparedIntent({ assertCurrent, ...input }: Input<"ensurePreparedIntent">) {
       return mutate("workerEnvironments.ensurePreparedIntent", { input }, assertCurrent);
+    },
+    refreshPreparedProject({ assertCurrent, ...input }: Input<"refreshPreparedProject">) {
+      return mutate("workerEnvironments.refreshPreparedProject", { input }, assertCurrent);
     },
     requestPreparedDestroy({ assertCurrent, ...input }: Input<"requestPreparedDestroy">) {
       return mutate("workerEnvironments.requestPreparedDestroy", { input }, assertCurrent);

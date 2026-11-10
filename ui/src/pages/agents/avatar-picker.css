@@ -30,7 +30,6 @@
   align-items: center;
   gap: 4px;
   padding: 12px;
-  border-bottom: 1px solid var(--border);
 }
 
 .avatar-picker__tab {
@@ -137,14 +136,14 @@
 
 .avatar-picker__upload > p {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   line-height: 1.5;
 }
 
 .avatar-picker__candidate > p {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .avatar-picker__actions {
@@ -170,14 +169,10 @@
   justify-items: center;
 }
 
-.avatar-picker__status,
 .avatar-picker__error {
   margin: 0;
   padding: 0 20px 16px;
-  font-size: 13px;
-}
-
-.avatar-picker__error {
+  font-size: calc(13px * var(--control-ui-text-scale));
   color: var(--danger);
 }
 

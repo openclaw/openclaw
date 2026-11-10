@@ -1,8 +1,11 @@
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { listImageCapableConfiguredProviders } from "./config-provider-models.js";
-import type { MediaUnderstandingProvider } from "./types.js";
+import {
+  listImageCapableConfiguredProviders,
+  resolveConfiguredMediaProviderCapabilities,
+} from "./config-provider-models.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,
@@ -43,7 +46,12 @@ export function buildMediaUnderstandingRegistry(
       cfg,
     });
   for (const provider of providers) {
-    mergeProviderIntoRegistry(registry, provider);
+    mergeProviderIntoRegistry(
+      registry,
+      provider.inheritConfiguredImageCapability
+        ? { ...provider, capabilities: resolveConfiguredMediaProviderCapabilities(provider, cfg) }
+        : provider,
+    );
   }
   // Auto-register media-understanding for config providers with image-capable models (#51392)
   for (const providerId of listImageCapableConfiguredProviders(cfg)) {

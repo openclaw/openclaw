@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { expectCollected, expectLiveObjects } from "../../../test-utils/retention.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
@@ -57,6 +58,47 @@ beforeEach(() => {
 });
 
 describe("embedded attempt abort", () => {
+  it("releases session callbacks when disposed controllers remain reachable", async () => {
+    class SessionPayload {
+      active = true;
+    }
+    const payloads: WeakRef<SessionPayload>[] = [];
+    const cleanupAfterEarlyAbort = async () => {};
+    const createController = () => {
+      const payload = new SessionPayload();
+      payloads.push(new WeakRef(payload));
+      const controller = createEmbeddedAttemptExternalAbortController({
+        abortSignal: new AbortController().signal,
+        cleanupAfterEarlyAbort,
+        runAbortController: new AbortController(),
+        runId: "retained-abort-controller",
+        state: { terminal: { kind: "ok" } },
+      });
+      controller.setActiveSessionAbort(async () => {
+        payload.active = false;
+      });
+      controller.setRunAbort(() => {
+        payload.active = false;
+      });
+      controller.setCompactionState({
+        isPendingOrRetrying: () => payload.active,
+        isInFlight: () => payload.active,
+      });
+      controller.arm();
+      return controller;
+    };
+    const active = createController();
+    const completed = Array.from({ length: 20 }, () => {
+      const controller = createController();
+      controller.dispose();
+      return controller;
+    });
+    await expectLiveObjects(payloads, 1);
+    active.dispose();
+    await expectCollected(...payloads);
+    expect(completed).toHaveLength(20);
+  });
+
   it("preserves external cancellation through active session settlement", async () => {
     const { source, runAbortController, state, abort, tracker, controller } = createAbortFixture();
     controller.setActiveSessionAbort(tracker.abortActiveSession);

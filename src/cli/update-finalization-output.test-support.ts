@@ -5,15 +5,13 @@ import path from "node:path";
 import { mock } from "node:test";
 import { pathToFileURL } from "node:url";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { finalizationFixtureClockUrl as fixtureClockUrl } from "./update-finalization-clock.test-support.js";
 
 await import(fixtureClockUrl);
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
-await fs.writeFile(
-  path.join(root, "package.json"),
-  JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-);
+await writeFixtureJson(path.join(root, "package.json"), { name: "openclaw", version: "2026.9.4" });
 const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
 const repairDeadline = scenario?.startsWith("repair-deadline");
@@ -44,6 +42,7 @@ const sourceUrl = (relative: string) =>
 const doctorDeadline = scenario === "doctor-hang" || scenario === "doctor-progress";
 // Keep native/HTTP observations and their full budgets; only recovery polling advances time.
 const recoveryClockUrl = `data:text/javascript,${encodeURIComponent(`
+export * from ${JSON.stringify(sourceUrl("../utils.ts"))};
 const realMonotonicNow = performance.now.bind(performance);
 const realWallNow = Date.now;
 export let elapsed = 0;
@@ -227,20 +226,21 @@ const blockedPhase = repairDeadline
   ? "plugins"
   : doctorDeadline
     ? "doctor"
-    : scenario === "phase-hang"
+    : scenario === "phase-hang" || scenario === "borrowed-phase"
       ? "configSnapshot"
       : scenario === "completion-hang"
         ? "completionCache"
         : undefined;
-if (blockedPhase || scenario === "borrowed-phase") {
-  // Keep real phase ownership; only the deliberately blocked phase gets a short budget.
+if (blockedPhase) {
+  // Doctor needs time for native admission; its output markers advance the deadline.
+  // Repair freezes admission time until the guarded plugin mutation is ready.
   stub(
     "./update-cli/update-finalization-lifecycle.ts",
     `import { once } from 'node:events';
 import { UpdateFinalizationLifecycle as RealLifecycle } from ${original("./update-cli/update-finalization-lifecycle.ts")};
 import { startFinalizationFixtureClock, restoreFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
 export class UpdateFinalizationLifecycle extends RealLifecycle {
-  budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? 1_000 : super.budget(phase); }
+  budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? ${doctorDeadline ? "30_000" : "1_000"} : super.budget(phase); }
   ${
     scenario === "phase-hang"
       ? `run(phase, operation, outcome, custody) {
@@ -256,10 +256,10 @@ export class UpdateFinalizationLifecycle extends RealLifecycle {
       },
     });
   }`
-      : doctorDeadline || scenario === "borrowed-phase"
+      : repairDeadline || doctorDeadline || scenario === "borrowed-phase"
         ? `async run(phase, operation, outcome, custody) {
-    if (phase !== 'doctor' && !(phase === 'configSnapshot' && ${scenario === "borrowed-phase"})) return super.run(phase, operation, outcome, custody);
-    startFinalizationFixtureClock();
+    if (phase !== ${JSON.stringify(repairDeadline ? "plugins" : "doctor")} && !(phase === 'configSnapshot' && ${scenario === "borrowed-phase"})) return super.run(phase, operation, outcome, custody);
+    startFinalizationFixtureClock(${repairDeadline});
     try { return await super.run(phase, operation, outcome, custody); }
     finally { restoreFinalizationFixtureClock(); }
   }`
@@ -287,22 +287,23 @@ export function captureUpdateFinalizationDoctorOutput(phase) {
         : "output.stdout.includes('Doctor complete.')"
     }) {
       ready = true;
-      ${doctorDeadline ? "advanceFinalizationFixtureClock(1_000);" : "restoreFinalizationFixtureClock();"}
+      ${doctorDeadline ? "advanceFinalizationFixtureClock(30_000);" : "restoreFinalizationFixtureClock();"}
     }
   });
 }`,
   );
 }
 if (scenario === "human-recovery-plugin-error") {
-  stub(
-    "./update-cli/update-command-report.ts",
+  override(
+    "../commands/configure.shared.ts",
     `
 import { mock } from 'node:test';
-export async function runInteractiveUpdateFailureAction({ runtime }) {
+import { defaultRuntime } from ${JSON.stringify(sourceUrl("../runtime.ts"))};
+export async function select() {
   mock.timers.tick(11_000);
   console.error('Fixture advanced watchdog clock.');
-  runtime.log('Interactive recovery completed.');
-  return 'handled';
+  defaultRuntime.log('Interactive recovery completed.');
+  return 'dismiss';
 }`,
   );
 }

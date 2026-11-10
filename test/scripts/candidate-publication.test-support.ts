@@ -42,6 +42,8 @@ export function candidatePublicationFixture(
     transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
+    protectedTag?: boolean;
+    publicationRoute?: PublicationSelection["route"];
   } = {},
 ) {
   const fixture = trustedMainNpmFixture();
@@ -63,7 +65,7 @@ export function candidatePublicationFixture(
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
   const laneInputs = { qualification_baselines_json: qualificationBaselinesJson };
   const selection: PublicationSelection = {
-    route: "normal",
+    route: options.publicationRoute ?? "normal",
     npmDistTag: "beta",
     publishOpenclawNpm: true,
     pluginPublishScope: "all-publishable",
@@ -83,7 +85,7 @@ export function candidatePublicationFixture(
     run_release_soak: "false",
     trusted_workflow_json: publicationDispatchEnvelope(tooling, intent, laneInputs),
   });
-  const admission = admissionFixture(true, {
+  const admission = admissionFixture(options.protectedTag ?? true, {
     inputs,
     candidateSha: q,
     transportRef: branch,

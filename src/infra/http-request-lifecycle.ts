@@ -8,6 +8,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 // This is a transport grace period, not another body-upload allowance. The
 // request stays paused; Node's readable high-water mark bounds residual input.
 const REJECTION_CLOSE_TIMEOUT_MS = 1_000;
+const responseFinishDiagnostics = channel("http.server.response.finish");
 
 type Rejection = {
   request: IncomingMessage;
@@ -314,15 +315,14 @@ export async function sendHttpRequestRejection(
           // HEAD write callbacks do not flush headers. The public notification lets a
           // standalone SDK response wait for earlier responses without private
           // socket-assignment events; Node completes that handoff on this stack.
-          const finished = channel("http.server.response.finish");
           const onFinish = (message: unknown) => {
             // SAFETY: Node documents this channel's payload as including the response's socket.
             if ((message as { socket: Duplex }).socket === socket) {
               queueMicrotask(writeHeaders);
             }
           };
-          finished.subscribe(onFinish);
-          stopWaitingForSocket = () => finished.unsubscribe(onFinish);
+          responseFinishDiagnostics.subscribe(onFinish);
+          stopWaitingForSocket = () => responseFinishDiagnostics.unsubscribe(onFinish);
         }
       }
       writeHeaders();

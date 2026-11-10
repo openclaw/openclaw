@@ -23,6 +23,11 @@ import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 const cfg = { agents: { entries: { main: {} } } };
+const context = () =>
+  createDirectChatContext({ getRuntimeConfig: () => cfg, getCommittedRuntimeConfig: () => cfg });
+const readEntry = async (key: string) =>
+  (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" }, cfg)).entry;
+const expectUnbound = () => expect(getSessionActorStorageBinding({})).toBeUndefined();
 
 beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 afterEach(() => {
@@ -38,7 +43,7 @@ it.each(["reset", "delete"] as const)(
       await captureRuntimeConfigAsyncReader()();
       const sql = observeHostDataSql();
       try {
-        expect(getSessionActorStorageBinding({})).toBeUndefined();
+        expectUnbound();
         const created = await createGatewaySession({
           cfg,
           incognito: true,
@@ -49,10 +54,8 @@ it.each(["reset", "delete"] as const)(
         if (!created.ok) {
           throw new Error(created.error.message);
         }
-        expect(getSessionActorStorageBinding({})).toBeUndefined();
-        expect(
-          (await loadGatewaySessionEntryReadOnlyAsync(created.key, { agentId: "main" }, cfg)).entry,
-        ).toMatchObject({
+        expectUnbound();
+        expect(await readEntry(created.key)).toMatchObject({
           incognito: true,
           sessionId: created.entry.sessionId,
           displayName: "Private conversation",
@@ -73,17 +76,12 @@ it.each(["reset", "delete"] as const)(
             await deleteGatewaySession({
               params: { key: created.key, agentId: "main" },
               client: null,
-              context: createDirectChatContext({
-                getRuntimeConfig: () => cfg,
-                getCommittedRuntimeConfig: () => cfg,
-              }),
+              context: context(),
             }),
           ).toMatchObject({ ok: true, result: { deleted: true } });
         }
-        expect(getSessionActorStorageBinding({})).toBeUndefined();
-        expect(
-          (await loadGatewaySessionEntryReadOnlyAsync(created.key, { agentId: "main" }, cfg)).entry,
-        ).toBeUndefined();
+        expectUnbound();
+        expect(await readEntry(created.key)).toBeUndefined();
         expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
       } finally {
         sql.restore();
@@ -101,10 +99,7 @@ it("creates a fresh explicit incognito key under authorization captured before i
       path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
     };
     const client = sharingPolicyClient({ scopes: ["operator.admin"] });
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => cfg,
-      getCommittedRuntimeConfig: () => cfg,
-    });
+    const requestContext = context();
     const params = {
       key,
       agentId: "main",
@@ -113,10 +108,10 @@ it("creates a fresh explicit incognito key under authorization captured before i
       communication: { receive: "never" },
     };
     expect(memorySessionActorOwners.read(location)).toBeUndefined();
-    expect(getSessionActorStorageBinding({})).toBeUndefined();
+    expectUnbound();
     const resolved = resolveSessionMutationAuthorization({
       client,
-      context,
+      context: requestContext,
       method: "sessions.create",
       requestParams: params,
     });
@@ -133,7 +128,7 @@ it("creates a fresh explicit incognito key under authorization captured before i
         req: { type: "req", id: "explicit-create", method: "sessions.create" },
         params,
         client,
-        context,
+        context: requestContext,
         respond,
         isWebchatConnect: () => true,
         sessionMutationAuthorization: authorization,
@@ -147,15 +142,14 @@ it("creates a fresh explicit incognito key under authorization captured before i
         }),
       );
       retained.assertCurrent();
-      const created = (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" }, cfg))
-        .entry;
+      const created = await readEntry(key);
       expect(created).toMatchObject({
         incognito: true,
         displayName: params.displayName,
         communication: { receive: "never" },
       });
       expect(respond.mock.calls[0]?.[1]).toMatchObject({ sessionId: created?.sessionId });
-      expect(getSessionActorStorageBinding({})).toBeUndefined();
+      expectUnbound();
     } finally {
       await retained.release?.();
     }

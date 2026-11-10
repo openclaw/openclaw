@@ -66,7 +66,7 @@ async function validateConfigObjectWithPluginsAsyncInternal(
   if (!prepared.ok) {
     return prepared.result;
   }
-  if (validationParams.pluginValidation === "core-only") {
+  if (validationParams.pluginValidation === "core-only" && !prepareStrictValidation) {
     return finishConfigObjectWithPlugins(prepared, validationParams, true);
   }
   // Raw-reference checks and parsed defaults must describe the same input after the await.
@@ -100,7 +100,7 @@ async function validateConfigObjectWithPluginsAsyncInternal(
     const strict = validatePreparedConfigWithPlugins(pending.migrated, strictConfig, {
       ...preparedParams,
       applyDefaults: false,
-      pluginValidation: "full",
+      pluginValidation: validationParams.pluginValidation === "core-only" ? "core-only" : "full",
       semanticValidation: "strict",
       installedPluginRecordIds: metadata?.installedPluginRecordIds,
     });
@@ -196,11 +196,9 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
     ...(manifestRecords ? { manifestRecords } : {}),
   });
   return materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
+    ...options,
     ambientChannelIds,
     env,
-    homedir: options?.homedir,
-    materializeSessionStore: options?.materializeSessionStore,
-    materializeWorkspace: options?.materializeWorkspace,
   });
 }
 
@@ -215,10 +213,8 @@ export async function materializeLegacyAgentOwnershipForActiveChannelsResultAsyn
     ...(manifestRecords ? { manifestRecords } : {}),
   });
   return materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
+    ...options,
     ambientChannelIds,
     env,
-    homedir: options?.homedir,
-    materializeSessionStore: options?.materializeSessionStore,
-    materializeWorkspace: options?.materializeWorkspace,
   });
 }

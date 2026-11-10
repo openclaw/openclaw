@@ -58,11 +58,13 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     public static let outboxSettingsGatewayUpgradeRequiredError = "settings_gateway_upgrade_required"
     public static let outboxSettingsReviewRequiredError = "settings_review_required"
     public static let outboxSettingsChangedError = "settings_changed"
+    public static let outboxQueueModeUpgradeRequiredError = "queue_mode_client_upgrade_required"
 
     static func outboxDisplayError(_ lastError: String?) -> String? {
         guard let lastError else { return nil }
         switch lastError {
-        case self.outboxClientUpgradeRequiredError, self.outboxSettingsUpgradeRequiredError:
+        case self.outboxClientUpgradeRequiredError, self.outboxSettingsUpgradeRequiredError,
+             self.outboxQueueModeUpgradeRequiredError:
             return String(localized: "A previous app version could not safely send this message. Review and retry it.")
         case self.outboxSettingsGatewayUpgradeRequiredError:
             return String(localized: "Update the gateway before sending queued messages with session settings.")
@@ -508,9 +510,9 @@ extension OpenClawChatSQLiteTranscriptCache {
                     sql: """
                     INSERT INTO outbox_commands(
                         gateway_id, client_uuid, session_key, delivery_session_key,
-                        routing_contract, agent_id, text, thinking, expected_settings_json, created_at,
+                        routing_contract, agent_id, text, thinking, queue_mode, expected_settings_json, created_at,
                         status, attempt_version, branch_epoch, retry_count, last_error, attachment_bytes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         gatewayID,
@@ -521,6 +523,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                         command.agentID ?? "",
                         command.text,
                         command.thinking,
+                        command.queueMode?.rawValue,
                         Self.encodeSessionSettingsExpectation(command.expectedSessionSettings),
                         command.createdAt,
                         command.status.rawValue,
@@ -554,6 +557,33 @@ extension OpenClawChatSQLiteTranscriptCache {
             }
         } catch {
             cacheLogger.error("outbox read failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    public func loadCommandStatusesIfAvailable() async -> [(id: String, status: OpenClawChatOutboxCommand.Status)]? {
+        guard !self.isRetired else { return nil }
+        let gatewayID = self.gatewayID
+        do {
+            return try await self.databases.stateQueue.write { db in
+                try Self.applyOutboxStaleness(db, gatewayID: gatewayID)
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT client_uuid, status FROM outbox_commands
+                    WHERE gateway_id = ? ORDER BY created_at, enqueue_sequence
+                    """,
+                    arguments: [gatewayID])
+                return try rows.map { row in
+                    let statusRaw: String = row["status"]
+                    guard let status = OpenClawChatOutboxCommand.Status(rawValue: statusRaw) else {
+                        throw DatabaseError(message: "unknown outbox status")
+                    }
+                    return (id: row["client_uuid"], status: status)
+                }
+            }
+        } catch {
+            cacheLogger.error("outbox status read failed \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
@@ -621,7 +651,8 @@ extension OpenClawChatSQLiteTranscriptCache {
                     sql: """
                     UPDATE outbox_commands
                     SET status = 'sending',
-                        settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1
+                        settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1,
+                        queue_mode_authorization = COALESCE(queue_mode_authorization, 0) + 1
                     WHERE gateway_id = ? AND client_uuid = ? AND status = 'queued'
                     """,
                     arguments: [gatewayID, id])
@@ -739,6 +770,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                         attempt_version = ?,
                         branch_epoch = ?, parked_was_accepted = 0, had_unacknowledged_send = 0,
                         settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1,
+                        queue_mode_authorization = COALESCE(queue_mode_authorization, 0) + 1,
                         retry_count = 0, last_error = '', created_at = ?,
                         agent_id = ?, delivery_session_key = ?, routing_contract = ?,
                         expected_settings_json = ?
@@ -1244,6 +1276,11 @@ extension OpenClawChatSQLiteTranscriptCache {
         }
         let lastError: String = row["last_error"]
         let expectedSettingsJSON: String? = row["expected_settings_json"]
+        let queueModeRaw: String? = row["queue_mode"]
+        let queueMode = queueModeRaw.flatMap(OpenClawChatQueueMode.init(rawValue:))
+        guard queueModeRaw == nil || queueMode != nil else {
+            throw DatabaseError(message: "unknown outbox queue mode")
+        }
         return try OpenClawChatOutboxCommand(
             id: id,
             sessionKey: row["session_key"],
@@ -1255,6 +1292,7 @@ extension OpenClawChatSQLiteTranscriptCache {
             text: row["text"],
             attachments: attachments,
             thinking: row["thinking"],
+            queueMode: queueMode,
             expectedSessionSettings: Self.decodeSessionSettingsExpectation(expectedSettingsJSON),
             createdAt: row["created_at"],
             status: status,

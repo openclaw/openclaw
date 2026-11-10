@@ -13,7 +13,7 @@ import { takeGraphemes } from "../lib/graphemes.ts";
 import { formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatGitHubItemReference, parseGitHubLinkTarget } from "./github-link-target.ts";
-import { createPreviewRenderer } from "./link-reader-preview-root.ts";
+import { createPreviewRenderer } from "./link-reader-preview-root.tsx";
 import { linkReaderAuthorHref, linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
 import { linkReaderTargetKey, type LinkReaderTarget } from "./link-reader-target.ts";
 import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
@@ -82,7 +82,6 @@ function parsePreviewResponse(
         ? value.coAuthorCount
         : undefined,
     createdAt: readNonBlankString(value.createdAt),
-    updatedAt: readNonBlankString(value.updatedAt),
     imageUrl: safePreviewImage(readNonBlankString(value.imageUrl)),
     metadata: Array.isArray(value.metadata)
       ? value.metadata.flatMap((entry) =>
@@ -168,19 +167,6 @@ export async function requestReaderPreview(
       throw error;
     }
     return { ...cached.preview, stale: true };
-  }
-  if (preview.stale && isCurrent()) {
-    // One awaited refresh joins the server's stale-while-revalidate work; no polling.
-    try {
-      preview = parsePreviewResponse(
-        target,
-        await client.request(method, { ...params, refresh: true }, { signal }),
-      );
-    } catch (error) {
-      if (signal.aborted) {
-        throw error;
-      }
-    }
   }
   // A reader-first entry owns newer header facts, not the plugin's compact projection.
   const header = cached?.enrichment ? cached.preview : undefined;
@@ -296,7 +282,7 @@ const renderLoadingContent = createPreviewRenderer(
       <div class="link-reader-hovercard__skeleton" aria-hidden="true">
         <For each={rows}>
           {(row) => (
-            <div class={"link-reader-hovercard__" + row[0]}>
+            <div class={["link-reader-hovercard__" + row[0]]}>
               <For each={row[1]}>
                 {(part) => (
                   <span class={["skeleton", `link-reader-hovercard__placeholder--${part}`]} />
@@ -386,7 +372,9 @@ const renderPreviewContent = createPreviewRenderer<{
 }>(
   (props) => {
     const preview = () => props.value.preview;
-    const timestamp = () => preview().updatedAt ?? preview().createdAt;
+    // Match the reader panel: show the badge event (merged/closed) or creation time, never the
+    // last activity time, which bot comments and CI keep bumping.
+    const timestamp = () => preview().badge?.timestamp ?? preview().createdAt;
     const authorHref = () => linkReaderAuthorHref(preview().authorUrl, preview().href);
     const author = () => (
       <>

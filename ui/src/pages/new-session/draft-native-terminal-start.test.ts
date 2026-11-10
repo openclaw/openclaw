@@ -11,18 +11,12 @@ import {
 import {
   createDraftFixture,
   registerTextPayload,
+  resetSubmissionMocks,
   stubObjectUrls,
 } from "./draft-submission-flow.test-support.ts";
 import { loadNewSessionPreference, replaceBrowserPreference } from "./preferences.ts";
 
-afterEach(() => {
-  document.body.replaceChildren();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  sessionStorage.clear();
-  localStorage.clear();
-});
+afterEach(resetSubmissionMocks);
 
 const nativeTerminalController = vi.fn(async () => createTerminalController());
 const nativeTerminalElement = defineTestTerminalPanelElement(nativeTerminalController);
@@ -281,7 +275,7 @@ describe("DraftSubmissionFlow native terminal", () => {
     request.mockClear();
     data.terminalHosts = [];
     await flow.submit();
-    expect(flow.blockedSubmitNotice()).toContain("Native CLI host unavailable");
+    expect(flow.blockedSubmitNotice()).toContain("Native CLI unavailable on this device");
     expect(request).not.toHaveBeenCalled();
     expect(place).toMatchObject({
       terminalHostId: "node:chosen",
@@ -302,7 +296,9 @@ describe("DraftSubmissionFlow native terminal", () => {
       folder: "/node/revalidated-project",
     });
     await flow.submit();
-    expect(flow.blockedSubmitNotice()).toBe("This session target is unavailable.");
+    expect(flow.blockedSubmitNotice()).toBe(
+      "Couldn’t use this device or workspace. Refresh and try again.",
+    );
     expect(context.sessions.createResult).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
@@ -341,7 +337,7 @@ describe("DraftSubmissionFlow native terminal", () => {
       if (failure === "mentions") {
         expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
         expect(flow.blockedSubmitNotice()).toBe(
-          "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
+          "Human mentions are not available in this mode. Remove the selected mentions or send from a normal session.",
         );
       }
       if (failure === "overrides") {

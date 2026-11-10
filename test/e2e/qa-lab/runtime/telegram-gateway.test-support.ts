@@ -3,6 +3,61 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
 
+type TelegramConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>;
+type TelegramAccount = NonNullable<TelegramConfig["accounts"]>[string];
+
+export function telegramProofChannel(
+  apiRoot: string,
+  botToken: string,
+  account: Partial<TelegramAccount>,
+  root: Partial<TelegramConfig> = {},
+): TelegramConfig {
+  return {
+    enabled: true,
+    defaultAccount: "proof",
+    ...root,
+    accounts: { proof: { enabled: true, botToken, apiRoot, ...account } },
+  };
+}
+
+export function bindTelegramProof(cfg: OpenClawConfig) {
+  cfg.bindings = [
+    ...(cfg.bindings ?? []),
+    { agentId: "qa", match: { channel: "telegram", accountId: "proof" } },
+  ];
+  return cfg;
+}
+
+export function telegramRequestHandler(
+  handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
+) {
+  return (req: IncomingMessage, res: ServerResponse) => {
+    void handle(req, res).catch((error: unknown) => {
+      writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
+    });
+  };
+}
+
+export async function forwardTelegramProvider(
+  req: IncomingMessage,
+  baseUrl: string,
+  pathname: string,
+  raw: string,
+) {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  for (const key of ["session_id", "x-session-affinity"]) {
+    const value = req.headers[key];
+    if (typeof value === "string") {
+      headers[key] = value;
+    }
+  }
+  return fetch(`${baseUrl}${pathname}`, {
+    method: req.method,
+    ...(raw ? { body: raw } : {}),
+    headers,
+  });
+}
+
 type GatewayOptions = Parameters<ReturnType<typeof createQaGatewayChild>["start"]>[0];
 export function telegramGatewayOptions({
   workspace,
@@ -13,7 +68,7 @@ export function telegramGatewayOptions({
   runtimeEnvPatch,
   ...options
 }: Omit<GatewayOptions, "repoRoot" | "transport" | "transportBaseUrl" | "controlUiEnabled"> & {
-  workspace: string;
+  workspace?: string;
   apiRoot: string;
   telegram: NonNullable<OpenClawConfig["channels"]>["telegram"];
   messages?: OpenClawConfig["messages"];
@@ -33,7 +88,9 @@ export function telegramGatewayOptions({
       ...runtimeEnvPatch,
     },
     mutateConfig: (cfg) => {
-      cfg.agents!.defaults!.workspace = workspace;
+      if (workspace !== undefined) {
+        cfg.agents!.defaults!.workspace = workspace;
+      }
       return mutateConfig ? mutateConfig(cfg) : cfg;
     },
   };

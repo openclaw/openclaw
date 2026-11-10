@@ -1,16 +1,19 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "../../agents/agent-scope.js";
 import {
-  applyPluginAutoEnable,
+  applyPluginAutoEnableAsync,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { HealthFinding } from "../../flows/health-checks.js";
 import {
+  DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING,
   hasDeferredUpdateModelRetirement,
   recordUpdateModelRetirement,
 } from "../../infra/update-deferred-model-retirement.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginDoctorContractModules } from "../../plugins/doctor-contract-preparation.js";
 import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "../../plugins/official-runtime-plugins.js";
 import {
@@ -40,6 +43,7 @@ import {
   type DoctorConfigMutationState,
 } from "./shared/config-mutation-state.js";
 import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engine-host-compat.js";
+import { maybeRepairContextEnginePluginIdSelector } from "./shared/context-engine-plugin-id-selector.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import {
@@ -50,6 +54,7 @@ import {
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
+import { prepareExplicitModelReplacement } from "./shared/model-replacement-preparation.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import {
   resolveConfigWideDoctorPluginMetadataSnapshot,
@@ -67,12 +72,14 @@ import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
+  modelReplacements?: readonly import("./shared/model-replacement.js").DoctorModelReplacement[];
   installedPluginIdRecovery?: InstalledPluginIdRecovery;
   env?: NodeJS.ProcessEnv;
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
   pluginMetadataSnapshotState?: DoctorPluginMetadataSnapshotState;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  reportFindings?: (findings: readonly HealthFinding[], warnings?: readonly string[]) => void;
 }): Promise<{
   state: DoctorConfigMutationState;
   /** Notes for repairs already committed to durable state (SQLite/filesystem). */
@@ -80,8 +87,13 @@ export async function runDoctorRepairSequence(params: {
   /** Notes for candidate-config mutations that are durable only after the config write. */
   configChangeNotes: string[];
   warningNotes: string[];
+  repairWarningNotes: string[];
+  advisoryNotes: string[];
+  displayWarningNotes: string[];
+  findings: readonly HealthFinding[];
   authProfilesRepaired: boolean;
   modelRetirementRepairRan: boolean;
+  modelRetirementBlockers: string[];
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -92,6 +104,7 @@ export async function runDoctorRepairSequence(params: {
   const changeNotes: string[] = [];
   const configChangeNotes: string[] = [];
   const warningNotes: string[] = [];
+  const advisoryNotes: string[] = [];
   const env = params.env ?? process.env;
   await assertInstalledPluginIdRecoveryCurrent(
     state.candidate,
@@ -99,6 +112,7 @@ export async function runDoctorRepairSequence(params: {
     env,
   );
   let modelRetirementRepairRan = false;
+  const modelRetirementBlockers: string[] = [];
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const resolveCurrentPluginMetadataScope = () => {
     const config = state.candidate;
@@ -166,6 +180,13 @@ export async function runDoctorRepairSequence(params: {
         env,
       }),
     );
+  await runWithCurrentPluginMetadata(() =>
+    preparePluginDoctorContractModules({
+      config: state.candidate,
+      env,
+      surfaces: ["configRepair"],
+    }),
+  );
   for (const mutation of await collectCurrentChannelRepairs()) {
     applyMutation(mutation);
   }
@@ -185,12 +206,13 @@ export async function runDoctorRepairSequence(params: {
     env,
     profileIdMap: new Map(),
   });
+  const authFieldWarningsStart = warningNotes.length;
   appendRepairNotes(authFieldRepair);
+  const authFieldWarningsEnd = warningNotes.length;
   const codexRouteRepair = runWithCurrentPluginMetadata(() =>
     maybeRepairCodexRoutes({
       cfg: state.candidate,
       env,
-      shouldRepair: true,
       blockedProviderPlan: params.blockedCodexProviderPlan,
     }),
   );
@@ -199,6 +221,7 @@ export async function runDoctorRepairSequence(params: {
     changes: codexRouteRepair.changes,
     warnings: codexRouteRepair.warnings,
   });
+  appendNotes(advisoryNotes, codexRouteRepair.advisories);
   // Auth JSON is archived below; retain its exact collision-aware profile map
   // so durable session selections can follow the same account after import.
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> =
@@ -206,6 +229,12 @@ export async function runDoctorRepairSequence(params: {
       cfg: state.candidate,
       env,
     });
+  // Host compatibility must inspect the engine the selector repair resolves, not a stale plugin ID.
+  applyMutation(
+    runWithCurrentPluginMetadata(() =>
+      maybeRepairContextEnginePluginIdSelector(state.candidate, env),
+    ),
+  );
   applyMutation(
     await runWithCurrentPluginMetadata(() =>
       maybeRepairContextEngineHostCompatibility({
@@ -258,15 +287,24 @@ export async function runDoctorRepairSequence(params: {
     records: missingConfiguredPluginInstallRepair.records,
   });
   applyMutation(installedPluginRecovery);
+  await runWithCurrentPluginMetadata(() =>
+    preparePluginDoctorContractModules({
+      config: state.candidate,
+      env,
+      surfaces: ["configRepair"],
+    }),
+  );
   appendNotes(warningNotes, installedPluginRecovery.notices);
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {
     appendNotes(changeNotes, missingConfiguredPluginInstallRepair.changes);
     applyMutation(
-      applyPluginAutoEnable({
-        config: state.candidate,
-        env,
-        manifestRegistry: pluginMetadataSnapshotState.current?.manifestRegistry,
-      }),
+      await runWithCurrentPluginMetadata(() =>
+        applyPluginAutoEnableAsync({
+          config: state.candidate,
+          env,
+          manifestRegistry: pluginMetadataSnapshotState.current?.manifestRegistry,
+        }),
+      ),
     );
     if (repairedPluginIds.length > 0) {
       applyMutation(
@@ -283,7 +321,7 @@ export async function runDoctorRepairSequence(params: {
       // Missing external plugins cannot expose their doctor contracts until
       // installation completes. Normalize legacy shapes before channel repair
       // so later validation and gateway restart consume canonical config.
-      const channelCompatibilityMutations = runWithCurrentPluginMetadata(() =>
+      const channelCompatibilityMutations = await runWithCurrentPluginMetadata(() =>
         collectChannelDoctorCompatibilityMutations(state.candidate, {
           env,
         }),
@@ -324,10 +362,10 @@ export async function runDoctorRepairSequence(params: {
     maybeRepairStaleSubagentAllowlists,
   ]);
 
-  const emptyAllowlistWarnings = await runWithCurrentPluginMetadata(() =>
+  const emptyAllowlistWarnings = await runWithCurrentPluginMetadata(async () =>
     scanEmptyAllowlistPolicyWarnings(state.candidate, {
       doctorFixCommand: params.doctorFixCommand,
-      ...createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: state.candidate, env }),
+      ...(await createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: state.candidate, env })),
     }),
   );
   appendNotes(warningNotes, emptyAllowlistWarnings);
@@ -349,7 +387,12 @@ export async function runDoctorRepairSequence(params: {
   });
   appendNotes(changeNotes, authRepair.storeChanges);
   openAICodexAuthProfileIdMap = authRepair.profileIdMap;
+  params.reportFindings?.(authRepair.findings, [
+    ...new Set([...authFieldRepair.warnings, ...authRepair.warnings]),
+  ]);
+  const authWarningsStart = warningNotes.length;
   applyMutation(authRepair);
+  const authWarningsEnd = warningNotes.length;
   const staleAuthOrderRepair = maybeRepairStaleConfiguredAuthOrders({
     cfg: state.candidate,
     env,
@@ -358,7 +401,27 @@ export async function runDoctorRepairSequence(params: {
   if (pluginInstallRepairConverged) {
     // Route retirement reads canonical credentials. Finish auth migration first,
     // and preserve model refs while configured plugin installation needs a retry.
+    if (params.modelReplacements?.length) {
+      appendRepairNotes(
+        await prepareExplicitModelReplacement({
+          cfg: state.candidate,
+          env,
+          choices: params.modelReplacements,
+        }),
+      );
+    }
+    modelRetirementBlockers.push(
+      ...[
+        state.pendingChanges && "model-retirement.pending-changes",
+        changeNotes.length > 0 && "model-retirement.change-notes",
+        warningNotes.length > 0 && "model-retirement.warning-notes",
+        codexRouteRepair.warnings.length > 0 && "model-retirement.warning-notes.codex-routes",
+        authRepair.findings.length > 0 && "model-retirement.auth-findings",
+        Boolean(params.modelReplacements?.length) && "model-retirement.model-replacements",
+      ].filter((blocker): blocker is string => Boolean(blocker)),
+    );
     const modelRepair = repairStaleAgentModelRefs(state.candidate, {
+      modelReplacements: params.modelReplacements,
       env,
       pluginMetadataSnapshot: pluginMetadataSnapshotState.current,
     });
@@ -366,9 +429,15 @@ export async function runDoctorRepairSequence(params: {
     applyMutation(modelRepair);
     modelRetirementRepairRan =
       modelRepair.warnings.length === 0 && hasDeferredUpdateModelRetirement(env);
+    if (modelRepair.warnings.length > 0) {
+      modelRetirementBlockers.push("model-retirement.model-repair-warnings");
+    }
   } else if (packageSwapInProgress) {
     recordUpdateModelRetirement("deferred", env);
-    warningNotes.push("Model retirement deferred until configured plugin installation converges.");
+    warningNotes.push(DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING);
+  }
+  if (!modelRetirementRepairRan && modelRetirementBlockers.length === 0) {
+    modelRetirementBlockers.push("model-retirement");
   }
   const authProfilesRepaired =
     authFieldRepair.changes.length > 0 ||
@@ -379,9 +448,19 @@ export async function runDoctorRepairSequence(params: {
     state,
     changeNotes,
     configChangeNotes,
-    warningNotes,
+    warningNotes: [...warningNotes, ...advisoryNotes],
+    repairWarningNotes: warningNotes,
+    advisoryNotes,
+    displayWarningNotes: [
+      ...warningNotes.slice(0, authFieldWarningsStart),
+      ...warningNotes.slice(authFieldWarningsEnd, authWarningsStart),
+      ...warningNotes.slice(authWarningsEnd),
+      ...advisoryNotes,
+    ],
+    findings: authRepair.findings,
     authProfilesRepaired,
     modelRetirementRepairRan,
+    modelRetirementBlockers,
     installedPluginIdRecovery: installedPluginRecovery.recovery,
     ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
     openAICodexAuthProfileIdMap,

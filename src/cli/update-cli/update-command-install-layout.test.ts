@@ -15,7 +15,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as windowsUser from "../../infra/windows-user-sid.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import { isReportableUpdateRun } from "../../shared/update-outcome.js";
+import { isReportableUpdateRun } from "../../shared/update-outcome-classification.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";

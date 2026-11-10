@@ -34,6 +34,10 @@ on:
       prepared_npm_bundle_json:
         type: string
         default: ""
+      npm_preflight_use_github_hosted_runners:
+        description: Run the npm stage's preflight jobs on GitHub-hosted ubuntu-24.04
+        type: boolean
+        default: false
 
 # Separate runs own immutable publication bytes. Retrying the FRV collectors
 # cannot hide their producer artifacts or require a rebuild of successful work.
@@ -72,7 +76,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - id: request
@@ -100,6 +104,7 @@ jobs:
       preflight_phase: ${{ inputs.preflight_phase }}
       npm_dist_tag: ${{ inputs.npm_dist_tag }}
       release_candidate_branch: ${{ inputs.release_candidate_branch }}
+      use_github_hosted_runners: ${{ inputs.npm_preflight_use_github_hosted_runners }}
 
   candidate:
     name: Prepare validation candidate
@@ -140,7 +145,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - id: receipt

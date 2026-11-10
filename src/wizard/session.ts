@@ -4,6 +4,7 @@ import type {
   WizardNextResult as ProtocolWizardNextResult,
   WizardStep as ProtocolWizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   DEVICE_CODE_PHISHING_WARNING,
@@ -79,36 +80,23 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       id: randomUUID(),
     };
   }
+
+  async function note(message: string, title?: string): Promise<void> {
+    await prompt({
+      type: "note",
+      title,
+      message,
+      executor: "client",
+    });
+  }
+
   return {
     cancel(message) {
       throw new WizardCancelledError(message);
     },
-    async intro(title: string): Promise<void> {
-      await prompt({
-        type: "note",
-        title,
-        message: "",
-        executor: "client",
-      });
-    },
-
-    async outro(message: string): Promise<void> {
-      await prompt({
-        type: "note",
-        title: "Done",
-        message,
-        executor: "client",
-      });
-    },
-
-    async note(message: string, title?: string): Promise<void> {
-      await prompt({
-        type: "note",
-        title,
-        message,
-        executor: "client",
-      });
-    },
+    intro: (title) => note("", title),
+    outro: (message) => note(message, "Done"),
+    note,
 
     async deviceCode(params): Promise<void> {
       const externalUrl = session.consumeExternalUrl(true);
@@ -385,6 +373,7 @@ export class WizardSession {
     this.status = "cancelled";
     this.error = "cancelled";
     this.abortController.abort(new WizardCancelledError());
+    materializeErrorStack(this.abortController.signal.reason);
     this.rejectPendingAnswers();
     this.consumeExternalUrl();
     this.progressSteps = [];
@@ -398,7 +387,10 @@ export class WizardSession {
     if (this.status !== "running") {
       return;
     }
-    this.inputClosedError ??= error;
+    if (!this.inputClosedError) {
+      materializeErrorStack(error);
+      this.inputClosedError = error;
+    }
     this.consumeExternalUrl();
     if (!this.cancellationLocked && !this.preparationCancellationLocked) {
       this.abortController.abort(this.inputClosedError);

@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
-  BootstrapBudgetAnalysis,
   BootstrapInjectionStat,
   BootstrapPromptWarning,
   BootstrapPromptWarningMode,
@@ -42,7 +41,9 @@ function appendSeenSignature(signatures: string[], signature: string): string[] 
     : next.slice(-DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX);
 }
 
-function buildBootstrapTruncationSignature(analysis: BootstrapBudgetAnalysis): string | undefined {
+function buildBootstrapTruncationSignature(
+  analysis: ReturnType<typeof analyzeBootstrapBudget>,
+): string | undefined {
   if (!analysis.hasTruncation) {
     return undefined;
   }
@@ -171,7 +172,7 @@ export function analyzeBootstrapBudget(params: {
   files: BootstrapInjectionStat[];
   bootstrapMaxChars: number;
   bootstrapTotalMaxChars: number;
-}): BootstrapBudgetAnalysis {
+}) {
   const bootstrapMaxChars = normalizePositiveLimit(params.bootstrapMaxChars);
   const bootstrapTotalMaxChars = normalizePositiveLimit(params.bootstrapTotalMaxChars);
   const nearLimitRatio = DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO;
@@ -206,7 +207,6 @@ export function analyzeBootstrapBudget(params: {
   const nearLimitFiles = files.filter((file) => file.nearLimit);
 
   return {
-    files,
     truncatedFiles,
     nearLimitFiles,
     totalNearLimit: injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio),
@@ -214,10 +214,8 @@ export function analyzeBootstrapBudget(params: {
     totals: {
       rawChars,
       injectedChars,
-      truncatedChars: Math.max(0, rawChars - injectedChars),
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
-      nearLimitRatio,
     },
   };
 }
@@ -237,7 +235,6 @@ export function buildBootstrapBudgetState(params: {
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
   });
-  const bootstrapPromptWarningMode: BootstrapPromptWarningMode = "always";
   const signature = buildBootstrapTruncationSignature(bootstrapAnalysis);
   let seenSignatures = normalizeUniqueTrimmedStringList(params.seenSignatures);
   if (params.previousSignature && !seenSignatures.includes(params.previousSignature)) {
@@ -256,19 +253,17 @@ export function buildBootstrapBudgetState(params: {
     bootstrapAnalysis,
     bootstrapMaxChars,
     bootstrapPromptWarning,
-    bootstrapPromptWarningMode,
     bootstrapTotalMaxChars,
   };
 }
 
 /** Serializes truncation warning state for run reports and future dedupe. */
 export function buildBootstrapTruncationReportMeta(params: {
-  analysis: BootstrapBudgetAnalysis;
-  warningMode: BootstrapPromptWarningMode;
+  analysis: ReturnType<typeof analyzeBootstrapBudget>;
   warning: BootstrapPromptWarning;
 }): BootstrapTruncationReportMeta {
   return {
-    warningMode: params.warningMode,
+    warningMode: "always",
     warningShown: params.warning.warningShown,
     promptWarningSignature: params.warning.signature,
     ...(params.warning.warningSignaturesSeen.length > 0

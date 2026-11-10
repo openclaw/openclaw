@@ -5,17 +5,15 @@ import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
 } from "../../config/sessions/session-actor-storage-binding.js";
-import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { projectExecutionSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { sameSessionTranscriptStorePath } from "../../config/sessions/transcript-store-identity.js";
-import {
-  withOwnedSessionTranscriptWrites,
-  type OwnedSessionTranscriptWriteContext,
-} from "../../config/sessions/transcript-write-context.js";
+import type { OwnedSessionTranscriptWriteContext } from "../../config/sessions/transcript-write-context-store.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import {
   resolveCompactionSuccessorTranscript,
   type ContextEngine,
@@ -30,6 +28,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { prepareCliHistoryCompactionBoundary } from "../cli-runner/history-boundary.js";
+import { readCompactionTranscriptBytes } from "../compaction-transcript-bytes.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { buildCompactionFailureResult } from "./compact-reasons.js";
@@ -239,16 +238,16 @@ export async function executeQueuedContextEngineCompaction(input: {
           compactionConfig?.maxActiveTranscriptBytes,
         );
         if (maxActiveTranscriptBytes !== null && maxActiveTranscriptBytes > 0) {
-          const { readSessionTranscriptAccountingAsync } =
-            await import("../../gateway/session-transcript-readers.js");
+          const pressureBytes = await readCompactionTranscriptBytes({
+            target: runtimeTarget,
+            rawBytes: undefined,
+            maxBytes: maxActiveTranscriptBytes,
+            runtime: preparedParams,
+            contextTokenBudget,
+            signal: params.abortSignal,
+          });
           assertCallerActive();
-          const snapshot = await readSessionTranscriptAccountingAsync(
-            runtimeTarget,
-            { includeByteSize: true, includeUsage: false },
-            params.abortSignal,
-          );
-          assertCallerActive();
-          if (snapshot.byteSize !== undefined && snapshot.byteSize >= maxActiveTranscriptBytes) {
+          if (pressureBytes !== undefined && pressureBytes >= maxActiveTranscriptBytes) {
             preflightCompactionTrigger = "transcript_bytes";
           }
         }
@@ -577,7 +576,7 @@ export async function executeQueuedContextEngineCompaction(input: {
                 sessionFile: postCompactionSessionFile,
                 sessionTarget: postCompactionSessionTarget,
                 ...(successor.entry
-                  ? { sessionEntry: projectPublicSessionEntry(successor.entry) }
+                  ? { sessionEntry: projectExecutionSessionEntry(successor.entry) }
                   : {}),
                 runtimeModel: effectiveRuntimeModel,
                 contextEngine,

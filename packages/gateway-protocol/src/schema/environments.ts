@@ -309,6 +309,7 @@ export const EnvironmentsListResultSchema = closedObject({
   requiredProfile: Type.Optional(NonEmptyString),
   environments: Type.Array(EnvironmentSummarySchema),
   profiles: Type.Optional(Type.Array(WorkerEnvironmentProfileSummarySchema)),
+  dispatchableProfileIds: Type.Optional(Type.Array(NonEmptyString, { uniqueItems: true })),
   suggestedProfile: Type.Optional(SuggestedWorkerProfileSummarySchema),
   preparedPool: Type.Optional(
     closedObject({

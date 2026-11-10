@@ -42,14 +42,14 @@ describe("provider replay helpers", () => {
     });
   });
 
-  it("omits tool-call id sanitization when opted out for openai-completions", () => {
-    const policy = openAI("openai-completions", {
-      sanitizeToolCallIds: false,
-    });
+  it.each(["openai-completions", "openai-responses"])("omits opted-out tool ids for %s", (api) => {
+    const policy = openAI(api, { sanitizeToolCallIds: false });
+    const completion = api === "openai-completions";
     expectFields(policy, {
-      applyAssistantFirstOrderingFix: true,
-      validateGeminiTurns: true,
-      validateAnthropicTurns: true,
+      applyAssistantFirstOrderingFix: completion,
+      validateGeminiTurns: completion,
+      validateAnthropicTurns: completion,
+      ...(!completion ? { allowSyntheticToolResults: true } : {}),
     });
     expect(policy).not.toHaveProperty("sanitizeToolCallIds");
     expect(policy).not.toHaveProperty("toolCallIdMode");
@@ -79,18 +79,6 @@ describe("provider replay helpers", () => {
     );
   });
 
-  it("omits tool-call id sanitization when opted out for openai-responses", () => {
-    const policy = openAI("openai-responses", { sanitizeToolCallIds: false });
-    expectFields(policy, {
-      applyAssistantFirstOrderingFix: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
-      allowSyntheticToolResults: true,
-    });
-    expect(policy).not.toHaveProperty("sanitizeToolCallIds");
-    expect(policy).not.toHaveProperty("toolCallIdMode");
-  });
-
   it("builds strict anthropic replay policy", () => {
     expectFields(buildStrictAnthropicReplayPolicy({ dropThinkingBlocks: true }), {
       appendOnlyRuntimeContext: false,
@@ -112,7 +100,10 @@ describe("provider replay helpers", () => {
 
   it.each([
     ["claude-fable-5-1", true],
-    ["claude-mythos-5-1", false],
+    // Unknown and newer Claude ids take the strict prefix-bound contract.
+    ["claude-mythos-5-1", true],
+    ["claude-zzz-9-9", true],
+    ["claude-opus-5", false],
   ])("scopes append-only replay to prefix-binding %s", (modelId, expected) => {
     for (const buildPolicy of [anthropic, nativeAnthropic]) {
       expect(buildPolicy(modelId).appendOnlyRuntimeContext).toBe(expected);
@@ -163,12 +154,15 @@ describe("provider replay helpers", () => {
       "claude-3-7-sonnet-20250219",
       "claude-3-5-sonnet-20240620",
       "claude-3-opus-20240229",
-      "claude-opus-50",
-      "claude-sonnet-50",
       "claude-sonnet-4-60",
     ]) {
       const policy = anthropic(modelId);
       expect(policy.dropThinkingBlocks).toBe(true);
+    }
+
+    // Ids that only resemble a released generation are unknown models and keep their thinking.
+    for (const modelId of ["claude-opus-50", "claude-sonnet-50", "claude-zzz-9-9"]) {
+      expect(anthropic(modelId)).not.toHaveProperty("dropThinkingBlocks");
     }
   });
 

@@ -59,6 +59,10 @@ export type {
   OpenClawPluginServiceContext,
   OpenClawPluginServiceContextV2,
   OpenClawPluginServiceV2,
+  OpenClawPluginServiceV3,
+  OpenClawPluginServiceContextV3,
+  PluginServiceSessionWorkV1,
+  PluginServiceSessionWorkContextV1,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginAgentEventEmitParams,
@@ -125,6 +129,8 @@ export type {
   ProviderPrepareDynamicModelContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
+  ProviderRuntimeAuthModel,
   ProviderPreparedRuntimeAuth,
   ProviderReconcileLocalServiceContext,
   ProviderReasoningOutputMode,
@@ -159,6 +165,10 @@ export type {
   WorkerDesktopEndpoint,
   WorkerLease,
   WorkerLeaseStatus,
+  WorkerResourceReceipt,
+  WorkerRetentionObservation,
+  WorkerRetentionOperation,
+  WorkerRetentionPolicy,
   WorkerMachineOption,
   WorkerProfile,
   WorkerProvider,
@@ -267,3 +277,18 @@ export function definePluginEntry({
     register,
   };
 }
+
+export type {
+  PluginHookBeforeChannelIngressContext,
+  PluginHookBeforeChannelIngressEvent,
+  PluginHookBeforeChannelIngressResult,
+} from "../plugins/hook-message.types.js";
+
+export type {
+  RepositoryIntegration,
+  RepositoryActor,
+  RepositoryOperation,
+  RepositoryCredentialScope,
+  RepositoryConnectionIdentity,
+  RepositoryAdmission,
+} from "../plugins/repository-integration.types.js";

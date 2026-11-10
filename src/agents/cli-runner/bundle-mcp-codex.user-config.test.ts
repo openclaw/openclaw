@@ -1,7 +1,6 @@
 /** Tests projecting OpenClaw user MCP servers into Codex app-server config. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerConfig } from "../../config/types.mcp.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "./bundle-mcp-codex.js";
 
 const project = (
@@ -164,55 +163,19 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     );
   });
 
-  it("filters Codex-scoped user MCP servers by OpenClaw agent id", async () => {
+  it("filters disabled and Codex-scoped user MCP servers by OpenClaw agent id", async () => {
     const servers = {
       atlas: http("https://atlas.example.com/mcp", { codex: { agents: ["atlas"] } }),
       apolo: http("https://apolo.example.com/mcp", { codex: { agents: ["apolo"] } }),
       global: { transport: "stdio", command: "node", args: ["global-mcp.js"] },
+      disabled: http("https://disabled.example.com/mcp", { enabled: false }),
     } satisfies Record<string, McpServerConfig>;
-    const atlasPatch = await project(servers, {
-      agentId: "atlas",
-    });
-    expect(Object.keys(atlasPatch!.mcp_servers).toSorted()).toEqual(["atlas", "global"]);
-    expect(atlasPatch!.mcp_servers.atlas).toMatchObject({ url: "https://atlas.example.com/mcp" });
-    expect(atlasPatch!.mcp_servers.global).toMatchObject({
-      command: "node",
-      args: ["global-mcp.js"],
-    });
-
-    const apoloPatch = await project(servers, {
-      agentId: "apolo",
-    });
-    expect(Object.keys(apoloPatch!.mcp_servers).toSorted()).toEqual(["apolo", "global"]);
-    expect(apoloPatch!.mcp_servers.apolo).toMatchObject({ url: "https://apolo.example.com/mcp" });
-  });
-
-  it("omits disabled user MCP servers from Codex app-server projection", async () => {
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          disabled: {
-            enabled: false,
-            transport: "streamable-http",
-            url: "https://disabled.example.com/mcp",
-          },
-          enabled: {
-            transport: "stdio",
-            command: "node",
-            args: ["enabled-mcp.js"],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        enabled: {
-          command: "node",
-          args: ["enabled-mcp.js"],
-        },
-      },
-    });
+    for (const agentId of ["atlas", "apolo"]) {
+      expectProjection(await project(servers, { agentId }), {
+        [agentId]: { url: `https://${agentId}.example.com/mcp` },
+        global: { command: "node", args: ["global-mcp.js"] },
+      });
+    }
   });
 
   it("fails closed for empty or invalid Codex agent scopes", async () => {

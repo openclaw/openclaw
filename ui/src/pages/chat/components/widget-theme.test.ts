@@ -135,6 +135,7 @@ it("posts host variables mapped to widget tokens, dropping empty values", () => 
     },
     "*",
   ]);
+  expect(frame.style.colorScheme).toBe("light");
 });
 
 it("targets the exact origin for authenticated cross-origin embeds", () => {
@@ -142,17 +143,11 @@ it("targets the exact origin for authenticated cross-origin embeds", () => {
   stubComputedStyles({ "--bg": "#0e1015", "--accent": "#ff5c5c" });
   const { frame, post } = makeFrame();
   postWidgetTheme(frame, "https://discussion.example");
-  expect(post.mock.calls[0]).toEqual([
-    {
-      type: "openclaw:widget-theme",
-      mode: "dark",
-      tokens: { surface: "#0e1015", accent: "#ff5c5c" },
-    },
-    "https://discussion.example",
-  ]);
+  expectTheme(post, { mode: "dark" }, "https://discussion.example");
 });
 
 it("shares one token sample across frames and refreshes mounted widgets on root changes", async () => {
+  document.documentElement.dataset.themeMode = "light";
   const values = { "--bg": "#ffffff", "--accent": "#c41e30" };
   stubComputedStyles(values);
   const readStyles = vi.mocked(getComputedStyle);
@@ -173,6 +168,7 @@ it("shares one token sample across frames and refreshes mounted widgets on root 
 
   for (const frame of [chatFrame, boardFrame, shadowFrame]) {
     postWidgetTheme(frame);
+    expect(frame.style.colorScheme).toBe("light");
   }
   expect(readStyles).toHaveBeenCalledTimes(1);
   expectTheme(chatPost, { tokens: { surface: "#ffffff", accent: "#c41e30" } });
@@ -186,6 +182,8 @@ it("shares one token sample across frames and refreshes mounted widgets on root 
   await Promise.resolve();
   expectTheme(boardPost, darkTheme);
   expectTheme(shadowPost, darkTheme, "https://widget.example");
+  expect(boardFrame.style.colorScheme).toBe("dark");
+  expect(shadowFrame.style.colorScheme).toBe("dark");
 
   readStyles.mockClear();
   values["--accent"] = "#207d82";

@@ -21,8 +21,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { readChatHistoryDelta } from "./server-methods/chat-history-delta.js";
-import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createPreparedSessionHistorySubagentProjection } from "./session-history-delta-visibility.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readSessionHistorySnapshotKernel } from "./session-history-snapshot.js";
@@ -253,6 +253,44 @@ describe("subagent coordination history", () => {
         "cross-late-answer",
       ]);
     });
+  });
+
+  it("keeps message-tool replies from a hidden child coordination run in history and live", async () => {
+    // A private coordination turn reaches the human only through message(action=send).
+    const reply = (runId: string, text: string, callId = "call-1") => ({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      api: "openclaw-transcript",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      stopReason: "stop",
+      idempotencyKey: `${runId}:message-tool:${callId}`,
+      __openclaw: { runId },
+    });
+    await withHistory(
+      [
+        ["child-input", childInput("coordination-run")],
+        ["user-update", reply("coordination-run", "Update for the human")],
+        ["private-final", response("coordination-run", "Private coordination note")],
+      ],
+      async ({ scope, entry }) => {
+        const page = await readSessionHistorySnapshotAsync({
+          target: { ...scope, sessionEntry: entry },
+          limit: 10,
+        });
+        expect(page.history.messages.map(readChatHistoryMessageId)).toEqual(["user-update"]);
+        const sse = SessionHistorySseState.fromSnapshot({
+          target: { ...scope, sessionEntry: entry },
+          snapshot: page,
+        });
+        const late = reply("coordination-run", "Second update for the human", "call-2");
+        await appendTranscriptMessage(scope, { eventId: "late-update", now: 4, message: late });
+        const live = (await sse.prepareInlineMessage({ message: late, messageSeq: 4 }))();
+        expect(live?.message).toMatchObject({
+          content: [{ type: "text", text: "Second update for the human" }],
+        });
+      },
+    );
   });
 
   it("rejects prepared inline visibility when shared-state custody retires before publication", async () => {

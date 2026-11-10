@@ -1,0 +1,2 @@
+# CLI regression for generic package-update catches and explicit permission precedence.
+27

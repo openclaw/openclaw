@@ -19,7 +19,7 @@ import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capabili
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import {
   applyProviderAuthConfigPatchWithNormalization,
   restoreAgentsDefaultsModel,
@@ -28,15 +28,11 @@ import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
 import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
+import type { ProviderAuthOptionBag } from "./provider-auth-types.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
 import { applyPrimaryModel } from "./provider-model-primary.js";
 import { buildProviderPluginMethodChoice } from "./provider-plugin-choice.js";
-import type {
-  ProviderAuthMethod,
-  ProviderAuthOptionBag,
-  ProviderAuthResult,
-  ProviderPlugin,
-} from "./types.js";
+import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "./types.js";
 
 type ApplyProviderAuthChoiceParams = {
   authChoice: string;
@@ -269,7 +265,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
     signal: params.signal,
     assertCurrent: params.assertCurrent,
   };
-  const prepared = await withPluginLifecycleLease(leaseOptions, async () =>
+  const prepared = await withPluginLifecycleLeaseAsync(leaseOptions, async () =>
     withPluginCache(initialCache, async () => {
       let nextConfig = params.config;
       let pendingPluginInstalls: Record<string, PluginInstallRecord> | undefined;

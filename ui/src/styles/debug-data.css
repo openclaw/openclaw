@@ -1,3 +1,42 @@
+.debug-refresh {
+  display: inline-grid;
+  grid-template-areas: "label";
+}
+
+.debug-refresh > span,
+.debug-refresh::before,
+.debug-refresh::after {
+  grid-area: label;
+}
+
+.debug-refresh::before,
+.debug-refresh::after {
+  visibility: hidden;
+}
+
+.debug-refresh::before {
+  content: attr(data-refresh-label);
+}
+
+.debug-refresh::after {
+  content: attr(data-refreshing-label);
+}
+
+.debug-read-feedback {
+  display: block;
+  min-block-size: 2lh;
+}
+
+.debug-read-feedback .settings-status {
+  vertical-align: top;
+}
+
+.debug-security-status {
+  /* Keep the audit row and its text column steady while the first snapshot arrives. */
+  inline-size: 14em;
+  max-inline-size: 100%;
+}
+
 .command-lanes-table-wrap {
   max-height: 420px;
 }
@@ -38,7 +77,7 @@
 }
 
 .command-lanes-table--compact {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .command-lanes-table--compact th,
@@ -53,14 +92,14 @@
 .debug-overlay__vitals-footer {
   margin-top: 8px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   text-align: right;
 }
 
 .debug-overlay__count,
 .debug-overlay__empty {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .debug-overlay__list {
@@ -68,7 +107,7 @@
   gap: 5px;
   margin: 8px 0 0;
   padding: 0;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   list-style: none;
 }
 

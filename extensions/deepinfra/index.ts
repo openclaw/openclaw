@@ -7,10 +7,14 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "openclaw/plugin-sdk/provider-stream";
-import { createDeepInfraAnthropicCacheWrapper } from "./cache-wrapper.js";
-import { buildDeepInfraEmbeddingAdapter } from "./embedding-adapter.js";
+import {
+  applyAnthropicEphemeralCacheControlMarkers,
+  applyCompletionsAnthropicCacheControl,
+  createPayloadPatchStreamWrapper,
+} from "openclaw/plugin-sdk/provider-stream-shared";
+import { deepinfraEmbeddingProviderAdapter } from "./embedding-adapter.js";
 import { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
-import { buildDeepInfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { deepinfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyDeepInfraConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildDeepInfraApiKeyCatalog } from "./provider-catalog.js";
@@ -67,10 +71,38 @@ export default defineSingleProviderPluginEntry({
       // providers; layer DeepInfra's anthropic cache-marker wrapper on top so
       // anthropic/* requests carry the ephemeral cache_control markers that
       // the upstream OpenRouter-only wrapper skips.
-      return createDeepInfraAnthropicCacheWrapper(
-        createOpenRouterWrapper(ctx.streamFn, thinkingLevel),
-        ctx.extraParams,
-      );
+      const baseStreamFn = createOpenRouterWrapper(ctx.streamFn, thinkingLevel);
+      const extraParams = ctx.extraParams;
+      return (model, context, options) => {
+        if (
+          thinkingLevel === "off" &&
+          model.api === "openai-completions" &&
+          model.id.toLowerCase() === "nvidia/nvidia-nemotron-3.5-super-vl"
+        ) {
+          // This default-on model supports an explicit off selector. Do not
+          // generalize to all DeepInfra reasoning models: some are always-on.
+          return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload }) => {
+            payload.reasoning = { enabled: false };
+          })(model, context, options);
+        }
+        if (!model.id.toLowerCase().startsWith("anthropic/")) {
+          return baseStreamFn(model, context, options);
+        }
+        const isCompletions = model.api === "openai-completions";
+        const configured = options?.cacheRetention ?? extraParams?.cacheRetention;
+        const cacheRetention =
+          configured === "none" || configured === "long" ? configured : "short";
+        return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload }) => {
+          if (isCompletions) {
+            applyCompletionsAnthropicCacheControl(
+              payload,
+              cacheRetention === "none" ? null : { type: "ephemeral" },
+            );
+          } else {
+            applyAnthropicEphemeralCacheControlMarkers(payload);
+          }
+        })(model, context, isCompletions ? { ...options, cacheRetention } : options);
+      };
     },
     isModernModelRef: () => true,
     isCacheTtlEligible: (ctx) => ctx.modelId.toLowerCase().startsWith("anthropic/"),
@@ -83,8 +115,8 @@ export default defineSingleProviderPluginEntry({
       kinds: ["image_generation"],
       liveCatalog: listDeepInfraImageGenCatalog,
     });
-    api.registerMediaUnderstandingProvider(buildDeepInfraMediaUnderstandingProvider());
-    api.registerEmbeddingProvider(buildDeepInfraEmbeddingAdapter());
+    api.registerMediaUnderstandingProvider(deepinfraMediaUnderstandingProvider);
+    api.registerEmbeddingProvider(deepinfraEmbeddingProviderAdapter);
     api.registerSpeechProvider(buildDeepInfraSpeechProvider());
     api.registerVideoGenerationProvider(buildDeepInfraVideoGenerationProvider());
     api.registerModelCatalogProvider({

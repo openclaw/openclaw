@@ -53,8 +53,12 @@ export type CodexBindingStateStore = Omit<
 > &
   Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup"> & {
     prepareRead: Parameters<typeof prepareCurrentCodexAppServerBindingRead>[0]["prepareRead"];
+    prepareGuard(
+      key: string,
+      assertValueCurrent: (value: StoredCodexAppServerBinding | undefined) => void,
+    ): Promise<{ assertCurrent: () => void; release: () => void } | undefined>;
     asyncReads: Pick<
-      PluginStateKeyedStore<StoredCodexAppServerBinding>,
+      PluginStateKeyedStore<StoredCodexAppServerBinding, 2>,
       "lookup" | "lookupMany" | "entries"
     >;
   };
@@ -174,31 +178,35 @@ function decodeCurrentCodexAppServerBinding(
     : undefined;
 }
 
+/** Metadata writes may preserve this owner; raw replacement and unknown settlement still fence it. */
+export function prepareCodexNativeSubagentBindingGuard(
+  state: Pick<CodexBindingStateStore, "prepareGuard">,
+  identity: CodexAppServerBindingIdentity,
+  owner: CodexNativeSubagentHistoryOwner,
+) {
+  const key = bindingStoreKey(identity);
+  return state.prepareGuard(key, (raw) => {
+    const binding = decodeCurrentCodexAppServerBinding(key, raw, identity);
+    if (
+      !binding ||
+      (identity.kind === "session" && owner.sessionId !== identity.sessionId) ||
+      !matchesCodexNativeSubagentSubmissionBinding(binding, owner)
+    ) {
+      throw new Error("Native subagent binding is no longer current.");
+    }
+  });
+}
+
 /** Acquire fresh rows off-thread; decode lazily to preserve caller failure ordering. */
 export async function* readCurrentCodexAppServerBindings(
-  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup" | "lookupMany">,
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding, 2>, "lookupMany">,
   identities: readonly CodexAppServerBindingIdentity[],
 ): AsyncGenerator<CodexAppServerThreadBinding | undefined, undefined, void> {
-  const lookupMany = state.lookupMany?.bind(state);
   for (let offset = 0; offset < identities.length; offset += 10_000) {
     const batch = identities.slice(offset, offset + 10_000);
-    let keys: string[] | undefined;
-    if (lookupMany) {
-      try {
-        keys = batch.map(bindingStoreKey);
-      } catch {
-        // A later invalid identity must not precede an earlier row's validation.
-      }
-    }
-    if (!keys || !lookupMany) {
-      for (const identity of batch) {
-        const key = bindingStoreKey(identity);
-        yield decodeCurrentCodexAppServerBinding(key, await state.lookup(key), identity);
-      }
-      continue;
-    }
+    const keys = batch.map(bindingStoreKey);
     // Query failures retain the storage owner's terminal handling; never retry the read.
-    const values = await lookupMany(keys);
+    const values = await state.lookupMany(keys);
     for (let index = 0; index < batch.length; index++) {
       const value = values[index]!;
       if (!value.ok) {
@@ -347,6 +355,7 @@ export function readPluginAppPolicyContext(value: unknown): PluginAppPolicyConte
     const { destructiveApprovalMode } = validated;
     const policy = {
       allowDestructiveActions: validated.allowDestructiveActions,
+      ...(validated.readOnlyTools !== undefined ? { readOnlyTools: validated.readOnlyTools } : {}),
       ...(validated.allowOpenWorld !== undefined
         ? { allowOpenWorld: validated.allowOpenWorld }
         : {}),

@@ -25,10 +25,17 @@ import {
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
+export class ClientCredentialMigrationRequiredError extends StartupMaintenanceRequiredError {
+  constructor(
+    message = "Client credential migration is incomplete or stale; run openclaw doctor --fix before using this client.",
+  ) {
+    super("state-migrations", message);
+    this.name = "ClientCredentialMigrationRequiredError";
+  }
+}
+
 function notReady(): Error {
-  return new Error(
-    "Client credential migration is incomplete or stale; run openclaw doctor --fix before using this client.",
-  );
+  return new ClientCredentialMigrationRequiredError();
 }
 
 type ClientCredentialReceiptState = {
@@ -46,7 +53,6 @@ function assertSupportedVersion(version: number): void {
 
 /** The receipt is a cross-process migration-phase guard, including in-place copied → complete transitions. */
 export function readClientCredentialAdmission(database: DatabaseSync): {
-  version: number;
   stored: ClientCredentialReceiptState | null;
 } {
   let row: Record<string, SQLOutputValue> | undefined;
@@ -71,7 +77,6 @@ export function readClientCredentialAdmission(database: DatabaseSync): {
   assertSupportedVersion(row.user_version);
   const localPath = database.location();
   return {
-    version: row.user_version,
     stored:
       row.source_store === null
         ? null
@@ -173,8 +178,7 @@ function assertClientCredentialLegacyReady(
         ) {
           continue;
         }
-        throw new StartupMaintenanceRequiredError(
-          "state-migrations",
+        throw new ClientCredentialMigrationRequiredError(
           "Legacy client credentials require migration; run openclaw doctor --fix before using this client.",
         );
       }
@@ -288,7 +292,7 @@ export function admitClientCredentialStore(
     readOnly: boolean;
     stored?: ClientCredentialReceiptState | null;
   },
-): void {
+): ClientCredentialReceipt {
   const stored = prepareClientCredentialReceipt(
     database,
     env,
@@ -297,4 +301,5 @@ export function admitClientCredentialStore(
     options.stored,
   );
   assertClientCredentialLegacyReady(database, env, !options.readOnly, stored.receipt);
+  return stored.receipt;
 }

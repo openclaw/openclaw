@@ -1,0 +1,2 @@
+# Real QuickJS executor recovery after a failed engine-asset read, preserving successful caching.
+54

@@ -124,32 +124,21 @@ type CachedDirectory = {
 export class CodexCatalogRolloutScanner {
   private readonly directories = new Map<string, CachedDirectory>();
   private cachedFiles = 0;
-  private running: Promise<CodexCatalogRolloutScan> | undefined;
   private closed = false;
 
   constructor(private readonly sessionsRoot: string) {}
 
-  scan(trackedPaths: ReadonlySet<string>): Promise<CodexCatalogRolloutScan> {
-    const previous = this.running;
-    const running = (async () => {
-      await previous?.catch(() => undefined);
-      // Deliver pending watcher notifications before consulting a cached fingerprint.
-      await nextTurn();
-      try {
-        return await this.walk(trackedPaths);
-      } catch (error) {
-        for (const cached of this.directories.values()) {
-          cached.dirty = true;
-        }
-        throw error;
+  async scan(trackedPaths: { has(path: string): boolean }): Promise<CodexCatalogRolloutScan> {
+    // The catalog index serializes scans. Deliver pending watcher notifications first.
+    await nextTurn();
+    try {
+      return await this.walk(trackedPaths);
+    } catch (error) {
+      for (const cached of this.directories.values()) {
+        cached.dirty = true;
       }
-    })();
-    this.running = running;
-    return running.finally(() => {
-      if (this.running === running) {
-        this.running = undefined;
-      }
-    });
+      throw error;
+    }
   }
 
   private forget(directory: string): void {
@@ -198,7 +187,9 @@ export class CodexCatalogRolloutScanner {
     }
   }
 
-  private async walk(trackedPaths: ReadonlySet<string>): Promise<CodexCatalogRolloutScan> {
+  private async walk(trackedPaths: {
+    has(path: string): boolean;
+  }): Promise<CodexCatalogRolloutScan> {
     if (this.closed) {
       throw new Error("Codex catalog rollout scanner is closed");
     }

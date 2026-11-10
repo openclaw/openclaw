@@ -32,11 +32,7 @@ const target = () => ({ cfg: {}, to: "123456789" });
 
 function createZaloHarness(params: OutboundPayloadHarnessParams) {
   const sendZalo = vi.fn();
-  primeChannelOutboundSendMock(
-    sendZalo,
-    { ok: true, messageId: "zl-1" },
-    params.sendResults?.map((result) => ({ ok: true, ...result })),
-  );
+  primeChannelOutboundSendMock(sendZalo, { messageId: "zl-1" }, params.sendResults);
   sendZaloTextMock
     .mockReset()
     .mockImplementation(
@@ -64,18 +60,6 @@ describe("Zalo outbound payload contract", () => {
     createHarness: createZaloHarness,
   });
 
-  it("throws legacy raw send failures at the typed delivery boundary", async () => {
-    sendZaloTextMock.mockReset().mockResolvedValue({
-      ok: false,
-      error: "Zalo rejected the message",
-      receipt: createMessageReceiptFromOutboundResults({ results: [], kind: "text" }),
-    });
-
-    await expect(
-      required(zaloPlugin.outbound?.sendText)({ ...target(), text: "hello" }),
-    ).rejects.toThrow("Zalo rejected the message");
-  });
-
   it.each([
     { kind: "text", payload: { text: "hello" } },
     {
@@ -88,11 +72,7 @@ describe("Zalo outbound payload contract", () => {
       setActivePluginRegistry(
         createTestRegistry([{ pluginId: "zalo", source: "test", plugin: zaloPlugin }]),
       );
-      sendZaloTextMock.mockReset().mockResolvedValue({
-        ok: false,
-        error: `Zalo rejected the ${kind}`,
-        receipt: createMessageReceiptFromOutboundResults({ results: [], kind }),
-      });
+      sendZaloTextMock.mockReset().mockRejectedValue(new Error(`Zalo rejected the ${kind}`));
 
       const result = await sendDurableMessageBatch({
         ...target(),
@@ -116,7 +96,6 @@ describe("Zalo outbound payload contract", () => {
         const kind = ctx.mediaUrl ? "media" : "text";
         const messageId = `zl-${kind}-1`;
         return {
-          ok: true,
           messageId,
           receipt: createMessageReceiptFromOutboundResults({
             results: [{ channel: "zalo", messageId }],

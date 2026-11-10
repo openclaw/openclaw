@@ -87,7 +87,11 @@ vi.mock("./session-accessor.sqlite-page-reclamation.js", () => ({
   withSqliteSessionPageReclamation: vi.fn(),
 }));
 vi.mock("./session-history-archive-pruning.js", () => ({ reclaimSqliteFreePages: vi.fn() }));
-vi.mock("./session-history-eviction.js", () => ({ collectAdmissionProtectedSessionIds: vi.fn() }));
+// mock-isolation: This suite retains native maintenance publication; the conformance suite exercises runtime worker custody.
+vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>()),
+  supportsOpenClawAgentDatabaseExecution: () => false,
+}));
 
 vi.mock("./session-transcript-worker-runtime.js", () => ({
   withSessionHistoryWorkerDatabase: vi.fn(),
@@ -175,7 +179,11 @@ it("cancels restoration queued at writer admission when its host callback expire
     if (params.expectedMessageType !== "reclaimed") {
       throw new Error("Expected cold restoration worker");
     }
-    await params.withWriteAdmission(async () => undefined, { admissionId: 1 });
+    await params.withWriteAdmission(
+      async () => undefined,
+      { admissionId: 1 },
+      { settled: Promise.resolve({ kind: "completed" }) },
+    );
     return [{ result }];
   });
   const pending = restore(controller.signal);

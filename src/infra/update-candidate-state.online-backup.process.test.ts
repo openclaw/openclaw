@@ -1,12 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -16,6 +12,7 @@ import { hasErrnoCode } from "./errno.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { useStateReceipts } from "./update-candidate-state-fixtures.test-support.js";
 import {
   UpdateCandidateSnapshotInventorySchema,
   UpdateCandidateStateSnapshotSchema,
@@ -23,13 +20,7 @@ import {
 
 let fixtureCompletion: Promise<void> | undefined;
 let releaseFixture: (() => void) | undefined;
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts.close();
-});
+const receipts = useStateReceipts();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     // Vitest cancellation can finish the test before its async body reaches finally.
@@ -105,12 +96,14 @@ it.for(["snapshot", "discover"] as const)(
       const candidateRoot = path.join(root, "package");
       const shared = path.join(stateDir, "state", "openclaw.sqlite");
       const agent = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-      for (const file of [shared, agent]) {
+      const supplemental = path.join(stateDir, "plugins", "workboard", "workboard.sqlite");
+      const sources = [shared, agent, supplemental];
+      for (const file of sources) {
         await fs.mkdir(path.dirname(file), { recursive: true });
         using db = openNodeSqliteDatabase(file);
         db.exec(`
           PRAGMA journal_mode = WAL;
-          PRAGMA user_version = 3;
+          PRAGMA user_version = ${file === supplemental ? 0 : 3};
           CREATE TABLE witness (id INTEGER PRIMARY KEY, generation INTEGER, inverse INTEGER);
           INSERT INTO witness VALUES (1, 0, 0), (2, 0, 0);
           CREATE TABLE payload (bytes BLOB);
@@ -137,7 +130,7 @@ it.for(["snapshot", "discover"] as const)(
       import { DatabaseSync } from "node:sqlite";
       import { setTimeout as sleep } from "node:timers/promises";
       ${fixtureReceiptClientSource(receipts.endpoint)}
-      const files = ${JSON.stringify([shared, agent])};
+      const files = ${JSON.stringify(sources)};
       const stores = files.map(file => new DatabaseSync(file));
       try {
         for (const db of stores) db.exec("PRAGMA busy_timeout = 1000; PRAGMA wal_autocheckpoint = 1;");
@@ -182,7 +175,7 @@ it.for(["snapshot", "discover"] as const)(
       };
       const opened = new Map();
       const open = fs.openSync, read = fs.readSync, close = fs.closeSync;
-      const sources = new Set(${JSON.stringify([shared, agent])});
+      const sources = new Set(${JSON.stringify(sources)});
       fs.openSync = function(file, ...args) {
         const fd = open.call(this, file, ...args);
         if (sources.has(String(file))) opened.set(fd, true);
@@ -210,6 +203,7 @@ it.for(["snapshot", "discover"] as const)(
         targetStateDir,
         stagingRoot: targetStateDir,
         candidateRoot,
+        additionalPaths: [supplemental],
         config: {},
         env: {
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -255,7 +249,7 @@ it.for(["snapshot", "discover"] as const)(
           .filter((line) => line.startsWith("State schema progress: "))
           .map((line) => JSON.parse(line.slice("State schema progress: ".length)));
         const completed = progressFrames.filter((entry) => entry.snapshot?.status === "completed");
-        expect(completed).toHaveLength(mode === "snapshot" ? 2 : 1);
+        expect(completed).toHaveLength(mode === "snapshot" ? 3 : 1);
         for (const { snapshot } of completed) {
           expect(snapshot.copiedBytes).toBeGreaterThan(4194304);
           expect(snapshot.copiedPages).toBeGreaterThan(0);
@@ -264,7 +258,7 @@ it.for(["snapshot", "discover"] as const)(
         }
         // One fresh materialization per source; verification consumes that private image.
         expect((await fs.readFile(backups, "utf8")).split("\n").filter(Boolean)).toHaveLength(
-          mode === "snapshot" ? 2 : 1,
+          mode === "snapshot" ? 3 : 1,
         );
         const observedAfter = await readWriterGeneration(progress);
         expect(observedAfter).toBeGreaterThan(before);
@@ -284,9 +278,10 @@ it.for(["snapshot", "discover"] as const)(
             expect.arrayContaining([
               expect.objectContaining({ path: shared, userVersion: 3 }),
               expect.objectContaining({ path: agent, userVersion: 3 }),
+              expect.objectContaining({ path: supplemental, userVersion: 0 }),
             ]),
           );
-          for (const source of [shared, agent]) {
+          for (const source of sources) {
             using db = openNodeSqliteDatabase(
               path.join(targetStateDir, path.relative(stateDir, source)),
               { readOnly: true },
@@ -305,7 +300,7 @@ it.for(["snapshot", "discover"] as const)(
         const ended = await writing;
         expect(ended.code, ended.stderr.toString()).toBe(0);
       }
-      for (const source of [shared, agent]) {
+      for (const source of sources) {
         using db = openNodeSqliteDatabase(source, { readOnly: true });
         checkDatabase(db);
         expect(

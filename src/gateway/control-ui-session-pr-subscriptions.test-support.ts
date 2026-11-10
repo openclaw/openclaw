@@ -45,6 +45,7 @@ export function createTestControlUiSessionPrSubscriptions(
       const target = {
         params: { sessionKey: session.sessionKey, agentId },
         identity: JSON.stringify(session),
+        taskReceiptsOnly: session.taskReceiptsOnly,
         readSource: { ...readSource, agentId },
         source: null,
       };

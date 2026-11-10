@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { Server, ServerResponse } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
@@ -11,6 +11,7 @@ import {
   reserveTestPortListener,
   type TestPortClaim,
 } from "../../../../src/test-utils/port-claims.js";
+import { writeSealedRuntimeProcessFixture } from "../../../../src/test-utils/sealed-runtime-process-fixture.js";
 import {
   openFixtureReceiptChannel,
   fixtureReceiptClientSource,
@@ -21,6 +22,11 @@ import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../../../
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../../helpers/qa-gateway-test-lifetime.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
+import {
+  createNativeProvider,
+  nativeModel,
+  writeNativeCompletion,
+} from "./native-provider-proof-fixture.js";
 import {
   closeWireServer,
   connectWireClient,
@@ -46,15 +52,13 @@ it.skipIf(process.platform === "win32")(
     const providerErrors: unknown[] = [];
     const heldTools: ServerResponse[] = [];
     const toolEntered = createDeferred();
-    void toolEntered.promise.catch(() => {});
     const completed = createDeferred();
     const originalTerminal = createDeferred();
-    void originalTerminal.promise.catch(() => {});
-    void completed.promise.catch(() => {});
+    void Promise.allSettled([toolEntered.promise, completed.promise, originalTerminal.promise]);
     const runStarts = new Set<string>();
     const terminals: Array<{ runId: string; phase: string; yielded?: boolean }> = [];
     let operator: Awaited<ReturnType<typeof connectWireClient>> | undefined;
-    let provider: ReturnType<typeof createServer> | undefined;
+    let provider: Server | undefined;
     let providerClaim: TestPortClaim | undefined;
     let published: Awaited<ReturnType<typeof createPublishedWireWorkspace>> | undefined;
     let verificationRequests = 0;
@@ -80,24 +84,16 @@ it.skipIf(process.platform === "win32")(
         const requests: Array<{
           messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>;
         }> = [];
-        provider = createServer((request, response) => {
-          void (async () => {
+        provider = createNativeProvider(
+          async (request, response, rawBody) => {
             if (request.url === "/tool-entered") {
               heldTools.push(response);
-              process.stderr.write("[midtool-node-loss] physical exec reached HTTP barrier\n");
               toolEntered.resolve();
               return;
             }
-            const chunks: Buffer[] = [];
-            for await (const chunk of request) {
-              chunks.push(Buffer.from(chunk));
-            }
-            const body = JSON.parse(Buffer.concat(chunks).toString()) as (typeof requests)[number];
+            const body = JSON.parse(rawBody) as (typeof requests)[number];
             expect(request.url).toBe("/v1/chat/completions");
             requests.push(body);
-            process.stderr.write(
-              `[midtool-node-loss] provider request ${requests.length}; tool results: ${JSON.stringify(body.messages?.filter((message) => message.role === "tool").map((message) => ({ id: message.tool_call_id, content: String(message.content).slice(0, 500) })))}\n`,
-            );
             const unknown = body.messages?.find(
               (message) =>
                 message.role === "tool" &&
@@ -154,23 +150,15 @@ it.skipIf(process.platform === "win32")(
               };
               finish = "tool_calls";
             }
-            response.writeHead(200, { "content-type": "text/event-stream" });
-            for (const [piece, finish_reason] of [
-              [delta, null],
-              [{}, finish],
-            ]) {
-              response.write(
-                `data: ${JSON.stringify({ id: `midtool-${requests.length}`, object: "chat.completion.chunk", created: 1, model: modelId, choices: [{ index: 0, delta: piece, finish_reason }] })}\n\n`,
-              );
-            }
-            response.end("data: [DONE]\n\n");
-          })().catch((error: unknown) => {
+            writeNativeCompletion(response, `midtool-${requests.length}`, modelId!, delta, finish);
+          },
+          (error, response) => {
             providerErrors.push(error);
             toolEntered.reject(error);
             completed.reject(error);
             response.destroy();
-          });
-        });
+          },
+        );
         const reservation = await reserveTestPortListener({
           offsets: [0],
           signal,
@@ -194,16 +182,11 @@ it.skipIf(process.platform === "win32")(
                 api: "openai-completions",
                 baseUrl: `http://127.0.0.1:${address.port}/v1`,
                 models: [
-                  {
-                    id: modelId!,
-                    name: modelId!,
-                    contextWindow: 32768,
+                  nativeModel(modelId!, {
                     maxTokens: 256,
                     reasoning: true,
                     thinkingLevelMap: { medium: "medium" },
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
+                  }),
                 ],
               },
             },
@@ -236,7 +219,6 @@ it.skipIf(process.platform === "win32")(
               };
               if (payload.stream === "lifecycle") {
                 if (payload.data?.phase === "start") {
-                  process.stderr.write(`[midtool-node-loss] lifecycle start ${payload.runId}\n`);
                   runStarts.add(payload.runId);
                 }
                 if (payload.data?.phase === "end" || payload.data?.phase === "error") {
@@ -249,9 +231,6 @@ it.skipIf(process.platform === "win32")(
                   } else if (payload.runId === RUN_ID) {
                     originalTerminal.resolve();
                   }
-                  process.stderr.write(
-                    `[midtool-node-loss] lifecycle ${payload.data.phase} ${payload.runId}\n`,
-                  );
                   terminals.push({
                     runId: payload.runId,
                     phase: payload.data.phase,
@@ -271,13 +250,20 @@ it.skipIf(process.platform === "win32")(
         ).href;
         const hostScript = path.join(root, "host.mts");
         const optionsFile = path.join(root, "host-options.json");
+        const processOwnerBootstrap = await writeSealedRuntimeProcessFixture(
+          path.join(root, "process-owner"),
+          "serviceChildRelay",
+          {
+            serviceChildGroupAnchor: resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor"),
+          },
+        );
         await fs.writeFile(
           optionsFile,
           JSON.stringify({
             root,
             gateway: { wsUrl: gateway.wsUrl, token: gateway.token, runtimeEnv: gateway.runtimeEnv },
             nodeConfig,
-            processOwnerUrl: resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor").href,
+            processOwnerBootstrap,
           }),
         );
         await fs.writeFile(
@@ -285,11 +271,13 @@ it.skipIf(process.platform === "win32")(
           `${fixtureReceiptClientSource(receipts.endpoint)}
 import fs from 'node:fs/promises';
 import { connectWireClient, createPairedNodeWorkerHost } from ${JSON.stringify(fixtureUrl)};
-import { registerSealedRuntimeProcessEntrypoint } from ${JSON.stringify(pathToFileURL(path.resolve("src/infra/runtime-process-url.ts")).href)};
+import { registerSealedRuntimeProcessEntrypoints } from ${JSON.stringify(pathToFileURL(path.resolve("src/infra/runtime-process-url.ts")).href)};
+import { bindInheritedProcessLineageFds } from ${JSON.stringify(pathToFileURL(path.resolve("src/process/supervisor/inherited-process-lineage.ts")).href)};
 const options = JSON.parse(await fs.readFile(process.argv[2], 'utf8'));
 const source = process.argv[3];
-// Linux custody requires the runner's built owner; a source-loader owner cannot reap safely.
-registerSealedRuntimeProcessEntrypoint('serviceChildGroupAnchor', new URL(options.processOwnerUrl));
+// Use the built Linux owner and forward its lineage so inner cleanup retains outer custody.
+registerSealedRuntimeProcessEntrypoints('serviceChildRelay', options.processOwnerBootstrap);
+bindInheritedProcessLineageFds([3]);
 const operator = await connectWireClient({ gateway: options.gateway, role: 'operator', identity: null });
 process.stderr.write('operator connected\\n');
 let host;

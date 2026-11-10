@@ -38,6 +38,7 @@ const tlonCommonConfigFields = {
   dmAllowlist: z.array(ShipSchema).optional(),
   groupInviteAllowlist: z.array(ShipSchema).optional(),
   autoDiscoverChannels: z.boolean().optional(),
+  crossChannelCitations: z.boolean().optional(),
   showModelSignature: z.boolean().optional(),
   responsePrefix: z.string().optional(),
   requireMentionInBotThreads: z.boolean().optional(),
@@ -64,6 +65,11 @@ const botThreadMentionHint = {
   help: "Override mention gating when this account's ship authored the thread root. False allows unmentioned replies; true requires a mention even after the bot participates. Omit to preserve existing behavior. Sender authorization still applies.",
 };
 
+const crossChannelCitationsHint = {
+  label: "Tlon Cross-Channel Citations",
+  help: "Expand citations of posts from other channels into agent context. False expands only citations of the channel a message was posted in; the owner's 1:1 DMs are exempt. Default: true.",
+};
+
 export const tlonChannelConfigSchema = buildChannelConfigSchema(TlonConfigSchema, {
   uiHints: {
     ...createChannelConfigUiHints({
@@ -73,5 +79,7 @@ export const tlonChannelConfigSchema = buildChannelConfigSchema(TlonConfigSchema
     requireMentionInBotThreads: botThreadMentionHint,
     "accounts.*.requireMentionInBotThreads": botThreadMentionHint,
     "authorization.channelRules.*.requireMentionInBotThreads": botThreadMentionHint,
+    crossChannelCitations: crossChannelCitationsHint,
+    "accounts.*.crossChannelCitations": crossChannelCitationsHint,
   },
 });

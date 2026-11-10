@@ -1,0 +1,2 @@
+25
+# Regression proof that clean-closed agent stores admit before unsealed ones defer the fleet (#195269).

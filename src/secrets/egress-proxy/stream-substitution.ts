@@ -14,7 +14,6 @@ export type SecretEgressRefusalReason =
   | "invalid-proxy-auth"
   | "missing-proxy-auth"
   | "non-https-request"
-  | "non-https-port"
   | "destination-not-allowed"
   | "unresolved-sentinel"
   | "upstream-error"

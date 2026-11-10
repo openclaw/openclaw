@@ -7,7 +7,7 @@ import {
 } from "./session-key.ts";
 import {
   parseSessionChangedEvent,
-  readSessionChangedEvent,
+  reconcileParsedSessionChangedRow,
   sessionChangedSnapshots,
 } from "./session-row-reconcile.ts";
 import type {
@@ -28,6 +28,29 @@ type Read = {
 };
 
 const MAX_DESCRIBED_SESSIONS = 128;
+
+function sampleRuntime(result: Result, previous?: GatewaySessionRow | null): Result {
+  const session = result.session;
+  if (session?.runtimeMs === undefined) {
+    return result;
+  }
+  const sameSample =
+    previous &&
+    session.runtimeMs === previous.runtimeMs &&
+    session.status === previous.status &&
+    session.hasActiveRun === previous.hasActiveRun &&
+    session.lastRunId === previous.lastRunId &&
+    session.activeRunIds?.length === previous.activeRunIds?.length &&
+    (session.activeRunIds?.every((runId, index) => runId === previous.activeRunIds?.[index]) ??
+      true);
+  return {
+    ...result,
+    session: {
+      ...session,
+      runtimeSampledAt: sameSample ? (previous.runtimeSampledAt ?? Date.now()) : Date.now(),
+    },
+  };
+}
 
 /** Descriptor completeness belongs to the read owner, not to partial roster snapshots. */
 export function createSessionDescribeReads(host: {
@@ -62,7 +85,7 @@ export function createSessionDescribeReads(host: {
       )
     );
   };
-  // Descriptor reads share one connection-owned cache until the session changes.
+  // Certified event snapshots advance completed reads on the same connection.
   const describe = async (
     params: Params,
     options: { refresh?: boolean; timeoutMs?: number; client?: SessionRequestClient } = {},
@@ -90,7 +113,7 @@ export function createSessionDescribeReads(host: {
     ]);
     const read = reads.get(key);
     if (read && current(read) && !options.refresh && (!read.result || host.canReuse())) {
-      return read.promise;
+      return read.result ?? read.promise;
     }
     reads.delete(key);
     const request = scope.client.request<Result>("sessions.describe", params, ...requestOptions);
@@ -103,13 +126,7 @@ export function createSessionDescribeReads(host: {
     };
     pending.promise = request.then(
       (response) => {
-        const result =
-          response.session?.runtimeMs === undefined
-            ? response
-            : {
-                ...response,
-                session: { ...response.session, runtimeSampledAt: Date.now() },
-              };
+        const result = sampleRuntime(response);
         if (reads.get(key) === pending && host.connection.isCurrent(scope)) {
           pending.result = result;
           if (!pending.reusable || !host.canReuse() || !current(pending)) {
@@ -145,9 +162,9 @@ export function createSessionDescribeReads(host: {
         return;
       }
       const targets = sessionChangedSnapshots(payload).flatMap((snapshot) => {
-        const target = readSessionChangedEvent(snapshot);
-        // References repeat content already invalidated by its preceding full snapshot.
-        return target && !target.isAncestorReference ? [target] : [];
+        const target = parseSessionChangedEvent(snapshot);
+        // References repeat content already received in the preceding full snapshot.
+        return target && !target[0].isAncestorReference ? [target] : [];
       });
       if (!targets.length) {
         reads.clear();
@@ -155,17 +172,40 @@ export function createSessionDescribeReads(host: {
       }
       for (const [key, read] of reads) {
         const agentId = parseAgentSessionKey(read.params.key)?.agentId ?? read.params.agentId;
-        if (
-          targets.some((target) => {
-            const targetAgentId = target.agentId ?? parseAgentSessionKey(target.key)?.agentId;
-            return (
-              areUiSessionKeysEquivalent(target.key, read.params.key) &&
-              (!agentId ||
-                !targetAgentId ||
-                normalizeAgentId(targetAgentId) === normalizeAgentId(agentId))
-            );
-          })
-        ) {
+        const target = targets.find(([info]) => {
+          const targetAgentId = info.agentId ?? parseAgentSessionKey(info.key)?.agentId;
+          return (
+            areUiSessionKeysEquivalent(info.key, read.params.key) &&
+            (!agentId ||
+              !targetAgentId ||
+              normalizeAgentId(targetAgentId) === normalizeAgentId(agentId))
+          );
+        });
+        if (!target) {
+          continue;
+        }
+        const previous = read.result?.session;
+        const next =
+          previous &&
+          target[1].session &&
+          target[0].sessionId === previous.sessionId &&
+          !target[2].rowMode
+            ? reconcileParsedSessionChangedRow(previous, target, { archivedFilter: "all" })
+                .admittedRow
+            : undefined;
+        if (next) {
+          // Full events include previews; omission clears them despite roster preservation.
+          if (!read.params.includeDerivedTitles || target[2].derivedTitle === undefined) {
+            delete next.derivedTitle;
+          }
+          if (!read.params.includeLastMessage || target[2].lastMessagePreview === undefined) {
+            delete next.lastMessagePreview;
+          }
+          if (!read.params.includeLastMessage || target[2].lastAssistantMessage === undefined) {
+            delete next.lastAssistantMessage;
+          }
+          read.result = sampleRuntime({ session: next }, previous);
+        } else {
           reads.delete(key);
         }
       }

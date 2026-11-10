@@ -1,8 +1,12 @@
-import type { PendingApprovalView } from "openclaw/plugin-sdk/approval-handler-runtime";
+import {
+  createChannelApprovalHandlerFromCapability,
+  type PendingApprovalView,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { SystemAgentApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, expect, it, vi } from "vitest";
 import { telegramApprovalNativeRuntime } from "./approval-handler.runtime.js";
+import { telegramApprovalCapability } from "./approval-native.js";
 import { buildTelegramCanonicalApprovalTerminalText } from "./approval-terminal.js";
 
 const { editMessage, sendMessage, sendTyping } = vi.hoisted(() => ({
@@ -99,7 +103,37 @@ async function deliver(
   if (!prepared) {
     throw new Error("Expected an approval target");
   }
-  await transport.deliverPending({ ...params, pendingPayload, preparedTarget: prepared.target });
+  return await transport.deliverPending({
+    ...params,
+    pendingPayload,
+    preparedTarget: prepared.target,
+  });
+}
+async function deliverSystemCard(request: SystemAgentApprovalRequest, to: string) {
+  sendTyping.mockResolvedValue(undefined);
+  sendMessage.mockImplementation(async (chatId: string) => ({ chatId, messageId: "m1" }));
+  const entry = await deliver({
+    ...base,
+    request,
+    approvalKind: "system-agent",
+    plannedTarget: { surface: "origin", reason: "preferred", target: { to } },
+    view: {
+      approvalKind: "system-agent",
+      approvalId: request.id,
+      phase: "pending",
+      title: request.request.title,
+      metadata: [],
+      commandText: request.request.command,
+      operationSummary: request.request.description,
+      actions: [],
+      expiresAtMs: request.expiresAtMs,
+    },
+  });
+  if (!entry) {
+    throw new Error("Expected a delivered approval card");
+  }
+  sendMessage.mockClear();
+  return entry;
 }
 function terminalEntry(request: SystemAgentApprovalRequest, text: string) {
   return {
@@ -303,18 +337,187 @@ it("sends one terminal origin result and releases its dedupe entry after finaliz
   expect(sendMessage).toHaveBeenCalledTimes(2);
 });
 
-it("sends the origin result when the approver card edit fails", async () => {
+it.each([
+  ["private root to topic", "1234", "1234", 42, ["1234", { messageThreadId: 42 }]],
+  ["same private topic", "1234:topic:42", "telegram:1234", 42, null],
+  ["scoped source thread", "1234:topic:42", "1234", "1234:42", null],
+  [
+    "different private topic",
+    "1234:topic:43",
+    "1234:topic:42",
+    undefined,
+    ["1234", { messageThreadId: 42 }],
+  ],
+  ["private topic one is not root", "1234:topic:1", "1234", undefined, ["1234", {}]],
+  ["forum General is root", "-1001234:topic:1", "-1001234", undefined, null],
+  ["forum root is General", "-1001234", "-1001234", 1, null],
+  [
+    "same Direct Messages topic",
+    "-1001234:direct-topic:77",
+    "-1001234:direct-topic:77",
+    undefined,
+    null,
+  ],
+  [
+    "different Direct Messages topic",
+    "-1001234:direct-topic:78",
+    "-1001234:direct-topic:77",
+    undefined,
+    ["-1001234", { directMessagesTopicId: 77 }],
+  ],
+  [
+    "Direct Messages topic one is not root",
+    "-1001234:direct-topic:1",
+    "-1001234",
+    undefined,
+    ["-1001234", {}],
+  ],
+  [
+    "forum and Direct Messages topics differ",
+    "-1001234:topic:77",
+    "-1001234:direct-topic:77",
+    undefined,
+    ["-1001234", { directMessagesTopicId: 77 }],
+  ],
+] as const)(
+  "sends a separate origin notice only for a different route: %s",
+  async (name, to, origin, threadId, notice) => {
+    editMessage.mockResolvedValue({ ok: true });
+    const request = systemRequest(`system-agent:route-${name}`, {
+      turnSourceChannel: "telegram",
+      turnSourceTo: origin,
+      turnSourceThreadId: threadId,
+    });
+    const entry = await deliverSystemCard(request, to);
+    try {
+      await transport.updateEntry?.({ ...terminalEntry(request, "Change denied"), entry });
+      expect(editMessage).toHaveBeenCalledWith(entry.chatId, "m1", "Change denied", {
+        cfg: {},
+        token: "tg-token",
+        accountId: "default",
+        textMode: "html",
+        buttons: [],
+      });
+      expect(sendMessage).toHaveBeenCalledTimes(notice ? 1 : 0);
+      if (notice) {
+        expect(sendMessage).toHaveBeenCalledWith(notice[0], "Change denied", {
+          cfg: {},
+          token: "tg-token",
+          accountId: "default",
+          textMode: "html",
+          ...notice[1],
+        });
+      }
+    } finally {
+      observe?.onFinalized?.({ ...base, request, approvalKind: "system-agent", phase: "resolved" });
+    }
+  },
+);
+
+it.each([
+  [
+    "allowed",
+    "allow-once",
+    undefined,
+    undefined,
+    "✅ OpenClaw change approved. Applying: restart the Gateway",
+  ],
+  [
+    "applied",
+    "allow-once",
+    "applied",
+    undefined,
+    "✅ OpenClaw change approved and applied: restart the Gateway",
+  ],
+  [
+    "not applied",
+    "allow-once",
+    "not-applied",
+    undefined,
+    "⚠️ OpenClaw change approved, but completion could not be confirmed. Check the current settings before retrying.",
+  ],
+  ["denied", "deny", undefined, undefined, "❌ OpenClaw change denied. No change was made."],
+  [
+    "cancelled",
+    "deny",
+    undefined,
+    "cancelled",
+    "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.",
+  ],
+  ["expired", null, undefined, undefined, "⏱️ OpenClaw change expired. No change was made."],
+] as const)(
+  "returns the %s terminal result from a root approval card to the originating topic",
+  async (name, decision, applicationStatus, terminalStatus, text) => {
+    sendTyping.mockResolvedValue(undefined);
+    sendMessage.mockResolvedValue({ chatId: "1234", messageId: "m1" });
+    editMessage.mockResolvedValue({ ok: true });
+    const handler = await createChannelApprovalHandlerFromCapability({
+      ...base,
+      capability: telegramApprovalCapability,
+      label: "telegram/approvals",
+      clientDisplayName: "Telegram approvals",
+      channel: "telegram",
+      channelLabel: "Telegram",
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "tg-token",
+            execApprovals: { enabled: true, approvers: ["1234"], target: "dm" },
+          },
+        },
+      },
+      nowMs: () => 0,
+    });
+    if (!handler) {
+      throw new Error("Expected a Telegram approval handler");
+    }
+    const request = systemRequest(`system-agent:terminal-${name}`, {
+      turnSourceChannel: "telegram",
+      turnSourceTo: "1234",
+      turnSourceThreadId: 42,
+    });
+    try {
+      await handler.handleRequested(request);
+      expect(sendMessage).toHaveBeenCalledOnce();
+      sendMessage.mockClear();
+      if (decision === null) {
+        await handler.handleExpired(request.id);
+      } else {
+        await handler.handleResolved({
+          id: request.id,
+          decision,
+          applicationStatus,
+          terminalStatus,
+          ts: 1,
+        });
+      }
+      expect(editMessage).toHaveBeenCalledOnce();
+      expect(sendMessage).toHaveBeenCalledExactlyOnceWith("1234", text, {
+        cfg: expect.any(Object),
+        token: "tg-token",
+        accountId: "default",
+        textMode: "html",
+        messageThreadId: 42,
+      });
+    } finally {
+      await handler.stop();
+    }
+  },
+);
+
+it("sends the origin result when the same-topic approver card edit fails", async () => {
   editMessage.mockRejectedValue(new Error("message was deleted"));
-  sendMessage.mockResolvedValue({ ok: true });
   const request = systemRequest("system-agent:origin-edit-failure", {
     turnSourceChannel: "telegram",
     turnSourceTo: "1234",
+    turnSourceThreadId: 42,
   });
+  const entry = await deliverSystemCard(request, "1234:topic:42");
 
   await expect(
     transport.updateEntry?.({
       ...base,
-      entry: { chatId: "5678", messageId: "m1" },
+      entry,
       request,
       approvalKind: "system-agent",
       payload: { text: "⚠️ OpenClaw change approved, but it was not applied." },
@@ -324,7 +527,7 @@ it("sends the origin result when the approver card edit fails", async () => {
   expect(sendMessage).toHaveBeenCalledWith(
     "1234",
     "⚠️ OpenClaw change approved, but it was not applied.",
-    { cfg: {}, token: "tg-token", accountId: "default", textMode: "html" },
+    { cfg: {}, token: "tg-token", accountId: "default", textMode: "html", messageThreadId: 42 },
   );
 });
 

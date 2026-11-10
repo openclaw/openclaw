@@ -1,5 +1,5 @@
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import type { MemoryIndexManager } from "./manager.js";
 
@@ -10,8 +10,21 @@ describe("memory index", () => {
   const { provider: providerFixture } = fixture;
   const { createConfig: createCfg, getFreshManager, getPersistentManager } = fixture;
   const fieldsOf = (manager: Awaited<ReturnType<typeof getFreshManager>>) =>
-    manager as unknown as { provider: EmbeddingProvider | null; providerInitialized: boolean };
-  const failedProvider = (id: string, model: string): EmbeddingProvider => {
+    manager as unknown as {
+      provider: MemoryEmbeddingProvider | null;
+      providerInitialized: boolean;
+      providerRuntime: { id: string; cacheKeyData: Record<string, unknown> };
+      providerKey: string;
+      computeProviderKey: () => string;
+    };
+  const makeProvider = (id: string, model: string): MemoryEmbeddingProvider => ({
+    id,
+    model,
+    embed: async () => [1, 0, 0, 0],
+    embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
+    close: async () => {},
+  });
+  const failedProvider = (id: string, model: string): MemoryEmbeddingProvider => {
     const fail = async (): Promise<never> => {
       throw providerFixture.createLocalWorkerExitError();
     };
@@ -21,6 +34,18 @@ describe("memory index", () => {
     expect(results).toEqual(
       expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
     );
+  async function publish(params: Parameters<typeof createCfg>[0]) {
+    const manager = await getFreshManager(createCfg(params));
+    await manager.sync({ reason: "test", force: true });
+    await manager.close();
+  }
+  function expectFallback(manager: MemoryIndexManager) {
+    expect(manager.status()).toMatchObject({
+      provider: "fallback-provider",
+      model: "fallback-provider-embed",
+    });
+    expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  }
 
   it("returns to the primary after a query outage without rebuilding its index", async () => {
     const manager = await getPersistentManager(createCfg({ fallback: "fallback-provider" }));
@@ -37,7 +62,7 @@ describe("memory index", () => {
     expect(manager.status().provider).toBe("fallback-provider");
 
     providerFixture.beforeEmbedQuery = null;
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 60_000);
     try {
       const recovered = await Promise.all([
         manager.search("alpha recovered"),
@@ -55,55 +80,29 @@ describe("memory index", () => {
   });
 
   it("does not activate fallback during search when index identity is already mismatched", async () => {
-    const cfg = createCfg({
-      fallback: "fallback-provider",
-    });
-    const manager = await getPersistentManager(cfg);
+    const manager = await getPersistentManager(createCfg({ fallback: "fallback-provider" }));
 
     await manager.sync({ reason: "test" });
     const callsBeforeSearch = providerFixture.providerCalls.length;
-    (
-      manager as unknown as {
-        provider: {
-          id: string;
-          model: string;
-          embed: () => Promise<number[]>;
-          embedBatch: (texts: string[]) => Promise<number[][]>;
-          close: () => Promise<void>;
-        };
-      }
-    ).provider = {
-      id: "local",
-      model: "mock-embed",
+    fieldsOf(manager).provider = {
+      ...makeProvider("local", "mock-embed"),
       embed: async () => {
         throw providerFixture.createLocalWorkerExitError();
       },
-      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
-      close: async () => {},
     };
 
     const results = await manager.search("alpha");
 
     expect(results).toStrictEqual([]);
     expect(providerFixture.providerCalls.slice(callsBeforeSearch)).toStrictEqual([]);
-    expect(
-      (
-        manager as unknown as {
-          provider: { id: string } | null;
-        }
-      ).provider?.id,
-    ).toBe("local");
+    expect(fieldsOf(manager).provider?.id).toBe("local");
   });
 
   it("reports the adopted fallback provider when the published index belongs to it", async () => {
-    // Status must adopt the published fallback identity just as search does.
-    const publishCfg = createCfg({
+    await publish({
       provider: "fallback-provider",
       model: "fallback-provider-embed",
     });
-    const publisher = await getFreshManager(publishCfg);
-    await publisher.sync({ reason: "test", force: true });
-    await publisher.close?.();
 
     const cfg = createCfg({ model: "mock-embed", fallback: "fallback-provider" });
 
@@ -127,12 +126,10 @@ describe("memory index", () => {
   });
 
   it("keeps probing the configured provider when the published index matches it", async () => {
-    const cfg = createCfg({ fallback: "fallback-provider" });
-    const publisher = await getFreshManager(cfg);
-    await publisher.sync({ reason: "test", force: true });
-    await publisher.close?.();
+    const params = { fallback: "fallback-provider" } as const;
+    await publish(params);
 
-    const statusManager = await getFreshManager(cfg);
+    const statusManager = await getFreshManager(createCfg(params));
     const probe = await statusManager.probeEmbeddingAvailability();
     const status = statusManager.status();
 
@@ -142,9 +139,7 @@ describe("memory index", () => {
   });
 
   it("rebuilds with fallback provider during explicit identity repair", async () => {
-    const oldManager = await getFreshManager(createCfg({ model: "old-embed" }));
-    await oldManager.sync({ reason: "test", force: true });
-    await oldManager.close?.();
+    await publish({ model: "old-embed" });
 
     const manager = await getFreshManager(
       createCfg({ model: "new-embed", fallback: "fallback-provider" }),
@@ -156,12 +151,8 @@ describe("memory index", () => {
 
     await manager.sync({ reason: "cli" });
 
-    expect(manager.status()).toMatchObject({
-      dirty: false,
-      provider: "fallback-provider",
-      model: "fallback-provider-embed",
-    });
-    expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(manager.status().dirty).toBe(false);
+    expectFallback(manager);
     await expect(manager.search("alpha")).resolves.not.toStrictEqual([]);
   });
 
@@ -171,28 +162,9 @@ describe("memory index", () => {
       model: "new-embed",
     });
     const maintenanceManager = await getFreshManager(cfg);
-    const maintenanceFields = maintenanceManager as unknown as {
-      providerInitialized: boolean;
-      provider: {
-        id: string;
-        model: string;
-        embed: (text: string) => Promise<number[]>;
-        embedBatch: (texts: string[]) => Promise<number[][]>;
-        close: () => Promise<void>;
-      };
-    };
+    const maintenanceFields = fieldsOf(maintenanceManager);
     maintenanceFields.providerInitialized = true;
-    maintenanceFields.provider = {
-      id: "mock",
-      model: "new-embed",
-      embed: async () => {
-        throw providerFixture.createLocalWorkerExitError();
-      },
-      embedBatch: async () => {
-        throw providerFixture.createLocalWorkerExitError();
-      },
-      close: async () => {},
-    };
+    maintenanceFields.provider = failedProvider("mock", "new-embed");
     await maintenanceManager.sync({ reason: "search", force: true });
     expect(maintenanceManager.status()).toMatchObject({
       provider: "fallback-provider",
@@ -213,11 +185,7 @@ describe("memory index", () => {
     expect(providerFixture.providerCalls.slice(callsBeforeSearch)).toContainEqual(
       expect.objectContaining({ provider: "fallback-provider" }),
     );
-    expect(manager.status()).toMatchObject({
-      provider: "fallback-provider",
-      model: "fallback-provider-embed",
-    });
-    expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    expectFallback(manager);
   });
 
   it("reinitializes the configured provider after probe-time local degradation", async () => {
@@ -242,13 +210,10 @@ describe("memory index", () => {
   });
 
   it("clears identity dirty after status resolves the indexed fallback provider", async () => {
-    const indexedCfg = createCfg({
+    await publish({
       provider: "fallback-provider",
       model: "new-embed",
     });
-    const indexedManager = await getFreshManager(indexedCfg);
-    await indexedManager.sync({ reason: "test", force: true });
-    await indexedManager.close?.();
 
     const cfg = createCfg({
       fallback: "fallback-provider",
@@ -258,29 +223,8 @@ describe("memory index", () => {
     try {
       expect(manager.status().dirty).toBe(true);
 
-      const fields = manager as unknown as {
-        provider: {
-          id: string;
-          model: string;
-          embed: (text: string) => Promise<number[]>;
-          embedBatch: (texts: string[]) => Promise<number[][]>;
-          close: () => Promise<void>;
-        };
-        providerInitialized: boolean;
-        providerRuntime: {
-          id: string;
-          cacheKeyData: Record<string, unknown>;
-        };
-        providerKey: string;
-        computeProviderKey: () => string;
-      };
-      fields.provider = {
-        id: "fallback-provider",
-        model: "new-embed",
-        embed: async () => [1, 0, 0, 0],
-        embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
-        close: async () => {},
-      };
+      const fields = fieldsOf(manager);
+      fields.provider = makeProvider("fallback-provider", "new-embed");
       fields.providerRuntime = {
         id: "fallback-provider",
         cacheKeyData: {
@@ -311,11 +255,11 @@ describe("memory index", () => {
       offload: { supported: true, offloadedLayers: 24, totalLayers: 24 },
       context: { requestedSize: 4096 },
     }));
-    const provider: EmbeddingProvider = {
+    const provider: MemoryEmbeddingProvider = {
       id: "local",
       model: "test-model.gguf",
       embed: vi.fn(async () => [1, 0, 0, 0]),
-      embedBatch: vi.fn<EmbeddingProvider["embedBatch"]>(async (texts) =>
+      embedBatch: vi.fn<MemoryEmbeddingProvider["embedBatch"]>(async (texts) =>
         texts.map(() => [1, 0, 0, 0]),
       ),
     };
@@ -351,18 +295,10 @@ describe("memory index", () => {
   });
 
   it("fails fast instead of returning FTS when an explicit provider is lost at runtime", async () => {
-    const cfg = createCfg({
-      provider: "openai",
-      minScore: 0.35,
-    });
-    const manager = await getFreshManager(cfg);
+    const manager = await getFreshManager(createCfg({ provider: "openai", minScore: 0.35 }));
     try {
       await manager.sync({ reason: "test", force: true });
-      (
-        manager as unknown as {
-          provider: null;
-        }
-      ).provider = null;
+      fieldsOf(manager).provider = null;
 
       await expect(manager.search("Alpha")).rejects.toThrow(
         /Memory search unavailable: embedding provider "openai" is configured but unavailable\./,

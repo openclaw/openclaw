@@ -1,8 +1,27 @@
-// Fish completion tests cover fish shell completion script generation.
 import { spawnSync } from "node:child_process";
 import { Command, Option } from "commander";
 import { describe, expect, it } from "vitest";
 import { getCompletionScript } from "./completion-cli.js";
+
+function captureChoices(choices: string[]) {
+  const program = new Command().name("openclaw");
+  program.addOption(new Option("--value <value>", "Value").choices(choices));
+  const line = getCompletionScript("fish", program)
+    .split("\n")
+    .find((entry) => entry.startsWith("complete -c openclaw "));
+  const capture = spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `complete() { while (( $# )); do if [[ "$1" == "-a" ]]; then printf '%s' "$2"; return; fi; shift; done; }\n${line}`,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(capture).toMatchObject({ status: 0, stderr: "" });
+  return capture.stdout;
+}
 
 describe("Fish completion scripts", () => {
   it("quotes apostrophes in subcommand descriptions", () => {
@@ -35,9 +54,7 @@ complete --do-complete 'openclaw --proof-option a'
         ],
         { encoding: "utf8", timeout: 15_000 },
       );
-      expect(result.error).toBeUndefined();
-      expect(result.stderr).toBe("");
-      expect(result.status).toBe(0);
+      expect(result).toMatchObject({ error: undefined, stderr: "", status: 0 });
       expect(result.stdout.split(/\r?\n/)).toEqual(
         expect.arrayContaining([
           `proof-command\t${description}`,
@@ -64,27 +81,9 @@ complete --do-complete 'openclaw --proof-option a'
   it.skipIf(process.platform === "win32")(
     "preserves apostrophes and backslashes through both Fish quoting layers",
     () => {
-      const program = new Command().name("openclaw");
-      program.addOption(
-        new Option("--theme <value>", "Theme").choices(["Bob's green", "path\\name", "ends\\"]),
+      expect(captureChoices(["Bob's green", "path\\name", "ends\\"])).toBe(
+        "'Bob\\'s green' 'path\\\\name' 'ends\\\\'",
       );
-      const line = getCompletionScript("fish", program)
-        .split("\n")
-        .find((entry) => entry.startsWith("complete -c openclaw "));
-
-      const capture = spawnSync(
-        "bash",
-        [
-          "--noprofile",
-          "--norc",
-          "-c",
-          `complete() { while (( $# )); do if [[ "$1" == "-a" ]]; then printf '%s' "$2"; return; fi; shift; done; }\n${line}`,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(capture.status).toBe(0);
-      expect(capture.stderr).toBe("");
-      expect(capture.stdout).toBe("'Bob\\'s green' 'path\\\\name' 'ends\\\\'");
     },
   );
 
@@ -92,43 +91,15 @@ complete --do-complete 'openclaw --proof-option a'
     "keeps command-shaped Commander choices inert during completion expression parsing",
     () => {
       const marker = "OPENCLAW_FISH_CHOICE_MUST_NOT_EXECUTE";
-      const program = new Command().name("openclaw");
-      program.addOption(
-        new Option("--channel <value>", "Channel").choices([
-          "(stable)",
-          `$(printf ${marker} >&2)`,
-          "light blue",
-        ]),
-      );
-      const line = getCompletionScript("fish", program)
-        .split("\n")
-        .find((entry) => entry.startsWith("complete -c openclaw "));
-
-      const capture = spawnSync(
-        "bash",
-        [
-          "--noprofile",
-          "--norc",
-          "-c",
-          `complete() { while (( $# )); do if [[ "$1" == "-a" ]]; then printf '%s' "$2"; return; fi; shift; done; }\n${line}`,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(capture.status).toBe(0);
-      expect(capture.stderr).toBe("");
-
+      const choices = ["(stable)", `$(printf ${marker} >&2)`, "light blue"];
+      const captured = captureChoices(choices);
       const evaluation = spawnSync(
         "bash",
-        ["--noprofile", "--norc", "-c", `set -- ${capture.stdout}; printf '%s\\n' "$@"`],
+        ["--noprofile", "--norc", "-c", `set -- ${captured}; printf '%s\\n' "$@"`],
         { encoding: "utf8" },
       );
-      expect(evaluation.status).toBe(0);
-      expect(evaluation.stderr).toBe("");
-      expect(evaluation.stdout.split("\n").filter(Boolean)).toEqual([
-        "(stable)",
-        `$(printf ${marker} >&2)`,
-        "light blue",
-      ]);
+      expect(evaluation).toMatchObject({ status: 0, stderr: "" });
+      expect(evaluation.stdout.split("\n").filter(Boolean)).toEqual(choices);
     },
   );
 });

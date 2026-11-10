@@ -2,28 +2,118 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ControlUiHost,
-  ControlUiReplacement,
-} from "../../../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiReplacement } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
 import "../../../plugins/control-ui-view.solid.tsx";
+import { createInertViewHost } from "../../../plugins/control-ui-view.test-support.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import { groupMessages } from "../chat-thread-grouping.ts";
+import { collapseCompletedTurnWork } from "../chat-turn-presentation.ts";
 import { buildLocalUserMessage } from "../user-message-content.ts";
+import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
-import { prepareGroupMessage } from "./chat-message-group-frame.ts";
+import { prepareGroupMessage, prepareMessageGroupFrame } from "./chat-message-group-frame.ts";
 import {
   ActivityGroup,
   MessageGroup,
   type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { ChatTimestamp, MessageMeta } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
+
+it("adds and removes usage details on a retained plain timestamp", () => {
+  const [meta, setMeta] = createSignal<Parameters<typeof MessageMeta>[0]["meta"]>(null);
+  const view = mountSolid(() => <MessageMeta timestamp={1000} meta={meta()} />);
+  const tooltip = view.container.querySelector("openclaw-tooltip");
+  expect(view.container.querySelector(".msg-meta__details")).toBeNull();
+  setMeta({
+    input: 21,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    model: null,
+    contextPercent: null,
+  });
+  flush();
+  expect(view.container.querySelector(".msg-meta__details")?.textContent).toContain("↑21");
+  setMeta(null);
+  flush();
+  expect(view.container.querySelector(".msg-meta__details")).toBeNull();
+  expect(view.container.querySelector("openclaw-tooltip")).toBe(tooltip);
+});
+
+it("shares mobile layout only for earlier-message actions and preserves updates", () => {
+  const query =
+    "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
+  const media = Object.assign(new EventTarget(), { matches: true });
+  const matchMedia = vi.fn((value: string) =>
+    value === query ? media : Object.assign(new EventTarget(), { matches: false }),
+  );
+  vi.stubGlobal("matchMedia", matchMedia);
+  const subscribe = vi.spyOn(media, "addEventListener");
+  const unsubscribe = vi.spyOn(media, "removeEventListener");
+  const message = { role: "user", content: "First message", timestamp: 1000 };
+  const singleGroup = createMessageGroup(message, "user");
+  const single = mountSolid(() => (
+    <MessageGroup group={singleGroup} options={{ showReasoning: false, onReply: vi.fn() }} />
+  ));
+  flush();
+  expect(single.container.querySelector(".chat-message-actions-row")).toBeNull();
+  expect(matchMedia.mock.calls.filter(([value]) => value === query)).toHaveLength(0);
+  expect(subscribe).not.toHaveBeenCalled();
+  single.unmount();
+  const group = createMessageGroup(message, "user", {
+    messages: [
+      { key: "first", message },
+      { key: "second", message: { ...message, content: "Second message", timestamp: 1001 } },
+    ],
+  });
+  // AgentRunFrame always owns assistant chrome around its representative messages.
+  const frame = mountSolid(() => (
+    <MessageGroup
+      group={{ ...group, role: "assistant" }}
+      options={{ showReasoning: false, frameContent: [<span>Completed fragment</span>] }}
+    />
+  ));
+  flush();
+  expect(matchMedia.mock.calls.filter(([value]) => value === query)).toHaveLength(0);
+  frame.unmount();
+  const view = mountSolid(() => (
+    <>
+      <MessageGroup group={group} options={{ showReasoning: false, onReply: vi.fn() }} />
+      <MessageGroup
+        group={{ ...group, key: "another-group" }}
+        options={{ showReasoning: false, onReply: vi.fn() }}
+      />
+    </>
+  ));
+  try {
+    expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(0);
+    expect(view.container.querySelectorAll(".chat-message-footer")).toHaveLength(2);
+    flush();
+    expect(matchMedia.mock.calls.filter(([value]) => value === query)).toHaveLength(1);
+    expect(subscribe).toHaveBeenCalledOnce();
+    media.matches = false;
+    media.dispatchEvent(new Event("change"));
+    flush();
+    expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(2);
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(unsubscribe).not.toHaveBeenCalled();
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  } finally {
+    view.unmount();
+    vi.unstubAllGlobals();
+  }
+});
 
 it.each([false, true])(
   "does not present a partial response group as complete usage (unavailable: %s)",
@@ -115,6 +205,137 @@ it.each([
   );
 });
 
+it.each([false, true])(
+  "keeps a mixed terminal answer visible with its actions (bubble=%s)",
+  (bubbleMode) => {
+    const answer = {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "read-a", name: "read", arguments: {} },
+        { type: "toolCall", id: "read-b", name: "read", arguments: {} },
+        { type: "text", text: "Both files are correct." },
+      ],
+      timestamp: 2000,
+      __openclaw: { id: "mixed-answer", runId: "mixed-run" },
+    };
+    const messages = [
+      {
+        role: "user",
+        content: "Check the files",
+        timestamp: 1000,
+        __openclaw: { id: "prompt", runId: "mixed-run" },
+      },
+      answer,
+    ];
+    const grouped = groupMessages(
+      messages.map((message, index) => ({ kind: "message", key: String(index), message })),
+    );
+    const frame = coalesceAgentRunFrames(
+      collapseCompletedTurnWork(grouped, {
+        sessionKey: "agent:main:dashboard:mixed",
+        runWorking: false,
+        bubbleMode,
+      }),
+      { messages },
+    ).find((item) => item.kind === "agent-run-frame");
+    if (!frame) {
+      throw new Error("Missing answer frame");
+    }
+    const onReply = vi.fn();
+    const view = mountSolid(() => (
+      <AgentRunFrame
+        frame={frame}
+        options={{
+          streamOptions: { bubbleMode },
+          workPreviews: new Map(),
+          partDependencies: (part) => [part],
+          renderGroupOptions: () => ({
+            bubbleMode,
+            showReasoning: false,
+            onReply,
+            onReact: vi.fn(),
+          }),
+          isWorkExpanded: () => false,
+          onToggleWork: () => {},
+        }}
+      />
+    ));
+    flush();
+    expect(view.container.textContent).toContain("Both files are correct.");
+    const reply = view.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Reply to message"]',
+    );
+    expect(reply).not.toBeNull();
+    reply!.click();
+    expect(onReply.mock.calls[0]?.[0]).toMatchObject({
+      sourceMessageId: "mixed-answer",
+      text: "Both files are correct.",
+    });
+    expect(view.container.querySelector('button[aria-label="Copy as markdown"]')).not.toBeNull();
+    expect(view.container.querySelector(".chat-reaction-action")).not.toBeNull();
+  },
+);
+
+it.each([false, true])(
+  "keeps every settled tool-only group without reply chrome (bubble=%s)",
+  async (bubbleMode) => {
+    const tool = createMessageGroup(
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "inspect", name: "read", arguments: { path: "report.md" } },
+          { type: "toolCall", id: "check", name: "exec", arguments: { command: "git status -sb" } },
+        ],
+        timestamp: 1000,
+      },
+      "tool",
+      { runId: "poll-run" },
+    );
+    const later = createMessageGroup(
+      createToolResultMessage("later", "read", "Later operation retained", { timestamp: 1001 }),
+      "tool",
+      { key: "later-group", runId: "poll-run" },
+    );
+    const [expanded, setExpanded] = createSignal(false);
+    const view = mountSolid(() => (
+      <AgentRunFrame
+        frame={{
+          kind: "agent-run-frame",
+          key: "poll",
+          runId: "poll-run",
+          boundaryId: "send:poll-run",
+          outcome: { kind: "completed", actionOwner: null },
+          parts: [tool, later],
+        }}
+        options={{
+          streamOptions: { bubbleMode },
+          workPreviews: new Map(),
+          partDependencies: (part) => [part],
+          renderGroupOptions: () => ({
+            showReasoning: false,
+            showToolCalls: true,
+            assistantName: "Assistant",
+            bubbleMode,
+            isToolMessageExpanded: () => expanded(),
+            onToggleToolMessageExpanded: () => setExpanded(true),
+          }),
+          isWorkExpanded: () => false,
+          onToggleWork: () => {},
+        }}
+      />
+    ));
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".chat-activity-group__summary")).not.toBeNull(),
+    );
+    expect(view.container.querySelector(".chat-avatar-slot")).toBeNull();
+    expect(view.container.querySelector(".chat-group-footer")).toBeNull();
+    view.container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!.click();
+    await waitForSolid(() =>
+      expect(view.container.textContent).toContain("Later operation retained"),
+    );
+  },
+);
+
 it("does not give provider speech unframed answer actions", () => {
   const speech = {
     role: "assistant",
@@ -131,6 +352,21 @@ it("does not give provider speech unframed answer actions", () => {
   expect(prepared.ownsActions).toBe(false);
   expect(prepared.actions?.replyTarget).toBeUndefined();
   expect(prepared.source.displayMarkdown).toBe(speech.content);
+});
+
+it("paints every right-side user turn with the viewer accent and only peers with identity hues", () => {
+  const profile = (id: string) => ({ id, name: id, identity: { type: "profile" as const, id } });
+  // [sender, viewer profile, peer]; without a viewer profile every user turn is the viewer's.
+  for (const [sender, userId, peer] of [
+    [profile("viewer"), "viewer", false],
+    [profile("peer"), "viewer", true],
+    [{ id: "pat@example.com" }, undefined, false],
+    [profile("viewer"), undefined, false],
+  ] as const) {
+    const group = createMessageGroup({ role: "user", content: "Hi" }, "user", { sender });
+    const frame = prepareMessageGroupFrame(group, { showReasoning: false, userId });
+    expect([frame.isPeerGroup, frame.senderHue !== null]).toEqual([peer, peer]);
+  }
 });
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
@@ -180,7 +416,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   expect(avatars[0]).not.toBe(avatars[1]);
   avatars.forEach((avatar, index) => {
     expect(avatar.closest(".chat-bubble")).toBe(bubbles[index]);
-    expect(avatar.querySelector('[aria-label="Peer"]')).not.toBeNull();
+    expect(avatar.getAttribute("aria-label")).toBe("Peer");
   });
   const control = view.getByRole("button", { name: "Open image Peer image" });
   const image = control.querySelector("img")!;
@@ -213,7 +449,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   expect(updatedAvatars).toHaveLength(2);
   expect(updatedAvatars[0]).not.toBe(updatedAvatars[1]);
   expect(
-    updatedAvatars.every((avatar) => avatar.querySelector('[aria-label="Peer Updated"]') !== null),
+    updatedAvatars.every((avatar) => avatar.getAttribute("aria-label") === "Peer Updated"),
   ).toBe(true);
 });
 
@@ -242,7 +478,7 @@ it("retains aggregate disclosure and legacy card focus when options refresh", as
   ));
   await waitForSolid(() => {
     expect(
-      view.container.querySelectorAll(".chat-tools-inline .chat-tool-msg-collapse"),
+      view.container.querySelectorAll(".chat-tools-inline .chat-tool-row:not([aria-busy])"),
     ).toHaveLength(2);
   });
   const summary = view.container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!;
@@ -265,22 +501,17 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const listeners = new Set<() => void>();
   const abort = new AbortController();
   // SAFETY: This mounted-view fixture supplies the service objects scoped by the host; it never calls their methods.
-  const pluginHost = {
-    signal: abort.signal,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as ControlUiHost;
+  const pluginHost = createInertViewHost(abort.signal);
   let selected: ControlUiReplacement | undefined;
   const reportError = vi.fn();
   const plugins: ControlUiPluginCapability = {
     errors: [],
     hasPlugins: true,
+    revision: 0,
     registryStatus: "complete",
     canReload: false,
     isLoading: () => false,
+    inlineViewLabel: () => undefined,
     reload: async () => undefined,
     refresh: async () => undefined,
     registrations: () => [],
@@ -475,7 +706,7 @@ describe("owned message controls", () => {
       />
     ));
     const disclosure = view.container.querySelector<HTMLDetailsElement>(
-      ".chat-context-attachment",
+      "details.chat-context-attachment",
     )!;
     expect(disclosure).not.toBeNull();
     disclosure.open = true;
@@ -538,6 +769,87 @@ describe("owned message controls", () => {
   });
 });
 
+it("prepares the detailed timestamp only when metadata exposes its label", () => {
+  const title = new Date(1000).toLocaleString([], {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+  });
+  const clock = vi.spyOn(Date, "now").mockReturnValue(9_000_000_000_000);
+  const calendarFormat = vi.spyOn(Intl, "DateTimeFormat");
+  const [metadata, setMetadata] = createSignal(false);
+  const view = mountSolid(() => (
+    <ChatTimestamp timestamp={1000} metadata={metadata() ? [<span>Usage</span>] : undefined} />
+  ));
+  try {
+    expect(calendarFormat.mock.calls.filter(([, options]) => options?.weekday)).toHaveLength(0);
+    setMetadata(true);
+    flush();
+    expect(view.getByRole("button").getAttribute("aria-label")).toContain(title);
+    expect(calendarFormat.mock.calls.filter(([, options]) => options?.weekday)).toHaveLength(1);
+  } finally {
+    view.unmount();
+    calendarFormat.mockRestore();
+    clock.mockRestore();
+  }
+});
+
+it("shares timestamp formatting across scroll tasks and refreshes it the next minute", async () => {
+  const timestamp = 8_000_000_000_000;
+  const older = timestamp - 10 * 24 * 60 * 60 * 1000;
+  const previousYear = new Date(older);
+  previousYear.setFullYear(previousYear.getFullYear() - 1);
+  const dateLabels = [new Date(older), previousYear].map((date) =>
+    date.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      ...(date.getFullYear() === new Date(timestamp).getFullYear() ? {} : { year: "numeric" }),
+    }),
+  );
+  const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
+  const formatter = vi.spyOn(Intl, "DateTimeFormat");
+  const nativeDate = vi.spyOn(Date.prototype, "toLocaleDateString");
+  const nativeTime = vi.spyOn(Date.prototype, "toLocaleString");
+  const views: ReturnType<typeof mountSolid>[] = [];
+  try {
+    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp} />));
+    await Promise.resolve();
+    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp + 1000} />));
+    expect(formatter).toHaveBeenCalledTimes(1);
+    expect(views[0]!.container.querySelector("time")?.dateTime).toBe(
+      new Date(timestamp).toISOString(),
+    );
+    views.push(
+      mountSolid(() => <ChatTimestamp timestamp={older} metadata={[<span>Usage</span>]} />),
+    );
+    views.push(
+      mountSolid(() => (
+        <ChatTimestamp timestamp={previousYear.getTime()} metadata={[<span>Usage</span>]} />
+      )),
+    );
+    expect(formatter).toHaveBeenCalledTimes(4);
+    expect(views.slice(2).map((view) => view.container.querySelector("time")?.textContent)).toEqual(
+      dateLabels,
+    );
+    expect(nativeDate).not.toHaveBeenCalled();
+    expect(nativeTime).not.toHaveBeenCalled();
+    clock.mockReturnValue(timestamp + 60_000);
+    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp + 2000} />));
+    expect(formatter).toHaveBeenCalledTimes(5);
+  } finally {
+    views.forEach((view) => view.unmount());
+    formatter.mockRestore();
+    nativeDate.mockRestore();
+    nativeTime.mockRestore();
+    clock.mockRestore();
+  }
+});
+
 it("leaves timestamp attributes untouched when only message usage changes", () => {
   const calendarFormat = vi.spyOn(Date.prototype, "toLocaleString");
   const clock = vi.spyOn(Date, "now").mockReturnValue(301_000);
@@ -574,7 +886,7 @@ it("leaves timestamp attributes untouched when only message usage changes", () =
   flush();
   expect(view.container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑200");
   expect(time.dateTime).toBe("1970-01-01T00:00:01.000Z");
-  expect(time.textContent).toBe("6m ago");
+  expect(time.textContent).toBe("5m ago");
   expect(observer.takeRecords()).toEqual([]);
   observer.disconnect();
   clock.mockRestore();

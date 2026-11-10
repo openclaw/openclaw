@@ -26,6 +26,7 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import * as gatewayScope from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createReplyOperation as createControllerOperation,
   getSessionControllerOperation,
@@ -208,6 +209,33 @@ function resolveState(
   });
 }
 
+it("captures the page Gateway binding once while checking each source's live ownership", () => {
+  rpcSourceTesting.clear();
+  const resolver = () => undefined;
+  const runs = Array.from({ length: 34 }, (_, index) => {
+    const run = makeRun(`page-scope-${index}`);
+    const registration = registerChatRun(run.sessionKey, run.sessionId, run.runId);
+    bindGatewayContextResolver(registration.entry!.input, resolver);
+    return run;
+  });
+  using ownershipReads = vi.spyOn(gatewayScope, "hasGatewayContextOwner");
+  using bindingReads = vi.spyOn(gatewayScope, "getCanonicalGatewayContextResolver");
+  const projector = createVisibleActiveSessionRunProjector(undefined, undefined, resolver);
+  for (const run of runs) {
+    expect(
+      projector({
+        storePath,
+        requestedKey: run.sessionKey,
+        canonicalKey: run.sessionKey,
+        sessionId: run.sessionId,
+        agentId: "main",
+      }),
+    ).toEqual({ active: true, runIds: [run.runId], status: "queued" });
+  }
+  expect(bindingReads).toHaveBeenCalledTimes(1);
+  expect(ownershipReads).toHaveBeenCalledTimes(runs.length);
+});
+
 it("projects an accepted source before its exact controller claim starts", async () => {
   const { sessionKey, sessionId, runId } = makeRun("queued");
   rpcSourceTesting.clear();
@@ -349,6 +377,10 @@ it.each(["rpc", "native"] as const)(
         active: false,
         runIds: [],
       });
+      if (operation) {
+        bindGatewayContextResolver(operation, () => undefined);
+        expect(project(selection)).toEqual({ active: false, runIds: [] });
+      }
     } finally {
       operation?.complete();
       rpcSourceTesting.clear();
@@ -489,7 +521,6 @@ it("projects native lifecycle snapshots and admits the next backend after produc
       buildGatewaySessionSnapshot({
         sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 1, status: "done" },
         activeRunState: state(),
-        includeSession: true,
       }),
     ).toMatchObject({ status, hasActiveRun, session: { status, hasActiveRun } });
   const operation = run.reply();
@@ -527,7 +558,6 @@ it("preserves an independent running worker over a queued native snapshot", asyn
     buildGatewaySessionSnapshot({
       sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 1, status: "done" },
       activeRunState: resolveState(sessionKey, { sessionId }),
-      includeSession: true,
     });
   registerAgentRunContext("worker-overlap-run", {
     projectSessionActive: true,
@@ -780,6 +810,14 @@ it.each(["store", "Gateway"] as const)(
       bindGatewayContextResolver(source.input.claim!.operation!, resolver);
     }
     expect(resolveState(sessionKey, { sessionId })).toEqual({ active: false, runIds: [] });
+    expect(
+      createVisibleActiveSessionRunProjector()({
+        storePath,
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      }),
+    ).toEqual({ active: false, runIds: [] });
     expect(hasRegisteredChatRunForSessionKey({ storePath, sessionKey, agentId: "main" })).toBe(
       false,
     );
@@ -854,7 +892,6 @@ it("preserves the completed foreground row while hidden embedded maintenance rem
         runtimeMs: 273_418,
       },
       activeRunState: state(),
-      includeSession: true,
     });
   let settled = false;
   const cleanup = waitForSessionRunEnd(sessionId, null).then((ended) => {

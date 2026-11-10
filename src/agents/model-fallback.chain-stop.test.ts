@@ -1,16 +1,19 @@
 import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
 import { loggingState } from "../logging/state.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
+import { SkillResourceDeliveryLimitError } from "../skills/runtime/resource-delivery-error.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
-import { resolveEmbeddedRunAttemptTerminalState } from "./embedded-agent-runner/run/terminal-outcome.js";
-import { resolveEmbeddedRunTerminalTimeout } from "./embedded-agent-runner/run/terminal-timeout.js";
 import { FailoverError } from "./failover-error.js";
-import { AgentHarnessPreflightError } from "./harness/errors.js";
+import {
+  AgentHarnessPreflightError,
+  AgentHarnessSessionSupersededError,
+} from "./harness/errors.js";
 import { type ModelFallbackStepHandler, runFallbackAttempt } from "./model-fallback-attempt.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
@@ -20,7 +23,6 @@ import {
   createAgentRunRestartAbortError,
 } from "./run-termination.js";
 import { toSandboxProvisioningError } from "./sandbox/provisioning-error.js";
-import { makeEmbeddedRunnerAttempt } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
 vi.mock("../plugins/provider-failover.js", () => ({
   classifyProviderFailoverSignalWithPlugin: () => undefined,
@@ -96,6 +98,7 @@ const stopCases: Array<{
   reason: string;
   make: () => StopInput | Promise<StopInput>;
   image?: boolean;
+  classified?: boolean;
 }> = [
   { reason: "agent_run_terminal_timeout", make: () => ({ error: terminalTimeout() }) },
   {
@@ -130,6 +133,28 @@ const stopCases: Array<{
     make: () => ({ error: createSessionPlacementSettlementClosedAbortError() }),
   },
   { reason: "terminal_abort_wrapper", make: async () => ({ error: await terminalAbortWrapper() }) },
+  ...[
+    {
+      reason: "local_runtime_coordination",
+      make: () => ({ error: new SkillResourceDeliveryLimitError() }),
+    },
+    {
+      reason: "local_runtime_coordination",
+      make: () => ({
+        error: new Error("skill preparation failed", {
+          cause: new SkillResourceDeliveryLimitError(),
+        }),
+      }),
+    },
+    {
+      reason: "local_runtime_coordination",
+      make: () => ({ error: new AgentHarnessSessionSupersededError("private supersede detail") }),
+    },
+    {
+      reason: "transcript_not_continuable",
+      make: () => ({ error: new TranscriptNotContinuableError("assistant") }),
+    },
+  ].flatMap((row) => [row, { ...row, classified: true }]),
 ];
 
 it("preserves an idle-breaker result without reporting fallback success or trying another model", async () => {
@@ -159,41 +184,10 @@ it("preserves an idle-breaker result without reporting fallback success or tryin
 });
 
 it("does not attribute a returned timeout to a deduplicated single-candidate chain", async () => {
-  const attempt = makeEmbeddedRunnerAttempt({
-    terminal: { kind: "timeout", phase: "prompt", source: "run_budget", aborted: true },
-  });
-  const run = vi.fn(async () =>
-    resolveEmbeddedRunTerminalTimeout({
-      terminalPrepared: {
-        replyDeliveryState: "missing",
-        sourceReplyDeliveryState: "missing",
-        preparedTerminalReply: { text: "", terminalReply: { disposition: "empty" } },
-        reportedModelRef: { provider: "runtime-provider", model: "runtime-model" },
-        finalAssistantVisibleText: "",
-        finalAssistantRawText: undefined,
-        finalAssistantMessageRawText: undefined,
-        timedOutDuringPrompt: true,
-        recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
-        hasSuccessfulFinalAssistantAfterPromptTimeout: false,
-        hasPartialAssistantTextAfterPromptTimeout: false,
-        payloads: [],
-        payloadsWithToolMedia: [],
-        agentMeta: {
-          sessionId: "chain-stop-session",
-          provider: "runtime-provider",
-          model: "runtime-model",
-        },
-        attemptToolSummary: undefined,
-        failureSignal: undefined,
-        terminalToolFailure: undefined,
-      },
-      attempt,
-      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant: undefined }),
-      resolveReplayInvalid: () => false,
-      setTerminalLifecycleMeta: vi.fn(),
-      startedAtMs: Date.now(),
-    }),
-  );
+  const agentMeta = { provider: "runtime-provider", model: "runtime-model" };
+  const run = vi.fn(async () => ({
+    meta: { agentMeta, modelFallbackStopReason: "agent_run_terminal_timeout" },
+  }));
   const result = await runWithModelFallback({
     ...fallbackOptions,
     fallbacksOverride: ["fixture-primary/fixture-model"],
@@ -201,20 +195,22 @@ it("does not attribute a returned timeout to a deduplicated single-candidate cha
     classifyResult: () => ({ stopReason: "agent_run_terminal_timeout" }),
   });
   expect(run).toHaveBeenCalledOnce();
-  expect(result.result?.meta.agentMeta).toMatchObject({
-    provider: "runtime-provider",
-    model: "runtime-model",
-  });
+  expect(result.result.meta.agentMeta).toEqual(agentMeta);
   await capture.flush();
   expect(fallbackRecords()).toHaveLength(0);
 });
 
 it.each(stopCases)(
-  "records $reason once without replacing or retrying the failure",
+  "records $reason (classified=$classified) once without replacing or retrying the failure",
   async (row) => {
     const { error, abortSignal } = await row.make();
     Object.freeze(error);
-    const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("must not run");
+    const run = vi.fn().mockResolvedValue("must not run");
+    if (row.classified) {
+      run.mockResolvedValueOnce("unusable result");
+    } else {
+      run.mockRejectedValueOnce(error);
+    }
     const onError = vi.fn();
     const onFallbackStep = vi.fn<ModelFallbackStepHandler>();
     const result = row.image
@@ -223,7 +219,14 @@ it.each(stopCases)(
           run,
           onError,
         })
-      : runWithModelFallback({ ...fallbackOptions, run, onError, onFallbackStep, abortSignal });
+      : runWithModelFallback({
+          ...fallbackOptions,
+          run,
+          onError,
+          onFallbackStep,
+          abortSignal,
+          classifyResult: row.classified ? () => ({ error }) : undefined,
+        });
     await expect(result).rejects.toBe(error);
     expect(run).toHaveBeenCalledOnce();
     expect(onError).not.toHaveBeenCalled();
@@ -245,6 +248,7 @@ it.each(stopCases)(
       expect(records[0]?.attributes).not.toHaveProperty("errorName");
     }
     expect(JSON.stringify(records)).not.toContain(error.message);
+    expect(warn.mock.calls.flat().join(" ")).toContain(`reason=${row.reason}`);
   },
 );
 

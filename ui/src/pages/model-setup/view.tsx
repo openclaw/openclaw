@@ -1,14 +1,19 @@
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { createDeferred } from "@solidjs/signals";
+import { createMemo, Errored, For, isPending, Loading, Match, Show, Switch } from "solid-js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { LearnMoreLink, SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
+import "../../styles/model-setup.css";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { JSX } from "../../types/solid-elements.js";
-import "../../styles/model-setup.css";
 import {
   renderMutationMessage,
   ModelProviderConnectAction,
@@ -21,12 +26,15 @@ import {
 } from "./configured-model.tsx";
 import { renderModelSetupLoading } from "./loading-view.tsx";
 import { renderProviderIcon } from "./model-setup-icon-loader.tsx";
+import { formatModelSetupError } from "./model-setup-task-result.ts";
 import { NativeModelSetupView } from "./native-model-setup.tsx";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderName, ManualProviderPicker } from "./provider-picker.tsx";
 import { ModelSetupSuccessDialog } from "./success-dialog.tsx";
 import type { ModelSetupViewProps } from "./view-types.ts";
 import { ModelSetupWizard } from "./wizard-view-solid.tsx";
+
+registerRouteSubtitlesEnglish();
 
 registerModelSetupEnglish();
 
@@ -48,20 +56,20 @@ function EmptyState(props: ModelSetupViewProps & { result: SystemAgentSetupDetec
   return (
     <Show when={visible()}>
       <section class="settings-section model-setup__empty">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.empty.title")}</h2>
-        </div>
-        <p class="muted">{t("modelSetup.empty.intro")}</p>
+        <SettingsSectionHeader
+          title={t("modelSetup.empty.title")}
+          description={t("modelSetup.empty.intro")}
+        />
         <div class="model-setup__recommendations">
-          <For each={installs()}>
+          <For each={installs()} keyed={(install) => install.id}>
             {(install) => (
-              <div class="model-setup__recommendation" data-recommended-install={install.id}>
-                {renderProviderIcon(props, install, "model-setup__icon--recommendation")}
+              <div class="model-setup__recommendation" data-recommended-install={install().id}>
+                {renderProviderIcon(props, install(), "model-setup__icon--recommendation")}
                 <div class="model-setup__row-main">
-                  <strong>{install.label}</strong>
-                  <div class="muted">{install.hint}</div>
-                  <a href={install.website} target="_blank" rel="noopener">
-                    {install.website}
+                  <strong>{install().label}</strong>
+                  <div class="muted">{install().hint}</div>
+                  <a href={install().website} target="_blank" rel="noopener">
+                    {install().website}
                   </a>
                 </div>
               </div>
@@ -142,12 +150,14 @@ function SignIn(props: ModelSetupViewProps & { result: SystemAgentSetupDetectRes
   return (
     <Show when={options().length > 0}>
       <section class="settings-section">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.signIn.title")}</h2>
-          <p>{t("modelSetup.signIn.description")}</p>
-        </div>
+        <SettingsSectionHeader
+          title={t("modelSetup.signIn.title")}
+          description={t("modelSetup.signIn.description")}
+        />
         <div class="model-setup__rows">
-          <For each={featured()}>{(option) => <SetupActionRow view={props} option={option} />}</For>
+          <For each={featured()} keyed={(option) => option.id}>
+            {(option) => <SetupActionRow view={props} option={option()} />}
+          </For>
         </div>
         <Show when={more().length > 0}>
           <details
@@ -157,7 +167,9 @@ function SignIn(props: ModelSetupViewProps & { result: SystemAgentSetupDetectRes
           >
             <summary>{t("modelSetup.signIn.more")}</summary>
             <div class="model-setup__rows">
-              <For each={more()}>{(option) => <SetupActionRow view={props} option={option} />}</For>
+              <For each={more()} keyed={(option) => option.id}>
+                {(option) => <SetupActionRow view={props} option={option()} />}
+              </For>
             </div>
           </details>
         </Show>
@@ -171,12 +183,14 @@ function Prepare(props: ModelSetupViewProps & { result: SystemAgentSetupDetectRe
   return (
     <Show when={props.canPrepare && options().length > 0}>
       <section class="settings-section">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.prepare.title")}</h2>
-        </div>
-        <p class="muted">{t("modelSetup.prepare.intro")}</p>
+        <SettingsSectionHeader
+          title={t("modelSetup.prepare.title")}
+          description={t("modelSetup.prepare.intro")}
+        />
         <div class="model-setup__rows">
-          <For each={options()}>{(option) => <SetupActionRow view={props} option={option} />}</For>
+          <For each={options()} keyed={(option) => option.id}>
+            {(option) => <SetupActionRow view={props} option={option()} />}
+          </For>
         </div>
       </section>
     </Show>
@@ -202,9 +216,7 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
   return (
     <Show when={manualProviders().length > 0 || !props.embedded}>
       <section class="settings-section">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.manual.title")}</h2>
-        </div>
+        <SettingsSectionHeader title={t("modelSetup.manual.title")} />
         <div class="model-setup__manual">
           <div class="field">
             <span>{t("modelSetup.manual.provider")}</span>
@@ -245,9 +257,9 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
             <span>{t("modelSetup.manual.verifyHint")}</span>
           </div>
           {props.manualError ? (
-            <div id={`${manualId()}-error`} class="callout danger" role="alert">
+            <InlineAlert tone="danger" id={`${manualId()}-error`} role="alert">
               {props.manualError}
-            </div>
+            </InlineAlert>
           ) : undefined}
           <button
             type="button"
@@ -280,14 +292,13 @@ function NativeSessionDiscovery(
       }
     >
       <section class="settings-section model-setup__native-discovery">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.nativeDiscovery.title")}</h2>
-        </div>
-        <p class="muted">{t("modelSetup.nativeDiscovery.body")}</p>
+        <SettingsSectionHeader
+          title={t("modelSetup.nativeDiscovery.title")}
+          description={t("modelSetup.nativeDiscovery.body")}
+        />
         <p>{props.result.nativeSessionCatalogs?.map((option) => option.label).join(", ")}</p>
         <label>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={props.nativeSessionCatalogsEnabled === true}
             disabled={props.actionsDisabled}
             onChange={(event) => props.onNativeSessionCatalogsChange?.(event.currentTarget.checked)}
@@ -302,9 +313,9 @@ function NativeSessionDiscovery(
 
 function renderSetupAccessWarning(canAdmin: boolean) {
   return (
-    <div class="callout warning" role="note">
+    <InlineAlert tone="warning" role="note">
       {t(canAdmin ? "modelSetup.access.gatewayTooOld" : "modelSetup.access.adminRequired")}
-    </div>
+    </InlineAlert>
   );
 }
 
@@ -335,9 +346,8 @@ function Ready(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResu
   );
 }
 
-function ModelSetupBody(props: ModelSetupViewProps) {
+function ModelSetupBody(props: ModelSetupViewProps & { detection: () => null }) {
   const ready = () => (props.page.phase === "ready" ? props.page.result : undefined);
-  const error = () => (props.page.phase === "detect-error" ? props.page.message : undefined);
   return (
     <Switch>
       <Match when={ready()}>
@@ -352,37 +362,79 @@ function ModelSetupBody(props: ModelSetupViewProps) {
       <Match when={!props.canAdmin || props.gatewayTooOld}>
         {renderSetupAccessWarning(props.canAdmin)}
       </Match>
-      <Match when={props.page.phase === "loading"}>
-        {props.embedded ? (
-          <div class="model-setup__loading" role="status">
-            {t("modelSetup.loading")}
-          </div>
-        ) : (
-          renderModelSetupLoading(props.modelConfigured === true)
-        )}
-      </Match>
-      <Match when={error()}>
-        {(message) => (
-          <>
-            <div class="callout danger" role="alert">
-              {message()}
-            </div>
-            <button
-              type="button"
-              class="btn"
-              disabled={props.detecting}
-              onClick={() => props.onDetect()}
-            >
-              {t("modelSetup.retry")}
-            </button>
-          </>
-        )}
+      <Match when={props.page.phase !== "ready"}>
+        <Show keyed when={props.detectionIdentity()} fallback={<SetupLoading {...props} />}>
+          <Errored
+            fallback={(error) => (
+              <>
+                <InlineAlert tone="danger" role="alert">
+                  {formatModelSetupError(error())}
+                </InlineAlert>
+                <button
+                  type="button"
+                  class="btn"
+                  disabled={props.detecting}
+                  onClick={() => props.onDetect()}
+                >
+                  {t("modelSetup.retry")}
+                </button>
+              </>
+            )}
+          >
+            <Loading on={props.detectionIdentity()} fallback={<SetupLoading {...props} />}>
+              <Show when={!isPending(props.detection)} fallback={<SetupLoading {...props} />}>
+                {props.detection()}
+                <SetupLoading {...props} />
+              </Show>
+            </Loading>
+          </Errored>
+        </Show>
       </Match>
     </Switch>
   );
 }
 
+function SetupLoading(props: ModelSetupViewProps) {
+  return (
+    <>
+      {props.embedded ? (
+        <div class="model-setup__loading" role="status">
+          {t("modelSetup.loading")}
+        </div>
+      ) : (
+        renderModelSetupLoading(props.modelConfigured === true)
+      )}
+    </>
+  );
+}
+
+function DetectionProgress() {
+  return (
+    <div class="muted" role="status">
+      {t("modelSetup.loading")}
+    </div>
+  );
+}
+
 export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
+  const checkAgainVisible = () =>
+    props.page.phase === "ready" &&
+    (props.embedded || !props.page.result.configuredModel) &&
+    props.activation.phase !== "success" &&
+    props.canAdmin &&
+    !props.gatewayTooOld;
+  const checkAgainLabel = () =>
+    t(props.detecting ? "modelSetup.verify.checkingButton" : "modelSetup.checkAgain");
+  // Retain accepted forms without holding synchronous owner and busy publications.
+  const detection: () => null = createDeferred(
+    () =>
+      props.detectionIdentity()?.completion.then((outcome) => {
+        if (outcome && "error" in outcome) {
+          throw outcome.error;
+        }
+        return null;
+      }) ?? null,
+  );
   const content = (
     <div
       class="model-setup"
@@ -390,19 +442,11 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
     >
       <div class="model-setup__intro">
         <div>
-          {props.embedded ? (
-            <>
-              {" "}
-              <h2>{t("modelSetup.discovery.title")}</h2>
-              <p>{t("modelSetup.discovery.description", { agent: props.agentLabel ?? "" })}</p>{" "}
-            </>
-          ) : (
-            <>
-              {" "}
-              <h1>{t("modelSetup.heading")}</h1>
-              <p>{t("modelSetup.intro")}</p>{" "}
-            </>
-          )}
+          {/* An embedded view gets its title and description from the dialog. */}
+          <Show when={!props.embedded}>
+            <h1>{t("modelSetup.heading")}</h1>
+            <p>{t("modelSetup.intro")}</p>
+          </Show>
         </div>
         <Show when={Boolean(props.connection)}>
           <ModelProviderConnectAction
@@ -413,32 +457,36 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
             primary
           />
         </Show>
-        <Show
-          when={
-            props.page.phase === "ready" &&
-            (props.embedded || !props.page.result.configuredModel) &&
-            props.activation.phase !== "success" &&
-            props.canAdmin &&
-            !props.gatewayTooOld
-          }
+        <button
+          type="button"
+          class="btn"
+          aria-label={checkAgainLabel()}
+          aria-hidden={checkAgainVisible() ? undefined : "true"}
+          style={{
+            display: "inline-grid",
+            "grid-template-areas": '"label"',
+            visibility: checkAgainVisible() ? undefined : "hidden",
+          }}
+          disabled={!checkAgainVisible() || props.actionsDisabled || props.detecting}
+          onClick={() => props.onDetect()}
         >
-          <button
-            type="button"
-            class="btn"
-            disabled={props.actionsDisabled || props.detecting}
-            onClick={() => props.onDetect()}
-          >
-            {props.detecting ? t("modelSetup.verify.checkingButton") : t("modelSetup.checkAgain")}
-          </button>
-        </Show>
+          {/* Both translations reserve the action's footprint without entering its name. */}
+          <span aria-hidden="true" style={{ "grid-area": "label", visibility: "hidden" }}>
+            {t("modelSetup.checkAgain")}
+          </span>
+          <span aria-hidden="true" style={{ "grid-area": "label", visibility: "hidden" }}>
+            {t("modelSetup.verify.checkingButton")}
+          </span>
+          <span style={{ "grid-area": "label" }}>{checkAgainLabel()}</span>
+        </button>
       </div>
       {props.canAdmin && !props.gatewayTooOld
         ? renderActivationFeedback(props.activation, props.onFeedback)
         : undefined}
       {props.refreshWarning ? (
-        <div class="callout warning" role="alert">
+        <InlineAlert tone="warning" role="alert">
           {props.refreshWarning}
-        </div>
+        </InlineAlert>
       ) : undefined}
       <Show
         when={Boolean(
@@ -467,17 +515,24 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
         </div>
       </Show>
       {renderMutationMessage(props.connection?.loginMessage)}
-      {props.detectionError ? (
-        <div class="callout warning" role="alert">
-          {props.detectionError}
-        </div>
-      ) : undefined}
-      {props.detecting && props.page.phase === "ready" ? (
-        <div class="muted" role="status">
-          {t("modelSetup.loading")}
-        </div>
-      ) : undefined}
-      <ModelSetupBody {...props} />
+      <Show when={props.page.phase === "ready"}>
+        <Show keyed when={props.detectionIdentity()}>
+          <Errored
+            fallback={(error) => (
+              <InlineAlert tone="warning" role="alert">
+                {formatModelSetupError(error())}
+              </InlineAlert>
+            )}
+          >
+            <Loading on={props.detectionIdentity()} fallback={<DetectionProgress />}>
+              <Show when={isPending(detection)} fallback={detection()}>
+                <DetectionProgress />
+              </Show>
+            </Loading>
+          </Errored>
+        </Show>
+      </Show>
+      <ModelSetupBody {...props} detection={detection} />
     </div>
   );
   const dialogs = (
@@ -488,6 +543,7 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
           onDialogRef={props.onWizardDialog}
           mode={props.wizardMode}
           state={props.wizard}
+          busy={props.wizardBusy}
           refreshWarning={props.refreshWarning}
           cancellationNotice={props.cancellationNotice}
           value={props.wizardValue}
@@ -497,8 +553,8 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
           onClose={props.onWizardClose}
         />
       </div>
-      <Show when={props.activation.phase === "success" ? props.activation : undefined}>
-        {(activation) => <ModelSetupSuccessDialog {...props} activation={activation()} />}
+      <Show when={props.activation.phase === "success" ? props.activation : undefined} keyed>
+        {(activation) => <ModelSetupSuccessDialog {...props} activation={activation} />}
       </Show>
     </>
   );
@@ -544,13 +600,22 @@ function EmbeddedModelSetup(props: {
           event.target === event.currentTarget ? props.view.onDiscoveryShown?.() : undefined
         }
       >
-        <div class="model-setup-wizard model-setup-discovery">
-          <div class="model-setup-wizard__body">{props.content}</div>
-          <openclaw-modal-actions class="model-setup-wizard__footer">
-            <button class="btn" onClick={() => props.view.onClose?.()}>
-              {t("common.close")}
-            </button>
-          </openclaw-modal-actions>
+        <div class="oc-dialog model-setup-wizard model-setup-discovery">
+          <div class="oc-dialog__header">
+            <h2 class="oc-dialog__title">{t("modelSetup.discovery.title")}</h2>
+            <IconButton
+              size={28}
+              class="oc-dialog__close"
+              icon="x"
+              label={t("common.close")}
+              tooltip={false}
+              onClick={() => props.view.onClose?.()}
+            />
+            <div class="oc-dialog__description">
+              <p>{t("modelSetup.discovery.description", { agent: props.view.agentLabel ?? "" })}</p>
+            </div>
+          </div>
+          <div class="oc-dialog__body model-setup-wizard__body">{props.content}</div>
         </div>
       </openclaw-modal-dialog>{" "}
     </>

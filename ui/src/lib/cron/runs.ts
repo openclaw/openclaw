@@ -17,7 +17,6 @@ export function clearCronRunsPage(state: CronState) {
   cronRunsViews.delete(state);
   state.cronRunsError = null;
   state.cronRuns = [];
-  state.cronRunsTotal = 0;
   state.cronRunsHasMore = false;
   state.cronRunsNextOffset = null;
 }
@@ -91,7 +90,12 @@ export async function loadCronRuns(
   opts?: { append?: boolean; coalesce?: boolean },
 ): Promise<CronRunsLoadStatus> {
   const client = state.client;
-  if (!client || !state.connected || state.canRefresh?.() === false) {
+  if (
+    !client ||
+    !state.connected ||
+    state.canRefresh?.() === false ||
+    state.canRefreshRuns?.() === false
+  ) {
     return "skipped";
   }
   const scope = state.cronRunsScope;
@@ -162,7 +166,6 @@ export async function loadCronRuns(
     cronRunsViews.set(state, request);
     state.cronRunsError = null;
     state.cronRuns = append ? [...state.cronRuns, ...res.entries] : res.entries;
-    state.cronRunsTotal = Math.max(res.total, state.cronRuns.length);
     state.cronRunsHasMore = res.hasMore;
     state.cronRunsNextOffset = res.nextOffset;
     return "ok";
@@ -187,7 +190,7 @@ export async function loadCronRuns(
   }
 }
 
-export function loadCronRunsForJob(
+export function selectCronRunsForJob(
   state: CronState,
   jobId: string | null,
   runId: string | null = null,
@@ -204,7 +207,10 @@ export function loadCronRunsForJob(
     });
   }
   state.cronRunsJobId = jobId;
-  return loadCronRuns(state);
+  const view = cronRunsViews.get(state);
+  if (!view || !matchesCronRunsView(state, view)) {
+    clearCronRunsPage(state);
+  }
 }
 
 export function updateCronRunsFilter(

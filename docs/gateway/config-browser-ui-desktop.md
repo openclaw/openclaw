@@ -145,7 +145,7 @@ For the full key index and the other top-level config domains, see [Configuratio
     prefs: {
       theme: "claw", // claw | knot | dash | absolutely | tide | beacon | phosphor | crt | manuscript | rose | miami | custom
       themeMode: "system", // light | dark | system
-      locale: "en",
+      locale: "en", // Control UI language; omit to follow the browser language
       chatShowThinking: true,
       chatShowToolCalls: true,
       chatPersistCommentary: true, // Keep commentary after runs in Control UI; does not deliver it to channels
@@ -170,6 +170,9 @@ Agent display names, emoji, and avatars belong to each agent's `identity` block 
   explicitly read-only connection keeps edits in that browser without attempting
   a config write. Offline edits remain queued for a later writable connection and
   continue as browser-local preferences while reconnected read-only.
+  `locale` is the Control UI language, edited in Settings → Appearance → Language;
+  leave it unset to follow the browser or system language. It does not set the
+  assistant's timezone (`agents.defaults.userTimezone`).
   `chatPersistCommentary` defaults to `true`. Setting it to `false` keeps live
   commentary visible during a run but removes it at completion and prevents new
   Codex commentary from entering the durable transcript mirror. Messaging-channel
@@ -196,7 +199,10 @@ Desktop without restarting the Gateway; the desktop becomes available on the
 same connection. Gateway administrator access is required. Detection does not
 expose the desktop or change system permissions. Existing managed Linux desktops
 can be enabled from the same view. **Settings → Labs → Host Desktop** remains
-available to turn access off or manage it separately.
+available to turn access off or manage it separately. When a chat session's
+Desktop panel targets the Gateway host and Host Desktop is off, the panel shows
+the same check, setup steps, and enable action, then re-checks and connects once
+Host Desktop is available.
 
 Enabling macOS Screen Sharing, a paired node's Desktop sharing, or screenshot
 capture alone does not enable the Gateway's desktop. On macOS, Remote Management

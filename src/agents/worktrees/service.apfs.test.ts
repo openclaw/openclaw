@@ -10,6 +10,7 @@ import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import {
   ageManagedWorktreeTemplates,
+  git,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import { listTemplatesAsync } from "./template-registry-async.js";
@@ -17,9 +18,6 @@ import { listTemplatesAsync } from "./template-registry-async.js";
 const read = (root: string, file: string) => fs.readFile(path.join(root, file), "utf8");
 
 const execFileAsync = promisify(execFile);
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
 
 async function readAcl(file: string): Promise<string[]> {
   const { stdout } = await execFileAsync("/bin/ls", ["-lde", file]);
@@ -214,9 +212,10 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     await git(repo, "commit", "-m", "invalidate template");
     const third = await create("third");
     expect(await read(third.path, "README.md")).toBe("new source\n");
-    expect((await listTemplatesAsync(env))[0]?.sourceCommit).toBe(
-      await git(repo, "rev-parse", "HEAD"),
-    );
+    expect(
+      (await listTemplatesAsync(env)).find((record) => record.cacheKey === template.cacheKey)
+        ?.sourceCommit,
+    ).toBe(await git(repo, "rev-parse", "HEAD"));
     await ageManagedWorktreeTemplates(env, Date.now() - IDLE_GC_MS - 1);
     expect((await service.gc()).removed).toEqual([]);
     expect(await listTemplatesAsync(env)).toEqual([]);

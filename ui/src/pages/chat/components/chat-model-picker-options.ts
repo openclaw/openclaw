@@ -1,12 +1,18 @@
-import { formatRawProviderLabel, providerDisplayLabel } from "../../../components/provider-icon.ts";
+import type { ModelCatalogEntry } from "../../../api/types.ts";
+import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
+import {
+  formatRawProviderLabel,
+  providerDisplayLabel,
+} from "../../../components/provider-icon-data.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
-import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
 
 registerModelControlsEnglish();
 
 export type ChatModelPickerOption = {
+  /** Configured provider branding from the admitted catalog row. */
+  presentation?: ProviderPresentation;
   agentRuntimeId?: string;
   /** Null is an unknown configured base; undefined is an ordinary model-only row. Both clear a prior pin. */
   agentRuntime?: string | null;
@@ -16,7 +22,7 @@ export type ChatModelPickerOption = {
   contextTokens?: number;
   contextWindow?: number;
   disabled?: boolean;
-  unavailableReason?: ModelRuntimeEntry["unavailableReason"];
+  unavailableReason?: ModelCatalogEntry["unavailableReason"];
   isDefault: boolean;
   label: string;
   provider: string;
@@ -41,30 +47,39 @@ export function isModelPickerOptionSelected(
   );
 }
 
-export function formatModelContextMeta(option: ChatModelPickerOption): string {
+export function formatModelContextMeta(
+  option: ChatModelPickerOption,
+  translate: typeof t = t,
+): string {
   const active = option.contextTokens;
   const maximum = option.contextWindow;
-  if (active && maximum && active !== maximum) {
-    return t("chat.modelControls.contextActiveAndMax", {
-      active: formatContextTokenCapacity(active),
-      maximum: formatContextTokenCapacity(maximum),
+  if (active && maximum && active < maximum) {
+    return translate("chat.modelControls.contextActiveAndMax", {
+      active: formatContextTokenCapacity(active, 0),
+      maximum: formatContextTokenCapacity(maximum, 0),
     });
   }
-  return maximum ? formatContextTokenCapacity(maximum) : "";
+  const capacity = active || maximum;
+  return capacity ? formatContextTokenCapacity(capacity, 0) : "";
 }
 
+/** Owners omit completed empty groups; a published group has rows or an active receipt. */
 export type ChatModelPickerTargetGroup = {
   errorLabel: string;
   id: string;
   label: string;
+  /** Accepted rows stay synchronous for search, shortcuts, and account offsets. */
   options: readonly { label: string; value: string }[];
-  status: "loading" | "ready" | "error";
+  /** The box keys the boundary without unwrapping its promise outside Loading. */
+  completion: { promise: Promise<ChatModelPickerTargetGroup["options"]> };
 };
 
-export function formatModelLabel(option: ChatModelPickerOption): string {
+export function formatModelLabel(
+  option: Pick<ChatModelPickerOption, "label" | "provider" | "presentation">,
+): string {
   const prefixes = [
     formatRawProviderLabel(option.provider),
-    providerDisplayLabel(option.provider),
+    providerDisplayLabel(option.provider, option.presentation),
   ].toSorted((left, right) => right.length - left.length);
   for (const prefix of prefixes) {
     if (option.label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {

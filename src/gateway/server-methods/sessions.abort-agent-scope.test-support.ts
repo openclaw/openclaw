@@ -34,10 +34,6 @@ export function createActiveRun(
 type ActiveRun = ReturnType<typeof createActiveRun>;
 type LegacyTestAgentConfig = { id: string; default?: boolean };
 
-function createDefaultAgents(): LegacyTestAgentConfig[] {
-  return [{ id: "main", default: true }, { id: "work" }];
-}
-
 export function createContext(
   options: {
     activeRuns?: ReadonlyArray<readonly [string, ActiveRun]>;
@@ -47,7 +43,7 @@ export function createContext(
   } = {},
 ): GatewayRequestContext {
   const cfg = createCanonicalAgentConfigFixture({
-    agents: { list: options.agents ?? createDefaultAgents() },
+    agents: { list: options.agents ?? [{ id: "main", default: true }, { id: "work" }] },
     ...(options.globalScope ? { session: { scope: "global" as const } } : {}),
   }).config;
   rpcSourceTesting.reset(options.activeRuns);
@@ -78,6 +74,16 @@ export function fixtureStorePath(agentId = "main") {
   return "/synthetic/agent-scope/" + agentId + "/sessions.db";
 }
 
+function finishProducer(finished: ReturnType<typeof createDeferred<void>>, cleanup: () => void) {
+  const producer = finished.promise.finally(cleanup);
+  const finish = () => finished.resolve();
+  onTestFinished(async () => {
+    finish();
+    await producer;
+  });
+  return finish;
+}
+
 export function createPhysicalOperation(
   params: Parameters<typeof createReplyOperation>[0] & { sessionKey: string },
 ) {
@@ -92,17 +98,7 @@ export function createPhysicalOperation(
   });
   const finish = createDeferred();
   operation.abortSignal.addEventListener("abort", () => finish.resolve(), { once: true });
-  const producer = (async () => {
-    try {
-      await finish.promise;
-    } finally {
-      operation.complete();
-    }
-  })();
-  onTestFinished(async () => {
-    finish.resolve();
-    await producer;
-  });
+  finishProducer(finish, () => operation.complete());
   return operation;
 }
 
@@ -142,20 +138,14 @@ export function attachActiveEmbeddedRun(
     cancelled.resolve();
   };
   registerNativeRun(sessionId, handle, sessionKey, undefined, undefined, operation);
-  const producer = (async () => {
-    try {
-      await cancelled.promise;
-    } finally {
+  nativeProducers.set(
+    handle,
+    finishProducer(cancelled, () => {
       clearNativeRun(sessionId, handle, sessionKey);
       operation.complete();
       nativeProducers.delete(handle);
-    }
-  })();
-  nativeProducers.set(handle, () => cancelled.resolve());
-  onTestFinished(async () => {
-    cancelled.resolve();
-    await producer;
-  });
+    }),
+  );
 }
 export function detachActiveEmbeddedRun(
   _sessionId: string,

@@ -329,7 +329,6 @@ test.each(["owner grant", "retained placeholder", "folded sibling", "malformed r
       await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
       expect(readRow()).toEqual({ entry_json: "{}" });
     } else {
-      await expect(deletion).rejects.toBeInstanceOf(Error);
       await expect(deletion).rejects.toThrow(
         ownerGrant
           ? "Session currency changed while awaiting its native grant"
@@ -378,79 +377,68 @@ test("sessions.delete broadcasts the removed generation after a replacement appe
   ]);
 });
 
-test("sessions.delete reports an exact-entry replacement during transcript materialization", async () => {
-  const lifecycleRevision = "materialization-race-revision";
-  const updatedAt = 1_737_600_000_000;
-  const replacement = { label: "concurrent replacement", lifecycleRevision, updatedAt };
-  const { storePath, sessionKey, sessionId } = await createStoredSession(
-    "materialization-race-run",
-    { lifecycleRevision, updatedAt },
-    "agent:main:cron:materialization-race",
-  );
-  const events = [{ type: "session" as const, id: sessionId, content: "original transcript" }];
-  await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
-  afterSessionStateMaterialization(() => {
-    replaceSessionEntrySync({ sessionKey, storePath }, sessionStoreEntry(sessionId, replacement));
-  });
-
-  const changed = await directSessionReq("sessions.delete", {
-    key: sessionKey,
-    expectedLifecycleRevision: lifecycleRevision,
-    expectedSessionId: sessionId,
-  });
-  expect(changed).toMatchObject({
-    ok: false,
-    error: {
-      message: `Session ${sessionKey} changed before deletion. Retry.`,
-      details: { reason: "session-changed" },
-    },
-  });
-
-  expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-    ...replacement,
-    sessionId,
-  });
-  await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(events);
-});
-
-test.each(["authorization", "placement"] as const)(
+test.each(["entry replacement", "authorization", "placement"] as const)(
   "sessions.delete rechecks %s after transcript materialization before committing",
   async (change) => {
-    const { storePath, sessionKey, sessionId } = await createStoredSession();
+    const lifecycleRevision = "materialization-race-revision";
+    const updatedAt = 1_737_600_000_000;
+    const replacement = { label: "concurrent replacement", lifecycleRevision, updatedAt };
+    const replacing = change === "entry replacement";
+    const { storePath, sessionKey, sessionId } = await createStoredSession(
+      replacing ? "materialization-race-run" : undefined,
+      replacing ? { lifecycleRevision, updatedAt } : undefined,
+      replacing ? "agent:main:cron:materialization-race" : undefined,
+    );
+    const target = { sessionKey, sessionId, storePath };
     const events = [{ type: "session" as const, id: sessionId, content: "preserve transcript" }];
-    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
+    await replaceTranscriptEvents(target, events);
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     let authorized = true;
     afterSessionStateMaterialization(async () => {
-      if (change === "authorization") {
+      if (change === "entry replacement") {
+        replaceSessionEntrySync(target, sessionStoreEntry(sessionId, replacement));
+      } else if (change === "authorization") {
         authorized = false;
       } else {
         await placementStore.startDispatch({ sessionId, sessionKey, agentId: "main" });
       }
     });
-    await expect(
-      directSessionReq(
-        "sessions.delete",
-        { key: sessionKey },
-        {
-          context: { workerSessionPlacementService: placementStore },
-          sessionMutationAuthorization: {
-            assertTargetCurrent: () => {},
-            assertCurrent: () => {
-              if (!authorized) {
-                throw new Error("session access revoked");
-              }
-            },
+    const deletion = directSessionReq(
+      "sessions.delete",
+      {
+        key: sessionKey,
+        ...(replacing
+          ? { expectedLifecycleRevision: lifecycleRevision, expectedSessionId: sessionId }
+          : {}),
+      },
+      {
+        context: { workerSessionPlacementService: placementStore },
+        sessionMutationAuthorization: {
+          assertTargetCurrent: () => {},
+          assertCurrent: () => {
+            if (!authorized) {
+              throw new Error("session access revoked");
+            }
           },
         },
-      ),
-    ).rejects.toThrow(
-      change === "authorization" ? "session access revoked" : "changed before retirement",
+      },
     );
-    expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe(sessionId);
-    await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(
-      events,
-    );
+    if (change === "entry replacement") {
+      await expect(deletion).resolves.toMatchObject({
+        ok: false,
+        error: {
+          message: `Session ${sessionKey} changed before deletion. Retry.`,
+          details: { reason: "session-changed" },
+        },
+      });
+      expect(loadSessionEntry(target)).toMatchObject({ ...replacement, sessionId });
+    } else {
+      await expect(deletion).rejects.toThrow(
+        change === "authorization" ? "session access revoked" : "changed before retirement",
+      );
+      expect(loadSessionEntry(target)?.sessionId).toBe(sessionId);
+    }
+    await expect(loadTranscriptEvents(target)).resolves.toEqual(events);
   },
 );
 
@@ -544,17 +532,16 @@ async function createCompanion(runModel?: () => Promise<string>) {
     sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
   });
   companions.add(service);
-  return { service, run: runLoop };
+  return service;
 }
 
-async function ask(
+const ask = (
   service: SessionCompanionService,
   sessionKey: string,
   question: string,
   agentId = "main",
-) {
-  return service.ask({ agentId, sessionKey, question, connId: `conn-${agentId}` });
-}
+  // Unauthenticated direct requests resolve to the shared Side chat owner.
+) => service.ask({ agentId, sessionKey, question, connId: `conn-${agentId}`, ownerId: "shared" });
 
 async function readState(service: SessionCompanionService, sessionKey: string, agentId = "main") {
   const response = await directSessionReq<SessionsCompanionStateResult>(
@@ -563,6 +550,9 @@ async function readState(service: SessionCompanionService, sessionKey: string, a
     { context: { sessionCompanion: service } },
   );
   expect(response.ok, response.error?.message).toBe(true);
+  if (!response.payload) {
+    throw new Error("sessions.companion.state returned no payload");
+  }
   return response.payload;
 }
 
@@ -573,7 +563,7 @@ test("sessions.delete isolates Side chat for the same global key and session ID 
     entries: { global: sessionStoreEntry("sess-main-global") },
     storePath: stores.workStorePath,
   });
-  const { service } = await createCompanion();
+  const service = await createCompanion();
   cleanups.push(() => resetConfiguredGlobalAgentSessionStore(stores));
   await ask(service, "global", "Main agent question?", "main");
   await ask(service, "global", "Work agent question?", "work");
@@ -582,12 +572,12 @@ test("sessions.delete isolates Side chat for the same global key and session ID 
   const deleted = await directSessionReq("sessions.delete", { key: "global", agentId: "work" });
   expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
   expect(await readState(service, "global", "main")).toEqual(mainBefore);
-  expect(await readState(service, "global", "work")).toEqual({ exchanges: [] });
+  expect((await readState(service, "global", "work")).exchanges).toEqual([]);
 });
 
 test("a delayed deletion event cannot erase Side chat for a newer generation", async () => {
   const { sessionKey } = await createStoredSession("old-generation");
-  const { service } = await createCompanion();
+  const service = await createCompanion();
   await ask(service, sessionKey, "Old generation question?");
   let deletion: Extract<SessionIdentityMutation, { kind: "delete" }> | undefined;
   const stop = onSessionIdentityMutation((event) => {
@@ -601,13 +591,13 @@ test("a delayed deletion event cannot erase Side chat for a newer generation", a
     stop();
   }
   expect(deletion).toBeDefined();
-  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
+  expect((await readState(service, sessionKey)).exchanges).toEqual([]);
   const recreated = await directSessionReq("sessions.patch", {
     key: sessionKey,
     label: "Recreated session",
   });
   expect(recreated.ok, recreated.error?.message).toBe(true);
-  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
+  expect((await readState(service, sessionKey)).exchanges).toEqual([]);
   await ask(service, sessionKey, "New generation question?");
   const newState = await readState(service, sessionKey);
   expect(newState?.exchanges.map((exchange) => exchange.question)).toEqual([
@@ -624,7 +614,7 @@ test("sessions.delete cancels a prepared Side chat ask before its late answer", 
   const { sessionKey } = await createStoredSession("active-generation");
   const pending = createDeferred<string>();
   const started = createDeferred();
-  const { service, run } = await createCompanion(() => {
+  const service = await createCompanion(() => {
     started.resolve();
     return pending.promise;
   });
@@ -638,10 +628,9 @@ test("sessions.delete cancels a prepared Side chat ask before its late answer", 
     awaitGateBeforeSettlement(started.promise, active, "Side chat settled before model start"),
     signal,
   );
-  expect(run).toHaveBeenCalledOnce();
   await deleteSession(sessionKey);
-  expect(run.mock.calls[0]?.[1].runParams.abortSignal?.aborted).toBe(true);
+  expect(runLoop.mock.calls[0]?.[1].runParams.abortSignal?.aborted).toBe(true);
   pending.resolve("Late answer from the deleted session.");
   await expect(failure).resolves.toMatchObject({ reason: "context-unavailable" });
-  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
+  expect((await readState(service, sessionKey)).exchanges).toEqual([]);
 });

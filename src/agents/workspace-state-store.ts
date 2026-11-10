@@ -25,18 +25,20 @@ import {
   readWorkspaceStateReceipt,
 } from "./workspace-state-publication.js";
 import {
-  WORKSPACE_SETUP_STATE_VERSION,
   workspacePathEntryExists,
-  type WorkspaceAttestation,
   type WorkspaceAttestationInput,
-  type WorkspaceSetupState,
-  type WorkspaceStateSnapshot,
 } from "./workspace-state-store.kernel.js";
 import type {
   WorkspaceStateDeletionPlan,
   WorkspaceStateGuard,
   WorkspaceStateWorkerOperations,
 } from "./workspace-state-store.worker-contract.js";
+import {
+  WORKSPACE_SETUP_STATE_VERSION,
+  type WorkspaceAttestation,
+  type WorkspaceSetupState,
+  type WorkspaceStateSnapshot,
+} from "./workspace-state-types.js";
 
 export {
   hasRecentWorkspaceSetupState,
@@ -48,11 +50,13 @@ export {
   registerWorkspaceStateAliasesInTransaction,
   WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
+} from "./workspace-state-store.kernel.js";
+export {
   WORKSPACE_SETUP_STATE_VERSION,
   type WorkspaceAttestation,
   type WorkspaceSetupState,
   type WorkspaceStateSnapshot,
-} from "./workspace-state-store.kernel.js";
+} from "./workspace-state-types.js";
 
 type WorkspaceStateOperationOptions = { assertCurrent?: () => void } & Pick<
   WorkspaceStateGuard,
@@ -181,6 +185,20 @@ export async function mergeWorkspaceSetupState(
         next: { ...next },
         nowMs,
       },
+    },
+    options,
+  );
+}
+
+export async function rollbackWorkspaceBootstrapSeed(
+  workspaceDir: string,
+  bootstrapSeededAt: string,
+  options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions = {},
+): Promise<void> {
+  return runWorkspaceStateOperation(
+    {
+      type: "workspace.rollbackBootstrapSeed",
+      input: { workspaceDir: path.resolve(resolveUserPath(workspaceDir)), bootstrapSeededAt },
     },
     options,
   );

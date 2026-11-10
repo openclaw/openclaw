@@ -46,6 +46,7 @@ it.each([
         type: "cli_error",
         message: expect.stringContaining("OpenClaw config is invalid:"),
       },
+      repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
       issues: agentIds.map((id) => ({
         path: `agents.entries.${id}.workspace`,
         message: "Invalid input: expected string, received number",

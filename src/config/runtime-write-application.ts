@@ -19,7 +19,8 @@ export type RuntimeConfigWriteApplicationStatus =
   | "superseded"
   | "failed"
   | "stopped"
-  | "unclaimed";
+  | "unclaimed"
+  | { status: "deferred"; reason: string; appliesWhen: string };
 
 export type RuntimeConfigWriteApplicationClaim = {
   settle: (status: RuntimeConfigWriteApplicationStatus) => void;
@@ -159,7 +160,6 @@ export function publishRuntimeConfigWrite(params: {
           revision: publishedMetadata?.revision ?? 0,
           fingerprint: hashRuntimeConfigValue(runtimeConfig),
           sourceFingerprint: hashRuntimeConfigValue(params.sourceConfig),
-          updatedAtMs: Date.now(),
         };
   notifyRuntimeConfigWriteListeners(
     copyRuntimeConfigWriteApplication(params.writeOptions, {
@@ -171,7 +171,6 @@ export function publishRuntimeConfigWrite(params: {
       revision: metadata.revision,
       fingerprint: metadata.fingerprint,
       sourceFingerprint: metadata.sourceFingerprint,
-      writtenAtMs: Date.now(),
       afterWrite: params.afterWrite ?? params.writeOptions?.afterWrite,
       ...(params.writeOptions?.runtimeRefresh
         ? { runtimeRefresh: params.writeOptions.runtimeRefresh }

@@ -31,7 +31,7 @@
 }
 .cloud-environments__status {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 .cloud-environments__sheet {
   min-width: 0;
@@ -46,7 +46,7 @@
 }
 .cloud-environments__header h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
 }
 .cloud-environments__actions,
@@ -60,15 +60,8 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px 16px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   color: var(--muted);
-}
-.cloud-environments__advanced {
-  margin-top: 24px;
-}
-.cloud-environments__advanced > summary {
-  padding: 16px 0;
-  font-weight: 600;
 }
 @media (max-width: 900px) {
   .cloud-environments {
@@ -100,7 +93,7 @@
   justify-content: space-between;
   gap: 16px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 .cloud-environments__step--longest {
   color: var(--text);
@@ -111,7 +104,7 @@
   overflow-wrap: anywhere;
   max-height: 240px;
   overflow: auto;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .cloud-environments__facts,

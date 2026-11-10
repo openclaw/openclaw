@@ -54,11 +54,6 @@ type OllamaSetupOptions = {
   customModelId?: string;
 };
 
-type OllamaSetupResult = {
-  config: OpenClawConfig;
-  defaultModel?: string;
-};
-
 // Hosted ollama.com access is the separate `ollama-cloud` auth choice.
 type OllamaInteractiveMode = "cloud-local" | "local-only";
 
@@ -163,73 +158,55 @@ async function promptForOllamaBaseUrl(
   const defaultBaseUrl = resolveOllamaSetupDefaultBaseUrl(env);
   const baseUrlRaw = await prompter.text({
     message: "Ollama base URL",
-    initialValue: defaultBaseUrl,
+    // Prefilling the default makes typed input append to it; hint it and use it for blank input.
     placeholder: defaultBaseUrl,
     validate: (value) =>
-      !value?.trim()
-        ? "Required"
-        : isHostedOllamaCloud(value.trim())
-          ? OLLAMA_HOSTED_BASE_URL_MESSAGE
-          : undefined,
+      isHostedOllamaCloud(value.trim()) ? OLLAMA_HOSTED_BASE_URL_MESSAGE : undefined,
   });
-  return resolveOllamaApiBase((baseUrlRaw ?? defaultBaseUrl).trim().replace(/\/+$/, ""));
+  return resolveOllamaApiBase((baseUrlRaw.trim() || defaultBaseUrl).replace(/\/+$/, ""));
 }
 
-async function resolveHostBackedSuggestedModelNames(params: {
-  mode: OllamaInteractiveMode;
-  baseUrl: string;
-  prompter: WizardPrompter;
-}): Promise<string[]> {
-  const modeConfig = HOST_BACKED_OLLAMA_MODE_CONFIG[params.mode];
-  if (!modeConfig.includeCloudModels) {
-    return OLLAMA_SUGGESTED_MODELS_LOCAL;
-  }
-
-  const auth = await checkOllamaCloudAuth(params.baseUrl);
-  if (auth.signedIn) {
-    return mergeUniqueModelNames(
-      OLLAMA_SUGGESTED_MODELS_LOCAL,
-      OLLAMA_SUGGESTED_MODELS_LOCAL_CLOUD,
-    );
-  }
-
-  await params.prompter.note(
-    buildOllamaCloudSigninLines(auth.signinUrl).join("\n"),
-    modeConfig.noteTitle,
-  );
-  return OLLAMA_SUGGESTED_MODELS_LOCAL;
-}
-
-async function promptAndConfigureHostBackedOllama(params: {
+export async function promptAndConfigureOllama(params: {
   cfg: OpenClawConfig;
-  mode: OllamaInteractiveMode;
-  prompter: WizardPrompter;
   env?: NodeJS.ProcessEnv;
+  prompter: WizardPrompter;
   signal?: AbortSignal;
-}): Promise<OllamaSetupResult> {
-  const baseUrl = await promptForOllamaBaseUrl(params.prompter, params.env);
+}) {
+  const mode = (await params.prompter.select({
+    message: "Ollama mode",
+    options: [
+      {
+        value: "cloud-local",
+        label: "Cloud + Local",
+        hint: "Route cloud and local models through your Ollama host",
+      },
+      { value: "local-only", label: "Local only", hint: "Local models only" },
+    ],
+  })) as OllamaInteractiveMode;
+  const { cfg, prompter, env, signal } = params;
+  const baseUrl = await promptForOllamaBaseUrl(prompter, env);
   let discovery = await discoverOllamaModelsForSetup({
     baseUrl,
-    includeRemoteModels: HOST_BACKED_OLLAMA_MODE_CONFIG[params.mode].includeCloudModels,
+    includeRemoteModels: HOST_BACKED_OLLAMA_MODE_CONFIG[mode].includeCloudModels,
     inspectTools: true,
-    ...(params.signal ? { signal: params.signal } : {}),
+    ...(signal ? { signal } : {}),
   });
 
   if (!discovery.reachable) {
-    await params.prompter.note(buildOllamaUnreachableLines(baseUrl, true).join("\n"), "Ollama");
-    const shouldRetry = await params.prompter.confirm({
+    await prompter.note(buildOllamaUnreachableLines(baseUrl, true).join("\n"), "Ollama");
+    const shouldRetry = await prompter.confirm({
       message: "Retry this Ollama address now?",
       initialValue: true,
     });
     if (!shouldRetry) {
       throw new WizardCancelledError("Ollama setup cancelled");
     }
-    params.signal?.throwIfAborted();
+    signal?.throwIfAborted();
     discovery = await discoverOllamaModelsForSetup({
       baseUrl,
-      includeRemoteModels: HOST_BACKED_OLLAMA_MODE_CONFIG[params.mode].includeCloudModels,
+      includeRemoteModels: HOST_BACKED_OLLAMA_MODE_CONFIG[mode].includeCloudModels,
       inspectTools: true,
-      ...(params.signal ? { signal: params.signal } : {}),
+      ...(signal ? { signal } : {}),
     });
   }
 
@@ -246,7 +223,7 @@ async function promptAndConfigureHostBackedOllama(params: {
   } = discovery;
 
   if (inspectionFailures.length > 0) {
-    await params.prompter.note(
+    await prompter.note(
       [
         "Some installed models could not be inspected and were skipped:",
         ...inspectionFailures.slice(0, 5).map((line) => `- ${line}`),
@@ -262,26 +239,19 @@ async function promptAndConfigureHostBackedOllama(params: {
   const inspectionUsable =
     inspectedModels.length === 0 || inspectionFailures.length < inspectedModels.length;
   if (!hasToolsCapableModel && inspectionUsable) {
-    const shouldPullRecommended = await params.prompter.confirm({
+    const shouldPullRecommended = await prompter.confirm({
       message: `No tools-capable Ollama model is installed. Pull ${OLLAMA_RECOMMENDED_TOOLS_MODEL} (${OLLAMA_RECOMMENDED_TOOLS_MODEL_SIZE})?`,
       initialValue: false,
     });
     if (shouldPullRecommended) {
-      if (
-        !(await pullOllamaModel(
-          baseUrl,
-          OLLAMA_RECOMMENDED_TOOLS_MODEL,
-          params.prompter,
-          params.signal,
-        ))
-      ) {
+      if (!(await pullOllamaModel(baseUrl, OLLAMA_RECOMMENDED_TOOLS_MODEL, prompter, signal))) {
         throw new WizardCancelledError("Failed to download recommended Ollama model");
       }
-      params.signal?.throwIfAborted();
+      signal?.throwIfAborted();
       const recommendedScan = await inspectOllamaModelsForSetup(
         baseUrl,
         [{ name: OLLAMA_RECOMMENDED_TOOLS_MODEL }],
-        params.signal,
+        signal,
       );
       // Unlike the pre-existing-model scan, a just-pulled model that cannot be
       // verified is a hard failure: configuring it unenriched would silently
@@ -300,11 +270,27 @@ async function promptAndConfigureHostBackedOllama(params: {
       ]);
     }
   }
-  const suggestedModelNames = await resolveHostBackedSuggestedModelNames({
-    mode: params.mode,
-    baseUrl,
-    prompter: params.prompter,
-  });
+  const resolveHostBackedSuggestedModelNames = async (): Promise<string[]> => {
+    const modeConfig = HOST_BACKED_OLLAMA_MODE_CONFIG[mode];
+    if (!modeConfig.includeCloudModels) {
+      return OLLAMA_SUGGESTED_MODELS_LOCAL;
+    }
+
+    const auth = await checkOllamaCloudAuth(baseUrl);
+    if (auth.signedIn) {
+      return mergeUniqueModelNames(
+        OLLAMA_SUGGESTED_MODELS_LOCAL,
+        OLLAMA_SUGGESTED_MODELS_LOCAL_CLOUD,
+      );
+    }
+
+    await prompter.note(
+      buildOllamaCloudSigninLines(auth.signinUrl).join("\n"),
+      modeConfig.noteTitle,
+    );
+    return OLLAMA_SUGGESTED_MODELS_LOCAL;
+  };
+  const suggestedModelNames = await resolveHostBackedSuggestedModelNames();
   const cloudDefaultModelId = suggestedModelNames.find(isOllamaCloudModel);
   const defaultModelId =
     selectAppGuidedOllamaModelFromDiscovery(discoveredModelsByName.values()) ?? cloudDefaultModelId;
@@ -312,32 +298,12 @@ async function promptAndConfigureHostBackedOllama(params: {
   return {
     ...(defaultModelId ? { defaultModel: `ollama/${defaultModelId}` } : {}),
     config: applyOllamaProviderConfig(
-      params.cfg,
+      cfg,
       baseUrl,
       mergeUniqueModelNames(suggestedModelNames, discoveredModelNames),
       discoveredModelsByName,
     ),
   };
-}
-
-export async function promptAndConfigureOllama(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  prompter: WizardPrompter;
-  signal?: AbortSignal;
-}): Promise<OllamaSetupResult> {
-  const mode = (await params.prompter.select({
-    message: "Ollama mode",
-    options: [
-      {
-        value: "cloud-local",
-        label: "Cloud + Local",
-        hint: "Route cloud and local models through your Ollama host",
-      },
-      { value: "local-only", label: "Local only", hint: "Local models only" },
-    ],
-  })) as OllamaInteractiveMode;
-  return await promptAndConfigureHostBackedOllama({ ...params, mode });
 }
 
 /** Checks existing host models without pulling or mutating state before reset. */

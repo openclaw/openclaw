@@ -1,172 +1,50 @@
-import {
-  prepareAcpSessionMetadataRead,
-  readAcpSessionCommand,
-} from "../acp/runtime/session-meta-read.worker.js";
-import { loadSubagentSessionListRunsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
-import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
+import type { ExecutionIdentityInspectionOutcome } from "../audit/execution-identity-inspection.types.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
-import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
-import {
-  readClawInstallRecordFromDatabase,
-  readClawInstallRecordsInDatabase,
-  readClawOrphanWorkspaceInDatabase,
-  readClawPackageRefsInDatabase,
-} from "../claws/provenance-read.kernel.js";
-import { readClawStateCommandInDatabase } from "../claws/state-read.kernel.js";
 import {
   isCronStateReadCommand,
   readCronStateCommandInDatabase,
 } from "../cron/store/read-command.js";
-import {
-  readSharedGitHubPublicationRequestInDatabase,
-  readSharedRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-publication-shared-read.kernel.js";
-import {
-  readGitHubPublicationRequest,
-  readKnownGitHubPublicationPullRequestUrlsInDatabase,
-} from "../gateway/github-publication-store.worker.js";
-import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.worker.js";
-import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.worker.js";
-import {
-  listCronStandingGrantsInDatabase,
-  lookupCronStandingGrantInDatabase,
-} from "../gateway/operator-approval-standing-grants.worker.js";
-import {
-  readOperatorApprovalReplayInDatabase,
-  readPendingOperatorApprovalsInDatabase,
-  listTerminalOperatorApprovalsInDatabase,
-} from "../gateway/operator-approval-store.kernel.worker.js";
-import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
-import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
-import {
-  readWorkerPlacementEnvironmentOwnerInDatabase,
-  readWorkerPlacementRecoveryCandidatesInDatabase,
-  readWorkerSessionPlacementProjectionInDatabase,
-} from "../gateway/worker-environments/placement-read-projection.js";
-import {
-  readWorkerPlacementChangeSnapshotInDatabase,
-  readWorkerPlacementsForReconcileInDatabase,
-} from "../gateway/worker-environments/placement-row-codec.js";
-import { readWorkspaceJournalInDatabase } from "../gateway/worker-environments/placement-workspace-journal.js";
 import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
-import { listPendingWorkerWorkspaceResultsInDatabase } from "../gateway/worker-environments/placement-workspace-result.js";
-import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
-import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
-import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
-import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
-import {
-  readInterruptedUpdateCandidate,
-  readUpdateRunStatusInDatabase,
-  readUpdateRunHistoryStatusInDatabase,
-  readUpdateRunRecord,
-  readUpdateRuns,
-} from "../infra/update-run-read.kernel.js";
-import {
-  inspectUpdateRunReconciliation,
-  readUpdateRunReconciliationCandidates,
-} from "../infra/update-run-reconciliation.read.js";
-import {
-  pluginBlobLookupInDatabase,
-  pluginBlobEntriesInDatabase,
-} from "../plugin-state/plugin-blob-store.sqlite.js";
+import { isUpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
 import { isPluginStateReadCommand } from "../plugin-state/plugin-state-worker-contract.js";
-import { readPluginStateCommand } from "../plugin-state/plugin-state.worker.js";
-import {
-  selectSkillLibraryRevisionMetadataBatch,
-  selectSkillLibraryRevisionManifestsBatch,
-} from "../skills/library/selection-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
-import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
-import { readAgentDatabaseDeletionWorkerSnapshot } from "./agent-deletion-journal.snapshot.worker.js";
-import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import {
   isConfigMachineStateReadCommand,
   readConfigMachineStateCommandInDatabase,
 } from "./config-machine-state.js";
-import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
-import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
-import {
-  isStateDiagnosticCommand,
-  readStateDiagnosticCommand,
-} from "./openclaw-state-read-diagnostics.js";
-import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
-import type { RegisteredStateReadCommand } from "./openclaw-state-read-operation-registry.js";
-import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
-import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
-import { readStateStream } from "./openclaw-state-read-stream.js";
-import type {
-  OpenClawStateReadRequest,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
-import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
-import { readUserBackgroundCommand } from "./user-background.kernel.js";
-import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
-import { readUserPreferences, selectUserPreferenceValues } from "./user-preferences.store.js";
-import { readUserProfileCommand } from "./user-profile-read.worker.js";
-import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
-
-export { prepareAcpSessionMetadataRead, loadSubagentSessionListRunsFromSqlite, readStateStream };
-
-/** Non-metadata query owners load only when the shared worker receives one of their commands. */
-export function readOpenClawStateDatabaseCommand(
-  db: EngineConnection,
+import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
+/** Load only the selected query owner before entering its synchronous database read. */
+export async function prepareOpenClawStateRead(
   input: OpenClawStateReadRequest,
-  command: Exclude<
-    OpenClawStateReadRequest["command"],
-    | RegisteredStateReadCommand
-    | {
-        type:
-          | "admit"
-          | "plugins.metadata.read"
-          | "subagents.restore"
-          | "meetingTranscripts.export"
-          | "gatewayOwnerLease.read"
-          | "agentDatabaseRegistry.read"
-          | "subagents.sessionList";
-      }
-  >,
-  metadataRead: ReturnType<typeof prepareAcpSessionMetadataRead> | undefined,
-): OpenClawStateReadResult {
-  if (command.type === "claws.inventory") {
-    return readClawStateCommandInDatabase(db, command);
-  }
-  if (command.type === "claws.packageOwnership") {
-    const install =
-      command.agentId === undefined
-        ? undefined
-        : readClawInstallRecordFromDatabase(db, command.agentId);
-    return {
-      type: command.type,
-      install,
-      installs: command.includeInstalls ? readClawInstallRecordsInDatabase(db) : [],
-      packageRefs: readClawPackageRefsInDatabase(db, { agentId: command.agentId }),
-      orphanWorkspace:
-        command.agentId !== undefined && !install
-          ? readClawOrphanWorkspaceInDatabase(db, command.agentId)
-          : undefined,
-    };
-  }
-  if (command.type === "agentDatabaseDeletion.snapshot") {
-    return {
-      type: command.type,
-      snapshot: readAgentDatabaseDeletionWorkerSnapshot(db, input.databasePath, command.purpose),
-    };
+  command: OpenClawStateReadRequest["command"],
+  metadataRead:
+    | ReturnType<
+        typeof import("../acp/runtime/session-meta-read.worker.js").prepareAcpSessionMetadataRead
+      >
+    | undefined,
+) {
+  if (command.type === "templates.inventory") {
+    const { readTemplateStateCommandInDatabase } =
+      await import("../templates/state-read.kernel.js");
+    return (db: EngineConnection) => readTemplateStateCommandInDatabase(db, command);
   }
   if (command.type === "deliveryQueue.outbound") {
-    // Custody reads retain queue ownership admission even on a read-only connection.
-    assertOpenClawStateWriteAllowed({
-      database: db,
-      databasePath: input.databasePath,
-      env: input.context.environment,
-    });
-    return {
-      type: command.type,
-      entries: readOutboundDeliveriesInDatabase({ db }, command),
+    const { assertOpenClawStateWriteAllowed } = await import("./openclaw-state-ownership.js");
+    const { readOutboundDeliveriesInDatabase } =
+      await import("../infra/outbound/delivery-queue-storage.kernel.js");
+    return (db: EngineConnection) => {
+      // Custody reads retain queue ownership admission even on a read-only connection.
+      assertOpenClawStateWriteAllowed({
+        database: db,
+        databasePath: input.databasePath,
+        env: input.context.environment,
+      });
+
+      return {
+        type: command.type,
+        entries: readOutboundDeliveriesInDatabase({ db }, command),
+      };
     };
   }
   if (
@@ -174,13 +52,19 @@ export function readOpenClawStateDatabaseCommand(
     command.type === "acpSessions.list" ||
     command.type === "acpSessions.metadata"
   ) {
-    return metadataRead ? metadataRead.read(db) : readAcpSessionCommand(db, command);
+    const { readAcpSessionCommand } = await import("../acp/runtime/session-meta-read.worker.js");
+    return (db: EngineConnection) =>
+      metadataRead ? metadataRead.read(db) : readAcpSessionCommand(db, command);
   }
   if (isChannelIngressReadCommand(command)) {
-    return readChannelIngressInDatabase(db, command);
+    const { readChannelIngressInDatabase } =
+      await import("../channels/message/ingress-queue-read.worker.js");
+    return (db: EngineConnection) => readChannelIngressInDatabase(db, command);
   }
   if (command.type === "subagents.runs") {
-    return readSubagentRunsInWorker(db, command);
+    const { readSubagentRunsInWorker } =
+      await import("../agents/subagents/registry/subagent-registry.store.worker.js");
+    return (db: EngineConnection) => readSubagentRunsInWorker(db, command);
   }
   if (
     command.type === "mcpOAuth.statuses" ||
@@ -189,31 +73,39 @@ export function readOpenClawStateDatabaseCommand(
     command.type === "mcpOAuth.pending" ||
     command.type === "mcpOAuth.countPrincipals"
   ) {
-    return readMcpOAuthStateCommand(db, command);
+    const { readMcpOAuthStateCommand } = await import("./openclaw-state-read-mcp-oauth.js");
+    return (db: EngineConnection) => readMcpOAuthStateCommand(db, command);
   }
   if (command.type === "sessionGroups.snapshot") {
-    return {
+    const { readSessionGroupCatalogSnapshot } =
+      await import("../gateway/session-group-catalog.kernel.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       snapshot: readSessionGroupCatalogSnapshot(db),
-    };
+    });
   }
   if (command.type === "sessionGroups.members") {
-    return {
+    const { readSessionGroupMembership } =
+      await import("../gateway/session-group-membership.read.js");
+    return () => ({
       type: command.type,
       snapshot: readSessionGroupMembership(command.cfg, input.context.environment),
-    };
+    });
   }
   if (command.type === "conversationBindings.inspect") {
-    return {
+    const { inspectCurrentConversationBindingRecordInDatabase } =
+      await import("../infra/outbound/current-conversation-bindings.kernel.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       record: inspectCurrentConversationBindingRecordInDatabase(db, command.conversation),
-    };
+    });
   }
   if (command.type === "backup.runs") {
-    return { type: command.type, runs: readBackupRunsInDatabase(db) };
+    const { readBackupRunsInDatabase } = await import("./backup-run-records.kernel.js");
+    return (db: EngineConnection) => ({ type: command.type, runs: readBackupRunsInDatabase(db) });
   }
   if (isCronStateReadCommand(command)) {
-    return readCronStateCommandInDatabase(db, command);
+    return (db: EngineConnection) => readCronStateCommandInDatabase(db, command);
   }
   if (
     command.type === "devicePairing.list" ||
@@ -221,182 +113,304 @@ export function readOpenClawStateDatabaseCommand(
     command.type === "devicePairing.pending" ||
     command.type === "devicePairing.bootstrapContext"
   ) {
-    return executeDevicePairingRead(db, input.databasePath, command);
+    const { executeDevicePairingRead } = await import("../infra/device-pairing-read.kernel.js");
+    return (db: EngineConnection) => executeDevicePairingRead(db, input.databasePath, command);
   }
   if (isPluginStateReadCommand(command)) {
-    return readPluginStateCommand({ db, path: input.databasePath }, command);
+    const { readPluginStateCommand } = await import("../plugin-state/plugin-state.worker.js");
+    return (db: EngineConnection) =>
+      readPluginStateCommand({ db, path: input.databasePath }, command);
   }
   if (command.type === "pluginBlob.lookup") {
-    return {
+    const { pluginBlobLookupInDatabase } =
+      await import("../plugin-state/plugin-blob-store.sqlite.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       value: pluginBlobLookupInDatabase(db, {
         ...command.input,
         env: input.context.environment,
         path: input.databasePath,
       }),
+    });
+  }
+  if (command.type === "capture.readOnlyEvents") {
+    const { readDebugProxyCaptureSessionEvents } =
+      await import("../proxy-capture/store-readonly.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      events: readDebugProxyCaptureSessionEvents(db, command.sessionId, command.limit),
+    });
+  }
+  if (command.type === "capture.readOnlyBlob") {
+    const { readDebugProxyCaptureBlob } = await import("../proxy-capture/store-readonly.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      blob: readDebugProxyCaptureBlob(db, command.blobId),
+    });
+  }
+  if (command.type === "config.snapshot.read") {
+    const { readConfigSnapshotAuditRecordInDatabase } =
+      await import("../config/config-journal-snapshot.kernel.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      snapshot: readConfigSnapshotAuditRecordInDatabase(db),
+    });
+  }
+  if (command.type === "audit.run.inspect") {
+    const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
+    const { inspectExecutionIdentityRunInDatabase } =
+      await import("../audit/execution-identity-context.js");
+    const { tableExists } = await import("./openclaw-state-db-schema-helpers.js");
+    const { ExecutionDecisionCursorError } =
+      await import("../audit/execution-decision-receipts.js");
+    return (db: EngineConnection) => {
+      try {
+        return {
+          type: command.type,
+          result: {
+            status: "inspected",
+            inspection: runSqliteReadSnapshotSync(db, () =>
+              inspectExecutionIdentityRunInDatabase(db, command.input, {
+                executionIdentityContexts: tableExists(db, "execution_identity_contexts"),
+                auditEvents: tableExists(db, "audit_events"),
+                cronRunReceipts: tableExists(db, "cron_run_receipts"),
+                executionOwnerLifecycleBindings: tableExists(
+                  db,
+                  "execution_owner_lifecycle_bindings",
+                ),
+              }),
+            ),
+          } satisfies ExecutionIdentityInspectionOutcome,
+        };
+      } catch (error) {
+        if (!(error instanceof ExecutionDecisionCursorError)) {
+          throw error;
+        }
+        return {
+          type: command.type,
+          result: {
+            status: "invalid-cursor",
+            message: error.message,
+          } satisfies ExecutionIdentityInspectionOutcome,
+        };
+      }
     };
   }
-  if (isStateDiagnosticCommand(command)) {
-    return readStateDiagnosticCommand(db, command);
-  }
   if (command.type === "pluginBlob.entries") {
-    return {
+    const { pluginBlobEntriesInDatabase } =
+      await import("../plugin-state/plugin-blob-store.sqlite.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       value: pluginBlobEntriesInDatabase(db, {
         ...command.input,
         env: input.context.environment,
         path: input.databasePath,
       }),
-    };
+    });
   }
   if (command.type === "updateRuns.get") {
-    return {
+    const { tableExists } = await import("./openclaw-state-db-schema-helpers.js");
+    const { readUpdateRunRecord } = await import("../infra/update-run-read.kernel.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       run: tableExists(db, "update_runs") ? readUpdateRunRecord(db, command.runId) : undefined,
-    };
+    });
   }
   if (command.type === "updateRuns.list") {
-    return {
+    const { readUpdateRuns } = await import("../infra/update-run-read.kernel.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       runs: readUpdateRuns(db, command.input),
-    };
+    });
   }
-  if (command.type === "updateRuns.reconciliationCandidates") {
-    return {
-      type: command.type,
-      candidates: readUpdateRunReconciliationCandidates(db, command.input),
-    };
-  }
-  if (command.type === "updateRuns.reconciliationCandidate") {
-    const run = tableExists(db, "update_runs") ? readUpdateRunRecord(db, command.runId) : undefined;
-    return {
-      type: command.type,
-      candidate: run ? inspectUpdateRunReconciliation(db, run, {}) : undefined,
-    };
+  if (isUpdateRunAdmissionReadCommand(command)) {
+    const { readUpdateRunAdmissionCommand } = await import("../infra/update-run-admission.read.js");
+    return (db: EngineConnection) => readUpdateRunAdmissionCommand(db, command);
   }
   if (command.type === "updateRuns.status") {
-    return {
+    const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
+    const { readUpdateRunStatusInDatabase } = await import("../infra/update-run-read.kernel.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       status: runSqliteReadSnapshotSync(db, () => readUpdateRunStatusInDatabase(db)),
-    };
+    });
   }
   if (command.type === "updateRuns.historyStatus") {
-    return {
+    const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
+    const { readUpdateRunHistoryStatusInDatabase } =
+      await import("../infra/update-run-read.kernel.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       status: runSqliteReadSnapshotSync(db, () => readUpdateRunHistoryStatusInDatabase(db)),
-    };
+    });
   }
   if (command.type === "updateRuns.interruptedCandidate") {
-    return {
+    const { readInterruptedUpdateCandidate } = await import("../infra/update-run-read.kernel.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       run: readInterruptedUpdateCandidate(db),
-    };
+    });
+  }
+  if (command.type === "updateRuns.pluginCohortRecoveries") {
+    const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
+    const { inspectPluginCohortRecoveryRows } =
+      await import("../infra/update-run-recovery-store.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      pairs: runSqliteReadSnapshotSync(db, () => inspectPluginCohortRecoveryRows(db)),
+    });
+  }
+  if (command.type === "updateRuns.pluginSnapshotCollection") {
+    const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
+    const { canCollectPluginSourceSnapshotsInDatabase } =
+      await import("../infra/update-run-recovery-store.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      allowed: runSqliteReadSnapshotSync(db, () => canCollectPluginSourceSnapshotsInDatabase(db)),
+    });
   }
   if (command.type === "exec-approvals.read") {
-    return {
+    const { readExecApprovalsConfigRow } = await import("../infra/exec-approvals-sqlite.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       row: readExecApprovalsConfigRow(db),
-    };
+    });
   }
   if (command.type === "skills.library.descriptions") {
-    return {
+    const { tableExists } = await import("./openclaw-state-db-schema-helpers.js");
+    const { selectSkillLibraryRevisionMetadataBatch } =
+      await import("../skills/library/selection-read.kernel.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       value: tableExists(db, "skill_library_entries")
         ? selectSkillLibraryRevisionMetadataBatch(db, command.input)
         : undefined,
-    };
+    });
   }
   if (command.type === "skills.library.manifests") {
-    return {
+    const { tableExists } = await import("./openclaw-state-db-schema-helpers.js");
+    const { selectSkillLibraryRevisionManifestsBatch } =
+      await import("../skills/library/selection-read.kernel.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       value: tableExists(db, "skill_library_entries")
         ? selectSkillLibraryRevisionManifestsBatch(db, command.input)
         : undefined,
-    };
+    });
   }
   if (command.type === "operatorApprovals.placementGrant") {
-    return { type: command.type, rows: readPlacementGrantRows(db, command.input) };
+    const { readPlacementGrantRows } =
+      await import("../gateway/operator-approval-placement-grants.read.worker.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      rows: readPlacementGrantRows(db, command.input),
+    });
+  }
+  if (command.type === "operatorApprovals.pendingSnapshot") {
+    const { readOperatorApprovalPendingSnapshotInDatabase } =
+      await import("../gateway/operator-approval-store.kernel.worker.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      page: readOperatorApprovalPendingSnapshotInDatabase(command.input, db),
+    });
   }
   if (command.type === "operatorApprovals.pending") {
-    return {
+    const { readPendingOperatorApprovalsInDatabase } =
+      await import("../gateway/operator-approval-store.kernel.worker.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       pending: readPendingOperatorApprovalsInDatabase(command.input, db),
-    };
+    });
   }
   if (command.type === "operatorApprovals.prepareReplay") {
-    return { type: command.type, replay: readOperatorApprovalReplayInDatabase(command.input, db) };
+    const { readOperatorApprovalReplayInDatabase } =
+      await import("../gateway/operator-approval-store.kernel.worker.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      replay: readOperatorApprovalReplayInDatabase(command.input, db),
+    });
   }
   if (command.type === "operatorApprovals.history") {
-    return {
+    const { listTerminalOperatorApprovalsInDatabase } =
+      await import("../gateway/operator-approval-store.kernel.worker.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       history: listTerminalOperatorApprovalsInDatabase(command.input, db),
-    };
+    });
   }
   if (command.type === "operatorApprovals.validateCronGrant") {
-    return {
+    const { lookupCronStandingGrantInDatabase } =
+      await import("../gateway/operator-approval-standing-grants.worker.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       result: lookupCronStandingGrantInDatabase(db, command.input, false),
-    };
+    });
   }
   if (command.type === "operatorApprovals.listCronGrants") {
-    return {
+    const { listCronStandingGrantsInDatabase } =
+      await import("../gateway/operator-approval-standing-grants.worker.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       grants: listCronStandingGrantsInDatabase(db, command.input),
-    };
+    });
   }
   if (command.type === "onboardingRecommendations.read") {
-    return {
+    const { readOnboardingRecommendationsInDatabase } =
+      await import("./onboarding-recommendations.kernel.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       record: readOnboardingRecommendationsInDatabase(db, command.configKey),
-    };
+    });
   }
   if (isConfigMachineStateReadCommand(command)) {
-    return readConfigMachineStateCommandInDatabase(db, command);
+    return (db: EngineConnection) => readConfigMachineStateCommandInDatabase(db, command);
   }
   if (command.type === "workspace.snapshot") {
-    return {
+    const { readWorkspaceStateSnapshotForDirectoryInDatabase } =
+      await import("../agents/workspace-state-store.kernel.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       snapshot: readWorkspaceStateSnapshotForDirectoryInDatabase({
         workspaceDir: command.workspaceDir,
         database: { db, path: input.databasePath },
       }),
-    };
+    });
   }
   if (command.type === "githubPublication.lifecycle") {
-    return {
+    const { readGitHubPublicationSessionLifecycle } =
+      await import("./github-publication-session-lifecycles.worker.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       lifecycle: readGitHubPublicationSessionLifecycle(command, db),
-    };
-  }
-  if (command.type === "githubPublication.sharedObservation") {
-    const { session, selector, entry } = command.input;
-    return {
-      type: command.type,
-      row:
-        readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry) ??
-        readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
-    };
+    });
   }
   if (command.type === "githubPublication.request") {
-    return {
+    const { readGitHubPublicationRequest } =
+      await import("../gateway/github-publication-store.worker.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
-    };
+    });
   }
-  if (
-    command.type === "githubPublication.knownPullRequestUrls" ||
-    command.type === "githubRepository.knownPullRequestUrls"
-  ) {
-    return {
+  if (command.type === "githubPublication.knownPullRequestUrls") {
+    const { readKnownGitHubPublicationPullRequestUrlsInDatabase } =
+      await import("../gateway/github-publication-store.worker.js");
+    return (db: EngineConnection) => ({
       type: command.type,
-      urls:
-        command.type === "githubPublication.knownPullRequestUrls"
-          ? readKnownGitHubPublicationPullRequestUrlsInDatabase(db, command.input)
-          : readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
-    };
+      urls: readKnownGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
+    });
+  }
+  if (command.type === "githubRepository.knownPullRequestUrls") {
+    const { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } =
+      await import("../gateway/github-repository-publication-store.worker.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      urls: readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
+    });
   }
   if (
     command.type === "userProfiles.catalogIdentity" ||
+    command.type === "userProfiles.identity" ||
     command.type === "userProfiles.githubIdentity.cached" ||
     command.type === "userProfiles.githubAttribution.resolve" ||
     command.type === "userProfiles.channelIdentity.list" ||
@@ -406,19 +420,33 @@ export function readOpenClawStateDatabaseCommand(
     command.type === "userProfiles.avatar.inspect" ||
     command.type === "userProfiles.avatar.read"
   ) {
-    return readUserProfileCommand(db, command);
+    const { readUserProfileCommand } = await import("./user-profile-read.worker.js");
+    return (db: EngineConnection) => readUserProfileCommand(db, command);
   }
   if (command.type === "userBackground.snapshot" || command.type === "userBackground.image") {
-    return readUserBackgroundCommand(db, command);
+    const { readUserBackgroundCommand } = await import("./user-background.kernel.js");
+    return (db: EngineConnection) => readUserBackgroundCommand(db, command);
+  }
+  if (command.type === "userPreferences.sessionPins") {
+    const { selectPersonalPinnedSessionKeys } = await import("./user-preferences.store.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      sessionKeys: selectPersonalPinnedSessionKeys(db),
+    });
   }
   if (command.type === "userPreferences.values") {
-    return {
+    const { selectUserPreferenceValues } = await import("./user-preferences.store.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       values: selectUserPreferenceValues(db, command.profileIds, command.key),
-    };
+    });
   }
   if (command.type === "userPreferences.read") {
-    return {
+    const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
+    const { tableExists } = await import("./openclaw-state-db-schema-helpers.js");
+    const { selectResolvedUserProfileMetadataById } = await import("./user-profiles-internal.js");
+    const { readUserPreferences } = await import("./user-preferences.store.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       preferences: runSqliteReadSnapshotSync(db, () => {
         const profile = tableExists(db, "user_profiles")
@@ -433,7 +461,7 @@ export function readOpenClawStateDatabaseCommand(
             }
           : undefined;
       }),
-    };
+    });
   }
   if (
     command.type === "userModelAccounts.authorization" ||
@@ -442,66 +470,114 @@ export function readOpenClawStateDatabaseCommand(
     command.type === "userModelAccounts.selection" ||
     command.type === "userModelAccounts.catalog"
   ) {
-    return readUserModelAccountCommand(db, command);
+    const { readUserModelAccountCommand } = await import("./user-model-accounts.read.worker.js");
+    return (db: EngineConnection) => readUserModelAccountCommand(db, command);
   }
   if (command.type === "sessionRepositoryWorkspaces.find") {
-    return {
-      type: command.type,
-      workspaces: runSqliteReadSnapshotSync(db, () =>
-        command.owners.flatMap((owner) => {
-          const workspace = findSessionRepositoryWorkspaceInDatabase(db, owner);
-          return workspace ? [workspace] : [];
-        }),
-      ),
+    const { tableExists } = await import("./openclaw-state-db-schema-helpers.js");
+    const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
+    const { findSessionRepositoryWorkspaceInDatabase } =
+      await import("./session-repository-workspaces.kernel.js");
+    return (db: EngineConnection) => {
+      if (command.owners.length === 0 || !tableExists(db, "session_repository_workspaces")) {
+        return { type: command.type, workspaces: [] };
+      }
+
+      return {
+        type: command.type,
+        workspaces: runSqliteReadSnapshotSync(db, () =>
+          command.owners.flatMap((owner) => {
+            const workspace = findSessionRepositoryWorkspaceInDatabase(db, owner);
+            return workspace ? [workspace] : [];
+          }),
+        ),
+      };
     };
   }
   if (command.type === "sessionRows.sharedFacts") {
-    return readSessionRowsSharedFacts(db, command);
+    const { readSessionRowsSharedFacts } =
+      await import("./openclaw-state-read-session-rows.worker.js");
+    return (db: EngineConnection) => readSessionRowsSharedFacts(db, command);
   }
   if (command.type === "workerPlacements.changeSnapshot") {
-    return {
+    const { readWorkerPlacementChangeSnapshotInDatabase } =
+      await import("../gateway/worker-environments/placement-row-codec.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       placements: readWorkerPlacementChangeSnapshotInDatabase(db, command.profileIds),
-    };
+    });
   }
   if (isWorkspaceJournalReadCommand(command)) {
-    return readWorkspaceJournalInDatabase(db, command);
-  }
-  if (command.type === "workers.placementRecoveryCandidates") {
-    return {
-      type: command.type,
-      candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
-    };
+    const { readWorkspaceJournalInDatabase } =
+      await import("../gateway/worker-environments/placement-workspace-journal.js");
+    return (db: EngineConnection) => readWorkspaceJournalInDatabase(db, command);
   }
   if (command.type === "workers.placementPreservation") {
-    return {
+    const { readWorkerPlacementsForReconcileInDatabase } =
+      await import("../gateway/worker-environments/placement-row-codec.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       placements: readWorkerPlacementsForReconcileInDatabase(db),
-    };
+    });
   }
   if (command.type === "workers.placementEnvironmentOwner") {
-    return {
+    const { readWorkerPlacementEnvironmentOwnerInDatabase } =
+      await import("../gateway/worker-environments/placement-read-projection.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       placement: readWorkerPlacementEnvironmentOwnerInDatabase(db, command.environmentId),
-    };
+    });
   }
   if (command.type === "workers.placementPendingResults") {
-    return {
+    const { listPendingWorkerWorkspaceResultsInDatabase } =
+      await import("../gateway/worker-environments/placement-workspace-result.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       pendingResults: listPendingWorkerWorkspaceResultsInDatabase(db, command.sessionId),
-    };
+    });
   }
   if (command.type === "workers.placementProjection") {
-    return {
+    const { readWorkerSessionPlacementProjectionInDatabase } =
+      await import("../gateway/worker-environments/placement-read-projection.js");
+    return (db: EngineConnection) => ({
       type: command.type,
       result: readWorkerSessionPlacementProjectionInDatabase(
         db,
         command.sessionIds,
         command.conflictBindings,
       ),
-    };
+    });
   }
-  return isTuiLastSessionReadCommand(command)
-    ? readTuiLastSessionCommand(db, command)
-    : readStateRegistryCommand(db, command);
+  if (isTuiLastSessionReadCommand(command)) {
+    const { readTuiLastSessionCommand } = await import("../tui/tui-last-session.kernel.js");
+    return (db: EngineConnection) => readTuiLastSessionCommand(db, command);
+  }
+  if (command.type === "agentDeletionJournal.status") {
+    const { readAgentDeletionJournalStatusInDatabase } =
+      await import("./agent-deletion-journal.read.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
+    });
+  }
+  if (command.type === "agentDeletionJournal.retainedIds") {
+    const { readRetainedAgentDeletionIds } =
+      await import("./agent-deletion-journal.snapshot.worker.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      agentIds: readRetainedAgentDeletionIds(db),
+    });
+  }
+  if (command.type === "worktrees.cleanupState") {
+    const { listRegistryWorktreesInDatabase } =
+      await import("../agents/worktrees/registry-read.kernel.js");
+    const { readWorktreeRunLeaseStateInDatabase } =
+      await import("../agents/worktrees/run-lease-owner.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      records: listRegistryWorktreesInDatabase(db),
+      leases: readWorktreeRunLeaseStateInDatabase(db),
+    });
+  }
+  throw new Error("Unsupported shared-state read command: " + command.type);
 }

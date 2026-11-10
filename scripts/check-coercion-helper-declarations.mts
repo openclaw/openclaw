@@ -70,6 +70,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
     names: [
+      "commonPrefixLength",
       "containsAsciiControlCharacter",
       "filterStringEntries",
       "normalizeArrayBackedTrimmedStringList",
@@ -155,6 +156,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "isRecord",
       "isStringArray",
       "isStringRecord",
+      "omitUndefinedFields",
       "readStringField",
     ],
   },
@@ -172,12 +174,17 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "collectNestedErrorCandidates",
       "extractErrorCodeOrErrno",
       "formatErrorStackWithMessage",
+      "mapErrorCauseChain",
       "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",
-      "toStringifiedError",
       "toStructuredErrorObject",
     ],
+  },
+  {
+    file: "packages/normalization-core/src/stringified-error.ts",
+    kind: "function",
+    names: ["toStringifiedError"],
   },
   {
     file: "scripts/lib/error-format.mts",
@@ -213,6 +220,7 @@ export const CANONICAL_COERCION_MODULES = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/json-coercion.ts",
   "packages/normalization-core/src/error-coercion.ts",
+  "packages/normalization-core/src/stringified-error.ts",
   "packages/normalization-core/src/boolean-coercion.ts",
   "scripts/lib/error-format.mts",
   "src/utils/boolean.ts",
@@ -241,6 +249,12 @@ export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
     name: "formatErrorMessage",
     reason: "Dependency-light scripts retain a deliberately smaller formatting policy.",
   },
+  {
+    file: "scripts/lib/error-format.mts",
+    name: "formatErrorMessageWithCauses",
+    reason:
+      "Dependency-light release diagnostics need bounded cause-chain rendering before install.",
+  },
 ] as const satisfies readonly { file: string; name: string; reason: string }[];
 
 const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
@@ -261,12 +275,6 @@ const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
     name: "asStandaloneRecord",
     kind: "variable",
     reason: "Serialized standalone app closure cannot capture module imports.",
-  },
-  {
-    file: "extensions/diffs/src/viewer-payload.ts",
-    name: "isViewerRecord",
-    kind: "function",
-    reason: "Standalone browser asset build cannot resolve workspace package imports.",
   },
   {
     file: "scripts/lib/kova-report-gate.mts",

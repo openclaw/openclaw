@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "tool_search",
-      "description": "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action; use tool_describe only when you need its input schema.",
+      "description": "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action. Use tool_describe when you need its input schema or when a result includes instructionsHint; call it before dispatch_action to load the complete server instructions.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -36,7 +36,9 @@
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "required": ["query"],
+                  "required": [
+                    "query"
+                  ],
                   "properties": {
                     "query": {
                       "type": "string",
@@ -64,10 +66,12 @@
     },
     {
       "name": "tool_describe",
-      "description": "Load the full schema and metadata for one search result when its input is not already clear.",
+      "description": "Load the full schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
       "parameters": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
           "id": {
             "type": "string",
@@ -78,10 +82,12 @@
     },
     {
       "name": "dispatch_action",
-      "description": "Call an exact Tool Search result id or name through OpenClaw.",
+      "description": "Call an exact Tool Search result id or name through OpenClaw. If arguments are not already clear, call tool_describe with the same id for the full description and schema; do not guess omitted fields from compact input hints.",
       "parameters": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
           "id": {
             "type": "string",
@@ -130,5 +136,5 @@
       }
     }
   ],
-  "toolSchemaDirectoryPrompt": "Available deferred-schema tools:\n- sessions_list (core): No description.\n\nPolicy-approved MCP and client tools may also be discoverable through search.\nUse tool_search for a compact input signature or tool_describe for a full schema. Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly."
+  "toolSchemaDirectoryPrompt": "Available deferred-schema tools:\n- sessions_list (core): No description.\n\nDeferred MCP tools are listed in the tool_search description. Policy-approved client tools may also be discoverable through search.\nUse tool_search for a compact input signature or tool_describe for a full schema. Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly."
 }

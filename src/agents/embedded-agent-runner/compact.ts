@@ -1,5 +1,5 @@
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { projectExecutionSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -23,6 +23,11 @@ import {
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
+import {
+  CliExecutionAuthProfileError,
+  cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId,
+} from "../cli-execution-auth.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { coerceToFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -32,6 +37,7 @@ import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { buildProviderAuthRecoveryHint } from "../provider-auth-recovery-hint.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -90,6 +96,49 @@ export async function compactNativeCliSession(params: {
     config: params.compactParams.config,
     agentId: params.compactParams.agentId,
   }).sessionAgentId;
+  // The session pin names the model provider's credential (for example the auto-selected
+  // "anthropic:default" API key). Reply turns convert it for the CLI child; compaction must too,
+  // or the native session is compacted on the metered key instead of the backend's own login.
+  let forwardedAuthProfileId = cliSessionBinding?.authProfileId;
+  if (!forwardedAuthProfileId && params.compactParams.authProfileId) {
+    const config = params.compactParams.config ?? {};
+    if (
+      cliBackendAcceptsAuthProfileForwarding({
+        provider: runtime,
+        config,
+        agentId: params.compactParams.agentId,
+      })
+    ) {
+      try {
+        forwardedAuthProfileId = await resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: runtime,
+          authProfileProvider: params.compactParams.provider ?? DEFAULT_PROVIDER,
+          config,
+          agentDir: params.compactParams.agentDir ?? resolveAgentDir(config, sessionAgentId),
+          selected: {
+            authProfileId: params.compactParams.authProfileId,
+            authProfileIdSource: params.compactParams.authProfileIdSource,
+          },
+          sessionBinding: cliSessionBinding,
+        });
+      } catch (err) {
+        if (err instanceof CliExecutionAuthProfileError) {
+          // Never substitute another account; tell the user how to restore or switch it.
+          const recovery = buildProviderAuthRecoveryHint({
+            provider: params.compactParams.provider ?? DEFAULT_PROVIDER,
+            config,
+            workspaceDir: params.compactParams.workspaceDir,
+          });
+          return buildCompactionFailureResult(
+            `CLI backend "${runtime}" cannot compact with the selected account: ${err.message} ${recovery} Or select an available account with /model, then run /compact again.`,
+          );
+        }
+        throw err;
+      }
+    } else {
+      forwardedAuthProfileId = params.compactParams.authProfileId;
+    }
+  }
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
     params.compactParams.config ?? {},
     runId,
@@ -118,11 +167,7 @@ export async function compactNativeCliSession(params: {
         runId,
         cliSessionId,
         ...(cliSessionBinding ? { cliSessionBinding } : {}),
-        ...(cliSessionBinding?.authProfileId
-          ? { authProfileId: cliSessionBinding.authProfileId }
-          : params.compactParams.authProfileId
-            ? { authProfileId: params.compactParams.authProfileId }
-            : {}),
+        ...(forwardedAuthProfileId ? { authProfileId: forwardedAuthProfileId } : {}),
         ...(params.compactParams.sessionEntry
           ? { sessionEntry: params.compactParams.sessionEntry }
           : {}),
@@ -211,7 +256,7 @@ export async function compactEmbeddedAgentSessionDirect(
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
   const requestedParams: CompactEmbeddedAgentSessionParams = {
     ...paramsBase,
-    sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
+    sessionEntry: entry ? projectExecutionSessionEntry(entry) : undefined,
     agentHarnessId: lockedHarnessRuntime ?? paramsBase.agentHarnessId,
     modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,
     agentId: runSessionTarget.agentId,
@@ -342,7 +387,6 @@ export async function compactEmbeddedAgentSessionDirect(
                 .map((candidate) => ({
                   provider: candidate.provider,
                   modelId: candidate.model,
-                  runtime: selected.boundHarnessRuntime,
                   agentId: requestedAgentIds.sessionAgentId,
                 })),
             ];
@@ -472,11 +516,12 @@ export async function compactEmbeddedAgentSessionDirect(
               ...params,
               provider,
               model,
+              agentHarnessId: isPrimaryCandidate ? params.agentHarnessId : undefined,
               requestedRouteResolution: isPrimaryCandidate ? undefined : "resolved",
               authProfileId,
               authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
               // The primary attempt retains its already prepared atomic plan. An
-              // actual fallback may change route/auth class and must rebuild it.
+              // actual fallback may change runtime/auth class and must rebuild it.
               runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
               runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
             });
@@ -484,10 +529,12 @@ export async function compactEmbeddedAgentSessionDirect(
         });
         return fallbackResult.result;
       };
-      return await withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
-        owner.captureContext();
-        return compactPrepared();
-      });
+      return await preparedModelRuntimeLease.run(() =>
+        withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
+          owner.captureContext();
+          return compactPrepared();
+        }),
+      );
     } catch (err) {
       return buildCompactionFailureResult(
         isFallbackSummaryError(err) ? err.message : formatErrorMessage(err),

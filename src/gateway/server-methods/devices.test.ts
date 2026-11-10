@@ -1,6 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { captureNodeWakeLifecycle } from "../node-wake-state.js";
+import { setDeviceTokenBindingOwner } from "../openclaw-id/device-token-binding.js";
 import {
   mocks,
   createClient,
@@ -10,10 +11,11 @@ import {
   expectDeviceError,
   captureSecurityEvents,
   resetDeviceHandlerTestState,
+  invokeDevice as invoke,
+  expectPrivate,
 } from "./devices.test-support.js";
 
 const { pairing, approval } = mocks;
-const { deviceHandlers } = await import("./devices.js");
 const hash = expect.stringMatching(/^sha256:[a-f0-9]{12}$/u);
 const scopes = ["operator.pairing"];
 
@@ -25,15 +27,6 @@ const pending = [
   { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
 ];
 const paired = [device(1), device(2)];
-async function invoke(opts: ReturnType<typeof createOptions>) {
-  await expectDefined(deviceHandlers[opts.req.method], opts.req.method)(opts);
-}
-function expectPrivate(events: unknown, secrets: string[]) {
-  const text = JSON.stringify(events);
-  for (const secret of secrets) {
-    expect(text).not.toContain(secret);
-  }
-}
 beforeEach(resetDeviceHandlerTestState);
 
 it.each([
@@ -68,6 +61,100 @@ it("marks live device connections in the pairing list", async () => {
     ["device-1", false],
     ["device-2", true],
   ]);
+});
+
+// OpenClaw ID browsers are managed on the Access page; nodes and unbound pairings are not.
+it("marks only OpenClaw ID operator browsers and forgets bindings of a removed pairing", async () => {
+  const bindings = new Map([
+    ["ocid-browser:operator", "iroh:browser"],
+    ["tunnel-node:node", "iroh:node"],
+    // A node host whose node role was removed first keeps its operator row: still a node host.
+    ["node-host:operator", "iroh:host"],
+  ]);
+  const cleanupEntered = createDeferredCore();
+  const cleanupRelease = createDeferredCore();
+  const forget = vi.fn(async () => {
+    cleanupEntered.resolve();
+    await cleanupRelease.promise;
+  });
+  setDeviceTokenBindingOwner({
+    lookup: (deviceId, role) => bindings.get(`${deviceId}:${role}`),
+    record: async () => {},
+    forget,
+    reportMismatch: () => {},
+  });
+  try {
+    const browser = {
+      deviceId: "ocid-browser",
+      publicKey: "pk-b",
+      clientId: "openclaw-control-ui",
+      clientMode: "webchat",
+      role: "operator",
+      roles: ["operator"],
+    };
+    const node = { deviceId: "tunnel-node", publicKey: "pk-n", role: "node", roles: ["node"] };
+    const host = {
+      deviceId: "node-host",
+      publicKey: "pk-h",
+      // Approval keeps the latest request's UI mode after the node role is removed.
+      clientId: "openclaw-macos",
+      clientMode: "ui",
+      role: "operator",
+      roles: ["operator"],
+    };
+    pairing.listDevicePairing.mockResolvedValue({
+      pending: [],
+      paired: [browser, node, host, device(1)],
+    });
+    let enabled = true;
+    const withConfig = (opts: ReturnType<typeof createOptions>) =>
+      Object.assign(opts.context, {
+        getRuntimeConfig: () => ({ gateway: { openclawId: { enabled } } }),
+      }) && opts;
+    const list = withConfig(createOptions("device.pair.list", {}, createClient(scopes)));
+    await invoke(list);
+    const payload = vi.mocked(list.respond).mock.calls[0]?.[1] as {
+      paired: Array<{ deviceId: string; managedBy?: string }>;
+    };
+    expect(payload.paired.map((d) => [d.deviceId, d.managedBy])).toEqual([
+      ["ocid-browser", "openclaw-id"],
+      ["tunnel-node", undefined],
+      ["node-host", undefined],
+      ["device-1", undefined],
+    ]);
+    pairing.getPairedDevice.mockResolvedValue(browser);
+    const refused = withConfig(
+      createOptions("device.pair.remove", { deviceId: "ocid-browser" }, createClient(scopes)),
+    );
+    await invoke(refused);
+    expect(pairing.removePairedDevice).not.toHaveBeenCalled();
+    expectDeviceError(
+      refused,
+      "This browser connects through OpenClaw ID. Manage access on the Access page.",
+    );
+    enabled = false;
+    pairing.removePairedDevice.mockResolvedValue({ deviceId: "ocid-browser" });
+    const removed = withConfig(
+      createOptions("device.pair.remove", { deviceId: "ocid-browser" }, createClient(scopes)),
+    );
+    const removal = invoke(removed);
+    try {
+      await cleanupEntered.promise;
+      expect(removed.context.invalidateClientsForDevice).toHaveBeenCalledWith("ocid-browser", {
+        reason: "device-pair-removed",
+      });
+      expect(removed.respond).not.toHaveBeenCalled();
+    } finally {
+      cleanupRelease.resolve();
+      await removal;
+    }
+    expect(removed.context.disconnectClientsForDevice).toHaveBeenCalledWith("ocid-browser");
+    expect(forget).toHaveBeenCalledWith([
+      { deviceId: "ocid-browser", role: "operator", peerKey: "iroh:browser" },
+    ]);
+  } finally {
+    setDeviceTokenBindingOwner(undefined);
+  }
 });
 
 it.each([

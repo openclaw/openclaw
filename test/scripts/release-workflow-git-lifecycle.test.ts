@@ -10,7 +10,6 @@ const releaseTag = "v2026.8.1";
 
 type ReleaseMode = "linux" | "macos" | "placeholder";
 type RunOptions = Partial<Parameters<typeof runCiGitStep>[0]>;
-type GitFault = NonNullable<RunOptions["gitFault"]>;
 
 const releases: Record<ReleaseMode, Pick<RunOptions, "workflow" | "env" | "revisions">> = {
   linux: {
@@ -56,9 +55,70 @@ function gitCommands(report: Awaited<ReturnType<typeof releaseRun>>) {
   return report.commands.filter(({ tool }) => tool === "git").map(({ args }) => args);
 }
 
+function selectedTagCheckout(signal: AbortSignal, options: RunOptions = {}) {
+  return runCiGitStep({
+    signal,
+    workflow: {
+      file: ".github/workflows/linux-app-release.yml",
+      job: "validate_release",
+      step: "Checkout selected tag",
+    },
+    fetchResults: [],
+    virtualBackoff: true,
+    ...options,
+    env: { CHECKOUT_KIND: "manual", RELEASE_TAG: releaseTag, ...options.env },
+    revisions: {
+      [`refs/tags/${releaseTag}^{commit}`]: sha,
+      HEAD: sha,
+      ...options.revisions,
+    },
+  });
+}
+
 const fetchMain = ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"];
 const head = ["rev-parse", "HEAD"];
 const onMain = (revision: string) => ["merge-base", "--is-ancestor", revision, "origin/main"];
+
+posixIt("retries selected-tag acquisition and checks out its exact commit", async ({ signal }) => {
+  const report = await selectedTagCheckout(signal, { fetchResults: [23, 23, 0] });
+  expect(report.code, report.output).toBe(0);
+  expect(
+    gitCommands(report).filter(([operation]) => operation === "fetch"),
+    report.output,
+  ).toEqual(
+    Array.from({ length: 3 }, () => [
+      "fetch",
+      "--force",
+      "--no-tags",
+      "origin",
+      `+refs/tags/${releaseTag}:refs/tags/${releaseTag}`,
+    ]),
+  );
+  expect(gitCommands(report)).toContainEqual(["checkout", "--detach", sha]);
+  expect(report.output).toContain("Selected release tag fetch attempt 2/3 failed; retrying.");
+});
+
+posixIt(
+  "fails closed when selected-tag acquisition exhausts its retry budget",
+  async ({ signal }) => {
+    const report = await selectedTagCheckout(signal, { fetchResults: [23, 23, 23] });
+    expect(report.code, report.output).not.toBe(0);
+    expect(gitCommands(report).filter(([operation]) => operation === "fetch")).toHaveLength(3);
+    expect(gitCommands(report).some(([operation]) => operation === "checkout")).toBe(false);
+    expect(report.output).toContain("Failed to fetch selected release tag after 3 attempts.");
+  },
+);
+
+posixIt(
+  "rejects a selected-tag checkout that does not retain the fetched commit",
+  async ({ signal }) => {
+    const report = await selectedTagCheckout(signal, { revisions: { HEAD: otherSha } });
+    expect(report.code, report.output).not.toBe(0);
+    expect(report.output).toContain(
+      "Selected release tag checkout did not preserve its exact commit.",
+    );
+  },
+);
 
 posixIt.for([releaseTag, `${releaseTag}-2`])(
   "Linux admits a stable tag from its matching release branch: %s",
@@ -128,51 +188,21 @@ const addFailure = (
   options: RunOptions,
   expected: Record<string, unknown> = {},
 ) => failures.push({ mode, options, expected });
-const fault = (operation: string, code: GitFault["code"], occurrence?: number) => ({
+const fault = (operation: string, code: number, occurrence?: number) => ({
   gitFault: { match: `^${operation} `, code, occurrence },
 });
 const ancestry = (revision: string, branch = "origin/main") =>
   `merge-base --is-ancestor ${revision} ${branch}`;
 const shaRejection =
   "NPM placeholder publication requires ref to equal the exact main workflow SHA.";
-const failureCodes = { cancel: 143, "cleanup-failure": 125, hang: 124 };
-const failureCode = (failure: GitFault["code"]) =>
-  typeof failure === "number" ? failure : failureCodes[failure];
-
+// Owner startup, cancellation and drain faults are covered by
+// ci-platform-checkout.test.ts; here retain each workflow's admission decisions.
 for (const mode of ["linux", "macos", "placeholder"] as const) {
-  for (const failure of [23, 125, "hang"] as const) {
-    addFailure(
-      mode,
-      { fetchResults: [failure] },
-      { code: failureCode(failure), operation: "fetch" },
-    );
-  }
-  for (const setupFailure of ["owner", "python", "git"] as const) {
-    addFailure(mode, { setupFailure });
-  }
+  addFailure(mode, { fetchResults: [23] }, { code: 23, operation: "fetch" });
 }
 for (const mode of ["linux", "macos"] as const) {
   for (const code of [23, 125]) {
     addFailure(mode, fault("rev-parse", code), { code, operation: "rev-parse" });
-  }
-}
-for (const [mode, operation, occurrence] of [
-  ["linux", "fetch"],
-  ["linux", "rev-parse"],
-  ["linux", "merge-base"],
-  ["macos", "rev-parse"],
-  ["macos", "fetch"],
-  ["placeholder", "rev-parse"],
-  ["placeholder", "fetch"],
-  ["placeholder", "merge-base", 1],
-  ["placeholder", "merge-base", 2],
-] as const) {
-  for (const failure of ["cleanup-failure", "cancel"] as const) {
-    addFailure(mode, fault(operation, failure, occurrence), {
-      code: failureCode(failure),
-      operation,
-      terminalMessage: false,
-    });
   }
 }
 for (const code of [23, 125]) {
@@ -183,19 +213,14 @@ for (const code of [23, 125]) {
     gitCount: 1,
   });
 }
-for (const failure of [128, "cleanup-failure", "cancel"] as const) {
-  addFailure(
-    "linux",
-    {
-      commandResults: { [ancestry(sha)]: { code: 1 } },
-      ...fault("fetch", failure, 2),
-    },
-    {
-      code: failureCode(failure),
-      operation: "fetch",
-    },
-  );
-}
+addFailure(
+  "linux",
+  {
+    commandResults: { [ancestry(sha)]: { code: 1 } },
+    ...fault("fetch", 128, 2),
+  },
+  { code: 128, operation: "fetch" },
+);
 for (const occurrence of [1, 2]) {
   addFailure("placeholder", fault("merge-base", 23, occurrence), {
     code: 1,

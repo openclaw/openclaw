@@ -1,3 +1,4 @@
+import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createGatewayHttpServer } from "../server-http.js";
 import { createNodeWorkspaceTransferHttpCallback } from "./node-workspace-transfer-http.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
@@ -26,16 +27,9 @@ export async function startNodeWorkspaceTransferTestServer(service: NodeWorkspac
     getRuntimeConfig: () => ({}),
     handleNodeWorkspaceTransferRequest: createNodeWorkspaceTransferHttpCallback(service),
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("workspace transfer test server did not bind");
-  }
+  const gatewayUrl = await listenLoopback(server, "ws");
   return {
-    gatewayUrl: `ws://127.0.0.1:${address.port}`,
+    gatewayUrl,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {

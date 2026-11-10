@@ -6,13 +6,14 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
-type MatrixThreadBindingTargetKind = "subagent" | "acp";
+type MatrixThreadBindingTargetKind = "subagent" | "acp" | "session";
 
 export type MatrixThreadBindingRecord =
   AccountScopedConversationBindingRecord<MatrixThreadBindingTargetKind> & {
     parentConversationId?: string;
     idleTimeoutMs?: number;
     maxAgeMs?: number;
+    metadata?: Record<string, unknown>;
   };
 
 type MatrixThreadBindingManager = {
@@ -93,6 +94,7 @@ export function toSessionBindingRecord(
     bindingId: resolveBindingKey(record),
     targetKind: record.targetKind === "subagent" ? "subagent" : "session",
     lifecycle: { ...lifecycle, idleTimeoutMs, maxAgeMs },
+    metadata: (lifecycleMetadata) => ({ ...lifecycleMetadata, ...record.metadata }),
   });
 }
 

@@ -1,5 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  ConnectErrorDetailCodes,
+  type readPairingConnectErrorDetails,
+} from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import {
   redactLoginFailureError,
   resolveAuthHintKind,
@@ -73,16 +77,54 @@ export type LoginFailureFeedback = {
   primaryCommand?: string;
   refreshAction?: { label: string };
   steps: LoginFailureStep[];
+  details?: string[];
   docsHref: string;
   rawError: string;
 };
 
 export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[0] & {
+  lastErrorPairing?: ReturnType<typeof readPairingConnectErrorDetails>;
   gatewayUrl?: string;
   secret?: string;
   reconnectPending?: boolean;
   reconnectAt?: number;
 };
+
+type PairingCopy = { titleKey: string; summaryKey: string; params?: Record<string, string> };
+
+/**
+ * Titles follow what approval would grant, not the Gateway's reason code alone: a
+ * revoked token for an approved role is reported as "role-upgrade" but adds nothing.
+ */
+function resolvePairingCopy(
+  kind: string,
+  pairing: LoginFailureFeedbackParams["lastErrorPairing"],
+): PairingCopy {
+  if (kind === "pairing-required") {
+    return { titleKey: "title", summaryKey: "summary" };
+  }
+  if (kind === "metadata-upgrade-pending") {
+    return { titleKey: "metadataTitle", summaryKey: "upgradeSummary" };
+  }
+  const role = pairing?.requestedRole;
+  const approvedRoles = pairing?.approvedRoles ?? [];
+  if (!role || !pairing?.requestedScopes) {
+    return {
+      titleKey: kind === "role-upgrade-pending" ? "roleTitle" : "scopeTitle",
+      summaryKey: "upgradeSummary",
+    };
+  }
+  if (!approvedRoles.includes(role)) {
+    return { titleKey: "roleTitle", summaryKey: "roleSummary", params: { role } };
+  }
+  const allowedScopes = pairing.approvedScopes ?? [];
+  const added = pairing.requestedScopes.filter(
+    (scope) => !roleScopesAllow({ role, requestedScopes: [scope], allowedScopes }),
+  );
+  return added.length > 0
+    ? { titleKey: "scopeTitle", summaryKey: "scopeSummary", params: { scopes: added.join(", ") } }
+    : { titleKey: "restoreTitle", summaryKey: "restoreSummary", params: { role } };
+}
 
 function buildFeedback(
   error: string,
@@ -97,6 +139,7 @@ function buildFeedback(
     summaryKey?: string;
     primaryCommand?: string;
     stepKeys: LoginFailureStepDefinition[];
+    detailKeys?: string[];
     stepParams?: Record<string, string>;
     refreshAction?: { label: string };
   },
@@ -118,6 +161,7 @@ function buildFeedback(
         ? { text: translate(step), commands: [] }
         : { text: translate(step.key), commands: step.commands },
     ),
+    details: params.detailKeys?.map(translate),
     docsHref,
     rawError,
   };
@@ -180,14 +224,8 @@ export function resolveLoginFailureFeedback(
     return buildFeedback(rawError, "login.failure.accessDenied", {
       kind: "access-denied",
       tone: "warn",
-      stepKeys: [
-        "stepAdmin",
-        {
-          key: "stepFindProfile",
-          commands: ["openclaw users list --json"],
-        },
-        "stepReconnect",
-      ],
+      stepKeys: ["stepAdmin", "stepReconnect"],
+      detailKeys: ["stepFindProfile"],
       docsHref: "https://docs.openclaw.ai/gateway/operator-scopes#named-operator-roles",
     });
   }
@@ -219,21 +257,15 @@ export function resolveLoginFailureFeedback(
     });
   }
 
-  const pairing = resolvePairingHint(false, rawError, lastErrorCode);
+  const pairing = resolvePairingHint(rawError, lastErrorCode);
   if (pairing) {
+    const copy = resolvePairingCopy(pairing.kind, params.lastErrorPairing);
     return buildFeedback(rawError, "login.failure.pairing", {
       kind: "pairing-required",
       tone: "pending",
       docsHref: "https://docs.openclaw.ai/web/control-ui#device-pairing-first-connection",
-      titleKey:
-        pairing.kind === "scope-upgrade-pending"
-          ? "scopeTitle"
-          : pairing.kind === "role-upgrade-pending"
-            ? "roleTitle"
-            : pairing.kind === "metadata-upgrade-pending"
-              ? "metadataTitle"
-              : "title",
-      summaryKey: pairing.kind === "pairing-required" ? "summary" : "upgradeSummary",
+      titleKey: copy.titleKey,
+      summaryKey: copy.summaryKey,
       // `approve --latest` only previews the newest pending request and prints the
       // exact approve command; without a request id the steps say to run that too.
       primaryCommand: pairing.requestId
@@ -244,7 +276,7 @@ export function resolveLoginFailureFeedback(
         { key: "stepDashboard", commands: ["openclaw dashboard"] },
         ...(params.reconnectPending ? [] : ["stepReconnect"]),
       ],
-      stepParams: { host },
+      stepParams: { host, ...copy.params },
     });
   }
 
@@ -260,7 +292,7 @@ export function resolveLoginFailureFeedback(
     });
   }
 
-  if (shouldShowInsecureContextHint(false, rawError, lastErrorCode)) {
+  if (shouldShowInsecureContextHint(rawError, lastErrorCode)) {
     return buildFeedback(rawError, "login.failure.insecure", {
       kind: "insecure-context",
       docsHref: "https://docs.openclaw.ai/web/control-ui#insecure-http",
@@ -276,11 +308,15 @@ export function resolveLoginFailureFeedback(
       kind: "origin-not-allowed",
       docsHref:
         "https://docs.openclaw.ai/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway",
-      stepKeys: ["stepAllowedOrigins", "stepFullOrigin", "stepRestart"],
+      stepKeys: [],
+      detailKeys: ["stepAllowedOrigins", "stepFullOrigin", "stepRestart"],
     });
   }
 
-  if (lower.includes("protocol mismatch")) {
+  if (
+    lastErrorCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
+    lower.includes("protocol mismatch")
+  ) {
     return buildFeedback(rawError, "login.failure.protocol", {
       kind: "protocol-mismatch",
       docsHref:
@@ -299,7 +335,8 @@ export function resolveLoginFailureFeedback(
   if (authHintKind === "trusted-proxy") {
     return buildFeedback(rawError, "login.failure.trustedProxy", {
       kind: "trusted-proxy",
-      stepKeys: ["stepSignIn", "stepHeaders", "stepNoToken"],
+      stepKeys: ["stepSignIn", "stepNoToken"],
+      detailKeys: ["stepHeaders"],
       docsHref: "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
     });
   }

@@ -33,6 +33,12 @@ openclaw dns setup --apply
 
 Without `--domain`, OpenClaw uses `discovery.wideArea.domain` from config. Setting that domain enables wide-area discovery.
 
+If no domain is configured, `--domain` is not a valid DNS name, or `--apply`
+runs off macOS or without a tailnet IP, the CLI prints the specific reason on
+stderr and exits with status `1`.
+
+The preview escapes control characters in displayed paths; the actual zone path is unchanged.
+
 Without `--apply`, the command only prints:
 
 - Resolved discovery domain and zone file path

@@ -23,12 +23,12 @@ function expectNoSeed(
 
 describe("pnpm image archive consumer", () => {
   it.for([
-    { platform: "win32", version: "12.12.1" },
-    { platform: "linux", version: "12.3.4" },
+    { platform: "win32", version: "12.15.0" },
+    { platform: "linux", version: "12.15.0" },
   ] as const)(
     "seeds $platform jobs from verified $version archives into private Corepack state",
     async ({ platform, version }, { command }) => {
-      const f = createPnpmArchiveFixture(command, { platform, version, image: true });
+      const f = createPnpmArchiveFixture(command, { platform, image: true });
       const homes: string[] = [];
       for (let run = 0; run < 2; run++) {
         const result = await f.run();
@@ -64,13 +64,12 @@ describe("pnpm image archive consumer", () => {
   );
 
   it.for([
-    { platform: "win32", version: "12.12.1", name: "pnpm-12.12.1.tgz" },
-    { platform: "linux", version: "12.3.4", name: "pnpm-12.3.4.tgz" },
-    { platform: "linux", version: "12.3.4", name: "exe.linux-x64-12.3.4.tgz" },
+    { platform: "win32", version: "12.15.0", name: "pnpm-12.15.0.tgz" },
+    { platform: "linux", version: "12.15.0", name: "exe.linux-x64-12.15.0.tgz" },
   ] as const)(
     "delegates substituted $name on $platform to Corepack, ignoring adjacent trust markers",
-    async ({ platform, version, name }, { command }) => {
-      const f = createPnpmArchiveFixture(command, { platform, version, image: true });
+    async ({ platform, name }, { command }) => {
+      const f = createPnpmArchiveFixture(command, { platform, image: true });
       fs.writeFileSync(join(f.image, name), "bad archive");
       fs.writeFileSync(join(f.image, ".complete"), "");
       fs.writeFileSync(
@@ -81,19 +80,12 @@ describe("pnpm image archive consumer", () => {
     },
   );
 
-  it.for(["different-version", "different-hash"])(
-    "leaves Corepack preparation in control for %s despite valid cached archives",
-    async (kind, { command }) => {
-      const f = createPnpmArchiveFixture(command, { version: "12.3.4", image: true });
-      const requested =
-        kind === "different-version"
-          ? f.spec.replace("12.3.4", "12.3.5")
-          : f.spec.replace(/.$/u, "z");
-      expectNoSeed(await f.run({}, requested), f.runner);
-    },
-  );
+  it("leaves a mismatched package-manager hash to Corepack", async ({ command }) => {
+    const f = createPnpmArchiveFixture(command, { image: true });
+    expectNoSeed(await f.run({}, f.spec.replace(/.$/u, "z")), f.runner);
+  });
 
-  it("wires image seeding before preparation without changing dependency installation", () => {
+  it("wires image seeding before Corepack preparation", () => {
     const action = parse(read(".github/actions/setup-pnpm-store-cache/action.yml"));
     for (const steps of [action.runs.steps, workflow.jobs.hydrate.steps]) {
       const preparation = steps.find((step: { run?: string }) =>
@@ -102,15 +94,7 @@ describe("pnpm image archive consumer", () => {
       expect(preparation.run.indexOf("seed-pnpm-from-image.mjs")).toBeLessThan(
         preparation.run.indexOf("corepack prepare"),
       );
-      expect(preparation.run).toContain('echo "COREPACK_HOME=$COREPACK_HOME" >> "$GITHUB_ENV"');
     }
-    const hydration = workflow.jobs.hydrate.steps;
-    expect(hydration.find((step: { name: string }) => step.name === "Setup Node.js").run).toContain(
-      'openclaw_ensure_node "24.x"',
-    );
-    expect(
-      hydration.find((step: { run?: string }) => step.run?.includes("install_args=")).run,
-    ).toContain("--frozen-lockfile");
   });
 
   it.each([

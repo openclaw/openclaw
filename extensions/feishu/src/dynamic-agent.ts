@@ -10,11 +10,6 @@ import type { DynamicAgentCreationConfig } from "./types.js";
 
 type DynamicAgentMutationResult = {
   created: boolean;
-  agentId?: string;
-};
-
-type MaybeCreateDynamicAgentResult = DynamicAgentMutationResult & {
-  updatedCfg: OpenClawConfig;
 };
 
 class DynamicAgentMutationSkipped extends Error {
@@ -77,7 +72,7 @@ export async function maybeCreateDynamicAgent(params: {
   senderOpenId: string;
   canCreateForConfig: (cfg: OpenClawConfig) => Promise<boolean>;
   log: (msg: string) => void;
-}): Promise<MaybeCreateDynamicAgentResult> {
+}) {
   const { cfg, runtime, senderOpenId, canCreateForConfig, log } = params;
   const accountId = normalizeAccountId(params.accountId);
 
@@ -177,7 +172,7 @@ export async function maybeCreateDynamicAgent(params: {
             },
           },
         ];
-        return { created: true, agentId };
+        return { created: true };
       },
     })
     .catch((error: unknown) => {
@@ -194,7 +189,6 @@ export async function maybeCreateDynamicAgent(params: {
   return {
     created: committed.result?.created ?? false,
     updatedCfg: runtime.config.current() as OpenClawConfig,
-    agentId: committed.result?.agentId,
   };
 }
 

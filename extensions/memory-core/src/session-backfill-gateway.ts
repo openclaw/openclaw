@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -102,6 +103,7 @@ function resolveExecutionContext(api: OpenClawPluginApi, agentId: string) {
   });
   return {
     workspaceDir,
+    workspaceFileMode: resolveAgentConfig(config, agentId)?.workspaceFileMode,
     ...(pluginConfig ? { pluginConfig } : {}),
     ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
   };

@@ -1,4 +1,6 @@
+import type { Context, PreparedSystemPrompt } from "@openclaw/llm-core";
 import { normalizeStructuredPromptSection } from "./prompt-cache-stability.js";
+import { sanitizeSurrogates } from "./sanitize-unicode.js";
 
 export const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\n";
 
@@ -6,12 +8,65 @@ export const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\
 export const SYSTEM_PROMPT_RELOCATABLE_BOUNDARY = "\n<!-- OPENCLAW-RELOCATABLE-BOUNDARY -->\n";
 export const SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END = "\n<!-- /OPENCLAW-RELOCATABLE-BOUNDARY -->";
 
+// Request conversion and egress observation strip the same session prompt every turn.
+const strippedSystemPrompts = new Map<string, string>();
+const MAX_STRIPPED_SYSTEM_PROMPTS = 32;
+
+/** Carry this fact with its session; interleaved sessions cannot evict a live revision. */
+export function prepareSystemPrompt(
+  text: string,
+  previous?: PreparedSystemPrompt,
+): PreparedSystemPrompt {
+  if (previous?.text === text) {
+    return previous;
+  }
+  let stripped: string | undefined;
+  let instructions: string | undefined;
+  return Object.freeze({
+    text,
+    get stripped() {
+      return (stripped ??= stripSystemPromptCacheBoundary(text));
+    },
+    get instructions() {
+      return (instructions ??= sanitizeSurrogates(this.stripped));
+    },
+  });
+}
+
+/** A stream's boundary transform carries the revision it actually passes downstream. */
+export function createSystemPromptCacheBoundaryStripper() {
+  let prepared: PreparedSystemPrompt | undefined;
+  return <T extends Pick<Context, "systemPrompt" | "preparedSystemPrompt">>(context: T): T => {
+    if (!context.systemPrompt) {
+      return context;
+    }
+    const stripped = prepareSystemPrompt(
+      context.systemPrompt,
+      context.preparedSystemPrompt,
+    ).stripped;
+    prepared = prepareSystemPrompt(stripped, prepared);
+    return { ...context, systemPrompt: stripped, preparedSystemPrompt: prepared };
+  };
+}
+
 export function stripSystemPromptCacheBoundary(text: string): string {
-  return stripSystemPromptRelocatableBoundary(
-    text
-      .replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY, "\n")
-      .replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY.trim(), ""),
-  );
+  let stripped = strippedSystemPrompts.get(text);
+  if (stripped === undefined) {
+    // Marker removal is ordered: one removal can join text into the next marker.
+    stripped = stripSystemPromptRelocatableBoundary(
+      text
+        .replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY, "\n")
+        .replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY.trim(), ""),
+    );
+    for (const oldest of strippedSystemPrompts.keys()) {
+      if (strippedSystemPrompts.size < MAX_STRIPPED_SYSTEM_PROMPTS) {
+        break;
+      }
+      strippedSystemPrompts.delete(oldest);
+    }
+    strippedSystemPrompts.set(text, stripped);
+  }
+  return stripped;
 }
 
 /** Reject ambiguous markers from workspace or hook text instead of moving instructions. */
@@ -60,6 +115,23 @@ export function splitSystemPromptCacheBoundary(
     stablePrefix: text.slice(0, boundaryIndex).trimEnd(),
     dynamicSuffix: text.slice(boundaryIndex + SYSTEM_PROMPT_CACHE_BOUNDARY.length).trimStart(),
   };
+}
+
+/** Keep the stripped prompt's separator in wire text while marking its stable prefix. */
+export function splitSystemPromptCacheBoundaryForWire(
+  text: string,
+): { stablePrefix: string; dynamicSuffix: string } | undefined {
+  const split = splitSystemPromptCacheBoundary(text);
+  if (!split) {
+    return undefined;
+  }
+  const wireText = text.replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY, "\n");
+  if (!split.stablePrefix) {
+    return { stablePrefix: "", dynamicSuffix: wireText };
+  }
+  return split.dynamicSuffix
+    ? { stablePrefix: split.stablePrefix, dynamicSuffix: wireText.slice(split.stablePrefix.length) }
+    : { stablePrefix: wireText, dynamicSuffix: "" };
 }
 
 /** Keep explicit cache breakpoints while removing relocation metadata. */

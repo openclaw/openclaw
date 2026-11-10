@@ -806,6 +806,48 @@ struct ChatGatewayRequestTests {
         #expect(json.contains("a.png"))
     }
 
+    @Test func `audio send waits for admission while explicit request deadlines remain caller owned`() {
+        for timeout in [nil, 1200] as [Int?] {
+            let request = OpenClawChatGatewayRequests.sendMessage(
+                sessionKey: "main",
+                agentID: nil,
+                expectedSessionRoutingContract: nil,
+                message: "caption",
+                thinking: nil,
+                idempotencyKey: "audio-send",
+                attachments: [.init(type: "file", mimeType: "audio/wav", fileName: "voice.wav", content: "abc")],
+                requestTimeoutMs: timeout)
+            #expect(request.timeoutMs == Double(timeout ?? 0))
+            #expect(request.params["timeoutMs"] == nil)
+        }
+    }
+
+    @Test func `attachment send deadline leaves admission time after a slow upload`() {
+        // An 8 MB file is 10,666,668 base64 bytes. URLSession reports the send
+        // done once buffered, so the deadline must outlast the upload itself.
+        let content = String(repeating: "A", count: 10_666_668)
+        func request(_ timeout: Int?, _ attachments: [OpenClawChatAttachmentPayload]) -> Double {
+            OpenClawChatGatewayRequests.sendMessage(
+                sessionKey: "main",
+                agentID: nil,
+                expectedSessionRoutingContract: nil,
+                message: "report",
+                thinking: nil,
+                idempotencyKey: "file-send",
+                attachments: attachments,
+                requestTimeoutMs: timeout).timeoutMs
+        }
+        let file = OpenClawChatAttachmentPayload(
+            type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: content)
+        let uploadAt1MbpsMs = Double(content.utf8.count * 8 / 1000)
+
+        // 30 s admission window plus the upload at 256 kbit/s.
+        #expect(request(nil, [file]) == 30000 + 333_333)
+        #expect(request(nil, [file]) > 30000 + uploadAt1MbpsMs)
+        #expect(request(nil, []) == 30000)
+        #expect(request(1200, [file]) == 1200)
+    }
+
     @Test func `send request omits inherited thinking override`() {
         let inherited = OpenClawChatGatewayRequests.sendMessage(
             sessionKey: "global",
@@ -821,6 +863,28 @@ struct ChatGatewayRequestTests {
         #expect(inherited.params["thinking"] == nil)
         #expect(inherited.params["expectedPermissionMode"] == nil)
         #expect(inherited.params["expectedToolOverrides"] == nil)
+    }
+
+    @Test(arguments: [nil, .steer, .followup] as [OpenClawChatQueueMode?])
+    func `send request preserves a per message queue mode`(mode: OpenClawChatQueueMode?) throws {
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "agent:main:main",
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            queueMode: mode,
+            message: "Keep the original wording.",
+            thinking: nil,
+            idempotencyKey: "mode-choice",
+            attachments: [])
+        let serialized = try JSONEncoder().encode(request.params)
+        let params = try #require(JSONSerialization.jsonObject(with: serialized) as? [String: Any])
+        let expectedMode: String? = switch mode {
+        case .steer: "steer"
+        case .followup: "followup"
+        case nil: nil
+        }
+        #expect(params["queueMode"] as? String == expectedMode)
+        #expect(params["message"] as? String == "Keep the original wording.")
     }
 
     @Test func `question resolve request uses the gateway answer envelope`() throws {

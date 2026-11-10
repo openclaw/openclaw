@@ -8,10 +8,21 @@
   min-width: 0;
 }
 
+@media (forced-colors: active) {
+  .cron-page .session-css-icon {
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+
+  .cron-page :is(:disabled, [aria-disabled="true"]) .session-css-icon {
+    background: GrayText;
+  }
+}
+
 /* Popover menus (row actions, filters) must escape the group surface;
    .settings-group clips overflow by default. */
-.cron-page .settings-group:has(.cron-table),
-.cron-page .settings-group:has(.cron-runs) {
+.cron-page .settings-group:has(> .cron-table),
+.cron-page .settings-group:has(> * > .cron-runs) {
   overflow: visible;
 }
 
@@ -36,8 +47,7 @@
   font-size: var(--control-ui-text-xs);
 }
 
-.cron-admin-note svg,
-.cron-row-run svg {
+.cron-admin-note svg {
   width: 12px;
   height: 12px;
 }
@@ -77,10 +87,11 @@
 .cron-toolbar .btn {
   height: var(--settings-control-height);
   padding-block: 0;
-  box-sizing: border-box;
 }
 
 .cron-search-box {
+  /* Text edits should repaint the search field without repainting every row. */
+  will-change: transform;
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
@@ -110,16 +121,6 @@
   padding-left: 32px;
 }
 
-/* The global :focus-visible outline draws an offset accent rectangle around
-   the input, and the accent is red — it reads as an error state. Focus is a
-   quiet border tint instead. */
-.cron-search-box input:focus,
-.cron-search-box input:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
-  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
-}
-
 .cron-toolbar__actions {
   display: flex;
   align-items: center;
@@ -139,23 +140,10 @@
   height: 14px;
 }
 
-.cron-refresh {
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-
-.cron-refresh svg,
 .cron-detail-actions .btn svg,
 .cron-trigger-summary svg {
   width: 13px;
   height: 13px;
-}
-
-.cron-refresh--loading svg {
-  animation: btn-spinner-spin 0.9s linear infinite;
 }
 
 .cron-filter-popover {
@@ -177,7 +165,17 @@
   padding: var(--space-3);
   display: grid;
   gap: var(--space-3);
-  box-shadow: var(--overlay-shadow);
+}
+
+.oc-sheet .cron-filter-popover__panel {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: auto;
+  padding: 0;
+}
+
+/* Schedule and Last run share a row; longer values such as "Recently updated" take the full width. */
+.oc-sheet .cron-filter-popover__panel > :nth-child(n + 3) {
+  grid-column: 1 / -1;
 }
 
 .cron-error-banner {
@@ -188,6 +186,17 @@
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
+}
+
+.cron-failure-details__cause {
+  overflow-wrap: anywhere;
+}
+
+.cron-failure-details__cause--preview {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 /* ── Jobs table (escape hatch inside the tasks group) ── */
@@ -208,10 +217,11 @@
   grid-template-columns: var(--cron-table-columns);
   gap: var(--space-3);
   align-items: center;
-  padding: var(--space-2) var(--space-4);
+  padding: var(--list-row-padding);
 }
 
 .cron-table__head {
+  padding-block: var(--space-2);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
@@ -221,17 +231,15 @@
 }
 
 .cron-table__row {
+  /* Keep row paint local; action menus live in the top layer. */
+  contain: layout paint;
   cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
-.cron-table__row + .cron-table__row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
 .cron-table__row:hover,
 .cron-table__row:focus-within {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .cron-table__row--paused .cron-table__name-text,
@@ -248,8 +256,8 @@
   border: 0;
   color: var(--text-strong);
   background: transparent;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
   text-align: left;
 }
 
@@ -258,8 +266,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
   margin-top: 2px;
   color: var(--muted);
 }
@@ -273,6 +281,11 @@
   fill: none;
 }
 
+.cron-table__state svg {
+  width: 100%;
+  height: 100%;
+}
+
 .cron-table__state-dot {
   width: 8px;
   height: 8px;
@@ -281,7 +294,7 @@
 }
 
 .cron-table__state--running {
-  color: var(--accent-2);
+  color: var(--status-running);
 }
 
 .cron-table__state--running svg {
@@ -292,12 +305,15 @@
   color: var(--danger);
 }
 
+.cron-table__state--warning {
+  color: var(--warn);
+}
+
 .cron-table__state--paused {
   color: var(--muted);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cron-refresh--loading svg,
   .cron-table__state--running svg {
     animation: none;
   }
@@ -319,20 +335,12 @@
   min-width: 0;
 }
 
-.cron-table__name-text,
-.cron-table__cell-value {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .cron-table__description {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -348,16 +356,21 @@
 }
 
 .cron-table__running {
-  color: var(--accent-2);
+  color: color-mix(in srgb, var(--status-running) 70%, var(--text-strong));
 }
 
 .cron-table__auto-disabled {
   color: var(--danger);
 }
 
+/* The meta group only exists as a box in the phone card. */
+.cron-table__meta {
+  display: contents;
+}
+
 .cron-table__cell {
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--control-ui-text-sm);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -368,13 +381,17 @@
   display: none;
 }
 
+.cron-table__waiting {
+  white-space: normal;
+}
+
 .cron-table__last {
   display: flex;
   align-items: center;
 }
 
 .cron-table__last-run {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -420,14 +437,6 @@
   gap: 6px;
 }
 
-.cron-row-run {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-
 .cron-empty-state {
   padding: var(--space-6) var(--space-4);
   display: grid;
@@ -438,7 +447,7 @@
 
 .cron-empty-state__title {
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 650;
 }
 
@@ -487,7 +496,7 @@
 
 .cron-detail-title {
   color: var(--text-strong);
-  font-size: 20px;
+  font-size: calc(20px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: -0.01em;
   min-width: 0;
@@ -507,13 +516,6 @@
 .cron-detail-description__label {
   color: var(--muted);
   font-weight: 600;
-}
-
-.cron-detail-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
 }
 
 .cron-detail-sub {
@@ -620,18 +622,6 @@
   margin-left: 3px;
 }
 
-.cron-required-sr {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 .cron-editor input[aria-invalid="true"],
 .cron-editor textarea[aria-invalid="true"] {
   border-color: var(--danger);
@@ -644,7 +634,7 @@
   padding: var(--space-3) var(--space-4);
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.4;
 }
 
@@ -708,7 +698,7 @@
 
 .cron-form-status__title {
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
   margin-bottom: var(--space-1);
 }
@@ -738,6 +728,13 @@
   color: var(--text-strong);
 }
 
+/* The action bar owns bottom spacing while present. Shell and settings-page
+   padding would leave form content visible beneath it, including at scroll end. */
+.shell main.content.content--cron-editor,
+.content--cron-editor .cron-page--detail > .settings-page {
+  padding-bottom: 0;
+}
+
 /* Sticky save bar: stays visible while the long form scrolls in `.content`. */
 .cron-editor-actions {
   position: sticky;
@@ -761,13 +758,11 @@
 
 .cron-job-menu {
   position: relative;
+  display: flex;
 }
 
 .cron-job-menu__trigger {
   list-style: none;
-  width: 30px;
-  justify-content: center;
-  padding: 0;
 }
 
 .cron-job-menu__item {
@@ -775,7 +770,7 @@
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
   padding: 7px 10px;
   border-radius: var(--menu-item-radius);
@@ -841,7 +836,7 @@
 .cron-condition-activity__metric dd {
   margin: 2px 0 0;
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
 }
 
@@ -868,7 +863,7 @@
 }
 
 .cron-runs__empty {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .cron-runs__list {
@@ -910,7 +905,7 @@
   gap: var(--space-2);
   align-items: center;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .cron-filter-dropdown__option > .oc-menu-item__check {
@@ -940,7 +935,6 @@
   align-items: baseline;
   gap: var(--space-2);
   width: 100%;
-  box-sizing: border-box;
 }
 
 @media (min-width: 1400px) {
@@ -962,7 +956,7 @@
 
 .cron-run-entry__title {
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
 }
 
@@ -982,7 +976,6 @@
   line-height: 1.45;
   min-width: 0;
   width: 100%;
-  box-sizing: border-box;
 }
 
 .cron-run-entry__body pre,
@@ -996,25 +989,17 @@
   width: 100%;
 }
 
-.cron-run-entry__body.chat-text pre,
-.cron-run-entry__body.chat-text blockquote {
+.cron-run-entry__body.chat-text :is(pre, blockquote) {
   width: 100%;
   max-width: 100%;
-  box-sizing: border-box;
 }
 
-.cron-run-entry__body.chat-text pre + p,
-.cron-run-entry__body.chat-text blockquote + p,
-.cron-run-entry__body.chat-text table + p,
-.cron-run-entry__body.chat-text p + pre,
-.cron-run-entry__body.chat-text p + blockquote,
-.cron-run-entry__body.chat-text p + table {
+.cron-run-entry__body.chat-text :is(pre, blockquote, table) + p,
+.cron-run-entry__body.chat-text p + :is(pre, blockquote, table) {
   margin-top: 0.75em;
 }
 
-.cron-run-entry__body.chat-text pre,
-.cron-run-entry__body.chat-text blockquote,
-.cron-run-entry__body.chat-text table {
+.cron-run-entry__body.chat-text :is(pre, blockquote, table) {
   margin-bottom: 0.75em;
 }
 
@@ -1074,8 +1059,6 @@
   .cron-table__row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2) var(--space-3);
-    padding-top: var(--space-3);
-    padding-bottom: var(--space-3);
   }
 
   .cron-table__name {
@@ -1124,27 +1107,142 @@
     align-self: flex-start;
   }
 
+  /* The agent scope moved into the toolbar, so the header keeps no empty row. */
+  openclaw-cron-page .content-header.hub-page-header:has(> .hub-page-header__actions:empty) {
+    row-gap: 0;
+  }
+
+  .cron-toolbar__scope {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
   .cron-new-task {
-    width: 44px;
-    min-height: 44px;
-    padding: 0;
-    justify-content: center;
-    font-size: 0;
+    margin-left: auto;
   }
-}
 
-@media (max-width: 400px) {
+  .cron-toolbar .cron-tabs {
+    box-shadow: none;
+  }
+
+  /* One card line for the name and its controls, one for schedule, next and last. */
   .cron-table__row {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px var(--space-1);
+    align-items: start;
+    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
   }
 
-  .cron-table__cell {
-    display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  /* The name line shares the controls' height, so they center together in every
+     state, including the auto-disabled card's extra line. */
+  .cron-table__name-line {
+    min-height: 32px;
+  }
+
+  .cron-table__state {
+    margin-top: calc((32px - var(--list-row-icon-size)) / 2);
+  }
+
+  .cron-table__name-meta {
+    margin-top: -4px;
+  }
+
+  /* The whole row opens the job, so its name needs no touch minimum of its own. */
+  .cron-table .cron-table__row .cron-table__name {
+    grid-area: 1 / 1;
+    min-height: 0;
+  }
+
+  .cron-table__name-copy > openclaw-agent-row-chip,
+  .cron-table__description,
+  .cron-table__meta-separator,
+  .cron-table__paused-note:not(.cron-table__auto-disabled),
+  .cron-table__name-meta:not(:has(.cron-table__auto-disabled)),
+  .cron-table__schedule-zone,
+  .cron-table__cell-label {
+    display: none;
   }
 
   .cron-table__actions {
+    grid-area: 1 / 2;
     padding-left: 0;
+  }
+
+  .cron-table .cron-table__row :is(.cron-row-run, .cron-job-menu__trigger) {
+    --oc-icon-button-size: 32px;
+  }
+
+  .cron-table .cron-table__row .settings-toggle {
+    min-width: 0;
+    min-height: 32px;
+  }
+
+  .cron-table__meta {
+    grid-area: 2 / 1 / auto / -1;
+    display: flex;
+    align-items: center;
+    /* Lines up with the name, past the status mark and its gap. */
+    padding-left: calc(var(--list-row-icon-size) + 10px);
+    /* Ends where the row's trailing control ends visually. */
+    padding-right: var(--space-2);
+    min-width: 0;
+    color: var(--muted);
+    font-size: var(--control-ui-text-sm);
+  }
+
+  .cron-table__cell {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 0;
+    white-space: nowrap;
+  }
+
+  /* A long schedule gives way first so the next and last facts stay readable. */
+  .cron-table__schedule {
+    flex: 0 1 auto;
+  }
+
+  .cron-table__cell-value {
+    white-space: nowrap;
+  }
+
+  .cron-table__next::before,
+  .cron-table__last::before {
+    content: "·";
+    margin-inline: var(--space-1);
+  }
+
+  /* With no finished run yet there is no result to report on an unlabeled line. */
+  .cron-table__last:has(.muted) {
+    display: none;
+  }
+
+  .cron-table__last-run {
+    gap: 3px;
+  }
+
+  .cron-table__last-time {
+    color: var(--muted);
+  }
+
+  .cron-table__last-run:has(.cron-last-glyph--error) .cron-table__last-time {
+    color: var(--danger);
+  }
+
+  .cron-run-filter-search input:placeholder-shown {
+    text-overflow: ellipsis;
+  }
+
+  .cron-run-entry + .cron-run-entry {
+    border-top: 0;
+  }
+
+  .cron-run-entry__meta > :has(> .btn),
+  .cron-run-entry__meta > :has(> .btn) + .muted {
+    margin-top: var(--space-2);
   }
 }
 
@@ -1153,13 +1251,6 @@
 }
 
 /* Owned surfaces keep positioning and dismissal with the overlay lifecycle. */
-.cron-job-menu > .oc-menu,
-.cron-filter-dropdown__details > .oc-menu {
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-}
-
 .cron-job-menu > .oc-menu {
   min-width: 170px;
 }

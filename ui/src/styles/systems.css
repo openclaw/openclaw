@@ -14,6 +14,14 @@ openclaw-systems-page {
   overflow: hidden;
   background: var(--bg);
 }
+/* Systems renders in the full-bleed chat content column: supply the page top inset
+   other pages get from content padding, and inset the title to the toolbar heading.
+   The selector outranks the shared hub-header insets. */
+.systems-workspace > .content-header.hub-page-header.systems-page-header {
+  flex: 0 0 auto;
+  margin-top: var(--space-4);
+  padding-inline: 18px;
+}
 .systems-toolbar {
   display: flex;
   align-items: center;
@@ -26,16 +34,16 @@ openclaw-systems-page {
   flex: 1;
   min-width: 0;
 }
-.systems-heading h1 {
+.systems-heading h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: 600;
   overflow-wrap: anywhere;
   color: var(--text-strong);
 }
 .systems-heading > span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .systems-icon-button {
   display: inline-grid;
@@ -44,7 +52,7 @@ openclaw-systems-page {
   height: 32px;
   padding: 6px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   flex: 0 0 auto;
@@ -69,12 +77,21 @@ openclaw-systems-page {
   width: 17px;
   height: 17px;
 }
+/* Reserve both summaries even for workers without telemetry or Gateway backups.
+   Complete lists live in Details; the overview never acquires a nested scrollbar. */
+.systems-overview {
+  flex: 0 0 auto;
+  min-height: 316px;
+}
+.systems-overview--compact {
+  min-height: 76px;
+}
+.systems-overview__telemetry {
+  height: 240px;
+}
 .systems-metrics {
   padding: 12px 18px 8px;
   border-bottom: 1px solid var(--border);
-  flex: 0 0 auto;
-  max-height: 50%;
-  overflow-y: auto;
 }
 .systems-vitals {
   display: grid;
@@ -122,7 +139,7 @@ openclaw-systems-page {
   gap: 4px 12px;
   margin-top: 6px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 .systems-sample-time {
   margin-left: auto;
@@ -131,28 +148,25 @@ openclaw-systems-page {
   margin: 0;
   padding: 10px 18px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   border-bottom: 1px solid var(--border);
 }
 .systems-backups {
-  flex: 0 1 auto;
-  max-height: 36%;
-  overflow: auto;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.5;
 }
 .systems-backups h2 {
   margin: 0 0 8px;
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
 }
 .systems-backups h3 {
   margin: 12px 0 4px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
 }
 .systems-backups__targets,
@@ -223,7 +237,7 @@ openclaw-systems-page {
   border-radius: 4px;
   background: transparent;
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .systems-body {
   display: flex;
@@ -256,13 +270,13 @@ openclaw-systems-page {
   height: 34px;
 }
 .systems-state h2 {
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
   color: var(--text-strong);
   font-weight: 550;
   margin: 18px 0 10px;
 }
 .systems-state p {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   max-width: 430px;
   line-height: 1.7;
   margin: 0;
@@ -271,14 +285,14 @@ openclaw-systems-page {
   background: transparent;
   border: 1px solid var(--border-strong);
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--text);
   margin-top: 18px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 .systems-callout {
   padding: 8px 18px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
   background: var(--bg-elevated);
@@ -313,13 +327,13 @@ openclaw-systems-page {
   gap: 8px;
 }
 .systems-details h2 {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
   color: var(--text-strong);
   margin: 0;
 }
 .systems-details h3 {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   color: var(--text);
   margin: 22px 0 9px;
@@ -329,7 +343,7 @@ openclaw-systems-page {
   grid-template-columns: 1fr;
   gap: 4px;
   margin: 18px 0;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .systems-details dt {
   color: var(--muted);
@@ -343,8 +357,6 @@ openclaw-systems-page {
 .systems-details .systems-metrics {
   padding: 0;
   border: 0;
-  max-height: none;
-  overflow: visible;
 }
 .systems-details .systems-vitals {
   grid-template-columns: minmax(0, 1fr);
@@ -358,13 +370,13 @@ openclaw-systems-page {
   line-height: 1.6;
 }
 .systems-details ul {
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   padding-left: 15px;
   overflow-wrap: anywhere;
   color: var(--muted);
 }
 .systems-detail-hint {
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   line-height: 1.6;
   color: var(--muted);
   margin: 7px 0;
@@ -379,7 +391,7 @@ openclaw-systems-page {
   border-radius: 4px;
   padding: 3px 5px;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
 }
 .systems-session-link {
@@ -388,7 +400,7 @@ openclaw-systems-page {
   gap: 4px;
   margin: 10px 0;
   text-decoration: none;
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
 }
 .systems-session-link__title {
@@ -401,16 +413,11 @@ openclaw-systems-page {
 .systems-session-link:hover .systems-session-link__title {
   color: var(--accent);
 }
-.systems-mobile-picker {
+/* Outranks the shared select's display so the picker stays phone-only. */
+.systems-workspace .systems-toolbar > select.systems-mobile-picker {
   display: none;
   min-width: 0;
   max-width: 230px;
-  background: var(--bg-elevated);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  padding: 6px;
-  font-size: 12px;
 }
 .systems-sidebar {
   padding: 6px 0 12px;
@@ -621,6 +628,7 @@ openclaw-systems-page {
   height: 14px;
 }
 .systems-sidebar__empty {
+  margin: 0;
   padding: 8px var(--sidebar-inset, 8px);
   color: var(--muted);
   font-size: calc(12px * var(--control-ui-text-scale, 1));
@@ -636,10 +644,22 @@ openclaw-systems-page {
   .systems-heading {
     display: none;
   }
-  .systems-mobile-picker {
-    display: block;
+  /* Level with the 32px icon buttons beside it, and drawn with the same border. */
+  .systems-workspace .systems-toolbar > select.systems-mobile-picker {
+    --settings-control-height: 32px;
+
+    display: -webkit-inline-box;
     flex: 1;
     max-width: none;
+    height: 32px;
+    min-height: 32px;
+    border-color: var(--border);
+  }
+  .systems-desktop .desktop-toolbar select.settings-select {
+    border-color: var(--border);
+  }
+  .systems-workspace > .content-header.hub-page-header.systems-page-header {
+    padding-inline: 10px;
   }
   .systems-toolbar {
     padding: 10px;
@@ -676,7 +696,167 @@ openclaw-systems-page {
     letter-spacing: normal;
   }
   .systems-vital .sparkline-tile__value {
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
     white-space: nowrap;
   }
+}
+@media (max-width: 640px) {
+  /* Keep the persistent outlet at the chat inset; pad only this page's content. */
+  .systems-workspace {
+    padding: 8px 8px 16px;
+    background: transparent;
+  }
+
+  .systems-workspace > .content-header.hub-page-header.systems-page-header {
+    margin-top: 0;
+  }
+
+  /* With stats off the viewer takes the space: Backups goes with the stats and only
+     notices keep the overview, which must not stay behind as an empty focus stop. */
+  .systems-overview--compact {
+    min-height: 0;
+  }
+  .systems-overview--compact > .systems-backups {
+    display: none;
+  }
+  .systems-overview--compact:not(:has(> .systems-callout)) {
+    display: none;
+  }
+
+  /* The panel tint belongs to the viewer's stage; the bar sits on the page. */
+  .systems-desktop .bp:not(:fullscreen) {
+    background: transparent;
+  }
+
+  /* Wrapped rows start at one edge and Disconnect closes the bar on the right. */
+  .systems-desktop .desktop-toolbar__spacer {
+    display: none;
+  }
+  .systems-desktop .desktop-toolbar--connection > :last-child {
+    margin-inline-start: auto;
+  }
+  /* Without app launchers the spacer breaks view controls from window controls, and its
+     empty line takes two row gaps. Fullscreen's tooltip wrapper has no box of its own. */
+  .systems-desktop .desktop-toolbar.desktop-toolbar--connection:not(:has(> .desktop-apps)) {
+    row-gap: 4px;
+
+    & > .desktop-toolbar__spacer {
+      display: block;
+      flex: 0 0 100%;
+      order: 1;
+    }
+
+    & > :nth-last-child(-n + 4),
+    & .desktop-fullscreen-button {
+      order: 2;
+    }
+  }
+  /* The window controls share one box; fullscreen otherwise keeps the browser's button. */
+  .systems-desktop .desktop-fullscreen-button {
+    display: inline-flex;
+    border: 0;
+    border-radius: 4px;
+    padding: 5px 7px;
+    background: transparent;
+    color: var(--muted);
+  }
+  .systems-desktop .desktop-fullscreen-icon {
+    display: inline-flex;
+  }
+  /* Safari's native control ignores height, so the picker draws its own chevron to match its 32px neighbors. */
+  .systems-toolbar > .systems-mobile-picker {
+    height: 32px;
+    padding-block: 0;
+    padding-inline-end: 28px;
+    appearance: none;
+    background-image: var(--select-chevron);
+    background-repeat: no-repeat;
+    background-position:
+      right 16px center,
+      right 12px center;
+    background-size: 5px 5px;
+    text-overflow: ellipsis;
+  }
+}
+
+/* Touch has no hover to reveal refresh; focus alone would hide it in the phone drawer. */
+@media (hover: none) {
+  .systems-filter__refresh {
+    opacity: 1;
+  }
+  .systems-filter__refresh:disabled {
+    opacity: 0.45;
+  }
+}
+
+.systems-overview__telemetry .systems-vitals {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.systems-volume-summary {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+.systems-volume-summary ul {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.systems-volume-summary li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: calc(20px * var(--control-ui-text-scale));
+  line-height: calc(20px * var(--control-ui-text-scale));
+}
+.systems-volume-summary li > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.systems-volume-summary li > span:last-child {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.systems-summary-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  line-height: calc(20px * var(--control-ui-text-scale));
+  text-decoration: underline;
+}
+.systems-summary-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.systems-backups--summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 20px 20px;
+  gap: 4px 12px;
+  min-height: 76px;
+}
+.systems-backups--summary h2,
+.systems-backups--summary p {
+  margin: 0;
+}
+.systems-backups--summary p {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.systems-backups__summary[data-status="failed"] {
+  color: var(--danger);
+}
+.systems-overview .systems-metrics-caption {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.systems-overview__telemetry .systems-vital {
+  min-height: 90px;
 }

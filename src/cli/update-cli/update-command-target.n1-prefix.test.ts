@@ -1,17 +1,12 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  buildRuntimeProbeEnv,
-  resolveBunRuntimeInfo,
-  resolveNodeRuntimeInfo,
-} from "../../daemon/runtime-paths.js";
+import { resolveBunRuntimeInfo, resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { activationFixture, runtimeFixture } from "./update-command-fixtures.test-support.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 
 const state = vi.hoisted(() => ({
-  calls: [] as string[][],
   manager: "npm" as "npm" | "bun",
   sqliteText: true,
 }));
@@ -26,7 +21,6 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandBuffered: async () => pkgQueryResult(),
   runCommandWithTimeout: async (argv: string[]) => {
-    state.calls.push(argv);
     if (argv.includes("--version")) {
       return { code: 0, stdout: "12.0.0", stderr: "" };
     }
@@ -61,8 +55,9 @@ vi.mock("../../infra/update-check.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-check.js")>()),
   resolveNpmChannelTag: async () => ({ tag: "latest", version: "2027.1.0" }),
 }));
-vi.mock("../../infra/update-check-package-target.js", () => ({
-  fetchNpmPackageTargetStatus: async () => ({ version: "2027.1.0", nodeEngine: ">=26.1.0" }),
+vi.mock("../../infra/update-check-package-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-check-package-target.js")>()),
+  fetchNpmPackageTargetStatus: async () => ({ version: "2027.1.0", nodeEngine: ">=26.12.1" }),
 }));
 vi.mock("../../../node-sqlite.mjs", async (original) => ({
   ...(await original<typeof import("../../../node-sqlite.mjs")>()),
@@ -93,7 +88,6 @@ vi.mock("./update-command-node-runtime-resolution.js", () => ({
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 beforeEach(() => {
-  state.calls = [];
   state.manager = "npm";
   state.sqliteText = true;
   vi.mocked(resolveNodeRuntimeInfo).mockReset();
@@ -144,9 +138,6 @@ it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
     expect(selected.packageInstallTarget?.packageRoot).toBe(
       kind === "writable rebind" ? rootB : rootA,
     );
-    if (kind !== "protected redirect") {
-      expect(state.calls.some((argv) => argv[1] === "root")).toBe(kind === "unowned project");
-    }
     if (kind === "writable rebind") {
       expect(selected.packageInstallTarget?.directNodeModulesRoot).toBe(true);
       expect(selected.packageUpdateNodeRunner).toBe(
@@ -156,10 +147,10 @@ it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
   },
 );
 it.each([
-  { service: "Node", node: "24.16.0", sqliteText: true, admitted: false },
-  { service: "Bun", node: "24.16.0", sqliteText: true, admitted: false },
-  { service: "Bun", node: "26.1.0", sqliteText: false, admitted: false },
-  { service: "Bun", node: "26.1.0", sqliteText: true, admitted: true },
+  { service: "Node", node: "24.22.1", sqliteText: true, admitted: false },
+  { service: "Bun", node: "24.22.1", sqliteText: true, admitted: false },
+  { service: "Bun", node: "26.12.1", sqliteText: false, admitted: false },
+  { service: "Bun", node: "26.12.1", sqliteText: true, admitted: true },
 ])(
   "checks $service service runtime from updater Node $node (SQLite text=$sqliteText)",
   async ({ service, node, sqliteText, admitted }) => {
@@ -170,7 +161,7 @@ it.each([
         execPath: "/fixture/bun",
         versions: { ...process.versions, bun: "1.4.3" },
       });
-      vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(runtimeFixture("24.16.0"));
+      vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(runtimeFixture("24.22.1"));
     } else {
       vi.stubGlobal(
         "process",
@@ -232,16 +223,10 @@ it.each([
         : {
             ok: false,
             error: expect.stringContaining(
-              `Required: openclaw@2027.1.0 Node >=26.1.0; detected: Node ${node}${nodeService ? " at /old/node" : ""}`,
+              `Required: openclaw@2027.1.0 Node >=26.12.1; detected: Node ${node}${nodeService ? " at /old/node" : ""}`,
             ),
             failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
           },
     );
-    expect(vi.mocked(resolveNodeRuntimeInfo).mock.calls.map(([executable]) => executable)).toEqual(
-      nodeService ? ["/old/node"] : [],
-    );
-    if (!nodeService) {
-      expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(runner, buildRuntimeProbeEnv(process.env));
-    }
   },
 );

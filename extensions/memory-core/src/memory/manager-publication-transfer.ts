@@ -133,13 +133,9 @@ export function memoryPublicationHeader(
 
 // A probe prints at most two batches; sources too large for one command keep them with the
 // unread generator so staging resumes the same print instead of repeating it.
-// The manager rebuilds the replacement object for every admission check, so probes key on the
-// prepared chunks array and are reused only while every printed input is the same object.
+// The manager rebuilds replacement objects, but their prepared chunks and vectors
+// remain unchanged until publication settles.
 type PublicationProbe = {
-  source: MemorySourceIndexReplacement["source"];
-  embeddings: readonly number[][];
-  retained: MemorySourceIndexReplacement["retained"];
-  removedIds: MemorySourceIndexReplacement["removedIds"];
   fragments?: MemoryPublicationFragment[];
   staged?: { head: MemoryPublicationFragment[][]; rest: Generator<MemoryPublicationFragment[]> };
 };
@@ -155,24 +151,10 @@ export function releaseMemoryPublication(
   }
 }
 
-function probeFor(replacement: MemorySourceIndexReplacement) {
-  const probe = publicationProbes.get(replacement.chunks);
-  if (!probe) {
-    return undefined;
-  }
-  return probe.source === replacement.source &&
-    probe.retained === replacement.retained &&
-    probe.removedIds === replacement.removedIds &&
-    probe.embeddings.length === replacement.embeddings.length &&
-    probe.embeddings.every((vector, index) => vector === replacement.embeddings[index])
-    ? probe
-    : undefined;
-}
-
 export function* memoryPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
-  const probe = probeFor(replacement);
+  const probe = publicationProbes.get(replacement.chunks);
   if (!probe?.staged) {
     yield* printPublicationBatches(replacement);
     return;
@@ -219,7 +201,7 @@ function* printPublicationBatches(
 
 /** Ordinary sources fit one bounded command; larger sources retain chunked transfer. */
 export function memoryPublicationInline(replacement: MemorySourceIndexReplacement) {
-  let probe = probeFor(replacement);
+  let probe = publicationProbes.get(replacement.chunks);
   if (!probe) {
     const rest = printPublicationBatches(replacement);
     const head: MemoryPublicationFragment[][] = [];
@@ -230,13 +212,7 @@ export function memoryPublicationInline(replacement: MemorySourceIndexReplacemen
       }
       head.push(batch.value);
     }
-    probe = {
-      source: replacement.source,
-      embeddings: [...replacement.embeddings],
-      retained: replacement.retained,
-      removedIds: replacement.removedIds,
-      ...(head.length < 2 ? { fragments: head[0] ?? [] } : { staged: { head, rest } }),
-    };
+    probe = head.length < 2 ? { fragments: head[0] ?? [] } : { staged: { head, rest } };
     publicationProbes.set(replacement.chunks, probe);
   }
   return probe.fragments

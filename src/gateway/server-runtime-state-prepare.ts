@@ -4,6 +4,7 @@ import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registr
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { readDevicePairingNodeSnapshot } from "../infra/device-pairing-store-readonly.js";
@@ -26,8 +27,11 @@ import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
+import { publishHooksTokenEnvKey } from "./hooks.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import { createOpenClawIdService } from "./openclaw-id/service.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
@@ -183,6 +187,7 @@ export async function prepareGatewayKernelState(params: {
     workerEnvironmentStartup && workerPlacementModule
       ? workerPlacementModule.createGatewayGitHubPublicationRuntime({
           placements: workerEnvironmentStartup.placementStore,
+          ...(workerEnvironmentService ? { environments: workerEnvironmentService } : {}),
           getCommittedRuntimeConfig,
           warn: (message) => log.warn(message),
         })
@@ -264,6 +269,7 @@ export async function prepareGatewayKernelState(params: {
     bindNodeWorkspaceBindingResolver?.(workerPlacementRuntime.resolveNodeWorkspaceBinding);
     workerEnvironmentRuntime.bindWorkerSessionDispatch?.(
       workerPlacementRuntime.dispatchService.dispatch,
+      workerPlacementRuntime.dispatchService.waitForInitialPlacement,
     );
   }
   const bindDeviceNodeRuntime = bindDeviceNodeControl
@@ -368,6 +374,8 @@ export async function prepareGatewayKernelState(params: {
     required: null,
   });
   const initialHooksConfig = runtimeConfig.hooksConfig;
+  // Publish before startup prepares plugins and other host exec owners.
+  publishHooksTokenEnvKey(initialHooksConfig);
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
@@ -424,13 +432,16 @@ export async function prepareGatewayKernelState(params: {
     pendingReason: "startup-sidecars",
     dispatchReady: false,
   };
+  const unavailableGatewayMethods = new Set<string>(
+    minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
+  );
   const lifecycle = { closePreludeStarted: false };
   const startupAccountStarts = createDeferredCore();
   const gatewayInstanceRuntimeRef: { current: GatewayInstanceRuntime | undefined } = {
     current: undefined,
   };
   // Internal principals belong to this server generation and become usable only after bind.
-  // Closing flips this first so delayed recovery/channel work cannot enter a retired context.
+  // Closing flips this first so delayed channel work cannot enter a retired context.
 
   const { createChannelManager } = await startupTrace.measure(
     "gateway.channel-manager-import",
@@ -456,7 +467,10 @@ export async function prepareGatewayKernelState(params: {
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
   const isGatewayStartupPending = () =>
-    (!startupState.dispatchReady || !startupState.sidecarsReady) && !lifecycle.closePreludeStarted;
+    (!startupState.dispatchReady ||
+      !startupState.sidecarsReady ||
+      unavailableGatewayMethods.size > 0) &&
+    !lifecycle.closePreludeStarted;
   const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
@@ -473,10 +487,12 @@ export async function prepareGatewayKernelState(params: {
     getAgentDatabaseAdmissionRefusals: () => {
       const cfg = getRuntimeConfig();
       return listAgentDatabaseAdmissionRefusals().filter(
-        (refusal) => !canIsolateAgentDatabase(cfg, refusal.agentId),
+        (refusal) =>
+          refusal.code === "agent-deletion" || !canIsolateAgentDatabase(cfg, refusal.agentId),
       );
     },
     getPluginReloadStatus: params.getPluginReloadStatus,
+    isChatSendAvailable: () => !unavailableGatewayMethods.has("chat.send"),
     shouldSkipChannelReadiness: isChannelStartupSuppressedByEnvironment,
   });
   const watchNodeRequestHandler: {
@@ -494,6 +510,15 @@ export async function prepareGatewayKernelState(params: {
     }),
   );
   const transportBridge = createGatewayTransportBridge();
+  // Inert until the Labs switch is on; the switch is reconciled after ready. Saved
+  // device-token bindings are read now, before any listener admits a connection.
+  const openclawIdService = createOpenClawIdService({
+    getConfig: () => getRuntimeConfig().gateway?.openclawId,
+    getStateDir: () => resolveStateDir(),
+    getGatewayServer: () => transportBridge.current()?.httpServer,
+    log: log.child("openclaw-id"),
+  });
+  void openclawIdService.loadTokenBindings();
   const presencePublisher = createPresencePublisher({
     scheduler,
     broadcast: connectionState.broadcast,
@@ -527,6 +552,7 @@ export async function prepareGatewayKernelState(params: {
       runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
     pluginRegistry: pluginRuntime.registry,
     getPluginRouteRegistry: () => pluginRuntime.registry,
+    isRequestRuntimeReady: () => startupState.dispatchReady,
     isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
     getGatewayRequestContext: resolvePluginGatewayContext,
     deps,
@@ -564,6 +590,7 @@ export async function prepareGatewayKernelState(params: {
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     hostDesktopService,
+    openclawIdService,
     gatewayComputerService,
     channelLogs,
     channelRuntimeEnvs,
@@ -597,6 +624,8 @@ export async function prepareGatewayKernelState(params: {
     gatewayTls,
     readinessEventLoopHealth,
     startupState,
+    unavailableGatewayMethods,
+    getReadiness,
     lifecycle,
     releaseStartupAccountStarts: startupAccountStarts.resolve,
     gatewayInstanceRuntimeRef,

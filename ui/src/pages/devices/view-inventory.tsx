@@ -1,13 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
-import {
-  resolvePendingDeviceApprovalState,
-  type DevicePairingAccessSummary,
-  type PendingDeviceApprovalKind,
-} from "../../../../src/shared/device-pairing-access.js";
+import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { PresenceEntry } from "../../api/types.ts";
-import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
+import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsStatus,
@@ -20,7 +17,7 @@ import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatList, formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { macFamilyLabel } from "../../lib/mac-form-factor.ts";
-import type { DeviceTokenSummary, PairedDevice, PendingDevice } from "../../lib/nodes/index.ts";
+import type { DeviceTokenSummary } from "../../lib/nodes/index.ts";
 import {
   buildDeviceInventory,
   findGatewayPresence,
@@ -33,10 +30,17 @@ import {
 import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { CapabilityChips } from "./capability-chips.tsx";
-import { deviceDesktopEnvironment, DeviceEntryMenu } from "./entry-menu.tsx";
-import { HostStats } from "./host-stats.tsx";
-import { deviceIcon, DeviceTile, DeviceIdentityFacts } from "./view-shared.tsx";
+import { CapabilityList } from "./capability-list.tsx";
+import { deviceDesktopEnvironment, DeviceEntryActions } from "./entry-actions.tsx";
+import { HostPressure, HostStats } from "./host-stats.tsx";
+import { PendingDeviceRows, PendingNode } from "./view-pending.tsx";
+import {
+  CommandFact,
+  DeviceDisclosure,
+  DeviceFact,
+  DeviceIdentityFacts,
+  MetaLine,
+} from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
@@ -46,30 +50,12 @@ function toRemovalRequest(entry: DeviceInventoryEntry): InventoryRemovalRequest 
   return { id: entry.id, name: entry.name, ...removal };
 }
 
-function inventorySummary(
-  groups: DeviceInventoryGroup[],
-  pendingCount: number,
-  loading: boolean,
-): string {
-  if (loading && groups.length === 0) {
-    return "";
-  }
-  const connected = groups.filter((group) => group.primary.connected).length;
-  const parts = [
-    t("devices.inventory.summaryConnected", {
-      connected: String(connected),
-      total: String(groups.length),
-    }),
-  ];
-  if (pendingCount > 0) {
-    parts.push(t("devices.inventory.summaryPending", { count: String(pendingCount) }));
-  }
-  return parts.join(" · ");
-}
-
-export function DeviceInventory(props: DevicesProps) {
+export function DeviceInventoryContent(props: DevicesProps & { pending: boolean }) {
   // Inventory reads replace their snapshots; config and approval drafts publish independently.
   const pending = createMemo(() => props.devicesList?.pending ?? []);
+  const pendingNodes = createMemo(() =>
+    props.nodes.filter((node) => isPendingNode(node) && node.pendingRequestId),
+  );
   const paired = createMemo(() => props.devicesList?.paired ?? []);
   const nodes = createMemo(() => props.nodes);
   const presenceSnapshot = createMemo(() => props.presence);
@@ -79,24 +65,24 @@ export function DeviceInventory(props: DevicesProps) {
   const gatewayPresence = createMemo(() => findGatewayPresence(presenceSnapshot()));
   const unpairedPresence = createMemo(() => listUnpairedPresence(presenceSnapshot(), groups()));
   const stale = createMemo(() => listStaleInventoryEntries(groups()));
-  const loading = () => props.loading || props.devicesLoading;
+  // Mutation owners can also start internal reloads after their write settles.
+  const loading = () => props.pending || props.loading || props.devicesLoading;
   const actions = (
     <>
       {stale().length > 0 ? (
         <button
-          class="btn btn--sm danger"
+          class="btn"
           title={
             props.connected && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : ""
           }
-          disabled={!props.connected || !props.canManagePairing}
+          disabled={props.inventorySaving || !props.connected || !props.canManagePairing}
           onClick={() => props.onInventoryCleanup(stale().map(toRemovalRequest))}
         >
-          <Icon name="trash" />{" "}
           {t("devices.inventory.cleanupStale", { count: String(stale().length) })}
         </button>
       ) : undefined}
       <button
-        class="btn"
+        class="btn device-entry__pair"
         title={props.connected && !props.canPairDevice ? t("devices.pairing.adminRequired") : ""}
         disabled={!props.connected || !props.canPairDevice}
         onClick={() => props.onDevicePairSetupOpen()}
@@ -105,41 +91,40 @@ export function DeviceInventory(props: DevicesProps) {
       </button>
     </>
   );
-  // Pending requests and unpaired presence render in their own sections, so
-  // this section's empty state depends only on its own rows.
-  const empty = () => groups().length === 0 && !gatewayPresence();
+  // Created once, so rows and their open state outlive a loading skeleton.
+  const groupedRows = (
+    <For each={groups()} keyed={(group) => group.key}>
+      {(group) => <InventoryGroup group={group()} devices={props} />}
+    </For>
+  );
   const deviceRows = (
     <>
       <Show when={gatewayPresence()}>
-        {(presence) => (
-          <PresenceRow presence={{ kind: "gateway", entry: presence() }} devices={props} />
-        )}
+        {(presence) => <GatewayEntry entry={presence()} devices={props} />}
       </Show>
       {loading() && groups().length === 0 ? (
         <SettingsLoadingSkeleton />
-      ) : empty() && (props.connected || props.devicesList) ? (
+      ) : groups().length === 0 && (props.connected || props.devicesList) ? (
         <SettingsEmpty message={t("devices.inventory.empty")} />
       ) : (
-        <For each={groups()} keyed={(group) => group.key}>
-          {(group) => <InventoryGroup group={group()} devices={props} />}
-        </For>
+        groupedRows
       )}
     </>
   );
   return (
     <>
-      {props.devicesError ? <div class="callout danger">{props.devicesError}</div> : undefined}
-      {props.lastError ? <div class="callout danger">{props.lastError}</div> : undefined}
-      {pending().length > 0 ? (
-        <SettingsSection title={t("devices.inventory.pendingApproval")} count={pending().length}>
+      {pending().length + pendingNodes().length > 0 ? (
+        <SettingsSection
+          title={t("devices.inventory.pendingApproval")}
+          count={pending().length + pendingNodes().length}
+        >
           <PendingDeviceRows {...props} />
+          <For each={pendingNodes()} keyed={(node) => node.pendingRequestId}>
+            {(node) => <PendingNode node={node()} devices={props} />}
+          </For>
         </SettingsSection>
       ) : undefined}
-      <SettingsSection
-        title={t("devices.inventory.title")}
-        description={inventorySummary(groups(), pending().length, loading())}
-        actions={actions}
-      >
+      <SettingsSection title={t("devices.inventory.title")} actions={actions}>
         {deviceRows}
       </SettingsSection>
       {unpairedPresence().length > 0 ? (
@@ -148,9 +133,7 @@ export function DeviceInventory(props: DevicesProps) {
             each={unpairedPresence()}
             keyed={(entry) => entry.instanceId ?? entry.deviceId ?? entry.host}
           >
-            {(entry) => (
-              <PresenceRow presence={{ kind: "unpaired", entry: entry() }} devices={props} />
-            )}
+            {(entry) => <UnpairedEntry entry={entry()} />}
           </For>
         </SettingsSection>
       ) : undefined}
@@ -160,24 +143,23 @@ export function DeviceInventory(props: DevicesProps) {
 
 function InventoryGroup(props: { group: DeviceInventoryGroup; devices: DevicesProps }) {
   return (
-    <>
-      <InventoryEntry entry={props.group.primary} devices={props.devices} />
+    <InventoryEntry entry={props.group.primary} devices={props.devices}>
       <Show when={props.group.duplicates.length > 0}>
-        <details class="device-group__dups">
-          <summary>
+        <div class="device-group__dups">
+          <p class="settings-row__desc">
             {t(
               props.group.duplicates.length === 1
                 ? "devices.inventory.olderPairing"
                 : "devices.inventory.olderPairings",
               { count: String(props.group.duplicates.length), name: props.group.name },
             )}
-          </summary>
+          </p>
           <For each={props.group.duplicates} keyed={(entry) => entry.id}>
             {(entry) => <InventoryEntry entry={entry()} devices={props.devices} />}
           </For>
-        </details>
+        </div>
       </Show>
-    </>
+    </InventoryEntry>
   );
 }
 
@@ -188,6 +170,10 @@ function isWindowsPlatform(platform: string | undefined): boolean {
     normalized === "windows" ||
     normalized?.startsWith("windows ") === true
   );
+}
+
+function isPendingNode(node: NodeListNode | undefined): boolean {
+  return node?.approvalState === "pending-approval" || node?.approvalState === "pending-reapproval";
 }
 
 function isApprovedNodeEntry(entry: DeviceInventoryEntry): boolean {
@@ -213,33 +199,69 @@ function resolveNodeCoreVersion(entry: DeviceInventoryEntry): string | undefined
   return legacyHeadless ? normalizeOptionalString(entry.node?.version) : undefined;
 }
 
-function entryWarnStatuses(
-  entry: DeviceInventoryEntry,
-  gatewayVersion: string | null,
-): JSX.Element[] {
-  const statuses: JSX.Element[] = [];
-  const warn = (kind: string, title = t(`devices.inventory.${kind}Title`)) =>
-    statuses.push(
-      <span title={title}>
-        <SettingsStatus kind={"warn"} label={t(`devices.inventory.${kind}`)} />
-      </span>,
-    );
+type EntryWarning = {
+  kind: "version" | "worker" | "wake" | "approval";
+  label: string;
+  detail?: string;
+};
+
+function entryWarnings(entry: DeviceInventoryEntry, gatewayVersion: string | null): EntryWarning[] {
+  const warnings: EntryWarning[] = [];
   const isApprovedNode = isApprovedNodeEntry(entry);
   const nodeVersion = resolveNodeCoreVersion(entry);
   if (isApprovedNode && nodeVersion && gatewayVersion && nodeVersion !== gatewayVersion) {
-    warn("versionDrift", t("devices.inventory.versionDriftTitle", { nodeVersion, gatewayVersion }));
+    warnings.push({
+      kind: "version",
+      label: t("devices.inventory.versionDrift"),
+      detail: t("devices.inventory.versionDriftTitle", { nodeVersion, gatewayVersion }),
+    });
   }
   if (entry.node?.workerBundle?.status === "missing") {
-    warn("workerMissing");
+    warnings.push({
+      kind: "worker",
+      label: t("devices.inventory.workerMissing"),
+      detail: t("devices.inventory.workerMissingTitle"),
+    });
   }
   if (isApprovedNode && entry.node?.connected === false && isWindowsPlatform(entry.platform)) {
-    warn("manualWake");
+    warnings.push({
+      kind: "wake",
+      label: t("devices.inventory.manualWake"),
+      detail: t("devices.inventory.manualWakeTitle"),
+    });
   }
-  const approvalState = entry.node?.approvalState;
-  if (approvalState === "pending-approval" || approvalState === "pending-reapproval") {
-    statuses.push(<SettingsStatus kind={"warn"} label={t("devices.inventory.approvalNeeded")} />);
+  if (isPendingNode(entry.node)) {
+    warnings.push({ kind: "approval", label: t("devices.inventory.approvalNeeded") });
   }
-  return statuses;
+  return warnings;
+}
+
+function identityParts(
+  entry: Pick<PresenceEntry, "platform" | "deviceFamily" | "modelIdentifier">,
+  name: string,
+): string[] {
+  const parts: string[] = [];
+  if (entry.platform) {
+    parts.push(prettifyPlatform(entry.platform, entry.deviceFamily));
+  }
+  const family = entry.modelIdentifier ? macFamilyLabel(entry.modelIdentifier) : undefined;
+  if (family && family !== name) {
+    parts.push(family);
+  }
+  return parts;
+}
+
+/** The closed row names the machine and, once it is gone, when it was last around. */
+function entryMeta(entry: DeviceInventoryEntry, connected: boolean): string[] {
+  const parts = identityParts(entry, entry.name);
+  if (!connected && entry.lastSeenAtMs) {
+    parts.push(t("devices.inventory.seen", { time: formatRelativeTimestamp(entry.lastSeenAtMs) }));
+  } else if (!connected && entry.approvedAtMs) {
+    parts.push(
+      t("devices.inventory.approved", { time: formatRelativeTimestamp(entry.approvedAtMs) }),
+    );
+  }
+  return parts;
 }
 
 function formatInputRecency(lastInputSeconds: number): string {
@@ -248,126 +270,11 @@ function formatInputRecency(lastInputSeconds: number): string {
   });
 }
 
-function identityMetaParts(
-  entry: Pick<PresenceEntry, "platform" | "deviceFamily" | "modelIdentifier" | "version">,
-): string[] {
-  const parts: string[] = [];
-  if (entry.platform) {
-    parts.push(prettifyPlatform(entry.platform, entry.deviceFamily));
-  }
-  if (entry.modelIdentifier) {
-    const family = macFamilyLabel(entry.modelIdentifier);
-    if (family) {
-      parts.push(family);
-    }
-    parts.push(entry.modelIdentifier);
-  }
-  if (entry.version) {
-    parts.push(entry.version);
-  }
-  return parts;
-}
-
-function entryMetaLine(entry: DeviceInventoryEntry): string {
-  const parts = identityMetaParts(entry);
-  if (entry.node?.workerBundle?.status === "installed") {
-    parts.push(t("devices.inventory.workerVersion", { version: entry.node.workerBundle.version }));
-  }
-  if (entry.connected && entry.presence?.lastInputSeconds != null) {
-    parts.push(formatInputRecency(entry.presence.lastInputSeconds));
-  } else if (!entry.connected && entry.lastSeenAtMs) {
-    parts.push(t("devices.inventory.seen", { time: formatRelativeTimestamp(entry.lastSeenAtMs) }));
-  } else if (!entry.connected && entry.approvedAtMs) {
-    parts.push(
-      t("devices.inventory.approved", { time: formatRelativeTimestamp(entry.approvedAtMs) }),
-    );
-  }
-  for (const role of entry.roles) {
-    parts.push(role);
-  }
-  if (entry.autoApproved) {
-    parts.push(t("devices.inventory.autoPaired"));
-  }
-  return parts.join(" · ");
-}
-
-// Node-controlled lists are unbounded input; cap the rendered items so a
-// hostile or chatty node cannot bloat the inventory render.
-const COMMAND_LINE_LIMIT = 16;
-
-function CommandLine(props: { values: string[] }) {
-  const visible = () => props.values.slice(0, COMMAND_LINE_LIMIT);
-  const overflow = () => props.values.length - visible().length;
-  return (
-    <Show when={props.values.length > 0}>
-      <dt class="settings-row__desc">{t("devices.inventory.commands")}</dt>
-      <dd class="settings-row__value settings-row__value--mono">
-        {formatList(visible())}
-        {overflow() > 0 ? ` +${overflow()}` : ""}
-      </dd>
-    </Show>
-  );
-}
-
-function EntryDetails(props: { entry: DeviceInventoryEntry; devices: DevicesProps }) {
-  const tokens = createMemo(() => props.entry.device?.tokens ?? []);
-  const commands = createMemo(() => props.entry.node?.commands ?? []);
-  const scopes = createMemo(() => props.entry.scopes);
-  return (
-    <details class="device-entry__details">
-      <summary>{t("devices.inventory.details")}</summary>
-      <dl class="device-entry__facts">
-        <DeviceIdentityFacts id={props.entry.id} remoteIp={props.entry.remoteIp} />
-        {scopes().length > 0 ? (
-          <>
-            <dt class="settings-row__desc">{t("devices.inventory.scopesLabel")}</dt>
-            <dd class="device-entry__scopes">
-              <For each={scopes()}>
-                {(scope) => <span class="device-capability device-capability--scope">{scope}</span>}
-              </For>
-            </dd>
-          </>
-        ) : undefined}
-        {tokens().length > 0 ? (
-          <>
-            <dt class="settings-row__desc">{t("devices.inventory.tokens")}</dt>
-            <dd class="device-entry__tokens">
-              <table
-                class="device-token-table settings-table--stacked"
-                role="table"
-                aria-label={t("devices.inventory.tokens")}
-              >
-                <thead>
-                  <tr>
-                    <th scope="col">{t("devices.inventory.tokenRole")}</th>
-                    <th scope="col">{t("devices.inventory.tokenStatus")}</th>
-                    <th scope="col">{t("devices.inventory.scopesLabel")}</th>
-                    <th scope="col">{t("devices.inventory.tokenAge")}</th>
-                    <th scope="col">{t("devices.inventory.actions")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <For each={tokens()} keyed={(token) => token.role}>
-                    {(token) => (
-                      <TokenRow
-                        device={{ id: props.entry.id, name: props.entry.name }}
-                        tokenSummary={token()}
-                        devices={props.devices}
-                      />
-                    )}
-                  </For>
-                </tbody>
-              </table>
-            </dd>
-          </>
-        ) : undefined}
-        <CommandLine values={commands()} />
-      </dl>
-    </details>
-  );
-}
-
-function InventoryEntry(props: { entry: DeviceInventoryEntry; devices: DevicesProps }) {
+function InventoryEntry(props: {
+  entry: DeviceInventoryEntry;
+  devices: DevicesProps;
+  children?: JSX.Element;
+}) {
   const capacity = createMemo(() =>
     workerCapacityPresentation({
       workerSlots: props.entry.node?.workerSlots,
@@ -376,176 +283,304 @@ function InventoryEntry(props: { entry: DeviceInventoryEntry; devices: DevicesPr
       unavailable: props.entry.node?.connected !== true || !isApprovedNodeEntry(props.entry),
     }),
   );
-  const pendingRequestId = () =>
-    props.entry.node?.approvalState === "pending-approval" ||
-    props.entry.node?.approvalState === "pending-reapproval"
-      ? props.entry.node.pendingRequestId
-      : undefined;
   const desktopEnvironment = createMemo(() =>
     deviceDesktopEnvironment(props.devices, `node:${props.entry.id}`),
   );
   const rowConnected = () => props.entry.node?.connected ?? props.entry.connected;
-  const connectionStatus = (
-    <SettingsStatus
-      kind={rowConnected() ? "ok" : "muted"}
-      label={t(rowConnected() ? "devices.inventory.connected" : "devices.inventory.offline")}
-    />
-  );
+  // OpenClaw ID membership owns these browsers; the Access page removes them.
+  const managedByOpenClawId = () => props.entry.device?.managedBy === "openclaw-id";
+  const warnings = createMemo(() => entryWarnings(props.entry, props.devices.gatewayVersion));
+  const tokens = createMemo(() => props.entry.device?.tokens ?? []);
+  const tokenRoles = createMemo(() => new Set(tokens().map((token) => token.role)));
+  const tokenScopes = createMemo(() => new Set(tokens().flatMap((token) => token.scopes ?? [])));
+  // Tokens already carry their role and scopes; the rest only appears when a token does not.
+  const showRoles = () => props.entry.roles.some((role) => !tokenRoles().has(role));
+  const showScopes = () => props.entry.scopes.some((scope) => !tokenScopes().has(scope));
+  const desktopUnavailable = () =>
+    !desktopEnvironment() && props.entry.node?.commands?.includes("desktop.stream");
+  const liveStats = () => (rowConnected() ? props.entry.node?.hostStats : undefined);
+  const hasAlerts = () =>
+    warnings().length > 0 || (liveStats() !== undefined && liveStats() !== null);
   return (
-    <div class="settings-row device-entry" title={capacity()?.title ?? undefined}>
-      <DeviceTile icon={deviceIcon(props.entry)} />
-      <div class="device-entry__body">
-        <div class="device-entry__heading">
-          <span class="settings-row__title">{props.entry.name}</span>
-          <span class="device-entry__status">{connectionStatus}</span>
-        </div>
-        <span class="settings-row__desc">{entryMetaLine(props.entry)}</span>
+    <DeviceDisclosure
+      deviceId={props.entry.id}
+      name={props.entry.name}
+      meta={entryMeta(props.entry, rowConnected())}
+      status={
+        <SettingsStatus
+          kind={rowConnected() ? "ok" : "muted"}
+          label={t(rowConnected() ? "devices.inventory.connected" : "devices.inventory.offline")}
+        />
+      }
+      alerts={
+        <Show when={hasAlerts()}>
+          <span class="device-entry__alerts">
+            <For each={warnings()} keyed={(warning) => warning.kind}>
+              {(warning) => (
+                <span title={warning().detail}>
+                  <SettingsStatus kind={"warn"} label={warning().label} />
+                </span>
+              )}
+            </For>
+            <HostPressure stats={liveStats()} />
+          </span>
+        </Show>
+      }
+    >
+      <DeviceEntryActions
+        devices={props.devices}
+        desktopEnvironment={desktopEnvironment()}
+        onEditAlias={
+          props.entry.device
+            ? () =>
+                props.devices.onDeviceRename({
+                  id: props.entry.id,
+                  name: props.entry.name,
+                  operatorLabel: props.entry.device?.operatorLabel,
+                })
+            : undefined
+        }
+        onRemove={
+          managedByOpenClawId()
+            ? undefined
+            : () => props.devices.onInventoryRemove(toRemovalRequest(props.entry))
+        }
+      />
+      <dl class="device-entry__facts">
+        <Show when={managedByOpenClawId()}>
+          <DeviceFact label={t("devices.inventory.openclawIdLabel")}>
+            {t("devices.inventory.openclawIdManaged")}{" "}
+            <a
+              href={`${pathForRoute("plugin", props.devices.basePath)}?${new URLSearchParams({ plugin: "openclaw-id-access", id: "access" })}`}
+            >
+              {t("devices.inventory.openclawIdOpen")}
+            </a>
+          </DeviceFact>
+        </Show>
+        <For
+          each={warnings().filter((warning) => warning.detail)}
+          keyed={(warning) => warning.kind}
+        >
+          {(warning) => <DeviceFact label={warning().label}>{warning().detail}</DeviceFact>}
+        </For>
+        <Show when={desktopUnavailable()}>
+          <DeviceFact label={t("devices.inventory.desktop")}>
+            {t("devices.inventory.desktopEnableHint")}
+          </DeviceFact>
+        </Show>
         <HostStats
           stats={props.entry.node?.hostStats}
           lastKnownAtMs={!rowConnected() ? props.entry.node?.hostStats?.updatedAtMs : undefined}
         />
-        <CapabilityChips caps={props.entry.node?.caps ?? []} />
-      </div>
-      <div class="settings-row__control">
-        {capacity()?.meter ?? undefined}{" "}
-        {entryWarnStatuses(props.entry, props.devices.gatewayVersion)}
-        <DesktopControl
-          devices={props.devices}
-          environmentId={desktopEnvironment()}
-          commands={props.entry.node?.commands}
+        <Show when={capacity()}>
+          {(current) => (
+            <DeviceFact label={t("devices.inventory.capacity")}>
+              <span class="device-meter">
+                <Show when={props.entry.node?.workerSlots}>
+                  <span>{current().label}</span>
+                </Show>
+                {current().meter}
+              </span>
+            </DeviceFact>
+          )}
+        </Show>
+        <Show when={tokens().length > 0}>
+          <DeviceFact label={t("devices.inventory.tokens")} class="device-fact--wide">
+            <div class="device-tokens">
+              <For each={tokens()} keyed={(token) => token.role}>
+                {(token) => (
+                  <TokenRow
+                    device={{ id: props.entry.id, name: props.entry.name }}
+                    tokenSummary={token()}
+                    devices={props.devices}
+                    revocable={!managedByOpenClawId()}
+                  />
+                )}
+              </For>
+            </div>
+          </DeviceFact>
+        </Show>
+        <Show when={showRoles()}>
+          <DeviceFact label={t("devices.inventory.rolesLabel")}>
+            <details>
+              <summary>{t("devices.inventory.showDetails")}</summary>
+              {formatList(props.entry.roles)}
+            </details>
+          </DeviceFact>
+        </Show>
+        <Show when={showScopes()}>
+          <DeviceFact label={t("devices.inventory.scopesLabel")}>
+            <details>
+              <summary>{t("devices.inventory.showDetails")}</summary>
+              {formatList(props.entry.scopes)}
+            </details>
+          </DeviceFact>
+        </Show>
+        <Show when={(props.entry.node?.caps ?? []).length > 0}>
+          <DeviceFact label={t("devices.inventory.capabilities")}>
+            <CapabilityList caps={props.entry.node?.caps ?? []} />
+          </DeviceFact>
+        </Show>
+        <CommandFact values={props.entry.node?.commands ?? []} />
+        <VersionFacts
+          modelIdentifier={props.entry.modelIdentifier}
+          version={props.entry.version}
+          workerVersion={
+            props.entry.node?.workerBundle?.status === "installed"
+              ? props.entry.node.workerBundle.version
+              : undefined
+          }
         />
-        <DeviceEntryMenu
-          devices={props.devices}
-          entry={{
-            name: props.entry.name,
-            deviceId: props.entry.id,
-            desktopEnvironment: desktopEnvironment(),
-            pendingRequestId: pendingRequestId(),
-            onEditAlias: props.entry.device
-              ? () =>
-                  props.devices.onDeviceRename({
-                    id: props.entry.id,
-                    name: props.entry.name,
-                    operatorLabel: props.entry.device?.operatorLabel,
-                  })
-              : undefined,
-            onRemove: () => props.devices.onInventoryRemove(toRemovalRequest(props.entry)),
-          }}
-        />
-      </div>
-      <EntryDetails entry={props.entry} devices={props.devices} />
-    </div>
+        <Show when={rowConnected() && props.entry.presence?.lastInputSeconds != null}>
+          <DeviceFact label={t("devices.inventory.lastInputLabel")}>
+            {formatTimeAgo((props.entry.presence?.lastInputSeconds ?? 0) * 1000)}
+          </DeviceFact>
+        </Show>
+        <Show when={props.entry.approvedAtMs || props.entry.autoApproved}>
+          <DeviceFact label={t("devices.inventory.approvedLabel")}>
+            <MetaLine
+              plain
+              parts={[
+                ...(props.entry.approvedAtMs
+                  ? [formatRelativeTimestamp(props.entry.approvedAtMs)]
+                  : []),
+                ...(props.entry.autoApproved ? [t("devices.inventory.autoPaired")] : []),
+              ]}
+            />
+          </DeviceFact>
+        </Show>
+        <DeviceIdentityFacts id={props.entry.id} remoteIp={props.entry.remoteIp} />
+      </dl>
+      {props.children}
+    </DeviceDisclosure>
   );
 }
 
-function PresenceRow(props: {
-  presence: { kind: "gateway" | "unpaired"; entry: PresenceEntry };
-  devices: DevicesProps;
+function VersionFacts(props: {
+  modelIdentifier?: string | null;
+  version?: string | null;
+  workerVersion?: string;
 }) {
-  const entry = () => props.presence.entry;
-  const gateway = () => props.presence.kind === "gateway";
+  const versions = () => [
+    ...(props.version ? [props.version] : []),
+    ...(props.workerVersion
+      ? [t("devices.inventory.workerVersion", { version: props.workerVersion })]
+      : []),
+  ];
+  return (
+    <>
+      <Show when={props.modelIdentifier}>
+        <DeviceFact label={t("devices.inventory.modelLabel")}>{props.modelIdentifier}</DeviceFact>
+      </Show>
+      <Show when={versions().length > 0}>
+        <DeviceFact label={t("devices.inventory.versionLabel")}>
+          <MetaLine plain parts={versions()} />
+        </DeviceFact>
+      </Show>
+    </>
+  );
+}
+
+function GatewayEntry(props: { entry: PresenceEntry; devices: DevicesProps }) {
+  const name = () => props.entry.host ?? t("devices.execApprovals.gateway");
+  const meta = createMemo(() => {
+    const info = props.devices.gatewaySystemInfo;
+    return [
+      t("devices.inventory.gateway"),
+      ...identityParts(props.entry, name()),
+      ...(info
+        ? [
+            t("devices.inventory.uptime", {
+              time: formatDurationCompact(info.uptimeMs) ?? "",
+            }),
+          ]
+        : []),
+    ];
+  });
+  return (
+    <DeviceDisclosure
+      name={name()}
+      meta={meta()}
+      status={<SettingsStatus kind={"ok"} label={t("devices.inventory.connected")} />}
+      alerts={
+        <Show when={props.devices.gatewaySystemInfo}>
+          {(info) => <PressureLine stats={info()} />}
+        </Show>
+      }
+    >
+      <DeviceEntryActions
+        devices={props.devices}
+        desktopEnvironment={deviceDesktopEnvironment(props.devices, "gateway")}
+      />
+      <dl class="device-entry__facts">
+        <HostStats stats={props.devices.gatewaySystemInfo} />
+        <VersionFacts modelIdentifier={props.entry.modelIdentifier} version={props.entry.version} />
+        <Show when={props.entry.lastInputSeconds != null}>
+          <DeviceFact label={t("devices.inventory.lastInputLabel")}>
+            {formatTimeAgo((props.entry.lastInputSeconds ?? 0) * 1000)}
+          </DeviceFact>
+        </Show>
+        <Show when={props.entry.deviceId}>
+          {(deviceId) => <DeviceIdentityFacts id={deviceId()} />}
+        </Show>
+      </dl>
+    </DeviceDisclosure>
+  );
+}
+
+function PressureLine(props: { stats: Parameters<typeof HostPressure>[0]["stats"] }) {
+  return (
+    <span class="device-entry__alerts">
+      <HostPressure stats={props.stats} />
+    </span>
+  );
+}
+
+/** A live connection with no pairing to manage: there is nothing further to open. */
+function UnpairedEntry(props: { entry: PresenceEntry }) {
+  const title = () => props.entry.host ?? props.entry.mode ?? t("devices.inventory.unknownClient");
   const parts = createMemo(() => {
-    const current = entry();
-    const result = identityMetaParts(current);
+    const current = props.entry;
+    const result: string[] = [];
+    if (current.platform) {
+      result.push(prettifyPlatform(current.platform, current.deviceFamily));
+    }
+    if (current.modelIdentifier) {
+      const family = macFamilyLabel(current.modelIdentifier);
+      if (family) {
+        result.push(family);
+      }
+      result.push(current.modelIdentifier);
+    }
+    if (current.version) {
+      result.push(current.version);
+    }
     if (current.lastInputSeconds != null) {
       result.push(formatInputRecency(current.lastInputSeconds));
     }
-    if (gateway() && props.devices.gatewaySystemInfo) {
-      result.push(
-        t("devices.inventory.uptime", {
-          time: formatDurationCompact(props.devices.gatewaySystemInfo.uptimeMs) ?? "",
-        }),
-      );
-    }
-    if (!gateway() && Array.isArray(current.roles)) {
+    if (Array.isArray(current.roles)) {
       result.push(...current.roles.filter(Boolean));
     }
     return result;
   });
-  const icon = () =>
-    gateway() ? (
-      <Icon name="server" />
-    ) : (
-      deviceIcon({
-        clientMode: entry().mode ?? undefined,
-        platform: entry().platform ?? undefined,
-        modelIdentifier: entry().modelIdentifier ?? undefined,
-      })
-    );
-  const title = () =>
-    gateway()
-      ? (entry().host ?? t("devices.execApprovals.gateway"))
-      : (entry().host ?? entry().mode ?? t("devices.inventory.unknownClient"));
-  const desktopEnvironment = createMemo(() =>
-    gateway() ? deviceDesktopEnvironment(props.devices, "gateway") : undefined,
-  );
   return (
     <div class="settings-row device-entry">
-      <DeviceTile icon={icon()} />
-      <div class="device-entry__body">
-        <div class="device-entry__heading">
-          <span class="settings-row__title">{title()}</span>
-          <span class="device-entry__status">
-            <SettingsStatus
-              kind={gateway() ? "accent" : "muted"}
-              label={t(gateway() ? "devices.inventory.gateway" : "devices.inventory.unpaired")}
+      <div class="settings-row__text">
+        <span class="settings-row__title">{title()}</span>
+        <MetaLine parts={parts()} />
+      </div>
+      <Show when={props.entry.deviceId}>
+        {(deviceId) => (
+          <div class="settings-row__control">
+            <CopyButton
+              text={deviceId()}
+              idleLabel={t("devices.inventory.copyDeviceId")}
+              iconFeedback
             />
-          </span>
-        </div>
-        {parts().length > 0 ? (
-          <span class="settings-row__desc">{parts().join(" · ")}</span>
-        ) : undefined}
-        {gateway() ? <HostStats stats={props.devices.gatewaySystemInfo} /> : undefined}
-      </div>
-      <div class="settings-row__control">
-        <DesktopControl devices={props.devices} environmentId={desktopEnvironment()} />
-        <DeviceEntryMenu
-          devices={props.devices}
-          entry={{
-            name: title(),
-            deviceId: entry().deviceId,
-            desktopEnvironment: desktopEnvironment(),
-          }}
-        />
-      </div>
+          </div>
+        )}
+      </Show>
     </div>
-  );
-}
-
-function DesktopControl(props: {
-  devices: DevicesProps;
-  environmentId: string | undefined;
-  commands?: string[];
-}) {
-  return (
-    <Show
-      when={props.environmentId}
-      fallback={
-        props.commands?.includes("desktop.stream") ? (
-          <span
-            class="device-capability device-capability--disabled"
-            aria-disabled="true"
-            title={t("devices.inventory.desktopEnableHint")}
-          >
-            <Icon name="monitor" /> {t("devices.inventory.desktop")}
-          </span>
-        ) : undefined
-      }
-    >
-      {(environmentId) => {
-        // Settings routes suppress the docked Desktop panel, so the row opens the
-        // standalone desktop focus window instead of dispatching a panel toggle.
-        return (
-          <button
-            class="btn btn--sm device-entry__desktop"
-            title={t("devices.inventory.desktopOpenWindow")}
-            onClick={() => openDesktopFocus(props.devices.basePath, environmentId())}
-          >
-            <Icon name="monitor" /> {t("devices.inventory.desktop")}
-          </button>
-        );
-      }}
-    </Show>
   );
 }
 
@@ -553,172 +588,65 @@ function TokenRow(props: {
   device: { id: string; name: string };
   tokenSummary: DeviceTokenSummary;
   devices: DevicesProps;
+  revocable: boolean;
 }) {
-  const status = () =>
-    props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : t("devices.inventory.active");
-  const scopes = createMemo(() => formatList(props.tokenSummary.scopes));
-  const when = createMemo(() =>
-    formatRelativeTimestamp(
+  const disabled = () =>
+    props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
+  const detail = createMemo(() => {
+    const when = formatRelativeTimestamp(
       props.tokenSummary.rotatedAtMs ??
         props.tokenSummary.createdAtMs ??
         props.tokenSummary.lastUsedAtMs ??
         null,
-    ),
-  );
-  return (
-    <tr>
-      <td data-label={t("devices.inventory.tokenRole")}>{props.tokenSummary.role}</td>
-      <td data-label={t("devices.inventory.tokenStatus")}>{status()}</td>
-      <td data-label={t("devices.inventory.scopesLabel")}>{scopes()}</td>
-      <td data-label={t("devices.inventory.tokenAge")}>{when()}</td>
-      <td data-label={t("devices.inventory.actions")}>
-        <div class="device-entry__token-actions">
-          <button
-            class="btn btn--sm"
-            disabled={!props.devices.connected || !props.devices.canManagePairing}
-            onClick={() =>
-              props.devices.onDeviceRotate(
-                props.device,
-                props.tokenSummary.role,
-                props.tokenSummary.scopes,
-              )
-            }
-          >
-            {t("devices.inventory.rotate")}
-          </button>
-          {props.tokenSummary.revokedAtMs ? undefined : (
-            <button
-              class="btn btn--sm danger"
-              disabled={!props.devices.connected || !props.devices.canManagePairing}
-              onClick={() => props.devices.onDeviceRevoke(props.device.id, props.tokenSummary.role)}
-            >
-              {t("devices.inventory.revoke")}
-            </button>
-          )}
-        </div>
-      </td>
-    </tr>
-  );
-}
-
-function PendingDeviceRows(props: DevicesProps) {
-  const pairedByDeviceId = createMemo(
-    () =>
-      new Map(
-        (props.devicesList?.paired ?? [])
-          .map((device) => [normalizeOptionalString(device.deviceId), device] as const)
-          .filter((entry): entry is [string, PairedDevice] => Boolean(entry[0])),
-      ),
-  );
-  return (
-    <For each={props.devicesList?.pending ?? []} keyed={(req) => req.requestId}>
-      {(req) => (
-        <PendingDevice
-          req={req()}
-          devices={props}
-          paired={lookupPairedDevice(pairedByDeviceId(), req())}
-        />
-      )}
-    </For>
-  );
-}
-
-function lookupPairedDevice(
-  pairedByDeviceId: ReadonlyMap<string, PairedDevice>,
-  request: Pick<PendingDevice, "deviceId" | "publicKey">,
-): PairedDevice | undefined {
-  const paired = pairedByDeviceId.get(normalizeOptionalString(request.deviceId) ?? "");
-  if (!paired) {
-    return undefined;
-  }
-  const requestPublicKey = normalizeOptionalString(request.publicKey);
-  const pairedPublicKey = normalizeOptionalString(paired.publicKey);
-  if (requestPublicKey && pairedPublicKey && requestPublicKey !== pairedPublicKey) {
-    return undefined;
-  }
-  return paired;
-}
-
-function formatAccessSummary(access: DevicePairingAccessSummary | null): string {
-  if (!access) {
-    return t("devices.inventory.none");
-  }
-  return t("devices.inventory.rolesAndScopes", {
-    roles: formatList(access.roles),
-    scopes: formatList(access.scopes),
+    );
+    return [props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : "", when].filter(
+      Boolean,
+    );
   });
-}
-
-const PENDING_APPROVAL_LABELS: Record<PendingDeviceApprovalKind, string> = {
-  "scope-upgrade": "devices.inventory.scopeUpgrade",
-  "role-upgrade": "devices.inventory.roleUpgrade",
-  "re-approval": "devices.inventory.reapproval",
-  "new-pairing": "devices.inventory.newPairing",
-};
-
-function PendingDevice(props: {
-  req: PendingDevice;
-  devices: DevicesProps;
-  paired?: PairedDevice;
-}) {
-  const name = () => normalizeOptionalString(props.req.displayName) || props.req.deviceId;
-  const age = createMemo(() =>
-    props.req.ts === undefined ? t("common.na") : formatRelativeTimestamp(props.req.ts),
-  );
-  const approval = createMemo(() => resolvePendingDeviceApprovalState(props.req, props.paired));
-  const repair = () => (props.req.isRepair ? ` · ${t("devices.inventory.repair")}` : "");
   return (
-    <div class="settings-row device-entry">
-      <DeviceTile icon={<Icon name="monitorSmartphone" />} />
-      <div class="device-entry__body">
-        <div class="device-entry__heading">
-          <span class="settings-row__title">{name()}</span>
-          <span class="device-entry__status">
-            <SettingsStatus kind={"warn"} label={t("devices.inventory.pendingApproval")} />
-          </span>
-        </div>
-        <span class="settings-row__desc">
-          {t("devices.inventory.requestedAt", {
-            note: t(PENDING_APPROVAL_LABELS[approval().kind]),
-            time: age(),
-          })}
-          {repair()}
+    <div class="device-token">
+      <div class="device-token__text">
+        <span class="device-token__role">
+          {t(
+            props.tokenSummary.role === "node"
+              ? "devices.inventory.deviceToken"
+              : props.tokenSummary.role === "operator"
+                ? "devices.inventory.accessToken"
+                : "devices.inventory.token",
+          )}
         </span>
+        <MetaLine parts={detail()} />
+        <details>
+          <summary>{t("devices.inventory.showDetails")}</summary>
+          <MetaLine
+            parts={[props.tokenSummary.role, formatList(props.tokenSummary.scopes ?? [])]}
+          />
+        </details>
       </div>
-      <div class="settings-row__control">
+      <div class="device-token__actions">
         <button
           class="btn btn--sm"
-          disabled={!props.devices.connected || !props.devices.canManagePairing}
-          onClick={() => props.devices.onDeviceApprove(props.req.requestId)}
+          disabled={disabled()}
+          onClick={() =>
+            props.devices.onDeviceRotate(
+              props.device,
+              props.tokenSummary.role,
+              props.tokenSummary.scopes,
+            )
+          }
         >
-          {t("devices.inventory.approve")}
+          {t("devices.inventory.rotate")}
         </button>
-        <button
-          class="btn btn--sm"
-          disabled={!props.devices.connected || !props.devices.canManagePairing}
-          onClick={() => props.devices.onDeviceReject(props.req.requestId)}
-        >
-          {t("devices.inventory.reject")}
-        </button>
-        <DeviceEntryMenu
-          devices={props.devices}
-          entry={{ name: name(), deviceId: props.req.deviceId }}
-        />
+        {props.tokenSummary.revokedAtMs || !props.revocable ? undefined : (
+          <button
+            class="btn btn--sm danger"
+            disabled={disabled()}
+            onClick={() => props.devices.onDeviceRevoke(props.device.id, props.tokenSummary.role)}
+          >
+            {t("devices.inventory.revoke")}
+          </button>
+        )}
       </div>
-      <details class="device-entry__details">
-        <summary>{t("devices.inventory.details")}</summary>
-        <dl class="device-entry__facts">
-          <DeviceIdentityFacts id={props.req.deviceId} remoteIp={props.req.remoteIp} />
-          <dt class="settings-row__desc">{t("devices.inventory.requestedAccessLabel")}</dt>
-          <dd class="settings-row__value">{formatAccessSummary(approval().requested)}</dd>
-          {approval().approved ? (
-            <>
-              <dt class="settings-row__desc">{t("devices.inventory.approvedAccessLabel")}</dt>
-              <dd class="settings-row__value">{formatAccessSummary(approval().approved)}</dd>
-            </>
-          ) : undefined}
-        </dl>
-      </details>
     </div>
   );
 }

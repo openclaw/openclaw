@@ -20,7 +20,6 @@ import { createWhatsAppMessageScenario } from "./whatsapp-live.scenario-builders
 function createWhatsAppAgentActionScenario(target: "dm" | "group", action: "react" | "upload") {
   const group = target === "group";
   return createWhatsAppMessageScenario({
-    posture: "user-path",
     configOverrides: { actions: true },
     ...(group ? { requiresGroupJid: true } : {}),
     marker: `WHATSAPP_QA_${group ? "GROUP_" : ""}AGENT_${action.toUpperCase()}`,
@@ -84,7 +83,6 @@ export const whatsappUserPathScenarios = {
   ),
 
   whatsappQaInboundReactionNoTriggerScenario: createWhatsAppMessageScenario({
-    posture: "user-path",
     marker: "WHATSAPP_QA_INBOUND_REACTION",
     buildRun: (token) => ({
       afterReply: async (reply, context) => {
@@ -109,7 +107,6 @@ export const whatsappUserPathScenarios = {
   }),
 
   whatsappQaReplyContextIsolationScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     marker: "WHATSAPP_QA_REPLY_ISOLATION",
     buildRun: (token) => ({
       afterReply: async (_reply, context) => {
@@ -148,7 +145,6 @@ export const whatsappUserPathScenarios = {
   }),
 
   whatsappQaInboundImageCaptionScenario: createWhatsAppMessageScenario({
-    posture: "user-path",
     marker: "WHATSAPP_QA_IMAGE",
     buildRun: (token) => ({
       input: `This image caption asks you to reply with only this exact marker: ${token}`,
@@ -162,7 +158,6 @@ export const whatsappUserPathScenarios = {
   }),
 
   whatsappQaAudioPreflightScenario: {
-    posture: "user-path",
     configOverrides: {
       audioPreflight: true,
     },
@@ -182,7 +177,6 @@ export const whatsappUserPathScenarios = {
   },
 
   whatsappQaOutboundMediaMatrixScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     marker: "WHATSAPP_QA_OUTBOUND_MEDIA",
     buildRun: (token) => ({
       afterReply: async (_reply, context) =>

@@ -1,13 +1,19 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import {
+  gatewayCredentialScope,
+  gatewayOriginScope,
+} from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { preserveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import { isSecureWebSocketUrl } from "../gateway/net.js";
 import { discoverGatewayBeacons, type GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import {
   buildGatewayDiscoveryLabel,
   buildGatewayDiscoveryTarget,
 } from "../infra/gateway-discovery-targets.js";
+import { formatHostForUrl } from "../infra/net/hostname.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
@@ -98,23 +104,26 @@ export async function promptRemoteGatewayConfig(
     const target = buildGatewayDiscoveryTarget(selectedBeacon);
     if (target.endpoint) {
       const { host, port } = target.endpoint;
+      const hostLabel = formatHostForUrl(host);
       const mode = await prompter.select({
         message: t("wizard.remote.connectionMethod"),
         options: [
           {
             value: "direct",
-            label: `Direct gateway WS (${host}:${port})`,
+            label: terminalText`Direct gateway WS (${hostLabel}:${port})`,
           },
           { value: "ssh", label: t("wizard.remote.sshTunnel") },
         ],
       });
       if (mode === "direct") {
-        suggestedUrl = `wss://${host}:${port}`;
+        suggestedUrl = `wss://${hostLabel}:${port}`;
         const fingerprint = target.endpoint.gatewayTlsFingerprintSha256;
         const trusted = await prompter.confirm({
           message: t("wizard.remote.trustGateway", {
-            host: `${host}:${port}`,
-            fingerprint: fingerprint ?? t("wizard.remote.fingerprintMissing"),
+            host: terminalText`${hostLabel}:${port}`,
+            fingerprint: fingerprint
+              ? terminalText`${fingerprint}`
+              : t("wizard.remote.fingerprintMissing"),
           }),
           initialValue: false,
         });
@@ -127,8 +136,8 @@ export async function promptRemoteGatewayConfig(
           await prompter.note(
             [
               t("wizard.remote.directDefaultsTls"),
-              `Using: ${suggestedUrl}`,
-              ...(fingerprint ? [`TLS pin: ${fingerprint}`] : []),
+              terminalText`Using: ${suggestedUrl}`,
+              ...(fingerprint ? [terminalText`TLS pin: ${fingerprint}`] : []),
               t("wizard.remote.loopbackSshHint"),
             ].join("\n"),
             t("wizard.remote.directAccessTitle"),
@@ -143,7 +152,7 @@ export async function promptRemoteGatewayConfig(
         await prompter.note(
           [
             "Start a tunnel before using the CLI:",
-            `ssh -N -L 18789:127.0.0.1:${port} <user>@${host}${target.sshPort ? ` -p ${target.sshPort}` : ""}`,
+            terminalText`ssh -N -L 18789:127.0.0.1:${port} <user>@${host}${target.sshPort ? ` -p ${target.sshPort}` : ""}`,
             "Docs: https://docs.openclaw.ai/gateway/remote",
           ].join("\n"),
           t("wizard.remote.sshTunnelTitle"),
@@ -158,12 +167,16 @@ export async function promptRemoteGatewayConfig(
     validate: validateGatewayWebSocketUrl,
   });
   const url = urlInput.trim() || DEFAULT_GATEWAY_URL;
-  // Discovery choices belong only to the accepted URL, never a subsequent manual edit.
-  const selectedDiscovery = discoveryRemote?.url === url ? discoveryRemote : undefined;
+  // Equivalent spellings keep the selected transport; another endpoint clears it.
+  const selectedDiscovery =
+    discoveryRemote && gatewayCredentialScope(discoveryRemote.url) === gatewayCredentialScope(url)
+      ? discoveryRemote
+      : undefined;
 
   // A saved secret belongs to the selected endpoint, not a newly entered URL or tunnel.
   const existingSecret =
-    (!cfg.gateway?.remote?.url || url === cfg.gateway.remote.url.trim()) &&
+    (!cfg.gateway?.remote?.url ||
+      gatewayCredentialScope(url) === gatewayCredentialScope(cfg.gateway.remote.url)) &&
     selectedDiscovery?.transport !== "ssh"
       ? (cfg.gateway?.remote?.token ?? cfg.gateway?.remote?.password)
       : undefined;
@@ -235,6 +248,12 @@ export async function promptRemoteGatewayConfig(
     remoteOriginUrl && gatewayOriginScope(url) === gatewayOriginScope(remoteOriginUrl)
       ? cfg.gateway?.remote?.edgeAuth
       : undefined;
+  // A newly suggested manual tunnel can reach another host behind the same loopback URL.
+  const preservedRemote =
+    gatewayCredentialScope(url) === gatewayCredentialScope(remoteOriginUrl ?? "") &&
+    selectedDiscovery?.transport !== "ssh"
+      ? cfg.gateway?.remote
+      : undefined;
 
   return {
     ...cfg,
@@ -242,9 +261,9 @@ export async function promptRemoteGatewayConfig(
       ...cfg.gateway,
       mode: "remote",
       remote: {
-        // A newly suggested manual tunnel can reach another host behind the same loopback URL.
-        ...(url === remoteOriginUrl?.trim() && selectedDiscovery?.transport !== "ssh"
-          ? cfg.gateway?.remote
+        ...preservedRemote,
+        ...(preservedRemote && selectedDiscovery?.transport !== "direct"
+          ? preserveGatewaySshRemotePort(cfg, url, remoteOriginUrl)
           : {}),
         url,
         edgeAuth,
