@@ -9,6 +9,7 @@ import type {
   revalidateManagedGatewayServiceAfterUpdate,
 } from "../cli/update-cli/update-command-service-maintenance.js";
 import type { GatewayService, readGatewayServiceState } from "../daemon/service.js";
+import * as bootReader from "../infra/update-managed-service-handoff-boot.js";
 import type { recordUpdateRunStep, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { resolveCommandProcessSignal, retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -207,6 +208,10 @@ const nativeFunctions = [
 let stopped: PreManagedServiceStop;
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+    platform: "linux",
+    identity: "01234567-89ab-cdef-0123-456789abcdef",
+  }));
   for (const native of nativeFunctions) {
     vi.mocked(native).mockImplementation(boundary.native);
   }

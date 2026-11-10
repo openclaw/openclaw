@@ -1,2 +1,2 @@
-# Split-root status and update-preview regression coverage.
-56
+# Split-root status/update previews, Doctor recovery guidance, and native permission-path regressions.
+111

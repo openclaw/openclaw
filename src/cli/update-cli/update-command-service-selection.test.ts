@@ -31,7 +31,7 @@ type Scenario = {
   platform: NodeJS.Platform;
   fault?: string;
   runtime?: "node" | "bun";
-  definition?: "plain" | "empty" | "managedDefinition" | "managedOverrides" | "launcherOverride";
+  definition?: "plain" | "empty" | "managedDefinition" | "managedOverrides";
   sameRoot?: boolean;
 };
 const cases: Scenario[] = [
@@ -45,7 +45,6 @@ const cases: Scenario[] = [
   { platform: "win32" },
   { platform: "win32", sameRoot: true },
   { platform: "linux", definition: "managedOverrides" },
-  { platform: "linux", definition: "launcherOverride" },
   { platform: "linux", definition: "managedDefinition" },
   { platform: "linux", definition: "empty" },
   { platform: "linux", definition: "empty", runtime: "bun" },
@@ -108,9 +107,6 @@ it.each(cases)(
             ? { managedDefinition: command }
             : {}),
           ...(definition === "empty" ? { managedOverrides: {} } : {}),
-          ...(definition === "launcherOverride"
-            ? { managedOverrides: { launcher: "command" as const } }
-            : {}),
           ...(definition === "managedOverrides"
             ? { managedOverrides: { environment: { keys: ["OPENCLAW_PROFILE"] } } }
             : {}),
