@@ -36,7 +36,7 @@ import {
   subscribeExpansionState,
 } from "../chat-thread.ts";
 import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
-import { yieldChatTask } from "../yield-chat-task.ts";
+import { splitChatConstruction, yieldChatTask } from "../yield-chat-task.ts";
 import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
@@ -257,10 +257,12 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   // Sample once before choosing the first row frame; cheap preparations need no placeholder.
   current();
   const initialRestoring = Boolean(input.props.restoring);
-  const [renderReady, setRenderReady] = createSignal(initialRestoring || !splitRows);
+  const [renderReady, setRenderReady] = createSignal(
+    initialRestoring || !splitRows || !splitChatConstruction,
+  );
   onSettled(() => {
     if (!renderReady()) {
-      void yieldChatTask(true).then(() => setRenderReady(true));
+      void yieldChatTask().then(() => setRenderReady(true));
     }
   });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);

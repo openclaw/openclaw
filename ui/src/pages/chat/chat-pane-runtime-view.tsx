@@ -47,7 +47,7 @@ import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { waitForPrewarmedChatSnapshot } from "./session-snapshot-store.ts";
-import { yieldChatTask } from "./yield-chat-task.ts";
+import { splitChatConstruction, yieldChatTask } from "./yield-chat-task.ts";
 
 const ChatComposerCapabilityDialogs = lazy(() => import("./chat-composer-capability-host.tsx"), {
   export: "ChatComposerCapabilityDialogs",
@@ -367,11 +367,13 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       () => frame().layout?.primary.chat ?? null,
     );
     // Cached route handoffs stay immediate; cold and document boot split at their first frame.
-    const [constructed, setConstructed] = createSignal(!bootComposerElement());
+    const [constructed, setConstructed] = createSignal(
+      !bootComposerElement() || !splitChatConstruction,
+    );
     onSettled(() => {
       if (!constructed()) {
         frame();
-        pendingLayout = yieldChatTask(true);
+        pendingLayout = yieldChatTask();
         void pendingLayout.then(() => {
           pendingLayout = undefined;
           if (!disposed) {
