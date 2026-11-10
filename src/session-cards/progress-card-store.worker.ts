@@ -1,4 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission.js";
 import { runSqliteWorkerTransactionSync } from "../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../infra/sqlite-worker-binding.js";
 import { isSqliteWorkerError, type SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
@@ -33,7 +34,11 @@ export function bindSqliteWorkerBackend(
       try {
         const value = runSqliteWorkerTransactionSync(
           context,
-          () => writePreparedSessionProgressCard(db, command.input.sessionKey, input),
+          // Card rows do not change session metadata or transcript authority.
+          () =>
+            withSqliteDatabaseWriteScope(db, [], () =>
+              writePreparedSessionProgressCard(db, command.input.sessionKey, input),
+            ),
           {
             databaseLabel: context.databasePath,
             operationLabel: "progress-card.put",

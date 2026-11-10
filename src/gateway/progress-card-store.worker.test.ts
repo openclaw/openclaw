@@ -9,6 +9,10 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptIndexStatus } from "../config/sessions/session-transcript-projection-writer.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../infra/sqlite-database-admission.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -56,7 +60,7 @@ function withCardSession(custom: boolean, run: (cfg: OpenClawConfig) => Promise<
 }
 
 it.each([false, true])(
-  "persists tool and conditional RPC clears without caller SQL (custom=%s)",
+  "persists tool and conditional RPC clears without caller SQL or revoking session receipts (custom=%s)",
   async (custom) => {
     await withCardSession(custom, async (cfg) => {
       const target = { agentId: "main", path: cfg.session?.store };
@@ -83,12 +87,16 @@ it.each([false, true])(
           markdown: "First",
           plan: [{ step: "Persist", status: "in_progress" }],
         });
+        const scope = [sessionKey, sqliteSessionIdWriteScope("card-session")];
+        const receipt = readSqliteDatabaseScopedWriteToken(db, scope);
+        expect(receipt).toBeDefined();
         await tool.execute("replace", { markdown: "Second" });
         expect(await invoke({ sessionKey, expectedRevision: 1 })).toMatchObject({
           card: { revision: 2, markdown: "Second" },
         });
         expect(await invoke({ sessionKey, expectedRevision: 2 })).toEqual({ card: null });
         await tool.execute("recreate", { plan: [{ step: "Done", status: "completed" }] });
+        expect(readSqliteDatabaseScopedWriteToken(db, scope)).toBe(receipt);
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
