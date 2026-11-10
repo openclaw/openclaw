@@ -79,11 +79,17 @@ function holdInlineCodeSpans(text: string, code: string[]): string {
       }
       j += runLength;
     }
-    if (close === -1 || text.slice(index + openLength, close).includes("\n")) {
+    if (close === -1) {
       // Consume the whole unmatched run so its tail backticks cannot reopen as a
-      // narrower span and steal delimiters from a later valid code span. A run
-      // that spans a line break is a fenced block, not an inline code span, so
-      // it is left for fence stripping.
+      // narrower span and steal delimiters from a later valid code span.
+      index += openLength;
+      continue;
+    }
+    // A backtick run at the start of a line opens a fenced block, which fence
+    // stripping removes whole; inline code may span lines, so only line-start
+    // runs are left for the fence pass.
+    const atLineStart = index === 0 || text.charAt(index - 1) === "\n";
+    if (atLineStart && openLength >= 3) {
       index += openLength;
       continue;
     }

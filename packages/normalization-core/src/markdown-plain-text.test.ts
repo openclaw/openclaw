@@ -18,6 +18,16 @@ describe("flattenMarkdownToPlainText", () => {
     ],
     ["unmatched wider run before a valid span", "`` prefix `__init__`", "`` prefix __init__"],
     [
+      "multiline inline code keeps its literal content",
+      "Use `__init__\nnext` now",
+      "Use __init__ next now",
+    ],
+    [
+      "multiline wider-run inline code keeps its literal content",
+      "Use ``a\nb`` now",
+      "Use a b now",
+    ],
+    [
       "links and escaped image markers",
       String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,
       String.raw`Read the deployment guide, \!important, \\diagram`,
