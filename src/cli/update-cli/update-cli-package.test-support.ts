@@ -32,6 +32,7 @@ export const writeOpenClawPackageFixture = async (
     git?: boolean;
     builtSha?: string;
     inventory?: boolean;
+    databaseEngines?: string[];
   } = {},
 ) => {
   const entryPath = options.entryPath ?? path.join(root, "dist", "index.js");
@@ -41,7 +42,17 @@ export const writeOpenClawPackageFixture = async (
   if (options.git) {
     await fs.mkdir(path.join(root, ".git"), { recursive: true });
   }
-  await writeJsonFixture(path.join(root, "package.json"), { name: "openclaw", version }, false);
+  await writeJsonFixture(
+    path.join(root, "package.json"),
+    {
+      name: "openclaw",
+      version,
+      ...(options.databaseEngines
+        ? { openclaw: { databaseEngines: options.databaseEngines } }
+        : {}),
+    },
+    false,
+  );
   if (options.entrySource !== undefined) {
     await fs.writeFile(entryPath, options.entrySource, "utf-8");
   }
@@ -74,10 +85,12 @@ export async function writeGitUpdateResultFixture(
   params: Pick<UpdateRunResult, "before"> & {
     root: string;
     after: { sha: string; version: string };
+    databaseEngines?: string[];
   },
 ): Promise<UpdateRunResult> {
   await writeOpenClawPackageFixture(params.root, params.after.version, {
     builtSha: params.after.sha,
+    databaseEngines: params.databaseEngines,
   });
   const { readGitRuntimeArtifactIdentity } = await import("../../infra/update-git-runtime.js");
   return {

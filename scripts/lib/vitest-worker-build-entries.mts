@@ -292,8 +292,6 @@ export const preservedModuleBuildAssets = [
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
-  // Standalone skill discovery loads this sibling only when prepared contributions are absent.
-  "plugin-metadata-readers.runtime": "src/plugins/plugin-metadata-readers.runtime.ts",
   "plugins/test-helpers/installed-plugin-index":
     "src/plugins/test-helpers/installed-plugin-index.ts",
   "legacy-config-binding-repair.runtime":

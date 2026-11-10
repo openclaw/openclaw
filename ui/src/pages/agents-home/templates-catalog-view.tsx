@@ -28,15 +28,15 @@ function CatalogLoading() {
   );
 }
 
-function CatalogRead(props: TemplatesCatalogViewProps & { children: JSX.Element }) {
+function DetailRead(props: TemplatesCatalogViewProps & { children: JSX.Element }) {
   return (
-    <For each={[props.catalogRequest]}>
+    <For each={[props.detailRequest]}>
       {() => (
         <Errored
           fallback={(error) => (
             <InlineAlert tone="danger" role="alert">
               {formatUiError(error(), t("templatesCatalog.unavailable"))}
-              <button class="btn btn--sm" onClick={() => props.onRetryCatalog()}>
+              <button class="btn btn--sm" onClick={() => props.onRetryDetail()}>
                 {t("templatesCatalog.retry")}
               </button>
             </InlineAlert>
@@ -67,11 +67,11 @@ export function TemplatesCatalogView(props: TemplatesCatalogViewProps) {
               >
                 {t("templatesCatalog.back")}
               </a>
-              <CatalogRead {...props}>
-                <Show when={props.readEntries().length > 0}>
+              <DetailRead {...props}>
+                <Show when={props.readDetail()}>
                   <CatalogLoading />
                 </Show>
-              </CatalogRead>
+              </DetailRead>
             </section>
           </SettingsPage>
         }

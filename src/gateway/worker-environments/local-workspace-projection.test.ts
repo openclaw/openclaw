@@ -32,13 +32,17 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { proveResumedBaseRefresh } from "./local-workspace-base-refresh.test-support.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
+import { registerSandboxCheckpointTests } from "./local-workspace-checkpoint.test-support.js";
 import {
   prepareLegacyArchiveRetention,
   proveAcceptedDirectoryRetention,
   proveArchivedInputRetention,
   proveLastFileDirectoryRetention,
 } from "./local-workspace-directory-retention.test-support.js";
-import { proveGitIgnoredWorkspaceOutputs } from "./local-workspace-generated-paths.test-support.js";
+import {
+  proveGitIgnoredWorkspaceOutputs,
+  proveLegacyGitIgnoredWorkspaceOutputs,
+} from "./local-workspace-generated-paths.test-support.js";
 import {
   expectMissing,
   observeAcknowledgedUpdate,
@@ -183,6 +187,8 @@ afterEach(async () => {
 });
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
+
+registerSandboxCheckpointTests(() => owner);
 
 it.each(["canonical", "projection"] as const)(
   "quarantines rejected checkpoints while allowing new agent work: %s",
@@ -424,6 +430,9 @@ it.each([false, true])(
 
 it("checkpoints Git changes without ignored build outputs or guest Git metadata", () =>
   proveGitIgnoredWorkspaceOutputs(owner, root));
+
+it("recaptures pre-fix accepted build output without publishing or deleting ignored bytes", () =>
+  proveLegacyGitIgnoredWorkspaceOutputs(owner));
 
 it("never admits nested host secrets after guest de-ignore", async () => {
   const prefix = "nested/";
@@ -779,6 +788,7 @@ it.for([false, true])(
       usePty: false,
     });
     events.length = 0;
+    await writeText(projection.workspaceDir, "source.txt", "accepted command output\n");
     const finalize = (spec: typeof accepted) =>
       backend.finalizeExec!({
         status: "completed",

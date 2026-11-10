@@ -1066,9 +1066,9 @@ export function packChangedNodeBoundary(shards: ChangedNodeTestShard[]): Changed
   if (!boundary) {
     return shards;
   }
-  // All 97 observed boundary test steps fit 73s, including both runtimes.
-  // Reserve 90s and retain the ordinary 150s selected-row budget.
-  const boundarySeconds = 90;
+  // Seven post-fix Bun boundary runs on two CPUs stayed below 34s.
+  // Keep the 90s Node/dual reserve and the ordinary 150s selected-row budget.
+  const boundarySeconds = process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY === "bun-all" ? 60 : 90;
   const recipient = shards
     .filter(
       (shard) =>

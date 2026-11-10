@@ -1,9 +1,8 @@
 import { performance } from "node:perf_hooks";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { expectCollected } from "../../test-utils/retention.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import { createStubChildAdapter, type StubChildAdapter } from "./supervisor.test-support.js";
@@ -12,11 +11,19 @@ import type { SpawnInput } from "./types.js";
 const { child, pty, readMemory } = vi.hoisted(() => ({
   child: vi.fn(),
   pty: vi.fn(),
-  readMemory: vi.fn<(path: string, callback: (error: null, text: Buffer) => void) => void>(),
+  readMemory: vi.fn<(path: string) => Buffer>(),
 }));
 const memoryOwner = vi.hoisted(() => ({
   setBudget: (_budget: { memoryBytes: number; swapBytes: number } | undefined) => {},
 }));
+vi.mock("../../../node-version.mjs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../node-version.mjs")>();
+  return {
+    ...actual,
+    parseNodeReleaseVersion: (version: string) =>
+      actual.parseNodeReleaseVersion(version === process.versions.node ? "24.22.1" : version),
+  };
+});
 vi.mock("../../shared/global-singleton.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../shared/global-singleton.js")>();
   return {
@@ -43,7 +50,14 @@ vi.mock("./adapters/child.js", () => ({
 vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: pty }));
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
-  readFile: readMemory,
+  readFile: (
+    path: string,
+    optionsOrCallback: { buffer: Buffer } | ((error: null, content: Buffer) => void) | undefined,
+    callback?: (error: null, content: Buffer) => void,
+  ) => {
+    const done = typeof optionsOrCallback === "function" ? optionsOrCallback : callback!;
+    done(null, readMemory(path));
+  },
 }));
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
@@ -130,11 +144,13 @@ describe("process supervisor", () => {
     const run = await spawn({ scopeKey: "scope" });
     adapter.settle(0);
     await run.wait();
-    const failure = new ExpiredCaller().fail();
+    const { failure, caller: callerRef } = (() => {
+      const caller = new ExpiredCaller();
+      return { failure: caller.fail(), caller: new WeakRef(caller) };
+    })();
     extinction.reject(failure);
     await run.waitForExtinction!().catch(() => undefined);
-    await nextTurn();
-    expect(queryObjects(ExpiredCaller)).toBe(0);
+    await expectCollected(callerRef);
     await expect(cleanup()).rejects.toBe(failure);
     await expect(supervisor.shutdown()).rejects.toBe(failure);
     expect(failure.code).toBe("ECLEANUP");
@@ -147,9 +163,7 @@ describe("process supervisor", () => {
       vi.useFakeTimers();
       mockProcessPlatform("linux");
       memoryOwner.setBudget({ memoryBytes: 128 * 1024, swapBytes: 0 });
-      const read = readMemory.mockImplementation((_path, callback) => {
-        callback(null, Buffer.from("Name:\tfixture\nVmRSS:\t256 kB\n"));
-      });
+      const read = readMemory.mockReturnValue(Buffer.from("Name:\tfixture\nVmRSS:\t256 kB\n"));
       const adapter = terminating();
       adapter.memoryRootPid = 4321;
       if (mode === "pty") {
@@ -169,7 +183,7 @@ describe("process supervisor", () => {
           expect(read).not.toHaveBeenCalled();
           adapter.settle(0);
         } else {
-          expect(read).toHaveBeenCalledWith("/proc/4321/status", expect.any(Function));
+          expect(read).toHaveBeenCalledWith("/proc/4321/status");
           expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
           await expect(run.wait()).resolves.toMatchObject({
             reason: "memory-limit",

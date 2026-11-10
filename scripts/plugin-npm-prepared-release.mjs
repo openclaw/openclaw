@@ -22,6 +22,7 @@ import {
 } from "./lib/npm-publish-plan.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { isPluginPublicationEnabled } from "./lib/plugin-publication-target.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
 import { createReleaseEvidenceReplay } from "./lib/release-evidence-replay.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import { loadNpmEvidenceReplay, npmEvidenceBinding } from "./plugin-npm-evidence-reuse.mjs";
@@ -196,24 +197,31 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
   const runAttempt = Number(params.fullReleaseValidationRunAttempt);
   const { manifest } = await client.loadManifest(runId, runAttempt);
   const selected = manifest.sourceAdmission?.publicationSelection;
-  // The child checks the npm operation it actually performs; the parent also
-  // supplies its complete selection (including route and optional Windows).
-  if (selected) {
-    const names = (params.plugins ?? "")
-      .split(/[,\s]+/u)
-      .filter(Boolean)
-      .toSorted();
+  // Derive the operation only after the validator authenticates the whole
+  // admission. Its owner decides whether this is a covered plugin-only subset.
+  let operation;
+  const publicationOperation = () => {
     requireValue(
-      selected.pluginPublishScope === params.selectionMode &&
+      selected &&
         (selected.npmDistTag === "extended-stable" ? "extended-stable" : "default") ===
-          params.npmDistTag &&
-        isDeepStrictEqual(
-          [...selected.plugins].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
-          names,
-        ),
-      "Prepared npm adoption differs from the admitted publication selection.",
+          params.npmDistTag,
+      "Prepared npm adoption differs from the admitted publication channel.",
     );
-  }
+    requireValue(
+      !params.publicationSelection || isDeepStrictEqual(params.publicationSelection, selected),
+      "Prepared npm adoption differs from the expected original publication selection.",
+    );
+    operation = {
+      ...selected,
+      pluginPublishScope: params.selectionMode,
+      plugins: (params.plugins ?? "")
+        .split(/[,\s]+/u)
+        .filter(Boolean)
+        .toSorted(),
+      publishOpenclawNpm: params.selectionMode === "selected" ? false : selected.publishOpenclawNpm,
+    };
+    return operation;
+  };
   const authenticated = await authenticateFullReleaseValidationEvidence(
     {
       run: await client.getRunAttempt(runId, runAttempt),
@@ -225,7 +233,9 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
       expectedReleaseTag: params.releaseTag ?? `v${manifest.sourceAdmission?.projection?.version}`,
       expectedTrustedWorkflowFullRef: params.workflowFullRef,
       expectedTrustedWorkflowSha: workflowSha,
-      expectedPublicationSelection: params.publicationSelection ?? selected,
+      ...(selected
+        ? { expectedPublicationOperation: publicationOperation }
+        : { expectedPublicationSelection: params.publicationSelection }),
       verifierSourceSha: workflowSha,
       verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
       isTrustedMainAncestor:
@@ -241,11 +251,16 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     client,
   );
   const current = authenticated.evidence.current;
-  const producerSha = current.manifest.workflowSha;
+  const producerSha =
+    retainedPublicationArtifactSource(current.manifest)?.workflow.sha ??
+    current.manifest.workflowSha;
   if (producerSha !== workflowSha) {
     requireValue(
       producerSha === sourceSha &&
-        current.workflowRefProof === "candidate-owned-admission-v1" &&
+        current.workflowRefProof ===
+          (current.manifest.receiptRecovery
+            ? "receipt-backed-recovery-v1"
+            : "candidate-owned-admission-v1") &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",
     );
@@ -277,10 +292,12 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
       "Prepared npm publisher policy differs from immutable source",
     );
   }
+  // Replay validation is asynchronous; live qualification authority is synchronous.
+  /** @type {(() => void | Promise<void>) | undefined} */
   const revalidateAuthority = params.immutableReads
     ? async () => {
         await params.immutableReads.revalidate(client);
-        await authenticated.revalidateAuthority?.();
+        authenticated.revalidateAuthority?.();
       }
     : authenticated.revalidateAuthority;
   if (revalidateOnReturn) {
@@ -290,6 +307,9 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     artifact: descriptor,
     workflowSha: producerSha,
     publisherPolicySha256,
+    publicationSelection: selected,
+    publicationOperation: operation,
+    evidenceClient: params.immutableReads ? client : undefined,
     revalidateAuthority,
   };
 }
@@ -470,11 +490,62 @@ export function createPreparedNpmRelease(params) {
   );
 }
 
+// First/last existing metadata responses, not extra quota probes. gh-backed
+// evidence/authority reads are outside this boundary; these partial counts
+// cannot establish a dispatch budget.
+export function createPreparedNpmCapacityObserver(fetchImpl = fetch) {
+  let before;
+  let after;
+  const requests = { fixed: 0, perPackage: 0 };
+  const observe = (phase) => async (url, options) => {
+    const response = await fetchImpl(url, options);
+    const endpoint = new URL(url);
+    // ZIP fetches follow storage redirects, whose headers are not GitHub quota.
+    if (endpoint.hostname !== "api.github.com" || endpoint.pathname.endsWith("/zip")) {
+      return response;
+    }
+    requests[phase] += 1;
+    const capacity = {};
+    for (const name of [
+      "x-ratelimit-limit",
+      "x-ratelimit-remaining",
+      "x-ratelimit-used",
+      "x-ratelimit-reset",
+      "retry-after",
+    ]) {
+      const value = response.headers.get(name);
+      if (value && /^[0-9]{1,16}$/u.test(value)) {
+        capacity[name] = value;
+      }
+    }
+    const resource = response.headers.get("x-ratelimit-resource");
+    if (resource && /^[a-z_]{1,32}$/u.test(resource)) {
+      capacity["x-ratelimit-resource"] = resource;
+    }
+    after = capacity;
+    if (!before) {
+      before = capacity;
+      console.error(JSON.stringify({ githubCapacity: { phase: "before", ...before } }));
+    }
+    return response;
+  };
+  return {
+    fetchImpl: observe("fixed"),
+    packageFetchImpl: observe("perPackage"),
+    report(packages) {
+      console.error(
+        JSON.stringify({
+          githubCapacity: { phase: "after", ...after },
+          githubRequestAccounting: { scope: "fetch-metadata-only", ...requests, packages },
+        }),
+      );
+    },
+  };
+}
+
 export async function downloadPreparedNpmRelease(params) {
-  requireValue(
-    typeof params.sourceRoot === "string",
-    "Prepared npm admission requires the frozen source root.",
-  );
+  // Load verifies the full source roster; package consumers authenticate this
+  // same sealed manifest and check their source package without a full checkout.
   const producer = normalizeProducer(params.artifact);
   requireValue(
     producer.repository === params.repository &&
@@ -482,13 +553,25 @@ export async function downloadPreparedNpmRelease(params) {
       params.artifact.artifactName === preparedNpmArtifactName(params.sourceSha, producer),
     "Prepared npm manifest artifact differs from the approved producer.",
   );
-  const downloaded = await downloadActionsArtifactArchive({
+  const download = {
     token: params.token,
     fetchImpl: params.fetchImpl,
     expected: { ...params.artifact, runStatePolicy: "completed-success" },
     archivePath: params.archivePath,
     maxArchiveBytes: MAX_MANIFEST_BYTES,
-  });
+  };
+  // Authenticated FRV consumers reuse only archive bytes; metadata and final
+  // qualification authority stay live in every command.
+  const downloaded = params.evidenceClient
+    ? await params.evidenceClient.downloadArtifactArchive({
+        ...download,
+        expected: {
+          ...download.expected,
+          artifactExpiresAt: (await params.evidenceClient.getArtifact(params.artifact.artifactId))
+            .expires_at,
+        },
+      })
+    : await downloadActionsArtifactArchive(download);
   const files = inspectActionsArtifactZipWithPolicy(downloaded.archiveBytes, {
     minEntries: 1,
     maxEntries: 1,
@@ -559,6 +642,37 @@ export async function consumePreparedNpmPackage(params) {
     outputDir: params.outputDir,
     verificationOutput: params.verificationOutput,
   });
+}
+
+// Prune only after verifying the original qualified package, registry bytes, and
+// selectors. Final core publication requires every original plugin to be present.
+export async function selectUnpublishedPreparedNpmPackages(params) {
+  const pending = [];
+  for (const entry of params.packages) {
+    const qualified = await consumePreparedNpmPackage({
+      ...params,
+      package: entry,
+      sourcePackageJson: join(params.sourceRoot, entry.packageDir, "package.json"),
+      outputDir: join(params.outputDir, entry.extensionId),
+    });
+    const { alreadyPublished } = await verifyPreparedNpmRegistry({
+      packageName: entry.packageName,
+      version: entry.version,
+      publishTags: [entry.publishTag],
+      route: entry.route,
+      tarballPath: qualified.tarballPath,
+      allowMissing: true,
+      fetchImpl: params.fetchImpl,
+    });
+    requireValue(
+      alreadyPublished || !params.requirePublished,
+      `${entry.packageName}@${entry.version}: final core publication requires the complete original plugin roster.`,
+    );
+    if (!alreadyPublished) {
+      pending.push(entry);
+    }
+  }
+  return pending;
 }
 
 export async function verifyPreparedNpmRegistry(params) {
@@ -737,7 +851,16 @@ export async function main(argv) {
       : undefined,
     token: process.env.GH_TOKEN,
   };
+  const capacity =
+    command === "load" && options["--report-capacity"] === "true"
+      ? createPreparedNpmCapacityObserver()
+      : undefined;
+  if (capacity) {
+    common.fetchImpl = capacity.fetchImpl;
+  }
   let adoption;
+  let prepared;
+  let selectedPackages;
   let writeEvidenceOutput;
   if (["load", "consume", "authorize"].includes(command)) {
     const adoptionParams = {
@@ -774,7 +897,35 @@ export async function main(argv) {
     Object.assign(common, {
       workflowSha: adoption.workflowSha,
       publisherPolicySha256: adoption.publisherPolicySha256,
+      selectionMode: adoptionParams.selectionMode,
+      plugins: adoptionParams.plugins,
     });
+    if (command !== "authorize" || options["--package"]) {
+      prepared = await downloadPreparedNpmRelease({
+        ...common,
+        selectionMode: adoption.publicationSelection?.pluginPublishScope ?? common.selectionMode,
+        plugins: adoption.publicationSelection?.plugins.join(",") ?? common.plugins,
+        // Preview checks the complete frozen source. Sparse publisher jobs instead
+        // authenticate that sealed manifest and verify their exact source package.
+        sourceRoot: options["--source-root"] ?? (command === "load" ? process.cwd() : undefined),
+        artifact: adoption.artifact,
+        evidenceClient: adoption.evidenceClient,
+        archivePath: options["--archive-path"],
+      });
+      selectedPackages =
+        common.selectionMode === "selected"
+          ? prepared.packages.filter((entry) =>
+              common.plugins.split(/[,\s]+/u).includes(entry.packageName),
+            )
+          : prepared.packages;
+      if (command !== "load") {
+        const entry = JSON.parse(options["--package"]);
+        requireValue(
+          selectedPackages.some((candidate) => isDeepStrictEqual(candidate, entry)),
+          "Prepared npm package differs from the authenticated current operation.",
+        );
+      }
+    }
   }
   if (command === "authorize") {
     await adoption.revalidateAuthority?.();
@@ -805,29 +956,39 @@ export async function main(argv) {
       artifact_name: preparedNpmArtifactName(common.sourceSha, producer),
     });
   } else if (command === "load") {
-    const manifest = await downloadPreparedNpmRelease({
-      ...common,
-      sourceRoot: options["--source-root"] ?? process.cwd(),
-      artifact: adoption.artifact,
-      archivePath: options["--archive-path"],
-    });
+    const requirePublished = options["--require-published"] === "true";
+    requireValue(
+      !requirePublished ||
+        (common.selectionMode === "all-publishable" &&
+          adoption.publicationOperation?.publishOpenclawNpm),
+      "Final npm roster verification requires the original all-package core operation.",
+    );
+    const matrix =
+      options["--prune-published"] === "true" || requirePublished
+        ? await selectUnpublishedPreparedNpmPackages({
+            ...common,
+            fetchImpl: capacity?.packageFetchImpl ?? common.fetchImpl,
+            packages: selectedPackages,
+            sourceRoot: options["--source-root"] ?? process.cwd(),
+            cacheDir: options["--cache-dir"],
+            outputDir: options["--output-dir"],
+            requirePublished,
+          })
+        : selectedPackages;
     await adoption.revalidateAuthority?.();
+    capacity?.report(selectedPackages.length);
     writeEvidenceOutput?.();
-    writeFileSync(options["--output"], JSON.stringify(manifest));
+    writeFileSync(options["--output"], JSON.stringify(prepared));
     outputValues(options["--github-output"], {
-      has_candidates: true,
-      has_selection: true,
-      candidate_count: manifest.packages.length,
-      selection_count: manifest.packages.length,
-      matrix: JSON.stringify(manifest.packages),
-      all_matrix: JSON.stringify(manifest.packages),
+      has_candidates: matrix.length > 0,
+      has_selection: matrix.length > 0,
+      candidate_count: matrix.length,
+      selection_count: matrix.length,
+      matrix: JSON.stringify(matrix),
+      all_matrix: JSON.stringify(selectedPackages),
     });
   } else if (command === "consume") {
     const entry = JSON.parse(options["--package"]);
-    requireValue(
-      isDeepStrictEqual(normalizeProducer(entry.artifact), normalizeProducer(adoption.artifact)),
-      "Prepared npm package differs from the admitted manifest producer.",
-    );
     const result = await consumePreparedNpmPackage({
       ...common,
       package: entry,
@@ -888,11 +1049,10 @@ export async function main(argv) {
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  try {
-    await main(process.argv.slice(2));
-  } catch (error) {
+  // Let this module finish evaluating before a lazy import cycles back to it.
+  void main(process.argv.slice(2)).catch((/** @type {unknown} */ error) => {
     console.error(error instanceof Error ? error.message : String(error));
     console.error("[plugin-npm-prepared-release] FAILED (exit 1)");
     process.exitCode = 1;
-  }
+  });
 }

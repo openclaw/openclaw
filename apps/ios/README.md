@@ -11,6 +11,7 @@ OpenClaw iOS is the officially released iPhone app. It connects to an OpenClaw G
 ## Support Notes
 
 - UI and onboarding changes ship through normal app releases.
+- The native agent picker, agent list, and chat toolbar show configured agent images. Missing or unreadable images fall back to the agent's emoji or initials. Images use bounded inline data or authenticated Gateway avatar routes.
 - Upgrade migrations support data written by releases shipped on or after July 1, 2026. Earlier UserDefaults gateway locations are no longer imported; reconnect from Gateway settings if needed. Push registrations without a relay profile are refreshed through normal registration.
 - Connections use the current `openclaw-ios` client identity without pre-rename retries or undocumented legacy client-ID overrides. Talk credentials come from the Gateway's configuration; local provider keys whose writer retired before July are no longer read.
 - Some node commands require foreground access because of iOS platform limits.
@@ -24,6 +25,28 @@ Onboarding names the device from its iOS device idiom, so an iPad keeps iPad wor
 - Navigation uses the root view's available width and size classes, not the device type or orientation. Regular width and height with at least 800pt available default to a persistent sidebar (300pt sidebar plus at least 500pt detail), including expanded iPhone Duo windows. Compact space and accessibility text sizes use a drawer. The sidebar grows only to 320pt.
 - Hiding the persistent sidebar is remembered while the window narrows and widens. Entering a compact window closes the drawer; keyboard appearance does not change navigation mode.
 - The detail view stays mounted across navigation layout changes. In regular width and height, native Chat messages, composer, and progress content use a centered column capped at 760pt within the remaining detail space. Assistant answers, including streaming output, use this shared column instead of a nested 560pt cap. Detail-pane margins grow from 12pt to 24pt with available width. Compact space, including narrow iPad windows, uses compact chat spacing. User bubbles retain their 560pt maximum.
+
+## Talk microphone mute
+
+During Talk, use the microphone button in the Talk activity strip to mute or
+unmute input without ending the call, canceling submitted work, or stopping
+reply audio. The crossed-out microphone uses the composer's symbol size and
+weight, with a 44-point tap target: gray while input is on, orange while muted.
+While Talk is active, the composer's dictation/voice-note microphone is hidden;
+it returns when Talk ends. The mute button stays in the Talk activity strip.
+A muted label and VoiceOver state identify when input is off. An idle muted
+realtime session shows "Connected (Realtime)" instead of "Listening (Realtime)";
+working, speaking, connection, and error statuses remain visible.
+The choice survives Talk restarts until you unmute or restart the app;
+standalone push-to-talk remains available after ending Talk.
+
+Native Talk stops audio input immediately and lets already-captured speech finish
+transcription before submitting it. If recognition errors or does not finish within
+two seconds, it submits the latest partial transcript. A quick unmute takes effect
+when that pending native turn finishes. Ending Talk discards pending recognition.
+Realtime relay sends silence, and WebRTC disables only the outgoing audio
+track. Realtime capture stays open, so the iOS microphone indicator may remain
+visible while muted.
 
 ## Exact Xcode Manual Deploy Flow
 
@@ -371,7 +394,7 @@ Gateway send pushes only to iOS devices paired with it.
 - Chat availability follows its operator connection independently of the device/node connection. Transient node failures remain available in Settings while chat is connected. Dismissed connection banners stay dismissed through identical retry failures; a changed problem or recovery resets dismissal. Authentication and pairing warnings remain visible.
 - Two distinct Watch voice paths: iPhone-relayed **Talk to Claw**, and opt-in **Talk on Watch** with native UDP media and Gateway-owned agent/tool control. Physical-Watch voice and endurance validation remain separate from simulator coverage.
 - iOS node commands in foreground: camera snap/clip, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
-- Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
+- Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when iOS wakes the app in the background (silent push, background refresh, significant location), without treating suspended sockets as connected.
 - Connected nodes publish CPU count and memory immediately and every 60 seconds through `node.host.stats`, supplying the Control UI Devices meters. iOS reports neither load averages nor disk capacity (Apple's required-reason API policy does not allow sending disk-space values off-device). Reporting stops when the node route disconnects or changes, and iOS suspension can pause updates.
 - Share extension deep-link forwarding into the connected gateway session.
 

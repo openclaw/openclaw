@@ -109,9 +109,14 @@ export async function createNpmPublicationReadbackFixture(
   const parentRunAttempt = 1;
   const publisherAttempt = mode === "retained-publisher" || replanned ? 1 : 2;
   const plannerAttempt = mode === "retained-plan" ? 1 : replanned ? 2 : publisherAttempt;
-  const producerId = mode === "prepared" ? 100 : runId;
-  const producerAttempt =
-    mode === "prepared" ? 3 : mode === "retained-qualification" ? 1 : publisherAttempt;
+  const prepared = mode === "prepared" || mode === "candidate-prepared";
+  const producerId = prepared ? 100 : runId;
+  const producerWorkflowSha = mode === "candidate-prepared" ? sourceSha : workflowSha;
+  const policy =
+    mode === "candidate-prepared" ? "name: frozen Q policy\n" : readFileSync(workflowPath);
+  mkdirSync(join(root, ".github/workflows"), { recursive: true });
+  writeFileSync(join(root, workflowPath), policy);
+  const producerAttempt = prepared ? 3 : mode === "retained-qualification" ? 1 : publisherAttempt;
   const mixed = ["missing-planned-job", "existing-package"].includes(fault);
   const selected = (mixed ? ["demo", "existing"] : ["demo"]).map((extensionId) => ({
     packageName: `@openclaw/${extensionId}`,
@@ -148,7 +153,9 @@ export async function createNpmPublicationReadbackFixture(
     publisherPolicy: {
       schema: "openclaw.plugin-npm-publisher-policy/v1",
       policyId: "plugin-npm-release-workflow",
-      sha256: createHash("sha256").update(readFileSync(workflowPath)).digest("hex"),
+      sha256: createHash("sha256")
+        .update(fault === "policy" ? readFileSync(workflowPath) : policy)
+        .digest("hex"),
     },
   };
   const created = createPluginPublicationArtifact({ ...common, artifactDir });
@@ -195,7 +202,10 @@ export async function createNpmPublicationReadbackFixture(
     size_in_bytes: data.length,
     expired: false,
     expires_at: "2099-01-01T00:00:00Z",
-    workflow_run: { id: producer, head_sha: workflowSha },
+    workflow_run: {
+      id: producer,
+      head_sha: producer === producerId ? producerWorkflowSha : workflowSha,
+    },
   });
   const deferredZip = deferredAuth
     ? await zipNpmFixture({
@@ -243,9 +253,10 @@ export async function createNpmPublicationReadbackFixture(
   const producerRun = run(
     producerId,
     producerAttempt,
-    mode === "prepared" || producerAttempt < publisherAttempt,
-    mode === "prepared" ? "success" : "failure",
+    prepared || producerAttempt < publisherAttempt,
+    prepared ? "success" : "failure",
   );
+  producerRun.head_sha = producerWorkflowSha;
   writeFileSync(metadataPath, JSON.stringify(qualifiedMetadata));
   writeFileSync(runPath, JSON.stringify(producerRun));
   writeFileSync(jobsPath, JSON.stringify({ total_count: producerJobs.length, jobs: producerJobs }));
@@ -256,12 +267,12 @@ export async function createNpmPublicationReadbackFixture(
     workflowPath,
     workflowEvent: "workflow_dispatch",
     workflowHeadBranch: "main",
-    workflowSha,
+    workflowSha: producerWorkflowSha,
     runId: producerId,
     runAttempt: producerAttempt,
     consumerRunAttempt: publisherAttempt,
     producerJobName: preflightName,
-    runStatePolicy: mode === "prepared" ? "completed-success" : "same-run-producer-success",
+    runStatePolicy: prepared ? "completed-success" : "same-run-producer-success",
     artifactId: 41,
     artifactDigest: qualifiedMetadata.digest,
     artifactSizeBytes: qualifiedZip.length,
@@ -275,6 +286,15 @@ export async function createNpmPublicationReadbackFixture(
   const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
   expect(JSON.stringify(receipt)).not.toContain(root);
   expect(receipt).toMatchObject({ runId: producerId, runAttempt: producerAttempt, artifactId: 41 });
+  if (fault === "workflow") {
+    receipt.workflowSha = "c".repeat(40);
+  }
+  if (fault === "same-run-q") {
+    receipt.workflowSha = sourceSha;
+  }
+  if (fault === "source-policy") {
+    writeFileSync(join(root, workflowPath), "name: replaced Q policy\n");
+  }
   if (fault === "source") {
     receipt.targetSha = "c".repeat(40);
   }
@@ -323,11 +343,13 @@ export async function createNpmPublicationReadbackFixture(
       producerId,
       producerAttempt,
       true,
-      mode === "prepared" || producerAttempt === runAttempt ? "success" : "failure",
+      prepared || producerAttempt === runAttempt ? "success" : "failure",
     ),
     run(runId, publisherAttempt, true, conclusion(publisherAttempt)),
     run(runId, plannerAttempt, true, conclusion(plannerAttempt)),
   ];
+  expectDefined(runResponses[0], "qualification producer run").head_sha =
+    fault === "producer-sha" ? "c".repeat(40) : producerWorkflowSha;
   const respondGh = (endpoint: string) => {
     if (endpoint.endsWith(`/actions/runs/${runId}`)) {
       return run(runId, runAttempt);

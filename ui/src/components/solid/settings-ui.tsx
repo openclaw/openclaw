@@ -130,48 +130,59 @@ export function SettingsPageHeader(props: {
   );
 }
 
-export function SettingsSection(props: {
+type SettingsSectionHeaderProps = {
   title?: JSX.Element;
   description?: JSX.Element;
   actions?: JSX.Element;
-  notice?: JSX.Element;
   count?: number;
-  danger?: boolean;
   carapace?: boolean;
-  children?: JSX.Element;
-}) {
+};
+
+export function SettingsSectionHeader(props: SettingsSectionHeaderProps) {
+  return (
+    <Show when={props.title || props.description || props.actions}>
+      <div class={["settings-section__header", { "oc-settings-section-header": props.carapace }]}>
+        <Show when={props.title || props.description}>
+          <div
+            class={["settings-section__copy", { "oc-settings-section-heading": props.carapace }]}
+          >
+            <Show when={props.title}>
+              <h2
+                class={[
+                  "settings-section__heading",
+                  { "oc-settings-section-title": props.carapace },
+                ]}
+              >
+                {props.title}
+                <Show when={props.count !== undefined}>
+                  {" "}
+                  <span class="settings-count">{props.count}</span>
+                </Show>
+              </h2>
+            </Show>
+            <Show when={props.description}>
+              <p class="settings-section__desc">{props.description}</p>
+            </Show>
+          </div>
+        </Show>
+        <Show when={props.actions}>
+          <div class="settings-section__actions">{props.actions}</div>
+        </Show>
+      </div>
+    </Show>
+  );
+}
+
+export function SettingsSection(
+  props: SettingsSectionHeaderProps & {
+    notice?: JSX.Element;
+    danger?: boolean;
+    children?: JSX.Element;
+  },
+) {
   return (
     <section class={["settings-section", { "oc-settings-section": props.carapace }]}>
-      <Show when={props.title || props.description || props.actions}>
-        <div class={["settings-section__header", { "oc-settings-section-header": props.carapace }]}>
-          <Show when={props.title || props.description}>
-            <div
-              class={["settings-section__copy", { "oc-settings-section-heading": props.carapace }]}
-            >
-              <Show when={props.title}>
-                <h2
-                  class={[
-                    "settings-section__heading",
-                    { "oc-settings-section-title": props.carapace },
-                  ]}
-                >
-                  {props.title}
-                  <Show when={props.count !== undefined}>
-                    {" "}
-                    <span class="settings-count">{props.count}</span>
-                  </Show>
-                </h2>
-              </Show>
-              <Show when={props.description}>
-                <p class="settings-section__desc">{props.description}</p>
-              </Show>
-            </div>
-          </Show>
-          <Show when={props.actions}>
-            <div class="settings-section__actions">{props.actions}</div>
-          </Show>
-        </div>
-      </Show>
+      <SettingsSectionHeader {...props} />
       {props.notice}
       <SettingsGroup carapace={props.carapace}>{props.children}</SettingsGroup>
     </section>

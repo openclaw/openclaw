@@ -1,0 +1,2 @@
+# Plugin invocation regression: prepare caller source facts, preserve mid-call revocation, and release both success and refusal scopes.
+64

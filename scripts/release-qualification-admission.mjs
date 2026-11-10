@@ -262,16 +262,27 @@ function actorIdentity(actor) {
   return { id: actor.id, login: actor.login };
 }
 
-function verifyActor(repository, actor, runGh) {
+export function verifyReleaseQualificationOperators(repository, actor, triggeringActor, runGh) {
   const identity = actorIdentity(actor);
-  const permission = api(repository, "collaborators/" + identity.login + "/permission", runGh);
-  requireValue(
-    ["admin", "write", "maintain"].includes(permission.permission) &&
-      permission.user?.id === identity.id &&
-      permission.user?.login === identity.login,
-    "Qualification operator no longer has repository qualification authority",
-  );
-  return identity;
+  const triggeringIdentity = actorIdentity(triggeringActor);
+  const verify = (principal) => {
+    const permission = api(repository, "collaborators/" + principal.login + "/permission", runGh);
+    requireValue(
+      ["admin", "write", "maintain"].includes(permission.permission) &&
+        permission.user?.id === principal.id &&
+        permission.user?.login === principal.login,
+      "Qualification operator no longer has repository qualification authority",
+    );
+    return principal;
+  };
+  const operator = verify(identity);
+  // One live grant proves both roles only when their validated identities agree.
+  return {
+    operator,
+    triggeringOperator: isDeepStrictEqual(identity, triggeringIdentity)
+      ? operator
+      : verify(triggeringIdentity),
+  };
 }
 
 function readSource(repository, sha, path, runGh) {
@@ -386,8 +397,12 @@ function verifyProducer(producer, runGh, completed) {
   );
   return {
     run,
-    operator: verifyActor(producer.repository, run.actor, runGh),
-    triggeringOperator: verifyActor(producer.repository, run.triggering_actor, runGh),
+    ...verifyReleaseQualificationOperators(
+      producer.repository,
+      run.actor,
+      run.triggering_actor,
+      runGh,
+    ),
   };
 }
 

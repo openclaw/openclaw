@@ -9,6 +9,9 @@
  *   --state-dir /absolute/new-fixture --broker [--allocation]
  * --server-source loads a saved baseline server.ts at its original module URL;
  * all unchanged dependencies stay identical. --source-root selects another checkout.
+ * --pre-exited-plugins measures normal closure with 46 real PluginInstances and
+ * one already-exited native child. --host-source substitutes the baseline relay
+ * host. Registrations are synthetic; this does not load 46 bundled integrations.
  *
  * This is process-owner attribution, not whole-Gateway or database scaling proof.
  * The fixture owns one real command, broker, relay and anchor. The core stub
@@ -37,7 +40,9 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     "source-root": { type: "string" },
     "server-source": { type: "string" },
+    "host-source": { type: "string" },
     "native-owner": { type: "string" },
+    "pre-exited-plugins": { type: "boolean", default: false },
     broker: { type: "boolean", default: false },
     allocation: { type: "boolean", default: false },
   },
@@ -58,6 +63,21 @@ const sourceRoot = path.resolve(
 );
 const moduleUrl = (relative: string) => pathToFileURL(path.join(sourceRoot, relative)).href;
 const serverUrl = moduleUrl("src/gateway/server.ts");
+const hostUrl = moduleUrl("src/process/supervisor/service-child-relay-host.ts");
+let hostSourceLoaded = false;
+const sourceHook = registerHooks({
+  load(url, context, nextLoad) {
+    if (url === hostUrl && values["host-source"]) {
+      hostSourceLoaded = true;
+      return {
+        format: "module-typescript",
+        source: readFileSync(values["host-source"], "utf8"),
+        shortCircuit: true,
+      };
+    }
+    return nextLoad(url, context);
+  },
+});
 const actualPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const messages: string[] = [];
 const errors = (error: unknown): string[] =>
@@ -104,6 +124,80 @@ const { runWithProcessCleanupBudget } = await import(
 const { GatewayShutdownCleanupRetainedError } = await import(
   moduleUrl("src/gateway/server-shutdown.ts")
 );
+const pluginTimes: Array<{ pluginId: string; elapsedMs: number }> = [];
+let closePlugins: (() => Promise<void>) | undefined;
+if (values["pre-exited-plugins"]) {
+  const { createPluginRecord }: typeof import("../../src/plugins/loader-records.js") = await import(
+    moduleUrl("src/plugins/loader-records.ts")
+  );
+  const { PluginInstance }: typeof import("../../src/plugins/plugin-instance.js") = await import(
+    moduleUrl("src/plugins/plugin-instance.ts")
+  );
+  const { createEmptyPluginRegistry }: typeof import("../../src/plugins/registry-empty.js") =
+    await import(moduleUrl("src/plugins/registry-empty.ts"));
+  const {
+    createPluginRegistryOwner,
+    setActivePluginRegistry,
+  }: typeof import("../../src/plugins/runtime.js") = await import(
+    moduleUrl("src/plugins/runtime.ts")
+  );
+  const { runGatewayCloseSteps }: typeof import("../../src/gateway/server-shutdown.js") =
+    await import(moduleUrl("src/gateway/server-shutdown.ts"));
+  // Exclude source-loader compilation of the cold cleanup graph from owner timing.
+  await import(moduleUrl("src/plugins/host-hook-cleanup.ts"));
+  const registry = createEmptyPluginRegistry();
+  for (let index = 0; index < 46; index++) {
+    const record = createPluginRecord({
+      id: index === 0 ? "synthetic-service-child" : `synthetic-${index}`,
+      source: "synthetic-fixture",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    if (index === 0) {
+      instance.lifecycle.onDispose(async () => {
+        run?.stdin?.end();
+        assert(extinction);
+        const settled = await extinction;
+        assert.equal(settled.status, "fulfilled", JSON.stringify(settled));
+      });
+    }
+    const dispose = instance.dispose.bind(instance);
+    let observed = false;
+    instance.dispose = (...args: Parameters<typeof dispose>) => {
+      const started = performance.now();
+      const result = dispose(...args);
+      if (!observed) {
+        observed = true;
+        void result.then(() => {
+          pluginTimes.push({ pluginId: record.id, elapsedMs: performance.now() - started });
+        });
+      }
+      return result;
+    };
+  }
+  setActivePluginRegistry(registry);
+  const owner = createPluginRegistryOwner(registry);
+  const idle = () => {};
+  closePlugins = () =>
+    runGatewayCloseSteps({
+      owner: {
+        connectionWork: { drain: async () => {} },
+        stopConnectionDependentSidecars: idle,
+        stopRegisteredGatewayLifetimeSidecars: idle,
+        stopRegisteredPostReadySidecars: idle,
+        runClosePrelude: idle,
+        sealAndJoinRegisteredSidecarStops: idle,
+      },
+      close: async () => {
+        const closed = await owner.close();
+        assert.deepEqual(closed, { memoryErrors: [], pluginFailures: [] });
+      },
+      onError: (message: string) => messages.push(message),
+    });
+}
 // Source-loader compiler children cannot share the anchor's exclusive native wait.
 const nativeDirectory = path.join(directory, "native");
 await mkdir(nativeDirectory);
@@ -163,7 +257,9 @@ Object.defineProperty(globalThis, Symbol.for(coreKey), {
         argv: [
           process.execPath,
           "-e",
-          `
+          values["pre-exited-plugins"]
+            ? "process.stdout.write('ready-marker\\nfinal-marker\\n', () => process.exit(0));"
+            : `
           process.on('SIGTERM', () => process.stdout.write('final-marker\\n', () => process.exit(0)));
           setInterval(() => {}, 1000);
           process.stdout.write('ready-marker\\n');
@@ -189,10 +285,18 @@ Object.defineProperty(globalThis, Symbol.for(coreKey), {
         ]),
         performance.now() + 10_000,
       );
+      if (values["pre-exited-plugins"]) {
+        const exited = await beforeDeadline(result, performance.now() + 10_000);
+        assert.equal(exited.status, "fulfilled", JSON.stringify(exited));
+      }
       return {
         startupSettled: Promise.resolve(),
         getTailscaleIngressEndpoint: () => undefined,
         async close() {
+          if (closePlugins) {
+            await closePlugins();
+            return;
+          }
           throw new GatewayShutdownCleanupRetainedError([
             new Error("synthetic received connection work retained"),
           ]);
@@ -242,6 +346,7 @@ const { startGatewayServer } = await import(serverUrl);
 // The core fixture has no shared-state users; no operator lease is acquired.
 const server = await startGatewayServer(0, { gatewayStateOwner: { assertDatabaseAccess() {} } });
 assert(run && result && extinction, "Core did not start the owned command");
+assert(!values["host-source"] || hostSourceLoaded, "Baseline relay host was not loaded");
 if (values.broker) {
   assert(broker, "Gateway broker was unavailable during setup");
 }
@@ -256,6 +361,7 @@ if (values.allocation) {
   });
 }
 const cpu = process.cpuUsage();
+const threadCpu = process.threadCpuUsage?.();
 const start = performance.now();
 const deadline = start + 5_000;
 // A retained production owner can keep handles alive after its deadline. The
@@ -280,6 +386,7 @@ const observed = await runWithProcessCleanupBudget(
 );
 const elapsedMs = performance.now() - start;
 const cpuUsage = process.cpuUsage(cpu);
+const threadCpuUsage = threadCpu ? process.threadCpuUsage(threadCpu) : undefined;
 let allocatedBytes: number | undefined;
 if (values.allocation) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -290,6 +397,7 @@ if (values.allocation) {
 }
 const scope = await observe(beforeDeadline(closeScope(), deadline));
 hooks.deregister();
+sourceHook.deregister();
 console.log(
   JSON.stringify({
     runtime: process.version,
@@ -297,10 +405,15 @@ console.log(
     transport: broker ? "broker" : "native",
     sourceRoot,
     serverSource: values["server-source"] ?? serverUrl,
+    hostSource: values["host-source"] ?? hostUrl,
+    ...(values["pre-exited-plugins"] ? { pluginTimes } : {}),
     hostLoad: os.loadavg(),
     deadlineMs: 5_000,
     elapsedMs,
     hostCpuMs: (cpuUsage.user + cpuUsage.system) / 1000,
+    ...(threadCpuUsage
+      ? { mainThreadCpuMs: (threadCpuUsage.user + threadCpuUsage.system) / 1000 }
+      : {}),
     lostBrokerOutcome: JSON.stringify(observed).includes(
       "Spawn broker exited; command outcome is unavailable",
     ),
@@ -314,8 +427,10 @@ console.log(
 // with a delivered final marker and confirmed extinction receives success.
 const [outcome, extinct] = observed.outcomes.status === "fulfilled" ? observed.outcomes.value : [];
 process.exitCode =
-  observed.close.status === "rejected" &&
-  observed.close.errors.includes("synthetic received connection work retained") &&
+  (values["pre-exited-plugins"]
+    ? observed.close.status === "fulfilled" && pluginTimes.length === 46
+    : observed.close.status === "rejected" &&
+      observed.close.errors.includes("synthetic received connection work retained")) &&
   outcome?.status === "fulfilled" &&
   outcome.value.stdout.includes("final-marker") &&
   extinct?.status === "fulfilled" &&

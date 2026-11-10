@@ -22,9 +22,9 @@
   max-height: none;
   overflow: visible;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 400;
-  line-height: 20px;
+  line-height: calc(20px * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -72,7 +72,7 @@
 
 .chat-details-goal__metrics {
   padding-inline: 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -116,7 +116,8 @@
   border-radius: 999px;
   background: transparent;
   color: var(--muted);
-  font: 500 13px/20px var(--font-body);
+  font: 500 calc(13px * var(--control-ui-text-scale))/calc(20px * var(--control-ui-text-scale))
+    var(--font-body);
 }
 
 .chat-details-goal .agent-chat__goal-action[aria-label],

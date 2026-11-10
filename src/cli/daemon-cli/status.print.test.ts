@@ -353,10 +353,10 @@ describe("printDaemonStatus", () => {
     expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
   });
 
-  it("prints stale updater launchd job guidance", () => {
-    printDaemonStatus({
-      service: {
-        runtime: { status: "running", pid: 8000 },
+  it.each([
+    {
+      label: "detected jobs",
+      serviceState: {
         staleUpdateLaunchdJobs: [
           {
             label: "ai.openclaw.update.2026.5.12",
@@ -368,14 +368,35 @@ describe("printDaemonStatus", () => {
           },
         ],
       },
+      expected: [
+        "Stale OpenClaw updater launchd job(s) detected.",
+        "ai.openclaw.update.2026.5.12",
+        "ai.openclaw.manual-update.1717168800",
+        "launchctl remove <label>",
+        formatCliCommand("openclaw gateway restart"),
+      ],
+    },
+    {
+      label: "failed inspection",
+      serviceState: {
+        staleLaunchdInspectionError: "launchctl list failed (exit 1): Operation not permitted",
+      },
+      expected: [
+        "Could not inspect stale OpenClaw updater launchd jobs",
+        "launchctl list failed (exit 1): Operation not permitted",
+        "NOT checked",
+        formatCliCommand("openclaw doctor"),
+      ],
+    },
+  ])("prints stale updater $label guidance", ({ serviceState, expected }) => {
+    printDaemonStatus({
+      service: { runtime: { status: "running", pid: 8000 }, ...serviceState },
       gateway,
     });
 
-    expectMockLineContains(runtime.error, "Stale OpenClaw updater launchd job(s) detected.");
-    expectMockLineContains(runtime.error, "ai.openclaw.update.2026.5.12");
-    expectMockLineContains(runtime.error, "ai.openclaw.manual-update.1717168800");
-    expectMockLineContains(runtime.error, "launchctl remove <label>");
-    expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
+    for (const line of expected) {
+      expectMockLineContains(runtime.error, line);
+    }
   });
 
   it("points macOS launchd stdout and stderr at one log when gateway is not listening", () => {

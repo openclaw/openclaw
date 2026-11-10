@@ -95,7 +95,7 @@ function buildFallbackNick(nick: string): string {
   const seq = ++nickCollisionFallbackSeq;
   const suffix = seq === 1 ? "_" : `_${seq}`;
   const maxNickLen = 30;
-  if (base.length >= maxNickLen) {
+  if (base.length + suffix.length > maxNickLen) {
     return `${base.slice(0, maxNickLen - suffix.length)}${suffix}`;
   }
   return `${base}${suffix}`;

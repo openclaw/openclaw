@@ -2,6 +2,7 @@ import type { Page, Locator } from "playwright";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
+  captureUiProof,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
@@ -47,6 +48,24 @@ function withMentions(
 
 suite.define(() => {
   for (const route of ["chat", "new"] as const) {
+    it(route + " mentions a person after literal backticks in prose", async () => {
+      await withMentions({ route }, async ({ page, input, menu, gateway }) => {
+        const prefix =
+          "When using ``` in the input field, the code block is clipped. Please fix. cc ";
+        await input.fill(prefix);
+        await input.pressSequentially("@ha");
+        await expect.poll(() => menu.getByRole("option").count()).toBe(2);
+        expect(await gateway.waitForRequest("users.mentionable")).toMatchObject({
+          params: { query: "ha" },
+        });
+        await captureUiProof(suite, page, "literal-backticks", `${route}-picker.png`);
+        await menu.getByRole("option").first().click();
+        expect(await input.inputValue()).toBe(prefix + "@Harper ");
+        expect(await page.locator(".composer-context-strip__person-name").textContent()).toContain(
+          "Harper",
+        );
+      });
+    });
     it.each(["prose", "caret"] as const)(
       route + " dismisses a mention on %s and ignores stale results",
       async (mode) => {

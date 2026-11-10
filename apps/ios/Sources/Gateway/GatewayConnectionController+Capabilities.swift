@@ -1,4 +1,3 @@
-import AVFoundation
 import Contacts
 import CoreLocation
 import CoreMotion
@@ -6,7 +5,6 @@ import EventKit
 import Foundation
 import OpenClawKit
 import ReplayKit
-import Speech
 import UIKit
 
 struct GatewayManualTransportPresentation: Equatable {
@@ -21,19 +19,58 @@ extension GatewayConnectionController {
     @discardableResult
     func refreshActiveGatewayRegistrationFromSettings() -> Task<Void, Never> {
         Task { [weak self] in
-            guard let self, let appModel = self.appModel,
-                  let cfg = appModel.activeGatewayConnectConfig,
-                  appModel.gatewayAutoReconnectEnabled
-            else { return }
-            let generation = appModel.gatewayConnectGeneration
-            var refreshedConfig = cfg
-            refreshedConfig.nodeOptions = await self.makeConnectOptions(
-                deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID,
-                allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
-            guard !Task.isCancelled,
-                  !self.hasPendingForgetCleanup(stableID: cfg.stableID),
-                  cfg.ingressAuthorization?.isCurrent() != false else { return }
-            appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
+            await self?.refreshActiveGatewayRegistrationFromSettingsAsync()
+        }
+    }
+
+    private func refreshActiveGatewayRegistrationFromSettingsAsync() async {
+        guard let appModel else { return }
+        // A queued handoff owns transport recovery; registration must not restart its paused sessions.
+        while self.pendingAutoConnectTask != nil || appModel.hasGatewaySessionResetInFlight {
+            await self.pendingAutoConnectTask?.value
+            await appModel.waitForGatewaySessionResetIfNeeded()
+        }
+        // A failed switch keeps the previous route paused until its retry, trust, or cancel decision.
+        guard let cfg = appModel.activeGatewayConnectConfig,
+              appModel.gatewayAutoReconnectEnabled,
+              appModel.unresolvedGatewayPreconnectStableID == nil
+        else { return }
+        let generation = appModel.gatewayConnectGeneration
+        var refreshedConfig = cfg
+        refreshedConfig.nodeOptions = await self.makeConnectOptions(
+            deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID,
+            allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
+        await appModel.waitForGatewaySessionResetIfNeeded()
+        // A replacement route can commit within the same connect generation while permissions are sampled.
+        guard !Task.isCancelled,
+              !self.hasPendingForgetCleanup(stableID: cfg.stableID),
+              cfg.ingressAuthorization?.isCurrent() != false,
+              appModel.gatewayAutoReconnectEnabled,
+              appModel.unresolvedGatewayPreconnectStableID == nil,
+              appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: cfg) == true
+        else { return }
+        // Unchanged registration is not a request to recover deliberately stopped transport loops.
+        guard !cfg.hasSameConnectionInputs(as: refreshedConfig) else { return }
+        appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
+    }
+
+    func observeGatewayRegistration() {
+        withObservationTracking {
+            _ = self.appModel?.locationAuthorizationSnapshot
+            // Camera, microphone and speech grants from in-app prompts must reach registration too.
+            _ = self.appModel?.mediaAuthorizationSnapshot
+            // An attempt can invalidate a sampled refresh without replacing the route (for example, cancellation).
+            _ = self.appModel?.gatewayConnectGeneration
+            // Startup and target-review resume may install options captured before authorization changed.
+            _ = self.appModel?.activeGatewayConnectConfig
+            // Resolving a failed switch releases a refresh deferred while the previous route was paused.
+            _ = self.appModel?.unresolvedGatewayPreconnectStableID
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.observeGatewayRegistration()
+                await self.refreshActiveGatewayRegistrationFromSettingsAsync()
+            }
         }
     }
 
@@ -208,13 +245,15 @@ extension GatewayConnectionController {
 
     private func currentPermissions() async -> [String: Bool] {
         var permissions: [String: Bool] = [:]
-        permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
-        permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
+        let media = self.appModel?.mediaAuthorizationSnapshot ?? .current()
+        permissions.merge(media.permissions) { _, sampled in sampled }
         let locationStatus = self.locationAuthorizationSnapshot.authorizationStatus
-        permissions["location"] = await Self.isLocationAvailable(
+        let locationAvailable = await Self.isLocationAvailable(
             status: locationStatus,
             servicesEnabled: LocationService.servicesEnabled)
+        // Authorization can change while the services probe is suspended; that change schedules a fresh sample.
+        permissions["location"] = locationAvailable
+            && self.locationAuthorizationSnapshot.authorizationStatus == locationStatus
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
         permissions["photos"] = PhotoLibraryAccess.canRead(PhotoLibraryAccess.authorizationStatus())

@@ -13,6 +13,7 @@ import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { removeUnusedEmptyWorktreeSource } from "./empty-source.js";
 import { requireGit, worktreePathExists, commandError, listGitWorktrees, runGit } from "./git.js";
 import { hydrateCommitObjects, missingCommitObjects } from "./object-hydration.js";
+import { collectOrphanWorktreeBranches } from "./orphan-branches.js";
 import { createProvisionedSnapshotWriter } from "./provisioned-snapshot-store.js";
 import {
   captureWorktreeRegistryReadGuard,
@@ -278,6 +279,11 @@ async function prepareExactSnapshotRetirement(params: {
 }) {
   const { record, expected, signal, assertCurrent } = params;
   const ref = `refs/openclaw/snapshots/${record.id}`;
+  if (expected.retainedSourceRef.startsWith("refs/heads/openclaw/")) {
+    throw new Error(
+      "Managed branches expire with their worktrees; choose an ordinary branch or remote-tracking retained source ref",
+    );
+  }
   if (
     expected.id !== record.id ||
     expected.expectedSnapshotRef !== ref ||
@@ -405,6 +411,20 @@ async function retireManagedWorktreeSnapshot(params: {
   assertRecordCurrent?: () => void;
 }) {
   const { record, env, signal } = params;
+  const retireBranch = async (commitGuard: () => void) => {
+    const cleanup = await collectOrphanWorktreeBranches({
+      env,
+      repoRoot: record.repoRoot,
+      retiring: record,
+      signal,
+      commitGuard,
+    });
+    const failure = cleanup.branches.find((branch) => branch.outcome === "failed");
+    if (failure) {
+      // Keep the row for GC retry; the normal GC receipt records the failure.
+      throw new Error(`Managed branch cleanup failed for ${failure.branch}: ${failure.reason}`);
+    }
+  };
   if (params.expected) {
     const { withLocalWorkspaceStore } =
       await import("../../gateway/worker-environments/local-workspace-store.js");
@@ -427,6 +447,7 @@ async function retireManagedWorktreeSnapshot(params: {
           signal,
           assertCurrent,
         });
+        await retireBranch(assertCurrent);
         await retireSnapshot(assertCurrent);
         assertCurrent();
         await deleteRegistryWorktree(env, record.id, {
@@ -477,6 +498,11 @@ async function retireManagedWorktreeSnapshot(params: {
     claimed = true;
   }
   try {
+    if (!exactRecord && (await worktreePathExists(record.path))) {
+      throw new Error(
+        `Retired checkout files remain at ${record.path}; recovery and branch preserved`,
+      );
+    }
     const { expireLocalWorkspaceProjection } =
       await import("../../gateway/worker-environments/local-workspace-projection.js");
     await expireLocalWorkspaceProjection({
@@ -578,6 +604,7 @@ async function retireManagedWorktreeSnapshot(params: {
             beforeRun: assertDeletionCurrent,
             input: `start\0${deletions.join("")}prepare\0commit\0`,
           });
+          await retireBranch(assertDeletionCurrent);
         }
       },
     });

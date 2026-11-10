@@ -280,6 +280,7 @@ function changedCheckDiffRefsReady({
     try {
       execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
         cwd,
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
         stdio: "ignore",
       });
     } catch {
@@ -514,6 +515,35 @@ export function createChangedCheckPlan(
     base: !options.staged ? baseEnv.CHECKOUT_BASE_SHA || options.base : undefined,
     cwd,
   };
+  const lanes = result.lanes;
+  const runAll =
+    lanes.all ||
+    (options.lintOnly &&
+      result.paths.some((file) =>
+        /^(?:\.oxlint|config\/(?:oxlint|tsconfig\/oxlint)|scripts\/(?:run-oxlint|oxlint)|scripts\/lib\/local-check-runtime\.)|(?:^|\/)tsconfig[^/]*\.json$/u.test(
+          file,
+        ),
+      ));
+  // Dedicated CI rows already own their commands; central discovery is discarded.
+  if (options.lintOnly && options.lintSelection && !options.lintSelection.central) {
+    return {
+      commands: createCiLintCommands(
+        options.lintSelection,
+        options.lintThreads ?? 1,
+        createChangedOxlintEnv(result.paths, baseEnv, changedOxlintContext),
+      ),
+      summary: result.docsOnly
+        ? "docs-only"
+        : lanes.releaseMetadata
+          ? "release metadata"
+          : runAll
+            ? "all"
+            : Object.entries(lanes)
+                .filter(([, enabled]) => enabled)
+                .map(([lane]) => lane)
+                .join(", "),
+    };
+  }
   if (
     result.paths.some((changedPath) => LINTABLE_EXTENSION_PATH_RE.test(changedPath)) &&
     cachedGeneratedExtensionAssetPaths?.cwd !== cwd
@@ -569,14 +599,17 @@ export function createChangedCheckPlan(
       const roots = new Set(config.fileNames.map((file) => path.resolve(file)));
       rootTestTargets = rootTestTargets.filter((file) => roots.has(path.resolve(file)));
     }
-    for (let offset = 0; offset < rootTestTargets.length; offset += TARGETED_LINT_PATH_LIMIT) {
-      const batch = rootTestTargets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT);
-      addLintCommand(
-        batch.length === 1 ? "lint test root changed file" : "lint test root changed files",
-        "node",
-        ["scripts/run-oxlint.mjs", "--tsconfig", ROOT_TEST_TS_CONFIG, ...batch],
-        baseEnv,
-      );
+    for (const command of batchTargetedLintCommand(
+      {
+        name: "lint test root changed files",
+        bin: "node",
+        args: ["scripts/run-oxlint.mjs", "--tsconfig", ROOT_TEST_TS_CONFIG, ...rootTestTargets],
+        env: baseEnv,
+      },
+      options.platform ?? process.platform,
+      "test root",
+    )) {
+      addLintCommand(command.name, command.bin, command.args, command.env);
     }
     for (const command of [...lintChecks].filter(isOxlintCommand)) {
       command.env = createChangedOxlintEnv(
@@ -956,7 +989,6 @@ export function createChangedCheckPlan(
 
   addTestTempCreationReport();
 
-  const lanes = result.lanes;
   const typecheckResult = options.typecheckResult ?? result;
   // Release metadata is exempt only with its validating guard, selected by the
   // full diff. Filtering trivia must not grant that exemption to package changes.
@@ -966,14 +998,6 @@ export function createChangedCheckPlan(
     !typecheckResult.paths.every((file) => getChangedPathFacts(file).surface === "docs")
       ? lanes
       : typecheckResult.lanes;
-  const runAll =
-    lanes.all ||
-    (options.lintOnly &&
-      result.paths.some((file) =>
-        /^(?:\.oxlint|config\/(?:oxlint|tsconfig\/oxlint)|scripts\/(?:run-oxlint|oxlint)|scripts\/lib\/local-check-runtime\.)|(?:^|\/)tsconfig[^/]*\.json$/u.test(
-          file,
-        ),
-      ));
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
   // Typechecking alone accepts extension imports; the graph guard also covers
@@ -1524,10 +1548,14 @@ export function createTargetedCoreLintCommands(
     tsconfig: CORE_OXLINT_TS_CONFIG,
     ...options,
   });
-  return command ? batchCoreLintCommand(command, options.platform ?? process.platform) : null;
+  return command ? batchTargetedLintCommand(command, options.platform ?? process.platform) : null;
 }
 
-function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Platform) {
+function batchTargetedLintCommand(
+  command: TargetedLintCommand,
+  platform: NodeJS.Platform,
+  label = "core",
+) {
   const prefix = command.args.slice(0, 3);
   const windows = platform === "win32";
   // POSIX uses the formatter's conservative argv budget. Keep Windows batches
@@ -1543,7 +1571,7 @@ function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Pla
   for (const file of command.args.slice(3)) {
     const fileBytes = argumentBytes([file]);
     if (prefixBytes + fileBytes > maxBytes) {
-      throw new Error(`Core lint target exceeds the command-line budget: ${file}`);
+      throw new Error(`Targeted lint target exceeds the command-line budget: ${file}`);
     }
     if (batch.length === maxPaths || bytes + fileBytes > maxBytes) {
       batches.push(batch);
@@ -1557,7 +1585,7 @@ function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Pla
     batches.push(batch);
   }
   return batches.map((files) => ({
-    name: files.length === 1 ? "lint core changed file" : "lint core changed files",
+    name: `lint ${label} changed ${files.length === 1 ? "file" : "files"}`,
     bin: command.bin,
     args: [...prefix, ...files],
     env: command.env,
