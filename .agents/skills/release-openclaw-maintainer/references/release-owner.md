@@ -90,11 +90,10 @@ Use local evidence if access is unavailable; ledger synchronization does not
 hold up the release. A hotfix opportunity is not inclusion approval. Follow
 the approved selection scope; obtain the categorized-set approval required by
 backport discovery unless that decision was already explicitly delegated.
-Fix a shared defect once on main through the maintainer workflow, then backport
-with provenance; reuse an already-merged fix. Respect each track's mutation
-route, including extended-stable staging PRs. Preserve the documented exception
-for a blocker that must be fixed/proven on the release branch, and track its
-forward-port for closeout.
+Follow [backports and new fixes](../SKILL.md#backports-and-new-fixes) on every
+track: reuse merged main fixes through individual direct backports, never
+release-branch PRs. Prefer individual main PRs for new fixes; urgent release-first
+fixes go directly to the branch with an owned post-release forward-port.
 
 Make intake explicit:
 
