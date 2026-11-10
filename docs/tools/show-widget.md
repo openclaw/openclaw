@@ -45,6 +45,11 @@ OpenClaw exposes `show_widget` only when the originating Gateway client declares
 
 An agent-turn automation bound to a persistent session and carrying a server-authored scheduled tool policy may explicitly allow `show_widget` without an inline client. That scheduled surface is pinned-only: every call requires `pin: true`, writes to the bound session dashboard, and cannot set `presentation.target`. Detached cron-run sessions, ordinary capless channel runs, and scheduled jobs without an explicit tool cap remain excluded. The originating-client capability remains mandatory for inline presentation.
 
+A verified subagent-completion turn can finish pinned updates on its requester’s
+browser-capable conversation dashboard when the replayed requester policy allows
+`show_widget`. It must use `pin: true` without `presentation.target`; the
+completion does not inherit inline or device presentation rights. Unverified inter-session input cannot enable this surface.
+
 A post-restart input uses the session's current authority and tool policy. It does
 not inherit an old browser connection or device presentation rights. Inline
 previews still require a connected client with `inline-widgets`; use the normal
