@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -85,6 +87,30 @@ async function loaded(request = replies({}), scopes: string[] = hello.auth.scope
 function clientFile(result: Partial<PersonalFile>) {
   return createTestGatewayClient(vi.fn().mockResolvedValue({ ...file, ...result }));
 }
+function mountRoster(request: GatewayBrowserClient["request"]) {
+  const harness = createConnectedContext(request, { id: "profile-1", name: "Ada" });
+  harness.emitHello({ ...hello, auth: { ...hello.auth, scopes: ["operator.sessions.read"] } });
+  const agents = createAgentCapability(harness.context.gateway);
+  const selection = createAgentSelectionCapability(
+    harness.context.gateway,
+    agents,
+    undefined,
+    undefined,
+    { requireConfiguredAgent: true },
+  );
+  const provider = createSolidApplicationContextProvider({
+    ...harness.context,
+    agents,
+    settingsAgentSelection: selection,
+  });
+  const view = mountSolid(() => <PersonalInstructions />, { wrapper: provider.wrapper });
+  onTestFinished(() => {
+    view.unmount();
+    selection.dispose();
+    agents.dispose();
+  });
+  return view.container;
+}
 async function save(element: HTMLElement, content: string) {
   await input(element, content);
   button(element, "Save").click();
@@ -123,6 +149,61 @@ async function input(element: HTMLElement, content: string) {
   editor.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
 }
+
+it("keeps a pending or failed roster distinct from empty and retries through its owner", async () => {
+  const initial = createDeferred<ReturnType<typeof makeBootRoster>>();
+  const retry = createDeferred<ReturnType<typeof makeBootRoster>>();
+  const roster = vi.fn().mockReturnValueOnce(initial.promise).mockReturnValueOnce(retry.promise);
+  const request = vi.fn().mockImplementation((method: string) => {
+    if (method === "agents.list") {
+      return roster();
+    }
+    if (method === "users.personalFile.get") {
+      return Promise.resolve(file);
+    }
+    throw new Error("Unexpected personal-instructions request: " + method);
+  });
+  const element = mountRoster(request);
+  await waitForSolid(() => {
+    expect(busy(element)).not.toBeNull();
+    expect(element.textContent).not.toContain("No agents yet");
+  });
+  expect(request).not.toHaveBeenCalledWith("users.personalFile.get", expect.anything());
+  initial.reject(new Error("Roster unavailable"));
+  await waitForSolid(() => expect(alert(element)?.textContent).toContain("Roster unavailable"));
+  expect(element.textContent).not.toContain("No agents yet");
+  button(element, "Retry").click();
+  await waitForSolid(() => {
+    expect(roster).toHaveBeenCalledTimes(2);
+    expect(alert(element)).toBeNull();
+    expect(busy(element)).not.toBeNull();
+  });
+  retry.resolve(makeBootRoster({ agents: [{ id: "main" }] }));
+  await waitForValue(element, file.content);
+  expect(busy(element)).toBeNull();
+  expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
+});
+
+it("shows confirmed empty only after the roster read succeeds, without reading a personal file", async () => {
+  const roster = createDeferred<ReturnType<typeof makeBootRoster>>();
+  const request = vi.fn().mockImplementation((method: string) => {
+    if (method === "agents.list") {
+      return roster.promise;
+    }
+    throw new Error("Unexpected empty-roster request: " + method);
+  });
+  const element = mountRoster(request);
+  await waitForSolid(() => expect(busy(element)).not.toBeNull());
+  expect(element.textContent).not.toContain("No agents yet");
+  roster.resolve(makeBootRoster({ agents: [] }));
+  await waitForSolid(() => {
+    expect(element.textContent).toContain("No agents yet");
+    expect(busy(element)).toBeNull();
+  });
+  expect(alert(element)).toBeNull();
+  expect(textarea(element)).toBeNull();
+  expect(request).not.toHaveBeenCalledWith("users.personalFile.get", expect.anything());
+});
 
 it.each(["operator.read", "operator.sessions.read"])(
   "creates the signed-in personal file with %s",
