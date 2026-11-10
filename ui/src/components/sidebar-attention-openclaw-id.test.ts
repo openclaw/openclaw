@@ -116,8 +116,18 @@ it("clears on Labs disable and rejects its pending reply", async () => {
   await waitForFast(() => expect(store?.entries).toHaveLength(1));
   read = () => pending.promise;
   store?.refreshOpenClawId();
+  const changed = vi.fn();
+  const stop = store!.subscribe(changed);
   h.disable();
   expect(store?.entries).toEqual([]);
+  expect(changed).toHaveBeenCalledTimes(1);
+  changed.mockClear();
+  h.request.mockClear();
+  h.disable();
+  store?.refreshOpenClawId();
+  expect(changed).not.toHaveBeenCalled();
+  expect(h.request).not.toHaveBeenCalled();
+  stop();
   pending.resolve(status);
   await pending.promise;
   await Promise.resolve();

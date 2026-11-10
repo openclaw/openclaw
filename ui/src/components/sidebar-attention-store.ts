@@ -562,8 +562,10 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       this.sources.gateway.connectionRevision === revision &&
       gatewayPresentationScope(this.sources.gateway) === scope;
     if (!client || !current() || !hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
-      this.keyAttention = null;
-      this.onChange();
+      if (this.keyAttention !== null) {
+        this.keyAttention = null;
+        this.onChange();
+      }
       return;
     }
     void (async () => {
