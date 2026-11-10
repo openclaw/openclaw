@@ -1440,7 +1440,6 @@ src/cli/gateway-cli/register.ts	4
 src/cli/gateway-cli/run.ts	4
 src/cli/gateway-cli/suspend-cli.ts	2
 src/cli/logs-cli.ts	1
-src/cli/mcp-cli.ts	1
 src/cli/models-cli.ts	1
 src/cli/native-hook-relay-cli.ts	1
 src/cli/nodes-cli/register.pairing.ts	1
