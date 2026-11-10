@@ -156,27 +156,26 @@ describe("receipt-backed aggregate recovery", () => {
     const verifyPayloads = vi
       .spyOn(publicationArtifacts, "verifyRetainedPublicationArtifacts")
       .mockRejectedValue(new Error("publication verification reached"));
-    const parentJobs = await old.client.getRunAttemptJobs(old.runId);
+    const dispatches = old.admission.receipt.coverage.children.map((child, index) => ({
+      id: 10_000 + index,
+      name: child.parentJobName,
+      status: "completed",
+      conclusion: "success",
+      runId: expectDefined(recovery.children[child.key], "recovery child").runId,
+    }));
+    const parentJobs = [...(await old.client.getRunAttemptJobs(old.runId)), ...dispatches];
     await expect(
       verifyOriginalReceiptQualification(recovery, {
         client: {
           ...old.client,
           getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
+          getRunAttemptJobs: async () => parentJobs,
           getJobLog: async (id: number) => {
-            const job = expectDefined(parentJobs.find((entry) => entry.id === id), "parent job");
-            const coverage = expectDefined(
-              old.admission.receipt.coverage.children.find((child) => child.parentJobName === job.name),
-              "dispatch coverage",
+            const child = expectDefined(
+              dispatches.find((entry) => entry.id === id),
+              "dispatch job",
             );
-            return (
-              "TARGET_SHA: " +
-              old.q +
-              "\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/" +
-              old.repository +
-              "/actions/runs/" +
-              expectDefined(recovery.children[coverage.key], "recovery child").runId +
-              " (attempt 1)"
-            );
+            return `TARGET_SHA: ${old.q}\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
           },
         },
       }),

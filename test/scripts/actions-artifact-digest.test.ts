@@ -75,7 +75,8 @@ describe("exact artifact streaming digest verification", () => {
     const params = fixture();
     const started = Date.now();
     const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
-      if (!String(input).endsWith("/zip")) {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (!url.endsWith("/zip")) {
         return Response.json(params.metadata);
       }
       const signal = init?.signal;
