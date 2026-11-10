@@ -16,7 +16,7 @@ export function createServiceRebindOwner(
     stop() {
       lifetime.abort();
     },
-    async run(action: RebindAction, channel?: Channel, input: RebindInput = {}) {
+    run: async (action: RebindAction, channel?: Channel, input: RebindInput = {}) => {
       if (lifetime.signal.aborted && deps.enabled()) {
         lifetime = new AbortController();
       }
