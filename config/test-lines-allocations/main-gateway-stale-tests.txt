@@ -1,0 +1,2 @@
+1
+# Skip reason pointing the removed admission refusal test at #196702.
