@@ -312,6 +312,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       configs: ["test/vitest/vitest.infra.config.ts"],
       files: [
         "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
+        "src/agents/subagents/registry/subagent-control.accounting.test.ts",
+        "src/agents/tools/sessions-send-communication.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
         "src/state/dreaming-startup-admission.test.ts",
         "test/canonical-descendant.integration.test.ts",
@@ -336,13 +338,19 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "src/gateway/talk/client-permission-parity.test.ts",
         "src/gateway/tool-resolution.swarm-collector.test.ts",
+        "src/gateway/session-row-projection.subagent-index.test.ts",
+        "src/gateway/session-subagent-resume.test.ts",
+        "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
         "test/plugins/deep-research-routing.gateway.test.ts",
       ],
       preset: "runtime",
     },
     {
       configs: ["test/vitest/vitest.gateway-methods.config.ts"],
-      files: ["src/gateway/server-methods/session-catalog-privacy.test.ts"],
+      files: [
+        "src/gateway/server-methods/session-catalog-privacy.test.ts",
+        "src/gateway/server-methods/sessions-lifecycle-dormant.test.ts",
+      ],
       preset: "runtime",
     },
     {
@@ -376,7 +384,10 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     {
       configs: ["test/vitest/vitest.gateway-server.config.ts"],
-      files: ["src/gateway/server.beam-owned-view.test.ts"],
+      files: [
+        "src/gateway/server.beam-owned-view.test.ts",
+        "src/gateway/server.subagent-transcript-conflict.test.ts",
+      ],
       preset: "runtime",
     },
     {
