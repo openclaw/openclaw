@@ -1,0 +1,2 @@
+# Foundry unknown-Claude model identity no longer granted a 1M context window.
+1
