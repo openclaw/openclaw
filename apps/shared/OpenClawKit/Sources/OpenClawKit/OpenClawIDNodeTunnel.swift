@@ -27,7 +27,7 @@ func openClawIDNodeDeadline<T: Sendable>(
 /// this owner reuses the QUIC connection and refuses all future dials after removal.
 public actor OpenClawIDNodeTunnel {
     private let endpoint: any OpenClawIDNodeEndpoint
-    private let serverKey: String
+    private let serverKey: @Sendable () async throws -> String
     private let relayURL: URL
     private let clock: OpenClawIDNodeClock
     private var pending: Task<any OpenClawIDNodeConnection, Error>?
@@ -43,12 +43,16 @@ public actor OpenClawIDNodeTunnel {
     private var nextDial = -Double.infinity
     private var denialBackoff: TimeInterval = 10
 
-    /// The caller must supply K_srv from a verified binding and commit its pin first.
-    public init(endpoint: any OpenClawIDNodeEndpoint, verifiedServerKey: String, relayURL: URL) {
+    /// `verifiedServerKey` runs before every dial and must return K_srv from a binding it has just
+    /// re-verified and committed (`OpenClawIDNodeEnrollmentClient.refresh`), so a redial follows a
+    /// K_srv rotation or re-bind and never reuses a retired key.
+    public init(endpoint: any OpenClawIDNodeEndpoint, verifiedServerKey: @escaping @Sendable () async throws -> String,
+                relayURL: URL) {
         self.init(endpoint: endpoint, verifiedServerKey: verifiedServerKey, relayURL: relayURL, clock: .init())
     }
 
-    init(endpoint: any OpenClawIDNodeEndpoint, verifiedServerKey: String, relayURL: URL, clock: OpenClawIDNodeClock) {
+    init(endpoint: any OpenClawIDNodeEndpoint, verifiedServerKey: @escaping @Sendable () async throws -> String,
+         relayURL: URL, clock: OpenClawIDNodeClock) {
         self.endpoint = endpoint
         self.serverKey = verifiedServerKey
         self.relayURL = relayURL
@@ -71,8 +75,9 @@ public actor OpenClawIDNodeTunnel {
         let delay = max(0, self.nextDial - self.clock.now())
         if delay > 0 { try await self.clock.sleep(.seconds(delay)) }
         try self.checkActive()
+        let key = try await self.serverKey()
+        try self.checkActive()
         let endpoint = self.endpoint
-        let key = self.serverKey
         let relay = self.relayURL
         let clock = self.clock
         do {
