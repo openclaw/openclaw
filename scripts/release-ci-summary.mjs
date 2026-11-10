@@ -2127,6 +2127,10 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutableReads } = {}) {
   const normalizedRepository = normalizeRepository(repository);
+  const readEvidenceJson = (route) => {
+    const load = () => runReleaseCiGh(githubRestArgs(route, normalizedRepository));
+    return JSON.parse(immutableReads ? immutableReads.text(route, load) : load());
+  };
   const runAdmissionGh = (args) => {
     const route = args[1].replace("repos/" + normalizedRepository + "/", "");
     const load = () => runQualificationAdmissionGh(args);
@@ -2175,10 +2179,10 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     },
     compareCommitLineage(base, head) {
-      return githubRestJson(`compare/${base}...${head}?per_page=1&page=2`, normalizedRepository);
+      return readEvidenceJson(`compare/${base}...${head}?per_page=1&page=2`);
     },
     compareCommits(base, head) {
-      return githubRestJson(`compare/${base}...${head}`, normalizedRepository);
+      return readEvidenceJson(`compare/${base}...${head}`);
     },
     getJobLog(jobId) {
       return parentJobLog(jobId, normalizedRepository, immutableReads);
@@ -2195,7 +2199,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       );
     },
     getRunAttempt(runId, runAttempt) {
-      return githubRestJson(`actions/runs/${runId}/attempts/${runAttempt}`, normalizedRepository);
+      return readEvidenceJson(`actions/runs/${runId}/attempts/${runAttempt}`);
     },
     verifyQualificationAdmission(options) {
       if (immutableReads) {

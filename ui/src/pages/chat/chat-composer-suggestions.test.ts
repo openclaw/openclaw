@@ -192,7 +192,7 @@ describe("chat composer suggestion accessibility", () => {
     }
   });
 
-  it("refreshes the current thinking argument menu after its catalog settles", async () => {
+  it("preserves the selected thinking argument across selection and catalog refresh", async () => {
     const refresh = createDeferred();
     const { container } = createReactiveDraftHarness({
       ...thinkingSession(["low", "ultra"]),
@@ -200,10 +200,17 @@ describe("chat composer suggestion accessibility", () => {
     });
     inputDraft(container, "/think");
     keydownComposer(container, "Tab");
-    expect(getComposerTextarea(container).value).toBe("/think ");
+    const textarea = getComposerTextarea(container);
+    expect(textarea.value).toBe("/think ");
+    keydownComposer(container, "ArrowUp");
+    textarea.setSelectionRange(6, 7, "backward");
+    textarea.dispatchEvent(new Event("select", { bubbles: true }));
+    flush();
     refresh.resolve();
     await refresh.promise;
     await waitForSolid(() => expect(optionNames(container)).toEqual(["default", "low", "ultra"]));
+    keydownComposer(container, "Tab");
+    expect(textarea.value).toBe("/think ultra");
   });
 
   it("keeps the keyboard-selected command when a pending catalog refresh settles", async () => {

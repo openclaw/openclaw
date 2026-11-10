@@ -1242,12 +1242,6 @@
   min-width: 0;
 }
 
-.session-menu__shortcut.sidebar-session-owner-count {
-  min-width: 0;
-  margin-inline-end: -2px;
-  text-align: right;
-}
-
 .session-menu__shortcut.sidebar-session-owner-selection {
   display: inline-flex;
   flex: 0 1 auto;
@@ -1303,7 +1297,7 @@
 /* Sections meet at the menu divider: a hairline on the rows' text inset. */
 .sidebar-session-menu-section + .sidebar-session-menu-section::before,
 .sidebar-session-menu-footer::before {
-  content: "";
+  content: var(--sidebar-filter-divider, "");
   display: block;
   height: 1px;
   margin: var(--space-1) var(--sidebar-filter-row-inset);
@@ -1323,16 +1317,6 @@
   border: 0;
 }
 
-/* Boxed-control rows pin the label to the control's line so an inline owner
-   list can grow below it on the mobile sheet. */
-.sidebar-session-menu-row {
-  display: grid;
-  grid-template-columns: calc(var(--space-6) * 4) minmax(0, 1fr);
-  align-items: start;
-  gap: var(--space-2);
-  padding-block: calc((var(--sidebar-filter-row-height) - var(--settings-control-height)) / 2);
-}
-
 .sidebar-session-menu-row > :is(label, span) {
   color: var(--text);
   padding-block: calc((var(--settings-control-height) - 1lh) / 2);
@@ -1346,8 +1330,10 @@
    move the whole control onto its own full-width line instead of clipping. */
 .sidebar-session-menu-row--segmented {
   display: flex;
+  align-items: start;
   flex-wrap: wrap;
-  row-gap: var(--space-1);
+  gap: var(--space-1) var(--space-2);
+  padding-block: calc((var(--sidebar-filter-row-height) - var(--settings-control-height)) / 2);
 }
 
 .sidebar-session-menu-row--segmented > span {
@@ -1369,15 +1355,6 @@
   min-height: calc(var(--settings-control-height) - var(--space-1) * 1.5);
   padding-inline: var(--space-1);
   font-size: var(--control-ui-text-xs);
-}
-
-.sidebar-session-menu-row .picker-select__trigger {
-  height: var(--settings-control-height);
-  padding-inline: var(--space-2);
-}
-
-.sidebar-session-menu-row .picker-select__label {
-  font-weight: var(--control-ui-font-weight-normal);
 }
 
 .sidebar-session-filter-panel :is(.picker-select, .picker-select__trigger, .picker-select__option) {
@@ -1518,9 +1495,40 @@
   margin-inline: auto;
 }
 
-/* An open choice page owns scrolling until Back returns to the sheet. */
+/* The active page contributes its own content height, rather than inheriting
+   the root's row count. The sheet cap still leaves scrolling to its option list. */
 .sidebar-session-filter-panel:has(.picker-select--sheet [aria-expanded="true"]) {
+  --sidebar-filter-divider: none;
+
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+
+  .sidebar-session-menu-section {
+    display: contents;
+
+    & > :not(.picker-select--sheet:has([aria-expanded="true"])) {
+      display: none;
+    }
+  }
+
+  .picker-select--sheet {
+    &,
+    & > div {
+      display: contents;
+    }
+  }
+
+  .sidebar-session-menu-footer,
+  .picker-select__trigger {
+    display: none;
+  }
+
+  .picker-select__menu {
+    position: static;
+    min-height: 0;
+    padding: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

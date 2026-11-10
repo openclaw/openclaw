@@ -15,7 +15,11 @@ import {
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
-import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
+import {
+  API_KEY_EXPIRED_ERROR_CODE,
+  ERROR_DETAILS_HINT,
+  ERROR_PREFIX_RE,
+} from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   AUTH_PROFILE_COOLDOWN_ERROR_CODE,
@@ -356,11 +360,13 @@ function resolveProviderRequestFailureCode(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
+  code?: string;
 }): ProviderRequestErrorCode | undefined {
   const reason =
     params.classification?.kind === "reason" ? params.classification.reason : undefined;
   if (reason === "auth" && params.status === 401) {
-    return "provider_authentication_error";
+    // An expired key cannot be fixed by signing in; its copy is rendered from the provider code.
+    return params.code === API_KEY_EXPIRED_ERROR_CODE ? undefined : "provider_authentication_error";
   }
   if (reason === "model_not_found") {
     return "provider_model_unavailable";
@@ -382,6 +388,7 @@ export function resolveProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
+  code?: string;
 }) {
   const code = resolveProviderRequestFailureCode(params);
   if (!code) {

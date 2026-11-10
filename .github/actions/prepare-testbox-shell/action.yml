@@ -66,13 +66,18 @@ runs:
           done
           printf 'exec %q "$@"\n' "$corepack_binary"
         } > "$corepack_shim"
-        chmod 0755 "$corepack_shim"
-        sudo ln -sf "$corepack_shim" /usr/local/bin/corepack
-        sudo tee /usr/local/bin/pnpm >/dev/null <<'PNPM'
+        pnpm_shim="$(mktemp "$RUNNER_TEMP/openclaw-pnpm.XXXXXX")"
+        cat > "$pnpm_shim" <<'PNPM'
         #!/usr/bin/env bash
         exec /usr/local/bin/corepack pnpm "$@"
         PNPM
-        sudo chmod 0755 /usr/local/bin/pnpm
+        chmod 0755 "$corepack_shim" "$pnpm_shim"
+        # Selected-source installers can put NODE_BIN first. Replace both aliases
+        # without writing through Corepack's symlinks into its packaged files.
+        for target_bin in "$node_bin" /usr/local/bin; do
+          sudo ln -sf "$corepack_shim" "$target_bin/corepack"
+          sudo ln -sf "$pnpm_shim" "$target_bin/pnpm"
+        done
 
     - name: Prepare Android proof prerequisites
       if: inputs.android == 'true'

@@ -95,7 +95,9 @@ describe("receipt fanout", () => {
     const tools = () => [
       ...container.querySelectorAll<HTMLElement>(".chat-tool-msg-collapse--manual"),
     ];
-    await waitForSolid(() => expect(tools()).toHaveLength(2));
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-tool-row__toggle")).toHaveLength(2),
+    );
     for (const tool of tools()) {
       click(tool, ".chat-tool-row__toggle");
     }

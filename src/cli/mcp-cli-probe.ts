@@ -1,8 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { defaultRuntime } from "../runtime.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 const createSessionMcpRuntime = createLazyRuntimeMethod(
   () => import("../agents/agent-bundle-mcp-runtime.js"),
@@ -98,7 +102,7 @@ export function resolveMcpProbeIssue(params: {
   result: Awaited<ReturnType<typeof probeMcpServers>>;
   servers: Record<string, Record<string, unknown>>;
   path: string;
-}): string | undefined {
+}): string[] {
   let probeIssue: string | undefined;
   if (params.result.diagnostics.length > 0) {
     const first = expectDefined(params.result.diagnostics[0], "diagnostics entry at 0");
@@ -114,5 +118,33 @@ export function resolveMcpProbeIssue(params: {
   const cleanupIssue = params.result.cleanupError
     ? `MCP cleanup failed in ${params.path}: ${params.result.cleanupError}`
     : undefined;
-  return [probeIssue, cleanupIssue].filter(Boolean).join("\n") || undefined;
+  return [probeIssue, cleanupIssue].filter((line) => line !== undefined);
+}
+
+/** Sanitize each issue as its own value: only this formatter supplies the line breaks. */
+export function formatMcpProbeIssues(lines: readonly string[]): string {
+  return lines.map((line) => terminalText`${line}`).join("\n");
+}
+
+const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
+
+export async function probeMcpServersOrFail(params: {
+  config: OpenClawConfig;
+  servers: Record<string, Record<string, unknown>>;
+  path: string;
+}): Promise<void> {
+  const probeServers = Object.fromEntries(
+    Object.entries(params.servers).map(([name, server]) => [
+      name,
+      asPositiveFiniteNumber(server.connectionTimeoutMs) !== undefined
+        ? server
+        : { ...server, connectionTimeoutMs: DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS },
+    ]),
+  );
+  const result = await probeMcpServers("openclaw-cli-mcp-probe", params.config, probeServers);
+  const probeIssues = resolveMcpProbeIssue({ result, servers: params.servers, path: params.path });
+  if (probeIssues.length > 0) {
+    defaultRuntime.error(formatMcpProbeIssues([...probeIssues, "Configuration was not saved."]));
+    exitCliAfterOutput(defaultRuntime, 1);
+  }
 }
