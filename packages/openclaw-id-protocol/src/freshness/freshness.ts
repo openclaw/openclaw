@@ -254,16 +254,21 @@ export function mergeFreshnessState(
 }
 
 /**
- * Loads stored state under the rule that only verified bindings raise the high-water: a marker
- * stored before that rule may carry a binding_seq a snapshot claimed, so it is capped at
- * `verifiedBindingSeq`, the highest binding the client verified (its pin's).
+ * Loads a marker stored before per-key order (no `k_gw`). Its binding_seq may be a snapshot's
+ * claim, so it is capped at `verifiedBindingSeq` (the pin's), and its (seq, issued_at) cannot
+ * be attributed to a key, so that order is dropped: kept, it would count as whichever K_gw
+ * signs next, and a retired key's inflated seq would block the replacement key for good.
+ * Markers with `k_gw` are left alone: their binding_seq is always a binding this client
+ * verified, even one it then refused to dial. Accepted edge case: right after the upgrade the
+ * current key's older snapshots are not refused as replays until a new one is stored.
  */
 export function clampFreshnessState<T extends FreshnessState | null | undefined>(
   state: T,
   verifiedBindingSeq: number,
 ): T {
-  if (!state?.snapshot || state.snapshot.binding_seq <= verifiedBindingSeq) {
+  if (!state?.snapshot || state.snapshot.k_gw !== undefined) {
     return state;
   }
-  return { ...state, snapshot: { ...state.snapshot, binding_seq: verifiedBindingSeq } };
+  const binding_seq = Math.min(state.snapshot.binding_seq, verifiedBindingSeq);
+  return { ...state, snapshot: { seq: 0, issued_at: 0, binding_seq } };
 }

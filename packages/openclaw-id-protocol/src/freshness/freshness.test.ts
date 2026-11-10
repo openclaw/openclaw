@@ -334,14 +334,37 @@ describe("assessFreshness", () => {
     expect(replay.gap).toBe("snapshot_replayed");
   });
 
-  it("caps a stored high-water a snapshot raised before the rule at the verified binding", async () => {
-    const stored = { claw_id: "c", snapshot: { seq: 3, issued_at: 1, binding_seq: 99 } };
-    expect(clampFreshnessState(stored, 4)).toEqual({
+  it("loads a marker from before per-key order capped and without its unattributable order", async () => {
+    const legacy = { claw_id: "c", snapshot: { seq: 3, issued_at: 1, binding_seq: 99 } };
+    expect(clampFreshnessState(legacy, 4)).toEqual({
       claw_id: "c",
-      snapshot: { seq: 3, issued_at: 1, binding_seq: 4 },
+      snapshot: { seq: 0, issued_at: 0, binding_seq: 4 },
     });
-    expect(clampFreshnessState(stored, 120)).toBe(stored);
     expect(clampFreshnessState(null, 4)).toBeNull();
+    // A keyed marker's binding_seq was verified, even above a pin that did not advance.
+    const keyed = {
+      claw_id: "c",
+      snapshot: { ...legacy.snapshot, binding_seq: 5, k_gw: "ed25519:x" },
+    };
+    expect(clampFreshnessState(keyed as never, 4)).toBe(keyed);
+  });
+
+  it("a retired key's inflated order in a legacy marker never blocks the replacement key", async () => {
+    const w = await world();
+    // Saved before per-key order: the old K_gw signed an inflated seq under binding 4.
+    const legacy = {
+      claw_id: w.pin.claw_id!,
+      snapshot: { seq: 1_000_000, issued_at: now - 60, binding_seq: 4 },
+    };
+    // The J1 re-bind: binding 5 names a new K_gw, which signs its first snapshot at seq 9.
+    const replacement = await generateEd25519Signer();
+    const r = await gate(
+      w,
+      await w.binding(5, w.newSrv, now - 10, replacement),
+      { snapshot: await w.snapshot(9, 5, { signer: replacement }) },
+      { stored: clampFreshnessState(legacy, 4) },
+    );
+    expect(r).toMatchObject({ ok: true, fresh: true });
   });
 
   it("never stores a snapshot from the future", async () => {
