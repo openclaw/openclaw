@@ -49,6 +49,9 @@ vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRootsFromMetadata: pluginSkillsMocks.resolvePluginSkillRootsFromMetadata,
 }));
 
+// Finish cold worker preparation before timing watcher behavior.
+const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+
 describe("ensureSkillsWatcher", () => {
   const fixture = useSkillsWatcherFixture();
   const { createFixtureDirectory } = fixture;
@@ -584,7 +587,6 @@ describe("ensureSkillsWatcher", () => {
   it.each(["before-content", "around-content", "after-content"] as const)(
     "discovers initial content when ancestor scans fail %s",
     async (ordering) => {
-      const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
       const { pathWatchers } = await import("./refresh-watch-registry.js");
       const ancestor = await createFixtureDirectory("ancestor-error");
       const intermediate = path.join(ancestor, "nested");

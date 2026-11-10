@@ -46,6 +46,17 @@ it.for([
       writeFixture(directory, "scripts/ci-run-node-test-shard.mts", "export {};\n");
     }
     if (mode === "modern-corrupt" || mode === "modern-unshared") {
+      // Modern runners own preparation; these non-E2E fixtures keep it non-writing.
+      writeFixture(
+        directory,
+        "scripts/lib/vitest-build-prerequisites.mts",
+        "export const prepareE2eVitestRuntime = async () => { throw new Error('unexpected E2E preparation'); };\nexport const preparePrebuiltAiPackage = async () => 0;\n",
+      );
+      writeFixture(
+        directory,
+        "scripts/test-projects.test-support.mts",
+        "export const buildVitestRunPlans = (configs) => configs.map(config => ({ config }));\n",
+      );
       writeFixture(
         directory,
         "scripts/lib/vitest-worker-run.mts",

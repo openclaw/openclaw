@@ -372,6 +372,10 @@ describe("gateway-hosted exec approvals", () => {
               command,
               workdir: workspaceDir,
             });
+            // Observe the expected rejection before the approval RPC can settle execution.
+            const rejected = revoked
+              ? expect(running).rejects.toThrow("Exec approval changed before execution")
+              : undefined;
             let id: string | undefined;
             await vi.waitFor(
               async () => {
@@ -388,7 +392,7 @@ describe("gateway-hosted exec approvals", () => {
             }
             await operator.request("exec.approval.resolve", { id, decision: "allow-once" });
             if (revoked) {
-              await expect(running).rejects.toThrow("Exec approval changed before execution");
+              await rejected;
             } else {
               expect((await running).details).toMatchObject({
                 status: "completed",

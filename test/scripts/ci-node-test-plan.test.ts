@@ -1522,7 +1522,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           measured
             .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))
             .toSorted(),
-        ).toEqual(files);
+        ).toEqual(files.filter((file) => file !== e2eModel && file !== fastModel));
         expect(
           measured
             .flatMap((job) => job.groups)
@@ -1534,13 +1534,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             .flatMap((job) => job.groups)
             .filter((group) => group.shard_name.startsWith(models));
           expect(modelGroups).toHaveLength(2);
-          expect(
-            modelGroups.map(
-              (group) =>
-                group.includePatterns?.filter((file) => file !== e2eModel && file !== fastModel)
-                  .length,
-            ),
-          ).toEqual([1, 1]);
+          expect(modelGroups.map((group) => group.includePatterns?.length)).toEqual([1, 1]);
           modelGroups.forEach((group, index) => {
             seconds[group.timing_key!] = index === 0 ? 180 : 190;
           });
@@ -7136,16 +7130,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
     const expected = [
-      ...listTestFiles("src/agents").filter(
-        (file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"),
-      ),
-      ...agentVitestProjectOwners.coreIsolated.include.filter((file) =>
-        relative("src/agents", file).replaceAll("\\", "/").includes("/"),
-      ),
+      ...listMatchedTestFiles(createAgentsCoreVitestConfig({})),
+      ...listMatchedTestFiles(createAgentsCoreIsolatedVitestConfig({})),
       ...agentVitestProjectOwners.spawnProductionBoundary.include,
-    ]
-      .filter((file) => !databaseWorkerCoreTestFiles.includes(file))
-      .toSorted((a, b) => a.localeCompare(b));
+    ].toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(expected);
     expect(new Set(actual).size).toBe(actual.length);

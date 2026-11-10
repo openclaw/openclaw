@@ -383,6 +383,20 @@ describe("CI changed Node test plan", () => {
     }
   });
 
+  it("keeps Gateway approval E2E in its executable E2E owner", () => {
+    const target = "src/agents/bash-tools.exec-gateway-approval.e2e.test.ts";
+    const shards = expectDefined(createChangedNodeTestShards([target]), "approval E2E plan");
+    const owner = expectDefined(
+      shards.find((shard) => shard.targets?.includes(target)),
+      "exact E2E target owner",
+    );
+    expect(buildVitestRunPlans(owner.targets ?? []).map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.e2e.config.ts",
+    ]);
+    expect(owner.pretestBuildMode).toBe("private-qa");
+    expect(selectedFiles(shards).filter((file) => file === target)).toEqual([target]);
+  });
+
   it("defers named process proofs without dropping mixed ordinary targets", () => {
     const ordinary = "src/plugin-sdk/config-runtime.test.ts";
     const shards = createChangedNodeTestShards([...CI_PROOF_TEST_FILES, ordinary]);
