@@ -169,11 +169,11 @@ enum MacNodeOpenClawIDBridgeHTTP {
         case .chunked:
             while true {
                 let line = try await reader.through(Data([13, 10]), limit: 128)
+                let sizeBytes = line.dropLast(2)
                 // The worker emits plain chunk sizes and no extensions or trailers.
-                guard let size = String(bytes: line.dropLast(2), encoding: .utf8),
-                      !size.isEmpty, size.utf8.allSatisfy({
-                          (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
-                      }), let count = Int(size, radix: 16)
+                guard !sizeBytes.isEmpty, sizeBytes.allSatisfy({
+                    (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+                }), let size = String(bytes: sizeBytes, encoding: .utf8), let count = Int(size, radix: 16)
                 else { throw MacNodeOpenClawIDBridgeError.malformedRequest }
                 if count == 0 {
                     guard try await reader.exactly(2) == Data([13, 10]) else {

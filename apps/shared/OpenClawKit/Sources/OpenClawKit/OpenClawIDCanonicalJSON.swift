@@ -200,8 +200,9 @@ indirect enum OpenClawIDCanonicalJSON: Sendable, Equatable {
 
         mutating func hexScalar() throws -> UInt32 {
             guard self.index + 4 <= self.bytes.count else { throw OpenClawIDNodeEnrollmentError.malformed }
-            guard let text = String(bytes: bytes[index..<(index + 4)], encoding: .utf8),
-                  text.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
+            let digits = self.bytes[self.index..<(self.index + 4)]
+            guard digits.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
+                  let text = String(bytes: digits, encoding: .utf8),
                   let value = UInt32(text, radix: 16)
             else { throw OpenClawIDNodeEnrollmentError.malformed }
             self.index += 4
