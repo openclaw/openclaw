@@ -3,9 +3,12 @@
   width: 100%;
 }
 
-.chat-session-activity__summary {
+/* Keep the shared disclosure reset from restoring prose-sized metadata. */
+.chat-session-activity > .chat-session-activity__summary {
   width: 100%;
-  font-size: calc(var(--control-ui-text-sm) + 1px);
+  font-family: var(--font-body);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
   list-style: none;
 }
 

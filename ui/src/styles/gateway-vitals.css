@@ -29,7 +29,7 @@
 
 .gateway-cpu-detail {
   min-width: min(240px, calc(100vw - 48px));
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.4;
 }
 
@@ -84,8 +84,8 @@
 
 .sparkline-tile__secondary {
   color: var(--muted);
-  font-size: 10px;
-  line-height: 12px;
+  font-size: calc(10px * var(--control-ui-text-scale));
+  line-height: calc(12px * var(--control-ui-text-scale));
   white-space: nowrap;
 }
 
@@ -125,7 +125,7 @@
 .sparkline-tile__label {
   overflow: hidden;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--control-ui-text-scale));
   letter-spacing: 0.08em;
   white-space: nowrap;
   text-transform: uppercase;
@@ -146,21 +146,21 @@
 .sparkline-tile__sub {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   white-space: nowrap;
 }
 
 .sparkline-tile__value {
   margin: 3px 0 2px;
   color: var(--text);
-  font-size: 16px;
+  font-size: var(--control-ui-text-lg);
   line-height: 1.2;
 }
 
 .sparkline-tile__age {
   margin-left: 4px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .sparkline-tile__chart {

@@ -23,11 +23,11 @@
 }
 
 .mcp-connected-apps h1 {
-  font-size: 26px;
+  font-size: calc(26px * var(--control-ui-text-scale));
 }
 
 .mcp-connected-apps h2 {
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
 }
 
 .mcp-connected-apps p,
@@ -39,7 +39,7 @@
 .mcp-connected-apps small,
 .mcp-connected-apps__details dt {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .mcp-connected-apps__consent,
@@ -59,7 +59,7 @@
   display: block;
   margin-bottom: var(--space-2);
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   letter-spacing: 0.08em;
 }
@@ -149,7 +149,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   color: var(--text-strong);
-  font-size: 28px;
+  font-size: calc(28px * var(--control-ui-text-scale));
   text-align: center;
   letter-spacing: 0.08em;
 }

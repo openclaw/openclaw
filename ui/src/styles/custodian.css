@@ -63,7 +63,7 @@ openclaw-custodian-page {
 .custodian__setup-state h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 22px;
+  font-size: calc(22px * var(--control-ui-text-scale));
 }
 
 .custodian__setup-state p {
@@ -86,7 +86,7 @@ openclaw-custodian-page {
 }
 
 .custodian-surface--panel .custodian__setup-state h2 {
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
 }
 
 .custodian-surface--empty-error {
@@ -187,14 +187,14 @@ openclaw-custodian-page {
 
 .custodian__identity h1 {
   color: var(--text-strong);
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
   letter-spacing: -0.02em;
 }
 
 .custodian__identity p {
   margin-top: 2px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .custodian__mark {
@@ -252,7 +252,7 @@ openclaw-custodian-page {
   margin: 0;
   padding-left: 20px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .custodian__alert-action {
@@ -278,12 +278,12 @@ openclaw-custodian-page {
 
 .custodian__nudge-copy strong {
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .custodian__nudge-copy span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
 }
 
@@ -369,7 +369,7 @@ openclaw-custodian-page {
 .custodian__wizard-title,
 .custodian__history-heading strong {
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 
 .custodian__wizard-step .btn {
@@ -422,7 +422,7 @@ openclaw-custodian-page {
 .custodian__plugin-intro h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 20px;
+  font-size: calc(20px * var(--control-ui-text-scale));
   line-height: 1.3;
   overflow-wrap: anywhere;
 }
@@ -491,7 +491,7 @@ openclaw-custodian-page {
 .custodian__history-heading span,
 .custodian__history-state {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .custodian__history-spinner {
@@ -537,7 +537,7 @@ openclaw-custodian-page {
   justify-content: space-between;
   gap: 10px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .custodian__change-source {
@@ -551,14 +551,14 @@ openclaw-custodian-page {
 .custodian__change-summary {
   margin-top: 7px;
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .custodian__change-warning,
 .custodian__change-note {
   margin-top: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .custodian__change-warning {
@@ -569,7 +569,7 @@ openclaw-custodian-page {
 .custodian__change-paths {
   margin-top: 7px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .custodian__change-paths summary {
@@ -584,7 +584,7 @@ openclaw-custodian-page {
 
 .custodian__change-paths code {
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .custodian__history-error {
@@ -593,7 +593,7 @@ openclaw-custodian-page {
   justify-content: space-between;
   gap: 10px;
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .custodian__history-more {

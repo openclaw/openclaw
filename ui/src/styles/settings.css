@@ -1673,7 +1673,7 @@ textarea.settings-input {
     }
 
     .content .content-header .page-title {
-      font-size: 26px;
+      font-size: calc(26px * var(--control-ui-text-scale));
     }
   }
 }
@@ -2201,7 +2201,7 @@ openclaw-approvals-page .data-table-pagination__info {
   padding: 0 9px;
   border-color: transparent;
   background: transparent;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 
 :root[data-theme-mode="light"] .settings-sidebar__agent .agent-select__trigger {
