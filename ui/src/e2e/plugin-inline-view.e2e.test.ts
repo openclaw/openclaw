@@ -26,7 +26,7 @@ type InlineViewIntersection = {
 
 declare global {
   interface Window {
-    __inlineViewIntersections?: { entries: InlineViewIntersection[]; dropped: number };
+    inlineViewIntersections?: { entries: InlineViewIntersection[]; dropped: number };
   }
 }
 
@@ -261,11 +261,11 @@ suite.define(() => {
         // Keep native deliveries; inspect layout only if the existing reload wait fails.
         await page.addInitScript(() => {
           const NativeObserver = window.IntersectionObserver;
-          const capture: NonNullable<Window["__inlineViewIntersections"]> = {
+          const capture: NonNullable<Window["inlineViewIntersections"]> = {
             entries: [],
             dropped: 0,
           };
-          window.__inlineViewIntersections = capture;
+          window.inlineViewIntersections = capture;
           window.IntersectionObserver = class extends NativeObserver {
             constructor(
               callback: IntersectionObserverCallback,
@@ -349,8 +349,8 @@ suite.define(() => {
               return {
                 inlineReload: {
                   documentVisible: document.visibilityState === "visible",
-                  intersections: window.__inlineViewIntersections?.entries ?? [],
-                  droppedIntersections: window.__inlineViewIntersections?.dropped ?? 0,
+                  intersections: window.inlineViewIntersections?.entries ?? [],
+                  droppedIntersections: window.inlineViewIntersections?.dropped ?? 0,
                   rootsTruncated: roots.length > 30,
                   roots: roots.slice(0, 30).map((root) => {
                     const box = root.getBoundingClientRect();
