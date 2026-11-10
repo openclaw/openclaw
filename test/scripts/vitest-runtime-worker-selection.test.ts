@@ -19,6 +19,16 @@ const reply = "test/vitest/vitest.auto-reply.config.ts";
 const delivery = "src/auto-reply/reply/dispatch-from-config.delivery.test.ts";
 
 it.each([
+  {
+    name: "Doctor setup and runtime registry",
+    config: "test/vitest/vitest.plugins.config.ts",
+    files: [
+      "src/plugins/doctor-repair-setup.test.ts",
+      "src/plugins/loader.runtime-registry.test.ts",
+    ],
+    env: {},
+    runtime: true,
+  },
   { name: "reply delivery", config: reply, files: [delivery], env: {}, runtime: true },
   { name: "broad reply", config: reply, files: [], env: {}, runtime: false },
   {

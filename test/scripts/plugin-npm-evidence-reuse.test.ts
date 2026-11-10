@@ -591,7 +591,16 @@ it("preserves the public return-time gate but removes exactly one CLI combined g
   // Compare the real final callback with the eliminated identical boundary.
   // The raw fixture graph is smaller than the saved production trace.
   expect(removed).toBe(finalGateCalls.length);
-  expect(removed).toBe(18);
+  // The completed admission job page now replays; the 17 live reads still run.
+  expect(finalGateCalls).not.toContain("actions/runs/40/attempts/1/jobs?per_page=100");
+  expect(finalGateCalls).toEqual(
+    expect.arrayContaining([
+      "actions/artifacts/70",
+      "actions/runs/40/attempts/1",
+      "collaborators/release-operator/permission",
+    ]),
+  );
+  expect(removed).toBe(17);
   expect(f.calls.length).toBe(publicFetchCalls);
   expect(f.source.calls.filter((route) => route === "actions/runs/800")).toHaveLength(2);
   console.log(

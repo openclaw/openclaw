@@ -236,13 +236,14 @@ function validateRun(run, selection, request) {
   );
 }
 
-async function readAttemptJobs(github, run, runAttempt) {
+async function readAttemptJobs(deps, run, runAttempt) {
+  const path = `actions/runs/${run.id}/attempts/${runAttempt}/jobs?`;
   return readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
     const jobs = [];
     let total;
     const maxPages = Math.ceil((MAX_JOB_PAGES * 100) / perPage);
     for (let page = 1; page <= maxPages; page += 1) {
-      const inventory = await github(
+      const inventory = await deps.github(
         `actions/runs/${run.id}/attempts/${runAttempt}/jobs?per_page=${perPage}&page=${page}`,
         { smallerPageFallback },
       );
@@ -265,11 +266,12 @@ async function readAttemptJobs(github, run, runAttempt) {
       jobs.push(...inventory.jobs);
       if (jobs.length >= total) {
         requireEvidence(jobs.length === total, "job inventory count changed");
+        deps.immutableReads?.selectJobPageSize(path, perPage);
         return jobs;
       }
     }
     throw new Error("Full release child evidence job inventory exceeded its bound");
-  });
+  }, deps.immutableReads?.jobPageSizes(path));
 }
 
 function validatePublisher(jobs, receipt) {
@@ -406,7 +408,7 @@ async function validateEvidence(selection, request, deps) {
     const results = await Promise.allSettled(
       Array.from({ length: Math.min(4, run.run_attempt - first + 1) }, async (_, index) => {
         const runAttempt = first + index;
-        return { runAttempt, jobs: await readAttemptJobs(deps.github, run, runAttempt) };
+        return { runAttempt, jobs: await readAttemptJobs(deps, run, runAttempt) };
       }),
     );
     const failed = results.find((result) => result.status === "rejected");
@@ -432,13 +434,9 @@ async function validateEvidence(selection, request, deps) {
       ),
     "receipt does not match the complete live composite workload",
   );
-  if (deps.immutableReads) {
-    const currentParent = await deps.github("actions/runs/" + selection.sourceParentRunId);
-    requireEvidence(
-      currentParent.run_attempt === selection.sourceParentAttempt,
-      "source parent attempt changed",
-    );
-  }
+  // The source parent is the pinned dispatch origin, not a live evidence producer.
+  // Its later reruns do not supersede the independently checked child attempt.
+  // Read the exact origin below, including when immutable payloads are replayed.
   const parent = await deps.github(
     `actions/runs/${selection.sourceParentRunId}/attempts/${selection.sourceParentAttempt}`,
   );

@@ -59,8 +59,8 @@ Capture decisions, context, and things to remember. Skip secrets unless asked to
 ### USER.md - Durable User Directives
 
 - Write stable preferences, communication style, relationships, and active-project context as imperative directives such as `Always`, `Never`, or `Prefer`.
-- Precede each directive with `<!-- observed: YYYY-MM-DD | status: active -->`.
-- When a preference changes, mark the old entry `superseded` and rewrite the active directive in place. Never leave contradictory active directives.
+- Keep only current directives, without date/status metadata; all text counts toward the 4,000-character prompt budget.
+- When a preference changes, replace the old directive in place. Preserve useful dated history in daily memory, not `USER.md`. Never leave contradictory directives.
 
 ### MEMORY.md - Durable Facts and Decisions
 
