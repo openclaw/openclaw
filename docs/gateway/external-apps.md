@@ -244,8 +244,9 @@ Terminal commands and scrollback are not recovered after restart; see
 
 An external deployment controller that explicitly authorizes interrupting
 remaining work can instead call `gateway.suspend.handoff` after its own graceful
-drain budget. The target must match the `pid` and `processInstanceId` obtained from
-`system.info` before suspension. With `commit: true`, the host commits shutdown
+drain budget. Allow at least 30 seconds for the handoff response (for the generic
+CLI RPC command, pass `--timeout 30000`). The target must match the `pid` and
+`processInstanceId` obtained from `system.info` before suspension. With `commit: true`, the host commits shutdown
 immediately once write custody is clear and returns
 `{ "status": "committed", "suspensionId": "...", "expiresAtMs": ... }`.
 Admission stays closed even after the original lease expires. The controller
