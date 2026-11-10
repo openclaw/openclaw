@@ -72,7 +72,7 @@ it("completes the requester row selected by exact OAuth state", async () => {
     "/oauth/mcp/callback?code=authorization-code&state=state-1234567890&iss=https%3A%2F%2Faccounts.example.com%2Ftenant%2F",
   );
 
-  expectPage(result, 200, "You&#39;re connected.");
+  expectPage(result, 200, "You’re connected");
   expect(result.response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
   expect(mocks.readPending).toHaveBeenCalledWith("state-1234567890", mocks.context);
   expect(mocks.readStore).toHaveBeenCalledWith(STORE_KEY, mocks.context);
