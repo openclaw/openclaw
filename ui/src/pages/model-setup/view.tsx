@@ -7,7 +7,7 @@ import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
+import { LearnMoreLink, SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
@@ -56,10 +56,10 @@ function EmptyState(props: ModelSetupViewProps & { result: SystemAgentSetupDetec
   return (
     <Show when={visible()}>
       <section class="settings-section model-setup__empty">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.empty.title")}</h2>
-        </div>
-        <p class="muted">{t("modelSetup.empty.intro")}</p>
+        <SettingsSectionHeader
+          title={t("modelSetup.empty.title")}
+          description={t("modelSetup.empty.intro")}
+        />
         <div class="model-setup__recommendations">
           <For each={installs()} keyed={(install) => install.id}>
             {(install) => (
@@ -150,10 +150,10 @@ function SignIn(props: ModelSetupViewProps & { result: SystemAgentSetupDetectRes
   return (
     <Show when={options().length > 0}>
       <section class="settings-section">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.signIn.title")}</h2>
-          <p>{t("modelSetup.signIn.description")}</p>
-        </div>
+        <SettingsSectionHeader
+          title={t("modelSetup.signIn.title")}
+          description={t("modelSetup.signIn.description")}
+        />
         <div class="model-setup__rows">
           <For each={featured()} keyed={(option) => option.id}>
             {(option) => <SetupActionRow view={props} option={option()} />}
@@ -183,10 +183,10 @@ function Prepare(props: ModelSetupViewProps & { result: SystemAgentSetupDetectRe
   return (
     <Show when={props.canPrepare && options().length > 0}>
       <section class="settings-section">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.prepare.title")}</h2>
-        </div>
-        <p class="muted">{t("modelSetup.prepare.intro")}</p>
+        <SettingsSectionHeader
+          title={t("modelSetup.prepare.title")}
+          description={t("modelSetup.prepare.intro")}
+        />
         <div class="model-setup__rows">
           <For each={options()} keyed={(option) => option.id}>
             {(option) => <SetupActionRow view={props} option={option()} />}
@@ -216,9 +216,7 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
   return (
     <Show when={manualProviders().length > 0 || !props.embedded}>
       <section class="settings-section">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.manual.title")}</h2>
-        </div>
+        <SettingsSectionHeader title={t("modelSetup.manual.title")} />
         <div class="model-setup__manual">
           <div class="field">
             <span>{t("modelSetup.manual.provider")}</span>
@@ -294,10 +292,10 @@ function NativeSessionDiscovery(
       }
     >
       <section class="settings-section model-setup__native-discovery">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.nativeDiscovery.title")}</h2>
-        </div>
-        <p class="muted">{t("modelSetup.nativeDiscovery.body")}</p>
+        <SettingsSectionHeader
+          title={t("modelSetup.nativeDiscovery.title")}
+          description={t("modelSetup.nativeDiscovery.body")}
+        />
         <p>{props.result.nativeSessionCatalogs?.map((option) => option.label).join(", ")}</p>
         <label>
           <Checkbox

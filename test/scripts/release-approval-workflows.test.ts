@@ -92,7 +92,7 @@ it.each([
 ])("%s verifies the parent receipt and attestation for bot dispatches", (workflow, jobId) => {
   const job = requireJob(workflow, jobId);
   expect(job.permissions?.attestations).toBe("read");
-  const step = job.steps.at(-1);
+  const step = job.steps.find((entry) => entry.name === "Verify release approval receipt");
   expect(step?.if).toBeUndefined();
   expect(step).toMatchObject({
     name: "Verify release approval receipt",

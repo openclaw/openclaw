@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { cancelLayout, scheduleLayout } from "../../lib/layout-frame.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { getComposerTextarea, renderChatView } from "./chat-view.test-helpers.ts";
@@ -48,6 +49,12 @@ it.each([
 ] as const)("keeps Stop available during %s", async (phase, status) => {
   const onAbort = vi.fn();
   const onSend = vi.fn();
+  if (!status) {
+    // A mount must not synchronously drain another owner's pending layout frame.
+    const queuedLayout = {};
+    scheduleLayout(queuedLayout, () => {});
+    onTestFinished(() => cancelLayout(queuedLayout));
+  }
   const container = renderChatView({
     canAbort: true,
     runActive: true,
@@ -57,6 +64,7 @@ it.each([
     onAbort,
     onSend,
   });
+  expect(container.querySelector(".chat-send-btn--stop")).not.toBeNull();
   if (status) {
     expect(workingStatus(container)).toContain(status);
     expect(container.querySelector(".chat-error")).toBeNull();
