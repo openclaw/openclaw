@@ -26,6 +26,7 @@ import { resolveAgentHarnessOwnerPluginIds } from "../agents/harness/runtime-plu
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
@@ -511,11 +512,10 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
   executionRoute: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
-  const runConfig = cloneConfigWithResolutionFacts(params.executionRoute.runConfig);
   const configuredExecution = {
     ...params.executionRoute,
     sourceConfig: cloneConfigWithResolutionFacts(params.executionRoute.sourceConfig),
-    runConfig,
+    runConfig: captureRuntimeConfig(params.executionRoute.runConfig),
   } as SystemAgentConfiguredRoute;
   const authProfileId = params.auth.authProfileId ?? configuredExecution.authProfileId;
   const modelId = params.auth.modelId?.trim();

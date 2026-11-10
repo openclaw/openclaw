@@ -739,6 +739,10 @@ span.new-session-page__select {
   min-height: 0;
 }
 
+div.new-session-page__project-search {
+  padding: 8px 10px;
+}
+
 .new-session-page__environment-picker {
   display: flex;
   flex-direction: column;

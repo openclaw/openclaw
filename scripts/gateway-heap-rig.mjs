@@ -25,6 +25,8 @@ import {
   waitForInitialProbe,
 } from "./lib/gateway-bench-runtime.ts";
 import { configureHeapRigCatalog } from "./lib/gateway-heap-rig-catalog.mjs";
+import { prepareHeapRigFixture } from "./lib/gateway-heap-rig-fixture.mjs";
+import { captureHeapRigRetention } from "./lib/gateway-heap-rig-retention.mjs";
 import { configureHeapRigTurns } from "./lib/gateway-heap-rig-turns.mjs";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
@@ -32,6 +34,7 @@ const { values } = parseArgs({
   options: {
     root: { type: "string" },
     "runtime-root": { type: "string" },
+    "fixture-gib": { type: "string" },
     "legacy-workshop": { type: "boolean" },
     "event-chars": { type: "string", default: "15000" },
     minutes: { type: "string", default: "90" },
@@ -45,6 +48,13 @@ const { values } = parseArgs({
     coverage: { type: "boolean" },
     "lazy-import-trace": { type: "boolean" },
     "turn-count": { type: "string" },
+    "fixed-turn-sessions": { type: "string" },
+    "new-turn-sessions": { type: "string" },
+    "turns-per-new-session": { type: "string", default: "3" },
+    "retention-round-size": { type: "string" },
+    "retention-snapshots": { type: "boolean" },
+    "retention-mode": { type: "string", default: "retained" },
+    "short-replies": { type: "boolean" },
     "large-session-events": { type: "string" },
     "restart-after-seed": { type: "boolean" },
     "gateway-preload": { type: "string" },
@@ -57,7 +67,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 41673 --snapshot-minutes 10,90 --module-census --coverage --idle-minutes 5]",
+    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 41673 --snapshot-minutes 10,90 --module-census --coverage --idle-minutes 5]\nFixed-session retention: --fixed-turn-sessions 8 --turn-count 80 --retention-round-size 10 --snapshot-minutes none --short-replies --retention-mode retained|allocation|timing\nNew idle sessions: --new-turn-sessions 1000 --turns-per-new-session 3 --retention-round-size 750 --snapshot-minutes none [--retention-snapshots --fixture-gib 35 (0 generates the small 5000-session fixture)]",
   );
   process.exit(0);
 }
@@ -73,6 +83,12 @@ if (values.coverage && !values["module-census"]) {
 if (Boolean(values["ready-file"]) !== Boolean(values["start-file"])) {
   throw new Error("--ready-file and --start-file must be supplied together");
 }
+const fixtureGib =
+  values["fixture-gib"] === undefined
+    ? undefined
+    : values["fixture-gib"] === "0"
+      ? 0
+      : positiveInteger(values["fixture-gib"], "fixture-gib");
 const minutes = positiveInteger(values.minutes, "minutes");
 const idleMinutes = values["idle-minutes"]
   ? positiveInteger(values["idle-minutes"], "idle-minutes")
@@ -95,9 +111,56 @@ const clientCount = positiveInteger(values.clients, "clients");
 const port = positiveInteger(values.port, "port");
 const rpcInterval = positiveInteger(values["rpc-interval-ms"], "rpc-interval-ms");
 const turnInterval = positiveInteger(values["turn-interval-ms"], "turn-interval-ms");
-const turnCount = values["turn-count"]
-  ? positiveInteger(values["turn-count"], "turn-count")
-  : Infinity;
+const newTurnSessions = values["new-turn-sessions"]
+  ? positiveInteger(values["new-turn-sessions"], "new-turn-sessions")
+  : 0;
+const turnsPerNewSession = positiveInteger(
+  values["turns-per-new-session"],
+  "turns-per-new-session",
+);
+if (newTurnSessions && (turnsPerNewSession < 2 || turnsPerNewSession > 5 || values["turn-count"])) {
+  throw new Error("New-session turns require 2–5 turns per session and determine turn-count");
+}
+const turnCount = newTurnSessions
+  ? newTurnSessions * turnsPerNewSession
+  : values["turn-count"]
+    ? positiveInteger(values["turn-count"], "turn-count")
+    : Infinity;
+const fixedTurnSessions = values["fixed-turn-sessions"]
+  ? positiveInteger(values["fixed-turn-sessions"], "fixed-turn-sessions")
+  : 0;
+const retentionRoundSize = values["retention-round-size"]
+  ? positiveInteger(values["retention-round-size"], "retention-round-size")
+  : 0;
+if (newTurnSessions && (fixedTurnSessions || largeSessionEvents || !retentionRoundSize)) {
+  throw new Error(
+    "New sessions require retention rounds and cannot combine with fixed/large sessions",
+  );
+}
+if (newTurnSessions && retentionRoundSize % turnsPerNewSession !== 0) {
+  throw new Error("New-session checkpoints must follow complete session cohorts");
+}
+if (values["retention-snapshots"] && !retentionRoundSize) {
+  throw new Error("retention-snapshots requires retention rounds");
+}
+if (
+  fixedTurnSessions > sessionCount ||
+  fixedTurnSessions > 64 ||
+  (fixedTurnSessions && largeSessionEvents)
+) {
+  throw new Error(
+    "Fixed turns require 1–64 seeded sessions and cannot combine with large-session-events",
+  );
+}
+if (
+  retentionRoundSize &&
+  (!(fixedTurnSessions || newTurnSessions) || !Number.isFinite(turnCount) || turnCount > 10000)
+) {
+  throw new Error("Retention rounds require fixed/new sessions and at most 10000 turns");
+}
+if (!["retained", "allocation", "timing"].includes(values["retention-mode"])) {
+  throw new Error("retention-mode must be retained, allocation, or timing");
+}
 if (port < 40000 || port > 65533) {
   throw new Error("port and two adjacent mock ports must fit 40000–65535");
 }
@@ -115,6 +178,11 @@ const snapshotMinutes =
         .map((v) => positiveInteger(v, "snapshot-minutes"));
 if (snapshotMinutes.some((v, i) => v > minutes || (i > 0 && v - snapshotMinutes[i - 1] < 2))) {
   throw new Error("snapshot minutes must increase by at least two and fit the duration");
+}
+if (retentionRoundSize && snapshotMinutes.length) {
+  throw new Error(
+    "Retention rounds require --snapshot-minutes none; capture full snapshots separately",
+  );
 }
 mkdirSync(path.dirname(root), { recursive: true });
 mkdirSync(root, { mode: 0o700 }); // Never reuse an operator directory or a previous run's databases.
@@ -144,6 +212,11 @@ if (values["legacy-workshop"]) {
   };
 }
 applyMockOpenAiModelConfig(config, { mockPort: port + 1 });
+if (fixedTurnSessions || newTurnSessions) {
+  for (const model of config.models.providers.openai.models) {
+    model.compat = { supportsInstructions: true, supportsResponsesContinuation: true };
+  }
+}
 // Utility summaries must not consume the agent mock's ordered tool-response script.
 config.models.providers["heap-rig-utility"] = {
   ...config.models.providers.openai,
@@ -193,6 +266,13 @@ const env = createGatewayBenchEnv(root, configPath, {
     TMPDIR: root,
   },
 });
+const stateFixture =
+  fixtureGib === undefined
+    ? undefined
+    : await prepareHeapRigFixture({ gib: fixtureGib, port, env, sourceRoot: runtimeRoot });
+if (stateFixture) {
+  record({ kind: "fixture-seeded", ...stateFixture });
+}
 const children = [];
 const expectedStops = new Set();
 const clients = new Set();
@@ -231,7 +311,9 @@ function start(args, label, extraEnv = {}) {
       "ignore",
       fd,
       fd,
-      ...(label.startsWith("gateway") && values["module-census"] ? ["ipc"] : []),
+      ...(label.startsWith("gateway") && (values["module-census"] || retentionRoundSize)
+        ? ["ipc"]
+        : []),
     ],
   });
   closeSync(fd);
@@ -350,7 +432,7 @@ async function connect(protocol, identity) {
 }
 const sessions = Array.from({ length: sessionCount }, (_, index) => {
   const agentId = index % 2 === 0 ? "main" : "second";
-  return { agentId, key: `agent:${agentId}:heap-rig-${index}` };
+  return { agentId, key: `agent:${agentId}:heap-rig-${index}`, sessionId: undefined };
 });
 let admin;
 const tasks = [];
@@ -371,6 +453,9 @@ try {
   });
   const coldStarted = performance.now();
   const gatewayArgs = [
+    ...(retentionRoundSize
+      ? ["--import", path.resolve("scripts/perf/gateway-retention-round-preload.mjs")]
+      : []),
     ...(values["gateway-preload"] ? ["--import", path.resolve(values["gateway-preload"])] : []),
     ...(values["lazy-import-trace"]
       ? ["--import", path.resolve("scripts/perf/lazy-import-trace-preload.mjs")]
@@ -455,6 +540,12 @@ try {
         }
         const { key, agentId } = sessions[index];
         const created = await admin.rpc("sessions.create", { key, agentId });
+        if (fixedTurnSessions && index < fixedTurnSessions) {
+          if (!created.sessionId) {
+            throw new Error("Fixed-session seed did not return a session ID");
+          }
+          sessions[index].sessionId = created.sessionId;
+        }
         if (largeSessionEvents) {
           if (!created.sessionId) {
             throw new Error("Large-session seed did not return a session ID");
@@ -480,7 +571,7 @@ try {
     }),
   );
   const inventory = await admin.rpc("sessions.list", { limit: 1, archived: "all" });
-  if (inventory.totalCount < sessionCount) {
+  if (inventory.totalCount < sessionCount + (stateFixture?.sessionCount ?? 0)) {
     throw new Error(`Seed inventory incomplete: ${inventory.totalCount}`);
   }
   record({
@@ -552,6 +643,13 @@ try {
   const samples = [];
   const floors = [];
   const snapshots = [];
+  const retentionRounds = [];
+  let completedFixedTurns = 0;
+  let fixedWorkComplete = false;
+  let promptBytes = 0;
+  let replyBytes = 0;
+  let idleParents = 0;
+  let currentNewSessionId;
   /** @type {Promise<unknown>} */
   let currentTurn = Promise.resolve();
   let floor;
@@ -564,6 +662,7 @@ try {
     }
   }
   async function sample() {
+    await workloadReady;
     const observation = await readGatewayMemory(admin.rpc, startedAt);
     samples.push(observation);
     const window = Math.floor(observation.atMs / floorWidthMs);
@@ -593,6 +692,44 @@ try {
       requests: { ...requests },
       counts: { ...turnDriver.counts },
     });
+  }
+  async function retentionCheckpoint(action) {
+    const pause = Promise.withResolvers();
+    workloadReady = pause.promise;
+    try {
+      while (inFlight.size) {
+        await Promise.allSettled(inFlight);
+      }
+      const observation = await captureHeapRigRetention(
+        gateway,
+        action,
+        values["retention-mode"],
+        values["retention-snapshots"]
+          ? path.join(root, `retention-${retentionRounds.length}.heapsnapshot`)
+          : undefined,
+      );
+      const entry = {
+        kind: "retention-round",
+        completedTurns: completedFixedTurns,
+        fixedTurnSessions,
+        idleParents,
+        idleChildren: turnDriver.counts.keptChildren,
+        codeFailures: turnDriver.counts.codeFailures,
+        promptBytes,
+        replyBytes,
+        historyNote:
+          "Canonical history grows by these payload bytes; sampled survivors are not net growth.",
+        ...observation,
+      };
+      retentionRounds.push(entry);
+      record(entry);
+    } finally {
+      workloadReady = unpausedWork;
+      pause.resolve();
+    }
+  }
+  if (retentionRoundSize) {
+    await retentionCheckpoint("start");
   }
   async function snapshot(minute) {
     /** @type {PromiseWithResolvers<void>} */
@@ -629,7 +766,7 @@ try {
         try {
           while (!abort.signal.aborted && performance.now() < deadline) {
             await workloadReady;
-            if (abort.signal.aborted || performance.now() >= deadline) {
+            if (abort.signal.aborted || fixedWorkComplete || performance.now() >= deadline) {
               break;
             }
             if (!client || performance.now() >= reconnectAt) {
@@ -698,9 +835,29 @@ try {
         if (abort.signal.aborted || performance.now() >= deadline) {
           break;
         }
+        const newSessionIndex = Math.floor(index / turnsPerNewSession);
+        const newSessionTurn = index % turnsPerNewSession;
         const turnWork = turnDriver.runTurn(admin.rpc, index, {
           agentId: largeSessionEvents ? "main" : index % 2 === 0 ? "main" : "second",
           ...(largeSessionEvents ? { sessionKey: sessions[0].key, kind: "text" } : {}),
+          ...(fixedTurnSessions
+            ? {
+                sessionKey: sessions[index % fixedTurnSessions].key,
+                agentId: sessions[index % fixedTurnSessions].agentId,
+                kind: "text",
+                shortReply: values["short-replies"],
+              }
+            : {}),
+          ...(newTurnSessions
+            ? {
+                sessionKey: `agent:main:heap-rig-new-${newSessionIndex}`,
+                agentId: "main",
+                kind: newSessionTurn === 0 ? "subagent" : newSessionTurn === 1 ? "code" : "text",
+                codeFailure: newSessionTurn === 1,
+                retainSession: true,
+                shortReply: true,
+              }
+            : {}),
           canStart: () => !abort.signal.aborted && performance.now() < deadline,
           shell: values["shell-turns"],
         });
@@ -717,6 +874,37 @@ try {
           completedLargeSessionTurns++;
         }
         record({ ...turn, kind: "turn", turnKind: turn.kind, atMs: performance.now() - startedAt });
+        if (fixedTurnSessions || newTurnSessions) {
+          if (
+            fixedTurnSessions &&
+            turn.sessionId !== sessions[index % fixedTurnSessions].sessionId
+          ) {
+            throw new Error("Fixed-session turn replaced the seeded physical session");
+          }
+          if (newTurnSessions) {
+            if (newSessionTurn === 0) {
+              currentNewSessionId = turn.sessionId;
+            } else if (turn.sessionId !== currentNewSessionId) {
+              throw new Error("New-session cohort replaced its physical session between turns");
+            }
+          }
+          if (newTurnSessions && newSessionTurn === turnsPerNewSession - 1) {
+            idleParents++;
+          }
+          completedFixedTurns++;
+          promptBytes += turn.promptBytes;
+          replyBytes += turn.replyBytes;
+          if (
+            retentionRoundSize &&
+            (completedFixedTurns % retentionRoundSize === 0 || completedFixedTurns === turnCount)
+          ) {
+            await retentionCheckpoint("capture");
+          }
+          if (completedFixedTurns === turnCount) {
+            fixedWorkComplete = true;
+            break;
+          }
+        }
         await sleep(Math.min(turnInterval, deadline - performance.now()));
       }
     })().catch(fail),
@@ -725,7 +913,7 @@ try {
   let nextSnapshot = 0;
   for (let tick = 1; tick <= minutes * 6 && !abort.signal.aborted; tick++) {
     await sleep(startedAt + tick * 10_000 - performance.now());
-    if (abort.signal.aborted) {
+    if (abort.signal.aborted || fixedWorkComplete) {
       break;
     }
     if (performance.now() < deadline) {
@@ -742,9 +930,27 @@ try {
     tick = Math.max(tick, Math.floor((performance.now() - startedAt) / 10_000));
   }
   await currentTurn;
+  if (fixedTurnSessions || newTurnSessions) {
+    await Promise.all(tasks);
+  }
   finishFloor();
   if (failure) {
     throw failure;
+  }
+  if ((fixedTurnSessions || newTurnSessions) && completedFixedTurns !== turnCount) {
+    throw new Error(`Session workload completed ${completedFixedTurns}/${turnCount} turns`);
+  }
+  if (
+    newTurnSessions &&
+    (idleParents !== newTurnSessions ||
+      turnDriver.counts.keptChildren !== newTurnSessions ||
+      turnDriver.counts.codeFailures !== newTurnSessions ||
+      turnDriver.counts.deleted !== 0 ||
+      turnDriver.counts.archived !== 0)
+  ) {
+    throw new Error(
+      "New-session workload did not preserve every parent, child and Code Mode failure",
+    );
   }
   if (largeSessionEvents && completedLargeSessionTurns === 0) {
     throw new Error("Large-session run completed no turns");
@@ -765,6 +971,9 @@ try {
         throw new Error("Idle observation interrupted", { cause: failure });
       }
       await census("stats", `idle-${minute}`);
+      if (retentionRoundSize) {
+        await retentionCheckpoint("capture");
+      }
     }
     if (snapshotMinutes.length > 0) {
       await snapshot(minutes + idleMinutes);
@@ -786,7 +995,7 @@ try {
   });
   writeFileSync(
     path.join(root, "result.json"),
-    `${JSON.stringify({ node: process.version, v8: process.versions.v8, build, pid: gateway.pid, minutes, sessionCount, clientCount, requests, events, samples, floors, snapshots, turns: turnDriver.evidence, counts: turnDriver.counts }, null, 2)}\n`,
+    `${JSON.stringify({ node: process.version, v8: process.versions.v8, build, pid: gateway.pid, minutes, sessionCount, clientCount, requests, events, samples, floors, snapshots, retentionRounds, turns: turnDriver.evidence, counts: turnDriver.counts }, null, 2)}\n`,
   );
 } catch (error) {
   record({ kind: "failed", error: String(error) });

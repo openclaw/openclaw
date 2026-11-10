@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { createMemo, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeStallingStream } from "../../../../../src/infra/http-body.test-support.js";
@@ -10,9 +9,9 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
+import { projectMessageMedia } from "./chat-message-media-projection.ts";
 import { stubObjectUrls, ticketResponse } from "./chat-message-media.test-helpers.ts";
 import {
-  projectMessageMedia,
   releaseChatMediaResourceOwner,
   type AttachmentItem,
   type AssistantAttachmentItem,

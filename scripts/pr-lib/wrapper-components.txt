@@ -1498,6 +1498,7 @@ src/logging/config.ts
 src/logging/console.ts
 src/logging/diagnostic-cpu-profile.ts
 src/logging/diagnostic-heap-profile.ts
+src/logging/diagnostic-profile-file.ts
 src/logging/diagnostic-profile.ts
 src/logging/diagnostic-support-key-check.ts
 src/logging/diagnostic-support-causes.ts
@@ -2693,6 +2694,7 @@ src/config/sessions/session-actor-memory-publication.ts
 src/config/sessions/session-actor-memory-reactions.ts
 src/config/sessions/session-actor-memory-registry.ts
 src/config/sessions/session-actor-memory-reports.ts
+src/config/sessions/session-actor-memory-replay-groups.ts
 src/config/sessions/session-actor-memory-search.ts
 src/config/sessions/session-actor-memory-side-effects-contract.ts
 src/config/sessions/session-actor-memory-side-effects.ts
@@ -2740,6 +2742,7 @@ src/config/sessions/session-transcript-execution-read.ts
 src/config/sessions/session-transcript-lock-settlement.ts
 src/config/sessions/session-transcript-raw-cursor.ts
 src/config/sessions/session-transcript-report-policy.ts
+src/config/sessions/session-transcript-replay.types.ts
 src/config/sessions/session-transcript-rewrite-effects.ts
 src/config/sessions/session-transcript-search-policy.ts
 src/config/sessions/session-transcript-turn-state.ts

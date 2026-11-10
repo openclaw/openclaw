@@ -47,6 +47,9 @@ local message attachments, and generation tools reading local references, wait f
 initial diff baseline. Tools that do not use the workspace can run immediately,
 including generation with inline or remote references. Completion also waits
 for preparation, and a preparation failure ends the turn with a retryable error.
+If workspace ownership expires or is lost, retry the operation. Caller access
+revocation is separate: restore access before retrying. Preparation diagnostics
+retain the failing phase when a lease error wraps the original failure.
 Accelerated clones can start prompt preparation once their files are complete,
 while Git index preparation finishes behind the same workspace-tool gate.
 
@@ -490,7 +493,11 @@ tracking branches confirmed deleted upstream (unless the fetch explicitly uses
 `--no-prune`), preserving tracking refs required by local symbolic refs or
 worktree HEADs, then fetches missing ref and
 worktree-HEAD objects by ID with commit-graph lookup and automatic maintenance
-disabled. Local branches, tags, and worktree HEADs are never deleted. Repair is
+disabled. Repair negotiates from a physically present commit when available,
+including in isolated transport metadata, to reuse local history. If requested
+objects remain missing, it retries once without negotiation: a resident descendant
+can otherwise hide a missing ancestor. Local branches, tags, and worktree HEADs
+are never deleted. Repair is
 limited to 50,000 refs, 4,096 missing tips, and five minutes; healthy fetches do
 not scan repository health. Managed project refresh retains its isolated,
 URL-pinned transport during recovery.

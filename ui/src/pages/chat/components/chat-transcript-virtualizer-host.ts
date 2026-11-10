@@ -665,12 +665,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.presentation.measureRowsWithoutScrollAdjustment();
     }
     const element = this.scrollElement;
-    // Completed end journeys still own pending row measurements. Keep a
-    // dynamic end target while their replay commits the final geometry.
-    if (element && preserveEnd) {
-      this.virtualizer.scrollToEnd({ behavior: "instant" });
-      this.endAnchor.capture(element);
-    } else if (element) {
+    // The end anchor owns later measurements. A completed dynamic destination
+    // would also follow new, unmeasured rows before end preparation admits them.
+    if (element) {
       this.virtualizer.scrollToOffset(element.scrollTop, { behavior: "instant" });
     }
   }
