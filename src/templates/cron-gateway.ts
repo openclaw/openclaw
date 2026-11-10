@@ -57,6 +57,10 @@ export function createTemplateCronGateway(
           cron.getDefaultAgentId(),
         );
         guard();
+        const actor = creator?.createdActor;
+        options?.captureOwnerProfileId?.(
+          actor?.type === "human" && actor.source === "profile" ? actor.id : undefined,
+        );
         return await cron.add(normalized, {
           ...creator,
           commitGuard: guard,

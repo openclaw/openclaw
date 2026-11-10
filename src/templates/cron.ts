@@ -22,7 +22,11 @@ export type { PersistedTemplateCronRef } from "./cron-records.js";
 export type TemplateCronGateway = {
   add: (
     input: Record<string, unknown>,
-    options?: { commitGuard?: () => void; existingRef?: PersistedTemplateCronRef },
+    options?: {
+      commitGuard?: () => void;
+      existingRef?: PersistedTemplateCronRef;
+      captureOwnerProfileId?: (ownerProfileId: string | undefined) => void;
+    },
   ) => Promise<unknown>;
   get?: (schedulerJobId: string) => Promise<unknown>;
   list?: (agentId: string) => Promise<unknown>;
@@ -148,6 +152,7 @@ export function templateCronGatewayJobMatchesRef(
   applyDefaultCronToolsAllow(comparableLive);
   const expectedWithPolicy = {
     ...expected,
+    ...ref.nativeOwnership,
     ...(comparableLive.scheduledToolPolicy
       ? { scheduledToolPolicy: createTrustedCronScheduledToolPolicy() }
       : {}),
@@ -327,6 +332,9 @@ export async function installTemplateCronJobsStateless(
         result = templateCronSchedulerJobFromResult(
           await options.gateway.add(templateCronGatewayInput(plan.agent.finalId, ref), {
             commitGuard: assertCurrent,
+            captureOwnerProfileId: (ownerProfileId) => {
+              ref = { ...ref, nativeOwnership: { ownerProfileId } };
+            },
           }),
         );
         assertCurrent();
@@ -340,7 +348,11 @@ export async function installTemplateCronJobsStateless(
               await options.gateway.list(plan.agent.finalId),
               ref.declarationKey,
             );
-            if (listed && templateCronGatewayJobMatchesRef(plan.agent.finalId, ref, listed)) {
+            if (
+              ref.nativeOwnership &&
+              listed &&
+              templateCronGatewayJobMatchesRef(plan.agent.finalId, ref, listed)
+            ) {
               result = listed;
             }
           } catch {
