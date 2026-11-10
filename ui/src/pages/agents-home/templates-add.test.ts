@@ -295,6 +295,7 @@ describe("Template Add", () => {
       composer.setMessage("My next step");
       if (stage === "after-agent-ready") {
         publishEvent({
+          type: "event",
           event: "templates.add.progress",
           payload: {
             requestId: "add-request",

@@ -20,6 +20,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createPluginDeclaredSurface } from "../../test-helpers/plugins-e2e-fixtures.test-support.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { TemplatesPage } from "../templates/page.tsx";
 
@@ -193,7 +194,10 @@ export function createPage(options: PageOptions = {}) {
                   version: "1.2.0",
                   ownerAction: "install",
                   integrity: `sha256-${"A".repeat(43)}=`,
-                  declaredCapabilities: { tools: ["workflow.start"] },
+                  declaredCapabilities: {
+                    ...createPluginDeclaredSurface(),
+                    tools: ["workflow.start"],
+                  },
                   capabilityGrants,
                   capabilityGrantsByPluginId: { "workflow-tools": capabilityGrants },
                   reviewToken: "review-workflow-tools",
@@ -291,10 +295,18 @@ export function createPage(options: PageOptions = {}) {
     ],
   });
   const navigate = vi.fn<ApplicationContext["navigate"]>((route, routeOptions) => {
-    void router.navigate(route, context, {}, routeOptions);
+    void router.navigate(route, context, {}, { ...router.getState().location, ...routeOptions });
   });
   const replace = vi.fn<ApplicationContext["replace"]>((route, routeOptions) => {
-    void router.navigate(route, context, { history: "replace" }, routeOptions);
+    void router.navigate(
+      route,
+      context,
+      { history: "replace" },
+      {
+        ...router.getState().location,
+        ...routeOptions,
+      },
+    );
   });
   const context = {
     ...createContext(source.gateway, sessionCapability, roster, [], agentIdentity),

@@ -70,6 +70,8 @@ export class CreationComposer {
   mentions: readonly HumanMention[] = [];
   inputs: CreationComposerInput[] = [];
   error: string | null = null;
+  /** Setup recovery survives edits that clear transient composition errors. */
+  recovery: { error: string; label: string; pending: boolean; retry: () => void } | undefined;
   flushInput: (() => void) | undefined;
   releasePresentation: (() => void) | undefined;
   private readonly listeners = createChangeListeners();
@@ -284,6 +286,7 @@ export class CreationComposer {
       return;
     }
     this.disposed = true;
+    this.recovery = undefined;
     for (const listener of this.invalidations) {
       listener();
     }

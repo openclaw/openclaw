@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { createComponent } from "solid-js";
+import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { takeCreatedComposer } from "../new-session/creation-composer-registry.ts";
+import { CreationComposer as CreationComposerView } from "../new-session/creation-composer-render.tsx";
 import {
   cleanupAgentsHomePageTest,
   createPage,
@@ -20,7 +23,10 @@ it.each(["ready", "initialization-failed"] as const)(
     const { request, context, replace, publishEvent } = createPage({
       templatesEnabled: true,
     });
-    const source = { packageName: workflowOperator.packageName, version: workflowOperator.version };
+    const source = {
+      packageName: workflowOperator.packageName,
+      version: workflowOperator.latestVersion,
+    };
     const plan = await readTemplateAddReviewPlan(context.gateway.snapshot.client!, source);
     const original = request.getMockImplementation()!;
     const apply = createDeferredCore<unknown>();
@@ -42,6 +48,7 @@ it.each(["ready", "initialization-failed"] as const)(
       sessionKey: "agent:workflow-operator:team-room",
     };
     publishEvent({
+      type: "event",
       event: "templates.add.progress",
       payload: { ...saved, stage: "agent-admitted" },
     });
@@ -60,6 +67,7 @@ it.each(["ready", "initialization-failed"] as const)(
     ).toHaveProperty("agentId", saved.agentId);
     if (outcome === "ready") {
       publishEvent({
+        type: "event",
         event: "templates.add.progress",
         payload: { ...saved, stage: "agent-ready" },
       });
@@ -100,3 +108,98 @@ it.each(["ready", "initialization-failed"] as const)(
     );
   },
 );
+
+it("retries retained Template setup only on click in the same chat and composer", async () => {
+  const { request, context, navigate, replace, publishEvent } = createPage({
+    templatesEnabled: true,
+    riskConsentRequired: true,
+    reviewRequiredOnce: "plugin",
+  });
+  const source = {
+    packageName: workflowOperator.packageName,
+    version: workflowOperator.latestVersion,
+  };
+  const plan = await readTemplateAddReviewPlan(context.gateway.snapshot.client!, source);
+  const original = request.getMockImplementation()!;
+  const first = createDeferredCore<unknown>();
+  const second = createDeferredCore<unknown>();
+  let attempts = 0;
+  request.mockImplementation((method, params, options) => {
+    if (method === "templates.add.apply") {
+      attempts += 1;
+      options?.onSent?.(attempts === 1 ? "partial-setup" : "retry-setup");
+      return attempts === 1 ? first.promise : second.promise;
+    }
+    return original(method, params, options);
+  });
+  // Consent was already given at the catalog seam; retry must reuse it, not re-add.
+  const applying = addTemplateAgent(context, source, plan, true);
+  const creation = context.chatSubmissions.creation;
+  const composer = context.chatSubmissions.readCreate()!.composer!;
+  composer.setMessage("Buffered follow-up");
+  expect(composer.enqueue()).toBe(true);
+  composer.setMessage("Draft before setup failed");
+  const view = mountSolid(() =>
+    createComponent(CreationComposerView, { composer, onOpenImage: () => {} }),
+  );
+  onTestFinished(view.unmount);
+  const saved = {
+    agentId: "workflow-operator",
+    sessionKey: "agent:workflow-operator:team-room",
+  };
+  first.resolve({
+    ...saved,
+    status: "partial",
+    agentRetained: true,
+    initializationPending: true,
+    readiness: { ready: false },
+    error: { code: "verification_failed", message: "Template verification failed" },
+  });
+  await applying;
+  expect(attempts).toBe(1);
+  await waitForSolid(() => expect(view.getByRole("button", { name: "Retry setup" })).toBeDefined());
+  // Editing the retained draft must not erase the recovery action.
+  composer.setMessage("Draft edited after setup failed");
+  await waitForSolid(() =>
+    expect(view.getByRole("button", { name: "Retry setup" })).toHaveProperty("disabled", false),
+  );
+  const retry = view.getByRole("button", { name: "Retry setup" });
+  retry.click();
+  retry.click();
+  expect(attempts).toBe(2);
+  expect(context.chatSubmissions.creation).toBe(creation);
+  expect(context.chatSubmissions.readCreate()?.composer).toBe(composer);
+  expect(composer.acceptedSessionKey).toBe(saved.sessionKey);
+  expect(composer.canAdopt()).toBe(false);
+  await waitForSolid(() =>
+    expect(view.getByRole("button", { name: "Retry setup" })).toHaveProperty("disabled", true),
+  );
+  const applies = request.mock.calls.filter(([method]) => method === "templates.add.apply");
+  expect(applies).toHaveLength(2);
+  expect(applies[1]?.[1]).toEqual(applies[0]?.[1]);
+  expect(applies[1]?.[1]).toMatchObject({
+    agentId: saved.agentId,
+    source,
+    planIntegrity: plan.planIntegrity,
+    acknowledgeClawHubRisk: true,
+  });
+  expect(request.mock.calls.filter(([method]) => method === "templates.add.plan")).toHaveLength(1);
+  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+  expect(request.mock.calls.filter(([method]) => method === "sessions.create")).toHaveLength(0);
+  publishEvent({
+    type: "event",
+    event: "templates.add.progress",
+    payload: { ...saved, requestId: "retry-setup", stage: "agent-ready" },
+  });
+  second.resolve({ ...saved, status: "complete", readiness: { ready: true } });
+  await waitForSolid(() => expect(context.chatSubmissions.creating).toBe(false));
+  const transfer = takeCreatedComposer(context, saved.sessionKey, context.gateway.snapshot.client);
+  expect(transfer?.draft).toBe("Draft edited after setup failed");
+  expect(transfer?.inputs.map((input) => input.text)).toEqual(["Buffered follow-up"]);
+  transfer?.complete();
+  expect(context.router.getState().location.pathname).toBe("/chat/workflow-operator");
+  expect(navigate.mock.calls.filter(([route]) => route === "chat")).toHaveLength(1);
+  expect(replace).not.toHaveBeenCalled();
+  expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(2);
+  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+});

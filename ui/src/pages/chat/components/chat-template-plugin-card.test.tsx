@@ -23,8 +23,7 @@ function mountTranscript(content: unknown[], role = "assistant") {
     throw new Error("Unexpected RPC: " + method);
   });
   const context = createContext(createGateway(client).gateway);
-  const navigate = vi.fn();
-  context.navigate = navigate;
+  const navigate = vi.mocked(context.navigate);
   const [message, setMessage] = createSignal({ role, content });
   const mounted = mountSolid(
     () => (

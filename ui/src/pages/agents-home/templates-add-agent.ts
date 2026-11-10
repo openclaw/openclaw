@@ -93,6 +93,8 @@ export async function addTemplateAgent(
       return;
     }
     const foreground = ownsForeground();
+    composer.error = null;
+    composer.recovery = undefined;
     composer.accept({ key: ready.sessionKey, initialRun: { status: "idle" } });
     retainCreatedComposer(context, ready.sessionKey, composer);
     creation.admitted = true;
@@ -118,71 +120,101 @@ export async function addTemplateAgent(
     }
     clearChat();
   };
-  let requestId: string | undefined;
-  const unsubscribe = context.gateway.subscribeEvents((event) => {
-    const payload = event.payload;
+  let applying = false;
+  const apply = async () => {
     if (
-      event.event === "templates.add.progress" &&
-      isRecord(payload) &&
-      requestId !== undefined &&
-      payload.requestId === requestId &&
-      (payload.stage === "agent-ready" || payload.stage === "agent-admitted") &&
-      typeof payload.agentId === "string" &&
-      typeof payload.sessionKey === "string"
+      applying ||
+      !isCurrent() ||
+      creation.admitted ||
+      (durable && (!composer.canDisplay() || context.chatSubmissions.creation !== creation))
     ) {
-      const saved = { agentId: payload.agentId, sessionKey: payload.sessionKey };
-      if (payload.stage === "agent-admitted") {
-        durableAdmission(saved);
-      } else {
-        admit(saved);
-      }
-    }
-  });
-  try {
-    const result = await applyTemplateAdd(client, source, {
-      reviewPlan: plan,
-      acknowledgeClawHubRisk,
-      onSent: (id) => {
-        requestId = id;
-      },
-    });
-    if (!isCurrent()) {
       return;
     }
-    if (result.agentId && (result.status === "complete" || result.agentRetained)) {
-      if (result.sessionKey) {
-        const saved = { agentId: result.agentId, sessionKey: result.sessionKey };
-        if (result.initializationPending) {
+    applying = true;
+    if (composer.recovery) {
+      composer.recovery.pending = true;
+      composer.error = null;
+      composer.notify();
+    }
+    let requestId: string | undefined;
+    const unsubscribe = context.gateway.subscribeEvents((event) => {
+      const payload = event.payload;
+      if (
+        event.event === "templates.add.progress" &&
+        isRecord(payload) &&
+        requestId !== undefined &&
+        payload.requestId === requestId &&
+        (payload.stage === "agent-ready" || payload.stage === "agent-admitted") &&
+        typeof payload.agentId === "string" &&
+        typeof payload.sessionKey === "string"
+      ) {
+        const saved = { agentId: payload.agentId, sessionKey: payload.sessionKey };
+        if (payload.stage === "agent-admitted") {
           durableAdmission(saved);
         } else {
           admit(saved);
         }
       }
-    }
-    if (result.status !== "complete" || !creation.admitted) {
-      throw new Error(result.error?.message ?? t("templatesCatalog.addFailed"));
-    }
-  } catch (error) {
-    if (isCurrent()) {
-      if (durable && !creation.admitted) {
-        composer.error = formatUiError(error);
+    });
+    try {
+      const result = await applyTemplateAdd(client, source, {
+        reviewPlan: plan,
+        acknowledgeClawHubRisk,
+        onSent: (id) => {
+          requestId = id;
+        },
+      });
+      if (!isCurrent()) {
+        return;
+      }
+      if (result.agentId && (result.status === "complete" || result.agentRetained)) {
+        if (result.sessionKey) {
+          const saved = { agentId: result.agentId, sessionKey: result.sessionKey };
+          if (result.initializationPending) {
+            durableAdmission(saved);
+          } else {
+            admit(saved);
+          }
+        }
+      }
+      if (result.status !== "complete" || !creation.admitted) {
+        throw new Error(result.error?.message ?? t("templatesCatalog.addFailed"));
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        if (durable && !creation.admitted) {
+          composer.error = formatUiError(error);
+          composer.recovery = {
+            error: composer.error,
+            label: t("newSession.retrySetup"),
+            pending: true,
+            retry: () => {
+              void apply();
+            },
+          };
+        }
+        if (!creation.admitted && !durable && ownsForeground() && initialRoute) {
+          context.replace(initialRoute, initialLocation);
+        }
+        showToast({
+          severity: creation.admitted || durable ? "warning" : "error",
+          message: formatUiError(error),
+          durationMs: 12_000,
+        });
+      }
+    } finally {
+      unsubscribe();
+      pending.clear();
+      if (!durable || creation.admitted || !isCurrent()) {
+        clearChat();
+      }
+      composer.releaseDraft();
+      applying = false;
+      if (composer.recovery) {
+        composer.recovery.pending = false;
         composer.notify();
       }
-      if (!creation.admitted && !durable && ownsForeground() && initialRoute) {
-        context.replace(initialRoute, initialLocation);
-      }
-      showToast({
-        severity: creation.admitted || durable ? "warning" : "error",
-        message: formatUiError(error),
-        durationMs: 12_000,
-      });
     }
-  } finally {
-    unsubscribe();
-    pending.clear();
-    if (!durable || creation.admitted || !isCurrent()) {
-      clearChat();
-    }
-    composer.releaseDraft();
-  }
+  };
+  await apply();
 }

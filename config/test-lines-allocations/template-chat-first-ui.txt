@@ -1,1 +1,3 @@
-620
+# Exact net growth: direct Add, independent retained drafts, explicit same-incarnation retry,
+# original consent/client scope, buffered-input custody, and affected consumer assertions.
+738
