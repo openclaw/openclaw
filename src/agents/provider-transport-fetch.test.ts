@@ -6,6 +6,8 @@ import { prepareModelRequestBody } from "../../packages/ai/src/transports/model-
 import { withinTest } from "../../test/helpers/promise.js";
 import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -300,6 +302,75 @@ describe("buildGuardedModelFetch", () => {
     expect(response.headers.get("x-should-retry")).toBeNull();
     await expect(response.json()).resolves.toEqual({ error: { message: "API key expired" } });
   });
+
+  it("logs bounded provider request errors without reflected credentials or unrelated body fields", async () => {
+    const capture = createDiagnosticLogRecordCapture();
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const credential = "synthetic-provider-credential";
+    const payload = {
+      error: {
+        type: "invalid_request_error",
+        message: `Unsupported thinking field; credential=${credential}\n${"x".repeat(800)}`,
+      },
+      request: { messages: [{ content: "unrelated prompt content" }] },
+    };
+    mockResponse(Response.json(payload, { status: 400 }));
+    try {
+      const response = await request({ headers: { Authorization: `Bearer ${credential}` } });
+      await expect(response.json()).resolves.toEqual(payload);
+      await capture.flush();
+      const message = capture.records.find((record) =>
+        record.message.includes("[model-fetch] response"),
+      )?.message;
+      expect(message).toContain("status=400");
+      expect(message).toContain("Unsupported thinking field");
+      expect(message).toContain("invalid_request_error");
+      expect(message).not.toContain(credential);
+      expect(message).not.toContain("unrelated prompt content");
+      expect(message).not.toContain("x".repeat(500));
+    } finally {
+      capture.cleanup();
+      setLoggerOverride(null);
+    }
+  });
+
+  it.each(["stalled", "oversized", "HTML"])(
+    "preserves HTTP errors when their diagnostic body is %s",
+    async (kind) => {
+      const capture = createDiagnosticLogRecordCapture();
+      setLoggerOverride({ level: "info", consoleLevel: "silent" });
+      const deadline = new AbortController();
+      using timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+      const body = kind === "HTML" ? "<html>private proxy page</html>" : "x".repeat(20 * 1024);
+      const source = responseStream(kind === "stalled" ? [] : [body], {
+        open: kind === "stalled",
+      });
+      const release = mockResponse(new Response(source.stream, { status: 400 }));
+      try {
+        const pending = request();
+        if (kind === "stalled") {
+          deadline.abort(new DOMException("Diagnostic deadline", "TimeoutError"));
+        }
+        const response = await pending;
+        expect(timeout).toHaveBeenCalledWith(1_000);
+        expect(response.status).toBe(400);
+        if (kind === "stalled") {
+          source.close();
+        }
+        await expect(response.text()).resolves.toBe(kind === "stalled" ? "" : body);
+        expect(release).toHaveBeenCalledOnce();
+        await capture.flush();
+        const message = capture.records.find((record) =>
+          record.message.includes("[model-fetch] response"),
+        )?.message;
+        expect(message).toContain("status=400");
+        expect(message).not.toContain("providerError=");
+      } finally {
+        capture.cleanup();
+        setLoggerOverride(null);
+      }
+    },
+  );
 
   it("accepts a large batch of small SSE events followed by a large split event", async () => {
     const count = 5_000;
