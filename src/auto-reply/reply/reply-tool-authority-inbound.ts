@@ -111,7 +111,7 @@ export function captureReplyToolAuthorityContinuation({
       const incoming = continuation.caller;
       const incumbentShared = isSharedGatewayOwnerRunAuthority(snapshot.operatorAuthority);
       const incomingShared = isSharedGatewayOwnerRunAuthority(incoming.operatorAuthority);
-      // This is a continuation grant between a shared browser principal and a
+      // This is a continuation grant between a shared UI principal and a
       // channel participant, never equivalence between personal administrators.
       const channel =
         incumbentShared && !incomingShared

@@ -1,3 +1,4 @@
+import { isNativeAppUiClient } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   validateSessionsProviderReviewContinueParams,
@@ -28,7 +29,8 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
       const { params, client, context, respond } = options;
       if (
         !client ||
-        !isOperatorUiClient(client.connect.client) ||
+        (!isOperatorUiClient(client.connect.client) &&
+          !isNativeAppUiClient(client.connect.client)) ||
         client.internal?.syntheticClient ||
         client.internal?.senderAttribution
       ) {

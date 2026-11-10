@@ -18,6 +18,7 @@ import {
   type OperatorRunRecoverySnapshot,
   type QueuedOperatorRecoverySource,
 } from "./operator-run-recovery-source.codec.js";
+import { resolveGatewayUiAdminSource } from "./operator-scopes.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 
 /** An unrecoverable source still runs in memory under its retained live authority. */
@@ -161,6 +162,7 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
     authPolicy: { ...authPolicy, generation: "" },
     sharedGeneration,
     device,
+    automationAdmin: resolveGatewayUiAdminSource(client) !== undefined,
     controlUiAdmin: client.internal?.controlUiAdmin === true,
     localOperator: client.internal?.isLocalClient === true,
     sourceIngress: isBrowserOperatorUiClient(client.connect.client) ? "control-ui" : "internal",
