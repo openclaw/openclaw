@@ -972,6 +972,7 @@ if (runCheckPlan && proposedCheckScope?.types) {
 }
 const fullCoreLintStripes =
   runnerProfile === "hybrid" &&
+  nodeRunnerBackend !== "boat" &&
   !frozenTarget &&
   ((!releaseGate && ["push", "pull_request"].includes(eventName)) ||
     nodeRunnerBackend === "runson" ||

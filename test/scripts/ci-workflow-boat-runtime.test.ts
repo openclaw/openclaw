@@ -1,0 +1,217 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
+import {
+  evaluateWorkflowExpression,
+  readCiWorkflow,
+  requiredWorkflowStep,
+  runWorkflowShellScript,
+  writeExecutable,
+} from "./ci-workflow.test-support.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+const routes = [
+  { name: "Boat", backend: "boat", runner: "boat-xlarge", attempt: 1, boat: true },
+  { name: "Boat retry", backend: "boat", runner: "boat-xlarge", attempt: 2, boat: false },
+  { name: "GitHub", backend: "github", runner: "ubuntu-24.04", attempt: 1, boat: false },
+  {
+    name: "hybrid",
+    backend: "hybrid",
+    runner: "blacksmith-2vcpu-ubuntu-2404",
+    attempt: 1,
+    boat: false,
+  },
+] as const;
+
+it.each(routes)("runs $name Node tests through the correct permission boundary", (route) => {
+  const root = dirs.make("openclaw-boat-node-step-");
+  const bin = path.join(root, "bin");
+  mkdirSync(bin);
+  mkdirSync(path.join(root, "scripts"));
+  writeFileSync(path.join(root, "scripts/ci-run-node-test-shard.mts"), "");
+  const calls = path.join(root, "calls");
+  writeExecutable(path.join(bin, "node"), [
+    "#!/bin/bash",
+    'printf "node %s\\n" "$*" >> "$CALLS"',
+    "exit 7",
+  ]);
+  writeExecutable(path.join(bin, "setpriv"), [
+    "#!/bin/bash",
+    'printf "setpriv %s %s\\n" "$1" "$2" >> "$CALLS"',
+    "shift 2",
+    'exec "$@"',
+  ]);
+  const step = requiredWorkflowStep(
+    readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps,
+    "Run Node test shard",
+  );
+  const selected = evaluateWorkflowExpression(step.env.BOAT_TEST_RUNNER ?? "${{ false }}", {
+    eventName: "pull_request",
+    repository: "openclaw/openclaw",
+    runAttempt: route.attempt,
+    matrix: { runner: route.runner, runner_label: route.runner },
+  });
+  const result = runWorkflowShellScript(step.run, {
+    linuxWorkflow: true,
+    cwd: root,
+    env: { PATH: `${bin}:/usr/bin:/bin`, CALLS: calls, BOAT_TEST_RUNNER: String(selected) },
+  });
+  expect(result.status, result.stderr).toBe(7);
+  expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+    ...(route.boat ? ["setpriv --inh-caps=-dac_read_search --ambient-caps=-dac_read_search"] : []),
+    "node --import tsx scripts/ci-run-node-test-shard.mts",
+  ]);
+});
+
+it.each(routes)("preserves the Android CPU budget for $name", (route) => {
+  const root = dirs.make("openclaw-boat-android-step-");
+  const android = path.join(root, "apps/android");
+  mkdirSync(android, { recursive: true });
+  mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
+  writeFileSync(
+    path.join(root, ".ci-harness/scripts/ci-collect-checks.sh"),
+    'run_check() { shift; "$@"; }\nfinish_checks() { :; }\n',
+  );
+  const calls = path.join(root, "calls");
+  writeExecutable(path.join(android, "gradlew"), [
+    "#!/bin/bash",
+    'printf "%s\\n" "$JAVA_TOOL_OPTIONS" > "$CALLS"',
+  ]);
+  const step = requiredWorkflowStep(
+    readCiWorkflow().jobs.android.steps,
+    "Run Android ${{ matrix.task }}",
+  );
+  const context = {
+    eventName: "pull_request" as const,
+    repository: "openclaw/openclaw",
+    headRepository: "openclaw/openclaw",
+    runAttempt: route.attempt,
+    runnerBackend: route.backend,
+    preflightOutputs: {
+      effective_runner_backend: route.backend,
+      placement_runner_backend: route.backend === "boat" ? "hybrid" : route.backend,
+    },
+  };
+  const result = runWorkflowShellScript(step.run, {
+    linuxWorkflow: true,
+    cwd: android,
+    env: {
+      PATH: "/usr/bin:/bin",
+      CALLS: calls,
+      BOAT_TEST_RUNNER: String(
+        evaluateWorkflowExpression(step.env.BOAT_TEST_RUNNER ?? "${{ false }}", context),
+      ),
+      CI_RUNNER_BACKEND: String(evaluateWorkflowExpression(step.env.CI_RUNNER_BACKEND, context)),
+      JAVA_TOOL_OPTIONS: "-Dfixture=true",
+      TASK: "test-third-party",
+      RUN_LINT: "false",
+      APP_LINT: "",
+      OPENCLAW_ROBOLECTRIC_INIT: "fixture.gradle",
+    },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(readFileSync(calls, "utf8").trim()).toBe(
+    route.boat ? "-Dfixture=true -XX:ActiveProcessorCount=2" : "-Dfixture=true",
+  );
+});
+
+it.each(["push", "pull_request", "workflow_dispatch"] as const)(
+  "keeps full Boat lint stripes separate for %s",
+  (eventName) => {
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName,
+      changedPaths: ["tsconfig.json"],
+      runnerProfile: "hybrid",
+      historicalCompatibility: false,
+      scopeEnv: {
+        OPENCLAW_CI_RUNNER_BACKEND: "boat",
+        OPENCLAW_CI_NODE_RUNNER_BACKEND: "boat",
+        OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND: "boat",
+        OPENCLAW_CI_RELEASE_GATE: eventName === "workflow_dispatch" ? "true" : "false",
+        OPENCLAW_CI_QUALIFICATION: eventName === "workflow_dispatch" ? "true" : "false",
+        OPENCLAW_CI_SHAPE: "main",
+      },
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(
+      JSON.parse(expectDefined(result.outputs.lint_core_matrix, "core lint matrix")).include.map(
+        (row: { stripe: number }) => row.stripe,
+      ),
+    ).toEqual([1, 2, 3, 4, 5]);
+  },
+);
+
+it("keeps baseline memory and retry routing independent", () => {
+  const baseline = readCiWorkflow().jobs["checks-baseline-ratchets"];
+  for (const attempt of [1, 2]) {
+    expect(
+      evaluateWorkflowExpression(baseline["runs-on"], {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        headRepository: "openclaw/openclaw",
+        runAttempt: attempt,
+        runnerBackend: "boat",
+        preflightOutputs: {
+          effective_runner_backend: "boat",
+          placement_runner_backend: "hybrid",
+          node_runner_backend: "boat",
+        },
+      }),
+    ).toBe(attempt === 1 ? "boat-large" : "ubuntu-24.04");
+  }
+});
+
+it.each(["boat", "hybrid"] as const)(
+  "keeps the %s lint shell aligned with its matrix",
+  (backend) => {
+    const root = dirs.make("openclaw-boat-lint-step-");
+    mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
+    mkdirSync(path.join(root, "scripts"));
+    writeFileSync(path.join(root, "scripts/run-oxlint-shards.mts"), "");
+    writeFileSync(
+      path.join(root, ".ci-harness/scripts/ci-static-step.sh"),
+      'run_static_check() { printf "%s\\n" "$*" >> "$CALLS"; }\nfinish_static_checks() { :; }\n',
+    );
+    const step = requiredWorkflowStep(
+      readCiWorkflow().jobs["check-lint-hosted-core-shard"].steps,
+      "Run hosted core lint stripe",
+    );
+    const script = step.run.replace(/\$\{\{[^}]+\}\}/gu, (expression: string) =>
+      String(
+        evaluateWorkflowExpression(expression, {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          preflightOutputs: {
+            runner_profile: "hybrid",
+            node_runner_backend: backend,
+            frozen_target: "false",
+          },
+        }),
+      ),
+    );
+    const calls = path.join(root, "calls");
+    const result = runWorkflowShellScript(script, {
+      linuxWorkflow: true,
+      cwd: root,
+      env: {
+        PATH: "/usr/bin:/bin",
+        CALLS: calls,
+        CORE_STRIPE: "2",
+        FROZEN_TARGET: "false",
+        RUNNER_PROFILE: "hybrid",
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      readFileSync(calls, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => /--core-stripe=(\d+)\/5/u.exec(line)?.[1]),
+    ).toEqual(backend === "boat" ? ["2"] : ["3", "4", "5"]);
+  },
+);
