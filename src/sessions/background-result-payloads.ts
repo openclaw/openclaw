@@ -151,9 +151,9 @@ async function buildResultDisplayContent(params: {
       const mimeType = attachment?.mimeType ?? mimeTypeFromFilePath(url);
       const kind = mediaKindFromMime(mimeType);
       const trusted = attachment?.trustedLocalMedia ?? payload.trustedLocalMedia === true;
+      const local = resolveLocalMediaPath(url) !== undefined;
       const reference =
-        kind === "document" ||
-        ((kind === "audio" || kind === "video") && !trusted && !!resolveLocalMediaPath(url));
+        kind === "document" || ((kind === "audio" || kind === "video") && !trusted && local);
       if (payload.sensitiveMedia === true || !reference) {
         return true;
       }
