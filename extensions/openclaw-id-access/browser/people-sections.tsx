@@ -2,13 +2,14 @@
 // The People sections of the Access page. Each takes plain data and callbacks, so the
 // page owns all Gateway access and the sections can be restyled independently.
 import type { MemberRole } from "@openclaw/openclaw-id-protocol";
-import { createSignal, For, latest, Show } from "solid-js";
+import type { ControlUiComponentHandle, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import { createEffect, createSignal, For, latest, onSettled, Show } from "solid-js";
 import type { CreatedInvite } from "./invites.js";
 import type { PeopleError, PeopleOperationError } from "./people-error.js";
 import {
   countDevices,
   formatDay,
-  inviteUsed,
+  roleName,
   memberName,
   memberPresence,
   memberRunning,
@@ -39,18 +40,79 @@ export function OperationError(props: { error?: PeopleError | null; page?: boole
   );
 }
 
-function Avatar(props: { name: string }) {
+function Avatar(props: { name?: string }) {
   return (
-    <span class="ocid-access__avatar" aria-hidden="true">
-      {personInitials(props.name)}
+    <span
+      class={["ocid-access__avatar", { "ocid-access__avatar--unknown": !props.name }]}
+      aria-hidden="true"
+    >
+      <Show
+        when={props.name}
+        fallback={
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+          >
+            <circle cx="12" cy="7" r="4" />
+            <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+          </svg>
+        }
+      >
+        {personInitials(props.name ?? "")}
+      </Show>
     </span>
   );
 }
 
 export type RemovedMemberNotice = { index: number; message: string };
 
+type RolePickerProps = Parameters<ControlUiHost["components"]["mountSelectPicker"]>[1];
+const ROLE_OPTIONS: RolePickerProps["options"] = [
+  {
+    value: "operator",
+    label: "Operator",
+    description: "Chat, run tools, and use connected services",
+  },
+  { value: "viewer", label: "Viewer", description: "Read conversations only" },
+];
+
+// The host picker owns listbox navigation, dismissal, and focus restoration.
+function RolePicker(props: {
+  components: ControlUiHost["components"];
+  role: MemberRole;
+  disabled: boolean;
+  onSelect: (role: MemberRole) => void;
+}) {
+  let container!: HTMLDivElement;
+  let handle: ControlUiComponentHandle<RolePickerProps> | undefined;
+  createEffect(
+    () => ({
+      options: ROLE_OPTIONS,
+      value: props.role,
+      accessibleLabel: "Role",
+      searchable: false,
+      disabled: props.disabled,
+      onSelect: (value: string) => props.onSelect(value === "viewer" ? "viewer" : "operator"),
+    }),
+    (value) => {
+      if (handle) {
+        handle.update(value);
+      } else {
+        handle = props.components.mountSelectPicker(container, value);
+      }
+    },
+  );
+  onSettled(() => () => handle?.dispose());
+  return <div class="ocid-access__role-picker" ref={(element) => (container = element)} />;
+}
+
 /** Invite one person with a role ceiling (operator at most); shows the link once. */
 export function InviteForm(props: {
+  components: ControlUiHost["components"];
   disabled: boolean;
   locale: string;
   error?: PeopleError | null;
@@ -58,14 +120,18 @@ export function InviteForm(props: {
 }) {
   const [email, setEmail] = createSignal("");
   const [role, setRole] = createSignal<MemberRole>("operator");
-  const [created, setCreated] = createSignal<CreatedInvite | null>(null);
+  const [created, setCreated] = createSignal<(CreatedInvite & { role: MemberRole }) | null>(null);
   const [copied, setCopied] = createSignal(false);
+  let emailInput!: HTMLInputElement;
+  let inviteAgain!: HTMLButtonElement;
   const submit = async () => {
-    const made = await props.onCreate(email().trim().toLowerCase(), role());
+    const invitedRole = role();
+    const made = await props.onCreate(email().trim().toLowerCase(), invitedRole);
     if (made) {
-      setCreated(made);
+      setCreated({ ...made, role: invitedRole });
       setCopied(false);
       setEmail("");
+      onSettled(() => inviteAgain.focus());
     }
   };
   // Clipboard access can be refused (permissions, insecure context); the link stays selectable.
@@ -85,67 +151,91 @@ export function InviteForm(props: {
         expires in 7 days.
       </p>
       <div class="ocid-access__invite-card">
-        <form
-          class="ocid-access__form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!props.disabled && EMAIL.test(email().trim())) {
-              void submit();
-            }
-          }}
+        <Show
+          when={created()}
+          keyed
+          fallback={
+            <form
+              class="ocid-access__form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!props.disabled && EMAIL.test(email().trim())) {
+                  void submit();
+                }
+              }}
+            >
+              <input
+                ref={(element) => (emailInput = element)}
+                class="settings-input"
+                type="email"
+                aria-label="Email address to invite"
+                placeholder="name@example.com"
+                autocomplete="off"
+                spellcheck="false"
+                value={email()}
+                disabled={props.disabled}
+                onInput={(event) => setEmail(event.currentTarget.value)}
+              />
+              <RolePicker
+                components={props.components}
+                role={role()}
+                disabled={props.disabled}
+                onSelect={setRole}
+              />
+              <button
+                type="submit"
+                class="btn primary"
+                disabled={props.disabled || !EMAIL.test(email().trim())}
+              >
+                Create invite link
+              </button>
+            </form>
+          }
         >
-          <input
-            class="settings-input"
-            type="email"
-            aria-label="Email address to invite"
-            placeholder="name@example.com"
-            autocomplete="off"
-            spellcheck="false"
-            value={email()}
-            onInput={(event) => setEmail(event.currentTarget.value)}
-          />
-          <select
-            class="settings-input"
-            aria-label="Role"
-            aria-describedby="ocid-access-role-hint"
-            value={role()}
-            onChange={(event) =>
-              setRole(event.currentTarget.value === "viewer" ? "viewer" : "operator")
-            }
-          >
-            <option value="operator">Operator · chat, run tools, and use connected services</option>
-            <option value="viewer">Viewer · read conversations only</option>
-          </select>
-          <button
-            type="submit"
-            class="btn primary btn--sm"
-            disabled={props.disabled || !EMAIL.test(email().trim())}
-          >
-            Create invite link
-          </button>
-        </form>
-        <OperationError error={props.error} />
-        <Show when={latest(created)}>
           {(made) => (
-            <div class="ocid-access__link" role="status">
-              <div>
-                Invite link for {made().email} · expires {formatDay(made().expiresAt, props.locale)}
+            <div class="ocid-access__created">
+              <Avatar name={made.email} />
+              <div class="ocid-access__person" role="status">
+                <div class="ocid-access__title">{made.email}</div>
+                <p class="ocid-access__hint">
+                  {roleName(made.role)} invite · expires {formatDay(made.expiresAt, props.locale)}
+                </p>
               </div>
-              <div class="ocid-access__link-copy">
-                <code class="ocid-access__url" title={made().url}>
-                  {made().url}
-                </code>
-                <button type="button" class="btn btn--sm" onClick={() => void copy(made().url)}>
-                  {latest(copied) ? "Copied" : "Copy link"}
-                </button>
+              <button
+                ref={(element) => (inviteAgain = element)}
+                type="button"
+                class="ocid-access__invite-again"
+                onClick={() => {
+                  setCreated(null);
+                  setRole("operator");
+                  onSettled(() => emailInput.focus());
+                }}
+              >
+                Invite someone
+              </button>
+              <div class="ocid-access__link">
+                <div class="ocid-access__link-copy">
+                  <code class="ocid-access__url" title={made.url}>
+                    {made.url}
+                  </code>
+                  <button
+                    type="button"
+                    class="btn primary btn--sm"
+                    aria-label={latest(copied) ? "Copied" : "Copy link"}
+                    onClick={() => void copy(made.url)}
+                  >
+                    <span role="status">{latest(copied) ? "Copied" : "Copy link"}</span>
+                  </button>
+                </div>
+                <p class="ocid-access__hint">
+                  Send this link privately. Anyone with it can request access, but only you can
+                  approve them.
+                </p>
               </div>
-              <p class="ocid-access__hint">
-                Send this link privately. Anyone with it can request access, but only you can
-                approve them.
-              </p>
             </div>
           )}
         </Show>
+        <OperationError error={props.error} />
       </div>
       <p class="ocid-access__hint" id="ocid-access-role-hint">
         Invites cannot grant owner access. Connected services keep their own permissions.
@@ -164,7 +254,13 @@ export function PendingRequests(props: {
   error?: PeopleOperationError | null;
   readOnly?: boolean;
   onDecide: (invite: Invite, approve: boolean) => void;
+  onRefresh: () => void;
 }) {
+  const departedRequestError = () =>
+    props.error?.target.startsWith("request:") &&
+    !props.invites.some((invite) => props.error?.target === `request:${invite.inviteId}`)
+      ? props.error
+      : null;
   return (
     <section
       class={[
@@ -176,15 +272,28 @@ export function PendingRequests(props: {
       ]}
       aria-labelledby="ocid-access-pending"
     >
-      <h3 id="ocid-access-pending">Waiting for you</h3>
-      <OperationError
-        error={
-          props.error?.target.startsWith("request:") &&
-          !props.invites.some((invite) => props.error?.target === `request:${invite.inviteId}`)
-            ? props.error
-            : null
-        }
-      />
+      <h3 id="ocid-access-pending">
+        {props.readOnly ? "Waiting for approval" : "Waiting for you"}
+      </h3>
+      <Show when={departedRequestError()}>
+        {(failure) => (
+          <div class="ocid-access__section">
+            <OperationError error={failure()} />
+            <Show when={!props.readOnly && failure().approvalUncertain}>
+              <div class="ocid-access__actions">
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  disabled={props.disabled}
+                  onClick={() => props.onRefresh()}
+                >
+                  Refresh
+                </button>
+              </div>
+            </Show>
+          </div>
+        )}
+      </Show>
       <Show
         when={props.invites.length > 0}
         fallback={<p class="ocid-access__empty">No one is waiting for approval.</p>}
@@ -196,50 +305,71 @@ export function PendingRequests(props: {
               const who = () => pending().reported.email || "OpenClaw ID account";
               return (
                 <li class="ocid-access__row ocid-access__row--request">
-                  <Avatar name={pending().reported.email || "?"} />
+                  <Avatar name={pending().reported.email || undefined} />
                   <div class="ocid-access__person">
                     <div class="ocid-access__title">{who()}</div>
                     <div class="ocid-access__hint">
-                      {inviteUsed(invite(), props.locale)} · decide by{" "}
-                      {formatDay(pending().decideBy, props.locale)} ·{" "}
-                      {pending().reported.locationHint ?? "location unknown"}
+                      {roleName(invite().role)} invite ·{" "}
+                      {pending().reported.locationHint ?? "location unknown"} · decide by{" "}
+                      {formatDay(pending().decideBy, props.locale)}
                     </div>
-                    <details class="ocid-access__details">
-                      <summary>Request details</summary>
-                      <p class="ocid-access__hint">
-                        Device ID:{" "}
-                        <code>{props.fingerprints.get(pending().devicePub) ?? "unavailable"}</code>
-                      </p>
-                      <p class="ocid-access__hint">
-                        OpenClaw ID provided this email and approximate location. Device details are
-                        unavailable.
-                      </p>
-                    </details>
+                  </div>
+                  <Show when={!props.readOnly}>
+                    <div class="ocid-access__actions">
+                      <Show
+                        when={
+                          props.error?.target === `request:${invite().inviteId}` &&
+                          props.error.approvalUncertain
+                        }
+                        fallback={
+                          <>
+                            <button
+                              type="button"
+                              class="btn primary btn--sm"
+                              disabled={props.disabled}
+                              onClick={() => props.onDecide(invite(), true)}
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              class="btn btn--sm"
+                              disabled={props.disabled}
+                              onClick={() => props.onDecide(invite(), false)}
+                            >
+                              Deny
+                            </button>
+                          </>
+                        }
+                      >
+                        <button
+                          type="button"
+                          class="btn btn--sm"
+                          disabled={props.disabled}
+                          onClick={() => props.onRefresh()}
+                        >
+                          Refresh
+                        </button>
+                      </Show>
+                    </div>
+                  </Show>
+                  <details class="ocid-access__details ocid-access__request-details">
+                    <summary>Request details</summary>
+                    <p class="ocid-access__hint">
+                      Device ID:{" "}
+                      <code>{props.fingerprints.get(pending().devicePub) ?? "unavailable"}</code>
+                    </p>
+                    <p class="ocid-access__hint">
+                      OpenClaw ID provided this email and approximate location. Device details are
+                      unavailable.
+                    </p>
+                  </details>
+                  <div class="ocid-access__row-error">
                     <OperationError
                       error={
                         props.error?.target === `request:${invite().inviteId}` ? props.error : null
                       }
                     />
-                    <Show when={!props.readOnly}>
-                      <div class="ocid-access__actions">
-                        <button
-                          type="button"
-                          class="btn primary btn--sm"
-                          disabled={props.disabled}
-                          onClick={() => props.onDecide(invite(), true)}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          type="button"
-                          class="btn btn--sm"
-                          disabled={props.disabled}
-                          onClick={() => props.onDecide(invite(), false)}
-                        >
-                          Deny
-                        </button>
-                      </div>
-                    </Show>
                   </div>
                 </li>
               );
@@ -302,7 +432,7 @@ function MemberRow(props: {
         </Show>
         <span class="chip">{props.member.role}</span>
       </div>
-      <Show when={latest(confirming)}>
+      <Show when={latest(confirming) && !props.readOnly}>
         <div class="ocid-access__confirmation">
           <div role="note">
             <p>Their devices disconnect now, and their running tasks stop.</p>
@@ -377,6 +507,20 @@ export function Members(props: {
           </div>
           <span class="chip">owner</span>
         </li>
+        <For each={open()} keyed={(invite) => invite.inviteId}>
+          {(invite) => (
+            <li class="ocid-access__row ocid-access__row--invited">
+              <Avatar name={invite().label} />
+              <div class="ocid-access__person">
+                <div class="ocid-access__title">{invite().label}</div>
+                <div class="ocid-access__hint">
+                  Not accepted yet · expires {formatDay(invite().expiresAt, props.locale)}
+                </div>
+              </div>
+              <span class="chip">{invite().role}</span>
+            </li>
+          )}
+        </For>
         <For each={props.members} keyed={(member) => member.accountId}>
           {(member, index) => (
             <>
@@ -402,24 +546,6 @@ export function Members(props: {
             {props.notice?.message}
           </li>
         </Show>
-        <For each={open()} keyed={(invite) => invite.inviteId}>
-          {(invite) => (
-            <li class="ocid-access__row ocid-access__row--invited">
-              <Avatar name={invite().label} />
-              <div class="ocid-access__person">
-                <div class="ocid-access__title">{invite().label}</div>
-                <div class="ocid-access__hint">
-                  Invite link created {formatDay(invite().createdAt, props.locale)} · expires{" "}
-                  {formatDay(invite().expiresAt, props.locale)} · not accepted yet
-                </div>
-              </div>
-              <div class="ocid-access__actions">
-                <span class="chip">Invited</span>
-                <span class="chip">{invite().role}</span>
-              </div>
-            </li>
-          )}
-        </For>
       </ul>
     </section>
   );

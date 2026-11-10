@@ -7,7 +7,7 @@ import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PeoplePage } from "./people-page.js";
 import { InviteForm } from "./people-sections.js";
-import type { StatusResult } from "./types.js";
+import type { Invite, StatusResult } from "./types.js";
 
 // Signing needs this browser's owner key from IndexedDB; the tests stand in for it.
 // mock-isolation: the owner device key lives in IndexedDB, which these page tests replace with a fixed signer.
@@ -22,7 +22,7 @@ vi.mock("./owner-signing.js", () => ({
 const { default: plugin } = await import("./index.js");
 const disposers: Array<() => void> = [];
 
-const pendingInvite = {
+const pendingInvite: Invite = {
   inviteId: "inv-1",
   label: "member@example.test",
   role: "operator",
@@ -56,11 +56,38 @@ function linked(overrides: Partial<StatusResult["link"]> = {}): StatusResult {
         { devicePub: "ed25519:old-laptop", label: "Old laptop", peerKeys: ["iroh:b"], cert: {} },
       ],
       members: [],
-      invites: [pendingInvite as never],
+      invites: [pendingInvite],
       ...overrides,
     },
   };
 }
+
+// The host owns picker behavior; this adapter exposes its public selection contract here.
+const mountSelectPicker: UI.ControlUiHost["components"]["mountSelectPicker"] = (
+  container,
+  initial,
+) => {
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", initial.accessibleLabel);
+  let current = initial;
+  const update = (next: typeof initial) => {
+    current = next;
+    select.replaceChildren(
+      ...next.options.map((option) => {
+        const element = document.createElement("option");
+        element.value = option.value;
+        element.textContent = `${option.label} · ${option.description}`;
+        return element;
+      }),
+    );
+    select.value = next.value;
+    select.disabled = next.disabled ?? false;
+  };
+  select.addEventListener("change", () => current.onSelect(select.value));
+  container.append(select);
+  update(initial);
+  return { update, dispose: () => select.remove() };
+};
 
 // Activates the plugin, mounts its page and returns the host's request spy.
 // Activation reads the status once (the flag gate) before the page reads its own.
@@ -105,6 +132,7 @@ function hostFor(statuses: StatusResult[], submitResult: unknown = {}) {
       normalizeKey: (key: string) => key,
     },
     ui: { registerPage, registerNavigation },
+    components: { mountSelectPicker },
   } as unknown as UI.ControlUiHost;
   return {
     host,
@@ -183,13 +211,23 @@ describe("Access page", () => {
   it("keeps invite expiry, permission ceiling, private sharing and owner approval explicit", async () => {
     const container = document.createElement("div");
     document.body.append(container);
-    const onCreate = async () => ({
+    const onCreate = vi.fn(async () => ({
       email: "friend@example.test",
       url: "https://example.test/#synthetic-invite",
       expiresAt: 1_800_600_000,
-    });
+    }));
     disposers.push(
-      render(() => <InviteForm disabled={false} locale="en-US" onCreate={onCreate} />, container),
+      render(
+        () => (
+          <InviteForm
+            components={hostFor([linked()]).host.components}
+            disabled={false}
+            locale="en-US"
+            onCreate={onCreate}
+          />
+        ),
+        container,
+      ),
     );
     const input = container.querySelector("input")!;
     input.value = "friend@example.test";
@@ -198,20 +236,33 @@ describe("Access page", () => {
     expect(container.textContent).toContain("The link expires in 7 days.");
     expect(container.textContent).toContain("Invites cannot grant owner access.");
     expect(container.querySelector('option[value="operator"]')?.textContent).toBe(
-      "Operator · chat, run tools, and use connected services",
+      "Operator · Chat, run tools, and use connected services",
     );
     expect(container.querySelector('option[value="owner"]')).toBeNull();
+    const picker = container.querySelector("select")!;
+    picker.value = "viewer";
+    picker.dispatchEvent(new Event("change"));
+    flush();
     button(container, "Create invite link")!.click();
     await vi.waitFor(() => expect(container.textContent).toContain("Send this link privately."));
     expect(container.textContent).toContain(
       "Anyone with it can request access, but only you can approve them.",
     );
+    expect(onCreate).toHaveBeenCalledWith("friend@example.test", "viewer");
+    expect(container.querySelector("form")).toBeNull();
+    expect(container.textContent).toContain("Viewer invite · expires");
+    button(container, "Invite someone")!.click();
+    flush();
+    expect(container.querySelector("input")?.value).toBe("");
+    expect(document.activeElement).toBe(container.querySelector("input"));
+    expect(container.querySelector("select")?.value).toBe("operator");
+    expect(container.textContent).not.toContain("https://example.test/#synthetic-invite");
   });
 
   it("shows who is asking, from which device, and which invite they used", async () => {
     const { container } = await mountPage([linked()]);
     await vi.waitFor(() => expect(container.textContent).toMatch(/Device ID: fp:[a-f0-9]{64}/));
-    expect(container.textContent).toContain("Operator invite · created");
+    expect(container.textContent).toContain("Operator invite · Falkenstein, DE · decide by");
     expect(container.textContent).toContain("member@example.test");
     expect(container.textContent).toContain("Falkenstein, DE");
     expect(container.textContent?.match(/member@example.test/g)).toHaveLength(1);
@@ -285,7 +336,10 @@ describe("Access page", () => {
       ],
     };
     const { container, request } = await mountPage(
-      [linked({ invites: [], members: [member] }), linked({ invites: [], members: [] })],
+      [
+        linked({ invites: [{ ...pendingInvite, status: "open" }], members: [member] }),
+        linked({ invites: [], members: [] }),
+      ],
       { removal: { devices: 1, connectionsClosed: 1, runsCancelled: 1 } },
     );
     await vi.waitFor(() =>
@@ -293,6 +347,14 @@ describe("Access page", () => {
         "bob@example.test · 1 device · active now · running “Trip ideas”",
       ),
     );
+    const rows = [...container.querySelectorAll('[aria-labelledby="ocid-access-members"] li')];
+    expect(rows.map((row) => row.querySelector(".ocid-access__title")?.textContent)).toEqual([
+      "You",
+      "member@example.test",
+      "Bob",
+    ]);
+    expect(rows.map((row) => row.querySelectorAll(".chip").length)).toEqual([1, 1, 1]);
+    expect(rows[1]?.textContent).toContain("Not accepted yet · expires");
     await vi.waitFor(() => expect(button(container, "Remove")?.disabled).toBe(false));
     button(container, "Remove")!.click();
     await vi.waitFor(() => expect(button(container, "Remove Bob")).toBeDefined());
@@ -367,12 +429,16 @@ describe("Access page", () => {
   it("is read-only in a browser that is not an owner device", async () => {
     const status = linked({
       ownerDevices: [{ devicePub: "ed25519:other", label: "Other", peerKeys: [], cert: {} }],
+      members: [
+        { accountId: "reader", email: "reader@example.test", role: "viewer", peerKeys: [] },
+      ],
     });
     const { container } = await mountPage([status]);
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain("can view people but cannot change access"),
-    );
+    await vi.waitFor(() => expect(container.textContent).toContain("Waiting for approval"));
+    expect(container.querySelector(".callout")).toBeNull();
     expect(button(container, "Approve")).toBeUndefined();
+    expect(button(container, "Deny")).toBeUndefined();
+    expect(button(container, "Remove")).toBeUndefined();
     expect(button(container, "Create invite link")).toBeUndefined();
     expect(button(container, "Add node")).toBeUndefined();
   });
@@ -492,7 +558,7 @@ describe("Access page", () => {
     flush();
     expect(reads).toBe(2);
     expect(harness.container.textContent).toContain("new@example.test");
-    held.resolve({ link: linked({ invites: [pendingInvite as never] }).link });
+    held.resolve({ link: linked({ invites: [pendingInvite] }).link });
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(harness.container.textContent).toContain("new@example.test");
@@ -552,38 +618,69 @@ describe("Access page", () => {
     expect(harness.container.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("keeps an uncertain approval separate from raw diagnostics and never suggests a blind retry", async () => {
-    const harness = await mountPage([linked()]);
-    await vi.waitFor(() => expect(button(harness.container, "Approve")?.disabled).toBe(false));
-    const initialRequest = harness.request.getMockImplementation()!;
-    harness.request.mockImplementation(async (method: string) => {
-      if (method === "openclawId.authority") {
-        throw new Error("handoff failed Bearer private-token https://example.test/#invite-secret");
+  it.each([false, true])(
+    "refreshes an uncertain approval without a blind retry (committed=%s)",
+    async (committed) => {
+      const harness = await mountPage([linked()]);
+      await vi.waitFor(() => expect(button(harness.container, "Approve")?.disabled).toBe(false));
+      const initialRequest = harness.request.getMockImplementation()!;
+      let submitted = false;
+      harness.request.mockImplementation(async (method: string) => {
+        if (method === "openclawId.authority") {
+          submitted = true;
+          throw new Error(
+            "handoff failed Bearer private-token https://example.test/#invite-secret",
+          );
+        }
+        if (committed && submitted && method === "openclawId.people") {
+          return {
+            link: linked({
+              invites: [],
+              members: [
+                {
+                  accountId: "acct-member",
+                  email: "member@example.test",
+                  role: "operator",
+                  peerKeys: [],
+                },
+              ],
+            }).link,
+          };
+        }
+        return initialRequest(method);
+      });
+      button(harness.container, "Approve")!.click();
+      await vi.waitFor(() =>
+        expect(harness.container.querySelector('[role="alert"]')).not.toBeNull(),
+      );
+      const alert = harness.container.querySelector('[role="alert"]')!;
+      if (committed) {
+        expect(alert.closest("li")).toBeNull();
+      } else {
+        expect(alert.closest("li")?.textContent).toContain("member@example.test");
       }
-      return initialRequest(method);
-    });
-    button(harness.container, "Approve")!.click();
-    await vi.waitFor(() =>
-      expect(harness.container.querySelector('[role="alert"]')).not.toBeNull(),
-    );
-    const alert = harness.container.querySelector('[role="alert"]')!;
-    expect(alert.closest("li")?.textContent).toContain("member@example.test");
-    expect(
-      harness.container
-        .querySelector("#ocid-nodes")
-        ?.closest("section")
-        ?.querySelector('[role="alert"]'),
-    ).toBeNull();
-    expect(alert.querySelector("p")?.textContent).toBe(
-      "Could not confirm whether access was approved. Refresh this page and check the person's access before approving again.",
-    );
-    expect(alert.querySelector("details")?.open).toBe(false);
-    expect(alert.querySelector("code")?.textContent).toContain("handoff failed");
-    expect(alert.textContent).not.toMatch(/private-token|invite-secret|Try again/);
-    expect(
-      harness.request.mock.calls.filter(([method]) => method === "openclawId.authority"),
-    ).toHaveLength(1);
-  });
+      expect(
+        harness.container
+          .querySelector("#ocid-nodes")
+          ?.closest("section")
+          ?.querySelector('[role="alert"]'),
+      ).toBeNull();
+      expect(alert.querySelector("p")?.textContent).toBe(
+        "Could not confirm whether access was approved. Refresh this page and check the person's access before approving again.",
+      );
+      expect(alert.querySelector("details")?.open).toBe(false);
+      expect(alert.querySelector("code")?.textContent).toContain("handoff failed");
+      expect(alert.textContent).not.toMatch(/private-token|invite-secret|Try again/);
+      expect(button(harness.container, "Approve")).toBeUndefined();
+      expect(button(harness.container, "Deny")).toBeUndefined();
+      button(harness.container, "Refresh")!.click();
+      await vi.waitFor(() => expect(harness.container.querySelector('[role="alert"]')).toBeNull());
+      expect(Boolean(button(harness.container, "Approve"))).toBe(!committed);
+      expect(
+        harness.request.mock.calls.filter(([method]) => method === "openclawId.authority"),
+      ).toHaveLength(1);
+    },
+  );
 
   it("releases event and connection listeners and cancels queued reads on disposal", async () => {
     const harness = await mountPage([linked({ invites: [] })]);

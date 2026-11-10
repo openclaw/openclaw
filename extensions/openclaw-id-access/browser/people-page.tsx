@@ -71,6 +71,7 @@ export function PeoplePage(props: { host: ControlUiHost }) {
   let observer: ReturnType<typeof observePeople> | undefined;
   let disposed = false;
   let actionInFlight = false;
+  let refreshedError: PeopleOperationError | null = null;
 
   // Reads link state (the owner view when this client is an owner) and which
   // listed owner device, if any, is this browser.
@@ -99,6 +100,11 @@ export function PeoplePage(props: { host: ControlUiHost }) {
       setNowMs(Date.now());
       setState(next);
       setReadError(null);
+      if (refreshedError) {
+        const previousError = refreshedError;
+        refreshedError = null;
+        setError((current) => (current === previousError ? null : current));
+      }
     } catch (failure) {
       if (isCurrent()) {
         setReadError(peopleError(failure, "load", host.redact));
@@ -212,17 +218,9 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                   <h2 id="ocid-access-people" class="ocid-access__sr-only">
                     People
                   </h2>
-                  <Show when={!latest(ownDevicePub)}>
-                    <div class="callout info" role="note">
-                      This browser can view people but cannot change access. Use an approved owner
-                      browser to invite, approve, or remove people.
-                    </div>
-                    <OperationError
-                      error={latest(error)?.target === "invite" ? latest(error) : null}
-                    />
-                  </Show>
                   <Show when={latest(ownDevicePub)}>
                     <InviteForm
+                      components={host.components}
                       disabled={!canManage()}
                       error={latest(error)?.target === "invite" ? latest(error) : null}
                       locale={host.locale}
@@ -238,6 +236,10 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                     readOnly={!latest(ownDevicePub)}
                     disabled={!canManage()}
                     locale={host.locale}
+                    onRefresh={() => {
+                      refreshedError = latest(error);
+                      void observer?.refresh();
+                    }}
                     onDecide={(invite, approve) =>
                       void run(
                         `request:${invite.inviteId}`,

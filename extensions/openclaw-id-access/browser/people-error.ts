@@ -5,7 +5,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 export type PeopleErrorAction = "load" | "update" | "approve";
 
 /** Plain copy and a separately sanitized diagnostic for a collapsed disclosure. */
-export type PeopleError = { message: string; diagnostic: string };
+export type PeopleError = { message: string; diagnostic: string; approvalUncertain?: boolean };
 
 /** Where an owner operation failed; retained even if its row leaves the next snapshot. */
 export type PeopleOperationError = PeopleError & {
@@ -114,5 +114,9 @@ export function peopleError(
       : code && VERIFICATION_CODES.has(code)
         ? "Access could not be verified. Do not continue with this request. Use an approved owner browser to review access to this claw."
         : fallback;
-  return { message, diagnostic: diagnosticText(error, code, redact) };
+  return {
+    message,
+    diagnostic: diagnosticText(error, code, redact),
+    ...(action === "approve" && message === fallback ? { approvalUncertain: true } : {}),
+  };
 }
