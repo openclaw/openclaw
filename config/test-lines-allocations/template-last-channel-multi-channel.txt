@@ -1,2 +1,2 @@
-# Regression proof that Template Add blocks last-channel automations on multi-channel hosts (42 lines); 21 reconcile inherited base debt at d5a021ebabe.
-63
+# Regression proof that Template Add blocks last-channel automations on multi-channel hosts.
+42
