@@ -530,7 +530,7 @@ export async function prepareGatewayLifecycle(params: {
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
     requestEntryLifetime.beginClose();
-    runtime.scheduler.beginClose();
+    runtime.scheduler.fence();
     cronReconciliation.invalidate();
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {
@@ -556,7 +556,9 @@ export async function prepareGatewayLifecycle(params: {
           await terminateLiveSubagentsForShutdown(runtime.resolvePluginGatewayContext);
         },
         cancelReceivedWork: (reason) => {
-          // Entry is fenced; retained principals still need their binding to settle.
+          // Restart markers and session stop classification precede authority retirement.
+          requestEntryLifetime.retire(reason);
+          runtime.scheduler.beginClose();
           runtime.connectionWork.beginClose(reason);
         },
         disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
