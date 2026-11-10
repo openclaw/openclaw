@@ -225,7 +225,6 @@ export async function maybeRestartService(params: {
       return await failed();
     }
   }
-  const original = params.originalManagedServiceRuntime;
   let activation = {
     ...params,
     signal: run?.deadline?.signal,
@@ -241,15 +240,6 @@ export async function maybeRestartService(params: {
       recordServiceReconciliationWarnings(params.result, warnings, run, assertCurrent),
     onTimedStep: (step: UpdateStepResult) => recordServiceTimedStep(params.result, step, run),
   };
-  if (original && !original.definition.runtimePin) {
-    if (!original.version) {
-      throw new Error("Original service runtime or schema support was not verified.");
-    }
-    activation.refreshServiceEnv = activation.serviceRuntimeRefreshRequired = false;
-    activation.nodeRunner = original.nodeRunner;
-    activation.expectedGatewayIdentity = { version: original.version, buildId: original.buildId };
-    activation.serviceUpdateVerdict = original.service.serviceUpdateVerdict;
-  }
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =
     verdict?.kind === "unresolved" || (verdict?.kind === "owned" && !verdict.refreshDefinition);

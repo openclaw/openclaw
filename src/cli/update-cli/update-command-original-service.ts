@@ -244,7 +244,6 @@ export async function observeOriginalManagedServiceRuntime(
           ...verdict,
           root,
           refreshDefinition: false,
-          ...(runtimePinMigrationPending ? { requiresInstallRootRefresh: false } : {}),
         },
       },
       ...files,

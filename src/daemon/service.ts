@@ -445,7 +445,7 @@ function withGatewayServiceMutationGuards(
         commitDaemonRuntimePin(scope, { expected }, null);
       },
     ),
-    start: guardGatewayServiceMutation(kind, `start the ${kind} service`, true, service.start),
+    start: guardGatewayServiceMutation(kind, `start the ${kind} service`, false, service.start),
     stop: guardGatewayServiceMutation(kind, `stop the ${kind} service`, false, async (args) => {
       const stalled = kind === "gateway" ? captureStalledGatewayStartup(args.env) : undefined;
       await service.stop(args);
@@ -456,7 +456,7 @@ function withGatewayServiceMutationGuards(
     restart: guardGatewayServiceMutation(
       kind,
       `restart the ${kind} service`,
-      true,
+      false,
       service.restart,
     ),
   };

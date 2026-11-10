@@ -45,6 +45,18 @@ backup.
 
 ## Update implementation contract
 
+After candidate Doctor migrates runtime-pin metadata, activation reads that
+completed intent before rebinding the managed Gateway. Missing metadata at the
+start of an update no longer forces a restart of the old installation against
+newly migrated state. Existing native definition and runtime-intent checks still
+protect operator changes. This requires the installed updater to contain the fix.
+
+Starting or restarting an unchanged service does not require migrating runtime-pin
+metadata; definition rewrites still preserve existing runtime intent. Failed
+split-install activation also keeps recovery results valid when restoring the
+original service is unverified. These fixes must be in the installed updater;
+downloading a candidate cannot change the older driver's behavior.
+
 Lazy SQLite schema catalogs load through the retained updater's module loader.
 An updater that first needs a catalog after Git activation therefore reads its
 own generation, not the candidate's replacement JSON. This fix must be present
