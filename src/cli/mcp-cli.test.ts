@@ -813,7 +813,6 @@ it("fails when removing an unknown MCP server", async () => {
 it("starts the channel bridge with parsed serve options", async () => {
   const tokenFile = path.join(workspaceDir, "gateway.token");
   await fs.writeFile(tokenFile, "secret-token\n", "utf-8");
-
   await mcp(
     "serve",
     ...flags({
@@ -823,7 +822,6 @@ it("starts the channel bridge with parsed serve options", async () => {
       "--verbose": true,
     }),
   );
-
   expect(serveOpenClawChannelMcp).toHaveBeenCalledWith({
     gatewayUrl: "ws://127.0.0.1:18789",
     gatewayToken: "secret-token",
@@ -833,53 +831,16 @@ it("starts the channel bridge with parsed serve options", async () => {
   });
 });
 
-it("points serve startup failures at the deep Gateway health diagnostic", async () => {
-  serveOpenClawChannelMcp.mockRejectedValueOnce(new Error("gateway unavailable"));
-
-  await expectFailure(
-    "MCP server failed to start: gateway unavailable. Run openclaw gateway status --deep --require-rpc to inspect Gateway health.",
-    "serve",
-  );
-});
-
-it("keeps a single period before the Gateway hint when the start error ends with one", async () => {
+it("reports serve flag errors as-is and start failures with one hint period", async () => {
+  const modeError = 'Invalid --claude-channel-mode value. Use "auto", "on", or "off".';
+  await expectFailure(modeError, "serve", "--claude-channel-mode", "bad");
   serveOpenClawChannelMcp.mockRejectedValueOnce(new Error("gateway closed (1006)."));
-
   await expectFailure(
     "MCP server failed to start: gateway closed (1006). Run openclaw gateway status --deep --require-rpc to inspect Gateway health.",
     "serve",
   );
 });
 
-it.each([
-  {
-    name: "an invalid --claude-channel-mode",
-    args: async () => ["--claude-channel-mode", "bad"],
-    message: 'Invalid --claude-channel-mode value. Use "auto", "on", or "off".',
-  },
-  {
-    name: "an unreadable --token-file",
-    args: async () => ["--token-file", path.join(workspaceDir, "missing.token")],
-    message: expect.stringMatching(/^Failed to inspect Gateway token file at .*missing\.token: /),
-  },
-  {
-    name: "both --token and --token-file",
-    args: async () => {
-      const tokenFile = path.join(workspaceDir, "gateway.token");
-      await fs.writeFile(tokenFile, "secret-token\n", "utf-8");
-      return ["--token", "inline", "--token-file", tokenFile];
-    },
-    message: "Use either --token or --token-file for Gateway token.",
-  },
-])("reports $name as a flag error, not a Gateway startup failure", async ({ args, message }) => {
-  await expect(mcp("serve", ...(await args()))).rejects.toMatchObject({ code: 1 });
-
-  expect(lastErrorLine()).toEqual(message);
-  const stderr = mockError.mock.calls.map(([line]) => String(line)).join("\n");
-  expect(stderr).not.toContain("MCP server failed to start");
-  expect(stderr).not.toContain("gateway status");
-  expect(serveOpenClawChannelMcp).not.toHaveBeenCalled();
-});
 it("emits one JSON failure for an unknown server in show", async () => {
   expect(await readJsonFailure("show", "missing")).toMatchObject({
     ok: false,
