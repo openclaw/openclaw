@@ -80,6 +80,16 @@ export async function captureCronInferenceBinding(params: {
   if (!model.ok) {
     throw new Error(model.error);
   }
+  return captureSelectedCronInferenceBinding(params, owner, model);
+}
+
+/** Primary overrides and native fallback selection share the same credential/runtime owner. */
+async function captureSelectedCronInferenceBinding(
+  params: Parameters<typeof captureCronInferenceBinding>[0],
+  owner: Awaited<ReturnType<typeof resolveCronModelSelectionOwner>>,
+  model: { provider: string; model: string; configuredProfileId?: string },
+): Promise<CronInferenceBinding | null | undefined> {
+  const { config: cfg, agentId, agentDir } = owner;
   // The account follows the config's runtime policy, so a job binds the account it always has.
   const cliExecutionProvider = resolveCliRuntimeExecutionProvider({
     cfg,
@@ -384,12 +394,13 @@ export async function captureCronAlternateInferenceBinding(
     }
     profileId = choices[0];
   }
-  const binding = await captureCronInferenceBinding({
-    ...params,
-    sessionEntry: undefined,
-    recordedRuntime: undefined,
-    model: `${selected.provider}/${selected.modelId}@${profileId}`,
-  });
+  // This ref came from the native fallback chain, not a primary model override.
+  // Do not reapply the primary override allowlist or inherit the creator account.
+  const binding = await captureSelectedCronInferenceBinding(
+    { ...params, sessionEntry: undefined, recordedRuntime: undefined },
+    owner,
+    { provider: selected.provider, model: selected.modelId, configuredProfileId: profileId },
+  );
   if (!binding) {
     throw new Error("runtime does not forward a supported stored account");
   }

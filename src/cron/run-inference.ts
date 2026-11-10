@@ -218,7 +218,38 @@ export function createCronRunInferenceCandidates(params: {
       if (reason) {
         throw new Error(reason);
       }
-      return leases.get(modelKey(provider, model));
+      const lease = leases.get(modelKey(provider, model));
+      const account = lease?.runParams.authProfileBinding;
+      if (!lease || !account) {
+        return lease;
+      }
+      // Both runtime adapters carry this assertion through awaited preparation to their
+      // final HTTP/process effect. Keep raw leases in the map to avoid recursive guards.
+      return {
+        ...lease,
+        runParams: {
+          ...lease.runParams,
+          authProfileBinding: {
+            ...account,
+            assertCurrent,
+            async revalidate() {
+              await account.revalidate();
+              assertCurrent();
+            },
+          },
+        },
+        assertCandidate(candidateProvider: string, cliExecution: boolean, runtime?: string) {
+          assertCurrent();
+          lease.assertCandidate(candidateProvider, cliExecution, runtime);
+        },
+        async resolveCliAuthProfile(
+          resolve: Parameters<CronRunInference["resolveCliAuthProfile"]>[0],
+        ) {
+          const profileId = await lease.resolveCliAuthProfile(resolve);
+          assertCurrent();
+          return profileId;
+        },
+      };
     },
     dispose: () => {
       for (const lease of leases.values()) {

@@ -70,6 +70,19 @@ function captureAuthority(
 }
 
 describe("cron handler inference binding persistence", () => {
+  it("captures configured fallbacks outside the primary override allowlist", async ({
+    fixture,
+  }) => {
+    fixture.setScheduledProfile(platformId, "default", false);
+    fixture.setDefaultFallbacks(["openai/gpt-4o@" + subscriptionId]);
+    await fixture.invoke("cron.add", createParams());
+    expect((await fixture.reload()).inferenceGrants).toMatchObject({
+      "openai/gpt-4o": { profileId: subscriptionId, authRequirement: "subscription" },
+    });
+    await fixture.invoke("cron.add", modelParams("openai/gpt-4o@" + subscriptionId), null, {
+      expectedSuccess: false,
+    });
+  });
   it("adopts newly configured fallbacks only on deliberate policy review and keeps the primary", async ({
     fixture,
   }) => {

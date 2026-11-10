@@ -3,6 +3,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, onTestFinished, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "../../agents/cli-backends.test-support.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCronListSnapshotRevision,
@@ -371,4 +376,40 @@ export function callerClientWithCronCreatorAuthority(
   client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
   client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
   return client;
+}
+
+export const cliBackedModelRef = "anthropic/claude-sonnet-4-6";
+export const embeddedModelRef = "anthropic/claude-opus-4-6";
+export function cliBackedModelConfig(runtime = "claude-cli"): OpenClawConfig {
+  cliBackendsTesting.setDepsForTest({ resolveRuntimeCliBackends: createClaudeCliBackends });
+  onTestFinished(cliBackendsTesting.resetDepsForTest);
+  return {
+    agents: {
+      ownership: "explicit",
+      entries: { main: {} },
+      defaults: {
+        model: { primary: cliBackedModelRef, fallbacks: [] },
+        models: {
+          [cliBackedModelRef]: { agentRuntime: { id: runtime } },
+          [embeddedModelRef]: { agentRuntime: { id: "openclaw" } },
+        },
+      },
+    },
+    models: {
+      providers: {
+        anthropic: {
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+          apiKey: "synthetic-unused-model-key",
+          models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) =>
+            modelDefinition(id, {
+              name: `Synthetic ${id}`,
+              reasoning: false,
+              contextWindow: 200_000,
+            }),
+          ),
+        },
+      },
+    },
+  };
 }

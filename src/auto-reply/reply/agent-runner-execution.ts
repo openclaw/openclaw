@@ -19,7 +19,7 @@ import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { prepareCronRunInference, type CronRunInference } from "../../cron/run-inference.js";
+import { createCronRunInferenceCandidates } from "../../cron/run-inference.js";
 import type { CronWorkspaceLease } from "../../cron/run-workspace.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -93,7 +93,7 @@ async function executeAgentTurnInternalLoop(
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager,
   compaction: AgentTurnCompaction,
   scheduledMessageActionTurnCapability?: string,
-  scheduledInference?: CronRunInference,
+  scheduledInferenceCandidates?: ReturnType<typeof createCronRunInferenceCandidates>,
 ): Promise<AgentTurnInternalResult> {
   let params = inputParams;
   // Direct delivery receipts retain settlement facts across fallback candidates.
@@ -397,7 +397,7 @@ async function executeAgentTurnInternalLoop(
       const cycleParams: AgentFallbackCycleParams = {
         preparedRunAdmission,
         scheduledMessageActionTurnCapability,
-        scheduledInference,
+        scheduledInferenceCandidates,
         turn: params,
         effectiveRun,
         runtimeConfig,
@@ -602,7 +602,9 @@ async function executeAgentTurnOutcome(
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
         const execution = prepareReplyTurnExecution(executionParams, runId);
-        let scheduledInference: CronRunInference | undefined;
+        let scheduledInferenceCandidates:
+          | ReturnType<typeof createCronRunInferenceCandidates>
+          | undefined;
         let workspaceLease: CronWorkspaceLease | undefined;
         try {
           execution.preparedRunAdmission.assertSourceCurrent();
@@ -624,10 +626,12 @@ async function executeAgentTurnOutcome(
             run.workspaceDir = workspace.workspaceDir;
             run.cwd = workspace.cwd;
           }
-          const binding = run.scheduledAutomation?.job.inferenceBinding;
-          if (binding) {
-            scheduledInference = await prepareCronRunInference({
-              binding,
+          const job = run.scheduledAutomation?.job;
+          if (job) {
+            scheduledInferenceCandidates = createCronRunInferenceCandidates({
+              binding: job.inferenceBinding,
+              grants: job.inferenceGrants,
+              primary: { provider: run.provider, model: run.model },
               cfg: selectLiveRuntimeConfig(executionParams.followupRun.run.config),
               agentDir: executionParams.followupRun.run.agentDir,
             });
@@ -643,14 +647,14 @@ async function executeAgentTurnOutcome(
             execution.deferredLifecycle,
             compaction,
             execution.scheduledMessageActionTurnCapability,
-            scheduledInference,
+            scheduledInferenceCandidates,
           );
         } finally {
           try {
             await execution.close();
           } finally {
             try {
-              scheduledInference?.dispose();
+              scheduledInferenceCandidates?.dispose();
             } finally {
               await workspaceLease?.release();
             }

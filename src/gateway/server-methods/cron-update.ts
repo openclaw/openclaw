@@ -94,14 +94,7 @@ export const cronUpdateHandler: GatewayRequestHandler = async ({
     respondInvalidCronParams(respond, "cron.update", "patch did not normalize");
     return;
   }
-  const p = candidate as {
-    id?: string;
-    jobId?: string;
-    patch: Record<string, unknown>;
-    expectedConfigRevision?: string;
-    reviewModelPolicy?: boolean;
-    dryRun?: boolean;
-  };
+  const p = candidate;
   const callerScope = readCronCallerScope(client);
   const jobId = resolveCronJobId(p);
   if (!jobId) {

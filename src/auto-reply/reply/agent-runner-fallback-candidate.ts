@@ -7,6 +7,7 @@ import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateAgentRuntime } from "../../agents/thinking-runtime.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
+import { resolveCronRuntimeSessionEntry } from "../../cron/inference-binding.js";
 import {
   assertCronCandidateSandboxPlacement,
   assertCronRuntimeAuthorityCandidate,
@@ -110,19 +111,18 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   });
   const selection = resolveModelFallbackOptions(params.effectiveRun, params.runtimeConfig);
   // A scheduled run resolves candidates on the runtime its account was captured for.
-  const runtimeSessionEntry = () => {
-    const entry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
-    return entry && params.scheduledInference
-      ? params.scheduledInference.runtimeSessionEntry(entry)
-      : entry;
-  };
+  const runtimeSessionEntry = (provider: string, model: string) =>
+    resolveCronRuntimeSessionEntry(
+      params.scheduledInferenceCandidates?.bindingFor(provider, model),
+      params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry() ?? {},
+    );
   const resolveCandidateRuntime = (
     provider: string,
     model: string,
     sessionRuntimeOverride: string | undefined,
   ) => {
     const candidateRun = resolveFallbackCandidateRun(params.effectiveRun, provider, model);
-    const activeEntry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
+    const activeEntry = runtimeSessionEntry(provider, model);
     const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
       config: params.runtimeConfig,
     });
@@ -134,7 +134,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         model,
         agentId: turn.followupRun.run.agentId,
         authProfileId:
-          params.scheduledInference?.runParams.authProfileId ?? selectedAuthProfile.authProfileId,
+          params.scheduledInferenceCandidates?.bindingFor(provider, model)?.profileId ??
+          selectedAuthProfile.authProfileId,
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(activeEntry),
       }),
@@ -158,7 +159,15 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           trigger: resolveReplyRunTrigger(turn),
         }),
       },
-      selection: buildRunEntrySelection(selection, turn.followupRun.run),
+      selection: {
+        ...buildRunEntrySelection(selection, turn.followupRun.run),
+        admitCandidate: params.scheduledInferenceCandidates?.admit,
+        resolveCandidateAuthProfileId:
+          turn.followupRun.run.scheduledAutomation?.job.inferenceGrants === undefined
+            ? undefined
+            : (provider, model) =>
+                params.scheduledInferenceCandidates?.bindingFor(provider, model)?.profileId,
+      },
       identity: {
         runId: params.runId,
         agentId: turn.followupRun.run.agentId,
@@ -174,10 +183,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           kind: "measured",
           run: (prepare) => params.timing.measure("fallback_prepare_harness", prepare),
         },
-        resolveRuntimeOverride: (provider) =>
+        resolveRuntimeOverride: (provider, model) =>
           resolveSessionRuntimeOverrideForProvider({
             provider,
-            entry: runtimeSessionEntry(),
+            entry: runtimeSessionEntry(provider, model),
             cfg: params.runtimeConfig,
           }),
         resolveContextEngineHost: (provider, model, runtimeOverride) => {
@@ -232,6 +241,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         });
       },
       runCandidate: async (provider, model, runOptions) => {
+        const scheduledInference = await params.scheduledInferenceCandidates?.prepare(
+          provider,
+          model,
+        );
         bindReplyFallbackSteeringRoute({
           operation: turn.replyOperation,
           provenance: runOptions.modelRoutingProvenance,
@@ -267,10 +280,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           modelId: model,
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
-          sessionEntry: runtimeSessionEntry(),
+          sessionEntry: runtimeSessionEntry(provider, model),
           agentRuntime: runOptions.agentHarnessRuntimeOverride,
         });
-        params.scheduledInference?.assertCandidate(
+        scheduledInference?.assertCandidate(
           provider,
           runtime.useCliExecution,
           candidateAgentRuntime,
@@ -343,6 +356,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           const common = {
             ...runOptions,
             ...params,
+            scheduledInference,
             turn,
             messageActionTurnCapability,
             candidateRun,

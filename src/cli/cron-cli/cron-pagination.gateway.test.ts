@@ -1,7 +1,8 @@
-// Cron CLI pagination exercises real Gateway handlers and canonical cron snapshots.
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+// Cron CLI pagination exercises real Gateway handlers and canonical cron snapshots.
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createMockCronStateForJobs } from "../../cron/service.test-harness.js";
@@ -123,9 +124,9 @@ function installGateway(
       );
       const [ok, payload, error] = expectDefined(respond.mock.calls.at(-1), "Gateway response");
       if (!ok) {
-        throw Object.assign(new Error(error?.message ?? `${method} failed`), {
-          name: "GatewayClientRequestError",
-          gatewayCode: error?.code,
+        throw new GatewayClientRequestError({
+          message: error?.message ?? `${method} failed`,
+          code: error?.code,
         });
       }
       if (method === "cron.list" && options.transformListPage) {
@@ -141,9 +142,9 @@ function unversionedPage(page: unknown) {
   return { jobs, hasMore, nextOffset, deliveryPreviews };
 }
 
-const legacyGetError = Object.assign(new Error("unknown method: cron.get"), {
-  name: "GatewayClientRequestError",
-  gatewayCode: "INVALID_REQUEST",
+const legacyGetError = new GatewayClientRequestError({
+  message: "unknown method: cron.get",
+  code: "INVALID_REQUEST",
 });
 
 async function runCron(args: string[], root = "cron"): Promise<void> {

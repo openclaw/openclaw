@@ -13,23 +13,29 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/r
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
+import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
+import * as transcriptPreparation from "../agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.js";
+import { modelDefinition as authModelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as browserOpen from "../infra/browser-open.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import * as runtimeBackends from "../plugins/cli-backends.runtime.js";
+import "../agents/ai-transport-runtime-host.js"; // Initialize before spies; lazy setup copies the host.
+import { resetSessionControllerStateForTest } from "../sessions/session-lifecycle-admission.test-support.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import "../agents/ai-transport-runtime-host.js"; // Initialize before spies; lazy setup copies the host.
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import * as cliPrompts from "../wizard/clack-prompter.js";
 import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent/run.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
+import { runCronSessionTurn } from "./session-run.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -52,17 +58,8 @@ const runtimeModels = (...ids: string[]) =>
     ids.map((id) => [id, { agentRuntime: { id: "openclaw" }, params: { transport: "sse" } }]),
   );
 
-function modelDefinition(id: string) {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 1024,
-  };
-}
+const modelDefinition = (id: string) =>
+  authModelDefinition(id, { reasoning: false, contextWindow: 128_000, maxTokens: 1024 });
 
 function provider(
   baseUrl: string,
@@ -96,7 +93,36 @@ async function writeConfig(state: OpenClawTestState, cfg: OpenClawConfig) {
   setRuntimeConfigSnapshot(cfg);
 }
 
-function runStoredTurn(cfg: OpenClawConfig, job: CronStoredJob) {
+async function runStoredTurn(
+  cfg: OpenClawConfig,
+  job: CronStoredJob,
+  agentRuntimeOverride?: string,
+) {
+  if (job.sessionTarget.startsWith("session:")) {
+    await import("../auto-reply/dispatch.js");
+    const runtime = await import("../auto-reply/reply/get-reply-from-config.runtime.js");
+    await runtime.prewarmConfigDrivenReplyRuntime();
+    const sessionKey = job.sessionTarget.slice(8);
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      {
+        sessionId: job.id,
+        updatedAt: Date.now(),
+        agentRuntimeOverride,
+      },
+    );
+    return runCronSessionTurn({
+      occurrence: TEST_SCHEDULED_OCCURRENCE,
+      cfg,
+      job,
+      agentId: "main",
+      sessionKey,
+      text: job.payload.kind === "agentTurn" ? job.payload.message : "",
+      admissionSource: "operator-schedule",
+      deliveryAttemptFence: null,
+      assertCurrent() {},
+    });
+  }
   return runCronIsolatedAgentTurn({
     occurrence: TEST_SCHEDULED_OCCURRENCE,
     cfg,
@@ -112,6 +138,38 @@ function runStoredTurn(cfg: OpenClawConfig, job: CronStoredJob) {
 function interceptProvider(fetch: typeof globalThis.fetch) {
   vi.spyOn(globalThis, "fetch").mockImplementation(fetch);
   vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(fetch);
+}
+
+async function requestedModel(request: Request): Promise<string> {
+  const bytes = Buffer.from(await request.arrayBuffer());
+  const body: unknown = JSON.parse(
+    request.headers.get("content-encoding") === "zstd"
+      ? zstdDecompressSync(bytes).toString("utf8")
+      : bytes.toString("utf8"),
+  );
+  if (!body || typeof body !== "object" || !("model" in body) || typeof body.model !== "string") {
+    throw new Error("Expected a serialized provider model request");
+  }
+  return body.model;
+}
+
+async function changeAccount(profileId: string, replace: boolean) {
+  if (replace) {
+    await persistAuthProfileBatch({
+      profiles: [keyProfile(profileId, "synthetic-replacement-key")],
+    });
+  } else {
+    await removeAuthProfilesAcrossOwnerStores({ profileIds: [profileId] });
+  }
+}
+
+async function captureAccounts(cfg: OpenClawConfig, model: string) {
+  const primary = await captureCronInferenceBinding({ cfg, agentId: "main" });
+  const alternate = await captureCronInferenceBinding({ cfg, agentId: "main", model });
+  if (!primary || !alternate) {
+    throw new Error("Expected stored accounts");
+  }
+  return { primary, alternate };
 }
 
 function keyProfile(profileId: string, key: string) {
@@ -167,32 +225,22 @@ function withAuthState<T>(label: string, run: (state: OpenClawTestState) => Prom
   );
 }
 
+function quotaResponse(): Response {
+  return Response.json(
+    { error: { code: "insufficient_quota", message: "Quota exhausted" } },
+    { status: 429 },
+  );
+}
+
 function completedResponse(model: string): Response {
-  const item = {
-    id: "msg_synthetic",
-    type: "message",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text: "same authorized account", annotations: [] }],
-  };
-  const response = { id: "resp_synthetic", model, status: "in_progress", output: [] };
-  const events = [
-    { type: "response.created", response },
-    { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        ...response,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 3, total_tokens: 4 },
-      },
-    },
-  ];
-  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-    headers: { "content-type": "text/event-stream" },
-  });
+  return providerResponse({
+    api: "openai-responses",
+    model,
+    id: "resp_synthetic",
+    messageId: "msg_synthetic",
+    text: "same authorized account",
+    calls: [],
+  }).response;
 }
 
 beforeEach(bindSessionMcpRuntimeTestScheduler);
@@ -201,6 +249,7 @@ afterEach(async () => {
   await disposeAllSessionMcpRuntimes();
   await resetPreparedModelRuntimeSnapshotsForTest();
   clearRuntimeAuthProfileStoreSnapshots();
+  resetSessionControllerStateForTest();
   vi.restoreAllMocks();
 });
 
@@ -214,21 +263,14 @@ it.each([false, true])(
         if (request.method !== "POST" || request.url !== "https://api.openai.com/v1/responses") {
           throw new Error(`Unexpected I/O: ${request.url}`);
         }
-        const bytes = Buffer.from(await request.arrayBuffer());
-        const body = JSON.parse(
-          request.headers.get("content-encoding") === "zstd"
-            ? zstdDecompressSync(bytes).toString("utf8")
-            : bytes.toString("utf8"),
-        ) as { model: string };
-        requests.push(`${request.headers.get("authorization")} ${body.model}`);
-        return body.model === "gpt-4.1" && !changedPrimary
-          ? new Response(
-              JSON.stringify({
-                error: { type: "server_error", message: "The server is overloaded" },
-              }),
-              { status: 503, headers: { "content-type": "application/json" } },
+        const model = await requestedModel(request);
+        requests.push(`${request.headers.get("authorization")} ${model}`);
+        return model === "gpt-4.1" && !changedPrimary
+          ? Response.json(
+              { error: { type: "server_error", message: "The server is overloaded" } },
+              { status: 503 },
             )
-          : completedResponse(body.model);
+          : completedResponse(model);
       });
       await persistAuthProfileBatch({ profiles: [keyProfile(platformId, platformKey)] });
       const cfg = configure(
@@ -275,7 +317,7 @@ it.each([false, true])(
   },
 );
 
-it.each([
+const alternateModes = [
   "approved",
   "shadowed primary runtime",
   "unapproved",
@@ -285,128 +327,154 @@ it.each([
   "in-flight revocation",
   "in-flight primary revocation",
   "in-flight primary replacement",
-] as const)("enforces an %s alternate account through the real cron runner", async (mode) => {
-  await withAuthState("cron-approved-fallback", async (state) => {
-    const requests: Array<string | null> = [];
-    interceptProvider(async (input, init) => {
-      const request = new Request(input, init);
-      if (request.method !== "POST" || !request.url.endsWith("/responses")) {
-        throw new Error(`Unexpected external I/O: ${request.url}`);
+  "alternate preparation primary revocation",
+  "alternate preparation primary replacement",
+] as const;
+it.each([
+  ...alternateModes.map((mode) => ({ mode, target: "isolated" as const })),
+  ...(
+    [
+      "approved",
+      "unapproved",
+      "alternate preparation primary revocation",
+      "alternate preparation primary replacement",
+    ] as const
+  ).map((mode) => ({ mode, target: "session:agent:main:approved-alternate" as const })),
+])(
+  "enforces an $mode alternate account through the real $target cron runner",
+  async ({ mode, target }) => {
+    await withAuthState("cron-approved-fallback", async (state) => {
+      const requests: Array<string | null> = [];
+      const models: string[] = [];
+      interceptProvider(async (input, init) => {
+        const request = new Request(input, init);
+        if (request.method !== "POST" || !request.url.endsWith("/responses")) {
+          throw new Error(`Unexpected external I/O: ${request.url}`);
+        }
+        const authorization = request.headers.get("authorization");
+        models.push(await requestedModel(request));
+        requests.push(authorization);
+        if (mode === "in-flight revocation" && authorization === `Bearer ${platformKey}`) {
+          await removeAuthProfilesAcrossOwnerStores({ profileIds: [otherPlatformId] });
+        }
+        if (mode.startsWith("in-flight primary") && authorization === "Bearer " + platformKey) {
+          await changeAccount(platformId, mode.endsWith("replacement"));
+        }
+        if (mode === "in-flight edit" && authorization === `Bearer ${platformKey}`) {
+          job.inferenceGrants = {};
+          cfg.agents!.defaults!.model = { primary: `openai/gpt-4.1@${platformId}`, fallbacks: [] };
+        }
+        return authorization === `Bearer ${platformKey}`
+          ? quotaResponse()
+          : completedResponse("gpt-4o");
+      });
+      await persistAuthProfileBatch({
+        profiles: [
+          keyProfile(platformId, platformKey),
+          keyProfile(otherPlatformId, "synthetic-approved-alternate-key"),
+        ],
+      });
+      const cfg = configure(
+        state,
+        {
+          model: {
+            primary: `openai/gpt-4.1@${platformId}`,
+            fallbacks: [`openai/gpt-4o@${otherPlatformId}`],
+          },
+          models: runtimeModels("openai/gpt-4.1", "openai/gpt-4o"),
+        },
+        { openai: provider("https://api.openai.com/v1", "openai-responses", modelIds) },
+        {
+          profiles: {
+            [platformId]: { provider: "openai", mode: "api_key" },
+            [otherPlatformId]: { provider: "openai", mode: "api_key" },
+          },
+        },
+      );
+      await writeConfig(state, cfg);
+      const { primary, alternate } = await captureAccounts(cfg, "openai/gpt-4o@" + otherPlatformId);
+      expect(primary.profileId).toBe(platformId);
+      expect(alternate.profileId).toBe(otherPlatformId);
+      const job: CronStoredJob = {
+        ...storedJob("approved-alternate"),
+        sessionTarget: target,
+        inferenceBinding: primary,
+        inferenceGrants: mode === "unapproved" ? {} : { "openai/gpt-4o": alternate },
+      };
+      if (mode === "shadowed primary runtime") {
+        job.inferenceGrants!["openai/gpt-4.1"] = { ...alternate, runtime: "codex" };
       }
-      const authorization = request.headers.get("authorization");
-      requests.push(authorization);
-      if (mode === "in-flight revocation" && authorization === `Bearer ${platformKey}`) {
-        await removeAuthProfilesAcrossOwnerStores({ profileIds: [otherPlatformId] });
+      if (mode === "revoked" || mode === "replaced") {
+        await changeAccount(otherPlatformId, mode === "replaced");
+        const result = await runStoredTurn(cfg, job);
+        expect(result).toMatchObject({ status: "error", admissionDisposition: "rejected" });
+        expect(result.error).toMatch(/removed|replaced|signed out/i);
+        expect(requests).toEqual([]);
+        return;
       }
-      if (mode === "in-flight primary revocation" && authorization === `Bearer ${platformKey}`) {
-        await removeAuthProfilesAcrossOwnerStores({ profileIds: [platformId] });
-      }
-      if (mode === "in-flight primary replacement" && authorization === `Bearer ${platformKey}`) {
-        await persistAuthProfileBatch({
-          profiles: [keyProfile(platformId, "synthetic-replacement-primary-key")],
+      let alternatePreparation = false;
+      if (mode.startsWith("alternate preparation")) {
+        const prepare = transcriptPreparation.prepareEmbeddedAttemptTranscriptLifecycle;
+        vi.spyOn(
+          transcriptPreparation,
+          "prepareEmbeddedAttemptTranscriptLifecycle",
+        ).mockImplementation(async (params) => {
+          const prepared = await prepare(params);
+          // Primary HTTP already settled; the real alternate has entered native session preparation.
+          if (requests.length === 1) {
+            alternatePreparation = true;
+            await changeAccount(platformId, mode.endsWith("replacement"));
+          }
+          return prepared;
         });
       }
-      if (mode === "in-flight edit" && authorization === `Bearer ${platformKey}`) {
-        job.inferenceGrants = {};
-        cfg.agents!.defaults!.model = { primary: `openai/gpt-4.1@${platformId}`, fallbacks: [] };
+      const result = await runStoredTurn(cfg, job, "claude-cli");
+      if (mode.startsWith("alternate preparation")) {
+        expect(alternatePreparation).toBe(true);
       }
-      return authorization === `Bearer ${platformKey}`
-        ? new Response(
-            JSON.stringify({ error: { code: "insufficient_quota", message: "Quota exhausted" } }),
-            {
-              status: 429,
-              headers: { "content-type": "application/json" },
-            },
-          )
-        : completedResponse("gpt-4o");
+      const succeeds =
+        mode === "approved" || mode === "in-flight edit" || mode === "shadowed primary runtime";
+      expect(result.status, result.error).toBe(succeeds ? "ok" : "error");
+      expect(models).toEqual(succeeds ? ["gpt-4.1", "gpt-4o"] : ["gpt-4.1"]);
+      expect(requests).toEqual(
+        succeeds
+          ? [`Bearer ${platformKey}`, "Bearer synthetic-approved-alternate-key"]
+          : [`Bearer ${platformKey}`],
+      );
     });
-    await persistAuthProfileBatch({
-      profiles: [
-        keyProfile(platformId, platformKey),
-        keyProfile(otherPlatformId, "synthetic-approved-alternate-key"),
-      ],
-    });
-    const cfg = configure(
-      state,
-      {
-        model: {
-          primary: `openai/gpt-4.1@${platformId}`,
-          fallbacks: [`openai/gpt-4o@${otherPlatformId}`],
-        },
-        models: runtimeModels("openai/gpt-4.1", "openai/gpt-4o"),
-      },
-      { openai: provider("https://api.openai.com/v1", "openai-responses", modelIds) },
-      {
-        profiles: {
-          [platformId]: { provider: "openai", mode: "api_key" },
-          [otherPlatformId]: { provider: "openai", mode: "api_key" },
-        },
-      },
-    );
-    await writeConfig(state, cfg);
-    const primary = await captureCronInferenceBinding({ cfg, agentId: "main" });
-    const alternate = await captureCronInferenceBinding({
-      cfg,
-      agentId: "main",
-      model: `openai/gpt-4o@${otherPlatformId}`,
-    });
-    expect(primary?.profileId).toBe(platformId);
-    expect(alternate?.profileId).toBe(otherPlatformId);
-    if (!primary || !alternate) {
-      throw new Error("Expected stored accounts");
-    }
-    const job: CronStoredJob = {
-      ...storedJob("approved-alternate"),
-      inferenceBinding: primary,
-      inferenceGrants: mode === "unapproved" ? {} : { "openai/gpt-4o": alternate },
-    };
-    if (mode === "shadowed primary runtime") {
-      job.inferenceGrants!["openai/gpt-4.1"] = { ...alternate, runtime: "codex" };
-    }
-    if (mode === "revoked") {
-      await removeAuthProfilesAcrossOwnerStores({ profileIds: [otherPlatformId] });
-    } else if (mode === "replaced") {
-      await persistAuthProfileBatch({
-        profiles: [keyProfile(otherPlatformId, "replacement-key")],
-      });
-    }
-    if (mode === "revoked" || mode === "replaced") {
-      const result = await runStoredTurn(cfg, job);
-      expect(result).toMatchObject({ status: "error", admissionDisposition: "rejected" });
-      expect(result.error).toMatch(/removed|replaced|signed out/i);
-      expect(requests).toEqual([]);
-      return;
-    }
-    const result = await runStoredTurn(cfg, job);
-    const succeeds =
-      mode === "approved" || mode === "in-flight edit" || mode === "shadowed primary runtime";
-    expect(result.status, result.error).toBe(succeeds ? "ok" : "error");
-    expect(requests).toEqual(
-      succeeds
-        ? [`Bearer ${platformKey}`, "Bearer synthetic-approved-alternate-key"]
-        : [`Bearer ${platformKey}`],
-    );
-  });
-});
+  },
+);
 
-it("forwards the approved alternate account to a real noninteractive CLI after primary quota", async () => {
-  await withAuthState("cron-cli-fallback", async (state) => {
-    const refuseInteractiveAuth = () => {
-      throw new Error("Cron attempted interactive authentication");
-    };
-    const browser = vi.spyOn(browserOpen, "openUrl").mockImplementation(refuseInteractiveAuth);
-    const prompt = vi
-      .spyOn(cliPrompts, "createClackPrompter")
-      .mockImplementation(refuseInteractiveAuth);
-    const effect = state.path("cli-effect.txt");
-    const script = await state.writeText(
-      "fixture-cli.mjs",
-      `
+it.each(
+  (["isolated", "session:agent:main:cli-alternate"] as const).flatMap((target) =>
+    ["approved", "unapproved", "revoked primary", "replaced primary"].map((mode) => ({
+      target,
+      mode,
+    })),
+  ),
+)(
+  "enforces $mode alternate at real CLI launch for $target after primary quota",
+  async ({ target, mode }) => {
+    await withAuthState("cron-cli-fallback", async (state) => {
+      const refuseInteractiveAuth = () => {
+        throw new Error("Cron attempted interactive authentication");
+      };
+      const browser = vi.spyOn(browserOpen, "openUrl").mockImplementation(refuseInteractiveAuth);
+      const prompt = vi
+        .spyOn(cliPrompts, "createClackPrompter")
+        .mockImplementation(refuseInteractiveAuth);
+      const effect = state.path("cli-effect.txt");
+      const launch = state.path("cli-launch.txt");
+      const script = await state.writeText(
+        "fixture-cli.mjs",
+        `
 import { readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+writeFileSync(${JSON.stringify(launch)}, "launched");
 const credential = readFileSync(Number(process.env.CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR), "utf8");
 if (credential !== "synthetic-cli-alternate") throw new Error("Wrong forwarded account");
+if (process.argv[process.argv.indexOf("--model") + 1] !== "claude-sonnet-4-6") throw new Error("Wrong CLI model");
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   if (message.type === "control_request") {
@@ -417,92 +485,106 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
 });
 `,
-    );
-    // Replace only the external executable; provider preparation and FD forwarding stay real.
-    const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
-      buildAnthropicCliBackend: () => CliBackendPlugin;
-    }>({ pluginId: "anthropic", artifactBasename: "api.js" });
-    const backend = buildAnthropicCliBackend();
-    vi.spyOn(runtimeBackends, "resolveRuntimeCliBackends").mockReturnValue([
-      {
-        ...backend,
-        pluginId: "anthropic",
-        config: { ...backend.config, command: process.execPath, args: [script] },
-      },
-    ]);
-    const requests: Array<string | null> = [];
-    interceptProvider(async (input, init) => {
-      const request = new Request(input, init);
-      requests.push(request.headers.get("authorization"));
-      if (request.method !== "POST" || !request.url.endsWith("/responses")) {
-        throw new Error(`Unexpected I/O: ${request.url}`);
-      }
-      return new Response(
-        JSON.stringify({ error: { code: "insufficient_quota", message: "Quota exhausted" } }),
-        { status: 429, headers: { "content-type": "application/json" } },
       );
-    });
-    await persistAuthProfileBatch({
-      profiles: [
-        keyProfile(platformId, platformKey),
+      // Replace only the external executable; provider preparation and FD forwarding stay real.
+      const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
+        buildAnthropicCliBackend: () => CliBackendPlugin;
+      }>({ pluginId: "anthropic", artifactBasename: "api.js" });
+      const backend = buildAnthropicCliBackend();
+      let alternatePreparation = false;
+      vi.spyOn(runtimeBackends, "resolveRuntimeCliBackends").mockReturnValue([
         {
-          profileId: "anthropic:alternate",
-          credential: { type: "api_key", provider: "anthropic", key: "synthetic-cli-alternate" },
+          ...backend,
+          pluginId: "anthropic",
+          config: { ...backend.config, command: process.execPath, args: [script] },
+          async prepareExecution(params) {
+            const prepared = await backend.prepareExecution?.(params);
+            alternatePreparation = true;
+            if (mode === "revoked primary" || mode === "replaced primary") {
+              await changeAccount(platformId, mode === "replaced primary");
+            }
+            return prepared;
+          },
         },
-      ],
+      ]);
+      const requests: Array<string | null> = [];
+      interceptProvider(async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request.headers.get("authorization"));
+        if (request.method !== "POST" || !request.url.endsWith("/responses")) {
+          throw new Error(`Unexpected I/O: ${request.url}`);
+        }
+        return quotaResponse();
+      });
+      await persistAuthProfileBatch({
+        profiles: [
+          keyProfile(platformId, platformKey),
+          {
+            profileId: "anthropic:alternate",
+            credential: { type: "api_key", provider: "anthropic", key: "synthetic-cli-alternate" },
+          },
+        ],
+      });
+      const cfg = configure(
+        state,
+        {
+          model: {
+            primary: `openai/gpt-4.1@${platformId}`,
+            fallbacks: ["anthropic/claude-sonnet-4-6@anthropic:alternate"],
+          },
+          thinkingDefault: "off",
+          models: {
+            ...runtimeModels("openai/gpt-4.1"),
+            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+        {
+          openai: provider("https://api.openai.com/v1"),
+          anthropic: {
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com",
+            models: [modelDefinition("claude-sonnet-4-6")],
+          },
+        },
+        {
+          profiles: {
+            [platformId]: { provider: "openai", mode: "api_key" },
+            "anthropic:alternate": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+      );
+      cfg.plugins!.allow = ["openai", "anthropic"];
+      await writeConfig(state, cfg);
+      const { primary, alternate } = await captureAccounts(
+        cfg,
+        "anthropic/claude-sonnet-4-6@anthropic:alternate",
+      );
+      expect(alternate).toMatchObject({ profileId: "anthropic:alternate", runtime: "claude-cli" });
+      const result = await runStoredTurn(
+        cfg,
+        {
+          ...storedJob("cli-alternate"),
+          sessionTarget: target,
+          inferenceBinding: primary,
+          inferenceGrants:
+            mode === "unapproved" ? {} : { "anthropic/claude-sonnet-4-6": alternate },
+        },
+        "openclaw",
+      );
+      expect(alternatePreparation).toBe(mode !== "unapproved");
+      expect(result.status, result.error).toBe(mode === "approved" ? "ok" : "error");
+      expect(await fs.readFile(launch, "utf8").catch(() => undefined)).toBe(
+        mode === "approved" ? "launched" : undefined,
+      );
+      expect(await fs.readFile(effect, "utf8").catch(() => undefined)).toBe(
+        mode === "approved" ? "approved CLI account" : undefined,
+      );
+      expect(browser).not.toHaveBeenCalled();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(requests).toEqual([`Bearer ${platformKey}`]);
     });
-    const cfg = configure(
-      state,
-      {
-        model: {
-          primary: `openai/gpt-4.1@${platformId}`,
-          fallbacks: ["anthropic/claude-sonnet-4-6@anthropic:alternate"],
-        },
-        thinkingDefault: "off",
-        models: {
-          ...runtimeModels("openai/gpt-4.1"),
-          "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-        },
-      },
-      {
-        openai: provider("https://api.openai.com/v1"),
-        anthropic: {
-          api: "anthropic-messages",
-          baseUrl: "https://api.anthropic.com",
-          models: [modelDefinition("claude-sonnet-4-6")],
-        },
-      },
-      {
-        profiles: {
-          [platformId]: { provider: "openai", mode: "api_key" },
-          "anthropic:alternate": { provider: "anthropic", mode: "api_key" },
-        },
-      },
-    );
-    cfg.plugins!.allow = ["openai", "anthropic"];
-    await writeConfig(state, cfg);
-    const primary = await captureCronInferenceBinding({ cfg, agentId: "main" });
-    const alternate = await captureCronInferenceBinding({
-      cfg,
-      agentId: "main",
-      model: "anthropic/claude-sonnet-4-6@anthropic:alternate",
-    });
-    expect(alternate).toMatchObject({ profileId: "anthropic:alternate", runtime: "claude-cli" });
-    if (!primary || !alternate) {
-      throw new Error("Expected stored accounts");
-    }
-    const result = await runStoredTurn(cfg, {
-      ...storedJob("cli-alternate"),
-      inferenceBinding: primary,
-      inferenceGrants: { "anthropic/claude-sonnet-4-6": alternate },
-    });
-    expect(result.status, result.error).toBe("ok");
-    expect(await fs.readFile(effect, "utf8")).toBe("approved CLI account");
-    expect(browser).not.toHaveBeenCalled();
-    expect(prompt).not.toHaveBeenCalled();
-    expect(requests).toEqual([`Bearer ${platformKey}`]);
-  });
-});
+  },
+);
 
 it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
   "keeps the selected %s account across fresh runs and default changes",
@@ -528,27 +610,14 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
         if (request.url !== `${baseUrl}/responses` || request.method !== "POST") {
           throw new Error(`Unexpected external I/O in cron credential fixture: ${request.url}`);
         }
-        const bytes = Buffer.from(await request.arrayBuffer());
-        const json =
-          request.headers.get("content-encoding") === "zstd"
-            ? zstdDecompressSync(bytes).toString("utf8")
-            : bytes.toString("utf8");
-        const body: unknown = JSON.parse(json);
-        if (
-          !body ||
-          typeof body !== "object" ||
-          !("model" in body) ||
-          typeof body.model !== "string"
-        ) {
-          throw new Error("Expected a serialized provider model request");
-        }
+        const model = await requestedModel(request);
         requests.push({
           url: request.url,
           authorization: request.headers.get("authorization"),
           account: request.headers.get("chatgpt-account-id"),
-          model: body.model,
+          model,
         });
-        return completedResponse(body.model);
+        return completedResponse(model);
       };
       interceptProvider(providerFetch);
       const other = profileId === platformId ? otherPlatformId : otherSubscriptionId;
@@ -619,36 +688,32 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
         },
       });
       const sessionIds: string[] = [];
-      try {
-        for (const model of modelIds) {
-          await resetPreparedModelRuntimeSnapshotsForTest();
-          clearRuntimeAuthProfileStoreSnapshots();
-          await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-          const reloaded = (await loadCronJobsStore(storePath)).jobs[0];
-          expect(reloaded?.inferenceBinding).toEqual(binding);
-          if (!reloaded) {
-            throw new Error("Persisted automation missing");
-          }
-          const changed = config(model, other);
-          await writeConfig(state, changed);
-          const result = await runStoredTurn(changed, reloaded);
-          expect(result.status, result.error).toBe("ok");
-          expect(result.summary).toContain("same authorized account");
-          expect(result.sessionId).toBeTruthy();
-          sessionIds.push(result.sessionId!);
-        }
-        expect(new Set(sessionIds).size).toBe(2);
-        expect(requests).toEqual(
-          modelIds.map((model) => ({
-            url: `${baseUrl}/responses`,
-            model,
-            authorization: `Bearer ${credential}`,
-            account: profileId === subscriptionId ? "synthetic-account" : null,
-          })),
-        );
-      } finally {
+      for (const model of modelIds) {
         await resetPreparedModelRuntimeSnapshotsForTest();
+        clearRuntimeAuthProfileStoreSnapshots();
+        await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+        const reloaded = (await loadCronJobsStore(storePath)).jobs[0];
+        expect(reloaded?.inferenceBinding).toEqual(binding);
+        if (!reloaded) {
+          throw new Error("Persisted automation missing");
+        }
+        const changed = config(model, other);
+        await writeConfig(state, changed);
+        const result = await runStoredTurn(changed, reloaded);
+        expect(result.status, result.error).toBe("ok");
+        expect(result.summary).toContain("same authorized account");
+        expect(result.sessionId).toBeTruthy();
+        sessionIds.push(result.sessionId!);
       }
+      expect(new Set(sessionIds).size).toBe(2);
+      expect(requests).toEqual(
+        modelIds.map((model) => ({
+          url: `${baseUrl}/responses`,
+          model,
+          authorization: `Bearer ${credential}`,
+          account: profileId === subscriptionId ? "synthetic-account" : null,
+        })),
+      );
     });
   },
 );
@@ -707,29 +772,23 @@ it.each([
     const storePath = state.statePath("cron", "jobs.json");
     await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
     if (kind === "replacement") {
-      await persistAuthProfileBatch({
-        profiles: [keyProfile(platformId, "synthetic-replacement-key")],
-      });
+      await changeAccount(platformId, true);
     } else if (kind === "revocation") {
       expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: [platformId] })).toBe(true);
     }
     clearRuntimeAuthProfileStoreSnapshots();
     const reloaded = (await loadCronJobsStore(storePath)).jobs[0]!;
     expect(reloaded.inferenceBinding).toEqual(job.inferenceBinding);
-    try {
-      const result = await runStoredTurn(cfg, reloaded);
-      if (error) {
-        expect(result.status).toBe("error");
-        expect(result.error).toContain(error);
-        expect(requests).toEqual([]);
-      } else {
-        expect(result.status, result.error).toBe("ok");
-        expect(requests).toEqual([
-          { url: `${openaiUrl}/responses`, authorization: "Bearer synthetic-config-key" },
-        ]);
-      }
-    } finally {
-      await resetPreparedModelRuntimeSnapshotsForTest();
+    const result = await runStoredTurn(cfg, reloaded);
+    if (error) {
+      expect(result.status).toBe("error");
+      expect(result.error).toContain(error);
+      expect(requests).toEqual([]);
+    } else {
+      expect(result.status, result.error).toBe("ok");
+      expect(requests).toEqual([
+        { url: `${openaiUrl}/responses`, authorization: "Bearer synthetic-config-key" },
+      ]);
     }
   });
 });

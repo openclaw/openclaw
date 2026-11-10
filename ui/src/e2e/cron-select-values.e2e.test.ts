@@ -100,13 +100,25 @@ suite.define(() => {
             .toBe(true);
           await page.locator("#cron-payload-text").fill(gardenMessage);
           if (keyboardName) {
-            for (let field = 0; field < 4; field++) {
+            await page.keyboard.press("Tab");
+            await page.keyboard.press("Tab");
+            if (mode === "edit") {
+              await page.keyboard.press("Tab");
+              const review = page.getByRole("switch", { name: "Review fallback accounts on save" });
+              expect(await review.evaluate((element) => element.matches(":focus"))).toBe(true);
+              await page.keyboard.press("Space");
+              expect(await review.isChecked()).toBe(true);
+              await page.keyboard.press("Space");
+              expect(await review.isChecked()).toBe(false);
+            }
+            for (let field = 0; field < 2; field++) {
               await page.keyboard.press("Tab");
             }
             expect(
               await page.locator("#cron-name").evaluate((element) => element.matches(":focus")),
             ).toBe(true);
             await page.keyboard.type("Garden keyboard task");
+            expect(await page.locator("#cron-name").inputValue()).toBe("Garden keyboard task");
           } else {
             await page.locator("#cron-name").fill("Garden keyboard task");
           }

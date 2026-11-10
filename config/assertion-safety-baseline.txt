@@ -1425,8 +1425,7 @@ src/cli/config-cli-runner.ts	2
 src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	4
 src/cli/connect-cli.ts	1
-src/cli/cron-cli/list-jobs.ts	4
-src/cli/cron-cli/register.cron-edit.ts	1
+src/cli/cron-cli/list-jobs.ts	3
 src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/register.cron-simple.ts	2
 src/cli/cron-cli/shared.ts	7
@@ -1733,7 +1732,6 @@ src/gateway/server-methods/chat-transcript-persistence.ts	4
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	1
-src/gateway/server-methods/cron.ts	1
 src/gateway/server-methods/doctor.ts	2
 src/gateway/server-methods/exec-approvals.ts	1
 src/gateway/server-methods/memory-search.ts	3

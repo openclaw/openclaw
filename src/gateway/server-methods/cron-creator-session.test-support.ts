@@ -1,5 +1,6 @@
 import { expect, it, type Mock } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronDeliveryPreview } from "../../cron/types.js";
 import {
   agentTurnCronParams,
@@ -21,6 +22,7 @@ export type CronCreatorSessionLookup = {
 
 export function registerCronCreatorSessionTests(fixture: {
   invokeCron: ReturnType<typeof createCronTestInvoker>;
+  setRuntimeConfig: (config: OpenClawConfig) => void;
   loadGatewaySessionEntry: Mock<(sessionKey: string) => CronCreatorSessionLookup>;
   resolveCronDeliveryPreview: Mock<() => Promise<CronDeliveryPreview>>;
 }) {
@@ -57,6 +59,7 @@ export function registerCronCreatorSessionTests(fixture: {
     ["operator", { kind: "script", script: "return { notify: 'report' };", toolsAllow: [] }],
     ["operator", { kind: "command", argv: ["echo", "report"] }],
   ])("retains %s creator context for %j", async (caller, jobPayload) => {
+    fixture.setRuntimeConfig({ agents: { entries: { ops: {} } } });
     loadGatewaySessionEntry.mockReturnValue({
       canonicalKey: sourceConversation.sessionKey,
       entry: {
@@ -99,6 +102,7 @@ export function registerCronCreatorSessionTests(fixture: {
   );
 
   it("retains unknown isolation provenance without attributing agent-created cron jobs to a human", async () => {
+    fixture.setRuntimeConfig({ agents: { entries: { ops: {} } } });
     const legacyCreator = { ...creator, source: "unknown", label: "Ada" } as const;
     loadGatewaySessionEntry.mockReturnValue({
       canonicalKey: "agent:ops:main",

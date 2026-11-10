@@ -7,7 +7,10 @@ import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronRunInference } from "../../cron/run-inference.js";
+import type {
+  createCronRunInferenceCandidates,
+  CronRunInference,
+} from "../../cron/run-inference.js";
 import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -28,7 +31,6 @@ import type { DirectBlockDelivery } from "./reply-delivery.js";
 type AgentFallbackRunContext = {
   preparedRunAdmission: PreparedAgentRunAdmission;
   scheduledMessageActionTurnCapability?: string;
-  scheduledInference?: CronRunInference;
   turn: AgentTurnParams;
   runtimeConfig: OpenClawConfig;
   runId: string;
@@ -42,6 +44,7 @@ type AgentFallbackRunContext = {
 export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions &
   AgentFallbackRunContext & {
     messageActionTurnCapability?: string;
+    scheduledInference?: CronRunInference;
     candidateRun: FollowupRun["run"];
     provider: string;
     model: string;
@@ -101,6 +104,7 @@ export type AgentFallbackCycleResult =
   | Extract<AgentTurnInternalResult, { kind: "final" | "aborted" }>;
 
 export type AgentFallbackCycleParams = AgentFallbackRunContext & {
+  scheduledInferenceCandidates?: ReturnType<typeof createCronRunInferenceCandidates>;
   effectiveRun: FollowupRun["run"];
   liveModelSwitchRuntimeEntry?: Pick<
     SessionEntry,

@@ -3,6 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -203,9 +204,9 @@ it("falls back to paginated cron.list for a Gateway without cron.get", async () 
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, params?: { offset?: number }) => {
       if (method === "cron.get") {
-        throw Object.assign(new Error("unknown method: cron.get"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
+        throw new GatewayClientRequestError({
+          message: "unknown method: cron.get",
+          code: "INVALID_REQUEST",
         });
       }
       if (method === "cron.list") {

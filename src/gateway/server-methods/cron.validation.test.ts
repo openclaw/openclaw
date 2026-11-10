@@ -8,7 +8,6 @@ import {
   bindCronManagementGrant,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
-import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { updateCronJobFromAgentTool } from "../../agents/tools/cron-tool-write.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
@@ -49,6 +48,9 @@ import { registerCronCreatorSessionTests } from "./cron-creator-session.test-sup
 import { registerCronRunWaitTests } from "./cron-run-wait.test-support.js";
 import { loadGatewaySessionEntry } from "./cron-session-reader.test-support.js";
 import {
+  cliBackedModelConfig,
+  cliBackedModelRef,
+  embeddedModelRef,
   createCronTestContext,
   callerClientWithCronCreatorAuthority,
   expectCronSuccess,
@@ -390,7 +392,7 @@ describe("cron method validation", () => {
     },
   );
   beforeEach(() => {
-    getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
+    getRuntimeConfig.mockReset().mockReturnValue({});
     cronRunRecordsOverride.mockReset();
     cronRunDetailsOverride.mockReset();
     resolveCronDeliveryPreview
@@ -954,6 +956,7 @@ describe("cron method validation", () => {
   });
 
   it("stamps declaration ownership from the trusted caller and scopes key lookup", async () => {
+    setRuntimeConfig({ agents: { entries: { ops: {} } } });
     const { context, respond } = await invokeCronAdd(
       agentTurnCronParams({
         declarationKey: "daily-report",
@@ -1001,6 +1004,7 @@ describe("cron method validation", () => {
     invokeCron,
     loadGatewaySessionEntry,
     resolveCronDeliveryPreview,
+    setRuntimeConfig,
   });
 
   it.each(["add", "update"] as const)(
@@ -1049,6 +1053,7 @@ describe("cron method validation", () => {
   );
 
   it("rejects a mismatched cron.add runId without consuming the exact grant", async () => {
+    setRuntimeConfig({ agents: { entries: { ops: {} } } });
     const scope = createCronCreatorAuthorityRunScope("run-add");
     const grant = mintCronCreatorAuthorityGrant(scope);
     const context = createCronContext();
@@ -1116,6 +1121,7 @@ describe("cron method validation", () => {
   ] as const)(
     "carries the original caller fence to the %s commit owner",
     async (method, params, owner) => {
+      setRuntimeConfig({ agents: { entries: { ops: {} } } });
       const context = createCronContext(createCronJob({ agentId: "ops" }));
       const client = callerClient("ops");
       client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
@@ -2115,39 +2121,6 @@ describe("cron method validation", () => {
 
   // Creation records no host inference account for a CLI-backed model, so an
   // edit must accept the same model ref instead of demanding a stored account.
-  const cliBackedModelRef = "anthropic/claude-sonnet-4-6";
-  const embeddedModelRef = "anthropic/claude-opus-4-6";
-  function cliBackedModelConfig(runtime = "claude-cli"): OpenClawConfig {
-    return {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {} },
-        defaults: {
-          model: { primary: cliBackedModelRef, fallbacks: [] },
-          models: {
-            [cliBackedModelRef]: { agentRuntime: { id: runtime } },
-            [embeddedModelRef]: { agentRuntime: { id: "openclaw" } },
-          },
-        },
-      },
-      models: {
-        providers: {
-          anthropic: {
-            api: "anthropic-messages",
-            baseUrl: "https://api.anthropic.com",
-            apiKey: "synthetic-unused-model-key",
-            models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) =>
-              modelDefinition(id, {
-                name: `Synthetic ${id}`,
-                reasoning: false,
-                contextWindow: 200_000,
-              }),
-            ),
-          },
-        },
-      },
-    } as OpenClawConfig;
-  }
   const cliModelPatch = (model: string) => ({
     payload: { kind: "agentTurn", message: "updated", model },
   });
@@ -2159,8 +2132,8 @@ describe("cron method validation", () => {
       { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@selected-profile`) },
       createCronJob(),
     );
-    expect(accepted.context.cron.update).toHaveBeenCalled();
     expectCronSuccess(accepted.respond);
+    expect(accepted.context.cron.update).toHaveBeenCalled();
 
     // Control: an embedded-runtime reference still needs its stored account.
     const refused = await invokeCronUpdate(

@@ -249,143 +249,43 @@ describe("ordinary session event execution", () => {
     },
   );
 
-  it.each([
-    { runtime: "embedded", revoke: false },
-    { runtime: "cli", revoke: false },
-    { runtime: "cli", revoke: true },
-  ] as const)(
-    "keeps scheduled credential authority through $runtime execution (revoked=$revoke)",
-    async ({ runtime, revoke }) => {
-      const automation = createScheduledAutomation();
-      const authRequirement = runtime === "cli" ? ("subscription" as const) : ("api-key" as const);
-      automation.job.inferenceBinding = {
-        version: 1,
-        provider: runtime === "cli" ? "claude-cli" : "anthropic",
-        profileId: "scheduled-profile",
-        authorizationId: "a".repeat(64),
-        authRequirement,
-        source: "auto",
-      };
-      const followupRun = createFollowupRun({
-        scheduledAutomation: automation,
-        authProfileId: "destination-profile",
-        authProfileIdSource: "user",
-      });
-      let retired = false;
-      const assertCurrent = vi.fn(() => {
-        if (retired) {
-          throw new Error("scheduled credential retired");
-        }
-      });
+  it.each([false, true])(
+    "releases scheduled candidates after settlement (rejected=%s)",
+    async (rejected) => {
+      const followupRun = createFollowupRun({ scheduledAutomation: createScheduledAutomation() });
       const dispose = vi.fn();
-      const assertCandidate = vi.fn();
-      const onSuccessfulAuthProfile = vi.fn();
-      const authProfileBinding = {
-        profileId: "scheduled-profile",
-        authRequirement,
-        assertCurrent,
-        revalidate: async () => {},
-      };
-      using acquire = vi.spyOn(cronInference, "prepareCronRunInference");
-      acquire.mockResolvedValue({
-        runParams: {
-          authProfileId: "scheduled-profile",
-          authProfileIdSource: "auto",
-          authProfileBinding,
-          allowAuthProfileFallback: false,
-          onSuccessfulAuthProfile,
+      const complete = vi.fn(async () => expect(dispose).not.toHaveBeenCalled());
+      using candidates = vi.spyOn(cronInference, "createCronRunInferenceCandidates");
+      candidates.mockReturnValue({
+        bindingFor: () => undefined,
+        admit: async () => undefined,
+        prepare: async () => {
+          if (rejected) {
+            throw new Error("scheduled credential retired");
+          }
+          return undefined;
         },
-        runtimeSessionEntry: (entry) => entry,
-        assertCandidate,
-        resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
         dispose,
       });
-      const settle = vi.fn(async () => {
-        expect(dispose).not.toHaveBeenCalled();
-      });
-      if (runtime === "cli") {
-        useCliFallback(followupRun);
-        state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
-          expect(params.authProfileId).toBe("scheduled-profile");
-          expect(params.assertCurrent).toBeTypeOf("function");
-          params.assertCurrent?.();
-          retired = revoke;
-          // The CLI owner rechecks after awaited preparation.
-          params.assertCurrent?.();
+      state.runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          params.onDeferredLifecycleOwner?.({
+            complete,
+            discard: vi.fn(),
+            beginRetryWait: vi.fn(),
+          });
+          expect(dispose).not.toHaveBeenCalled();
           return { payloads: [{ text: "done" }], meta: {} };
-        });
-      } else {
-        state.runEmbeddedAgentMock.mockImplementationOnce(
-          async (params: RunEmbeddedAgentInternalParams) => {
-            expect(params.authProfileId).toBe("scheduled-profile");
-            expect(params.authProfileIdSource).toBe("auto");
-            expect(params.authProfileBinding).toBe(authProfileBinding);
-            expect(params.allowAuthProfileFallback).toBe(false);
-            params.onSuccessfulAuthProfile?.("scheduled-profile");
-            params.onDeferredLifecycleOwner?.({
-              complete: settle,
-              discard: vi.fn(),
-              beginRetryWait: vi.fn(),
-            });
-            expect(dispose).not.toHaveBeenCalled();
-            return { payloads: [{ text: "done" }], meta: {} };
-          },
-        );
-      }
+        },
+      );
       const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
       expect(result.outcome).toMatchObject(
-        revoke ? { kind: "rejected" } : { kind: "settled", status: "ok" },
+        rejected ? { kind: "rejected" } : { kind: "settled", status: "ok" },
       );
-      if (runtime === "cli") {
-        expect(assertCurrent).toHaveBeenCalledTimes(2);
-      } else {
-        expect(assertCandidate).toHaveBeenCalledWith("anthropic", false);
-        expect(onSuccessfulAuthProfile).toHaveBeenCalledExactlyOnceWith("scheduled-profile");
-        expect(settle).toHaveBeenCalledOnce();
-      }
+      expect(complete).toHaveBeenCalledTimes(rejected ? 0 : 1);
       expect(dispose).toHaveBeenCalledOnce();
     },
   );
-
-  it("resolves a session job's candidates on its captured runtime, not the row's override", async () => {
-    const automation = createScheduledAutomation();
-    automation.job.inferenceBinding = {
-      version: 1,
-      provider: "anthropic",
-      profileId: "scheduled-profile",
-      authorizationId: "a".repeat(64),
-      authRequirement: "api-key",
-      source: "auto",
-      runtime: "openclaw",
-    };
-    const followupRun = createFollowupRun({ scheduledAutomation: automation });
-    const rowEntry = { sessionId: "row", updatedAt: 1, agentRuntimeOverride: "claude-cli" };
-    const runtimeSessionEntry = vi.fn(() => ({ agentRuntimeOverride: "openclaw" }));
-    const assertCandidate = vi.fn();
-    using acquire = vi.spyOn(cronInference, "prepareCronRunInference");
-    acquire.mockResolvedValue({
-      runParams: {
-        authProfileId: "scheduled-profile",
-        authProfileIdSource: "auto",
-        allowAuthProfileFallback: false,
-      },
-      runtimeSessionEntry,
-      assertCandidate,
-      resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
-      dispose: vi.fn(),
-    });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      getActiveSessionEntry: () => rowEntry,
-    });
-
-    expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
-    expect(runtimeSessionEntry).toHaveBeenCalledWith(rowEntry);
-    expect(assertCandidate).toHaveBeenCalledWith("anthropic", false, "openclaw");
-    expect(state.runCliAgentMock).not.toHaveBeenCalled();
-  });
 
   it.for([
     { runtime: "embedded", outcome: "start" },

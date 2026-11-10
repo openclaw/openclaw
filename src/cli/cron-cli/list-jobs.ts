@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type {
   CronListPageOptions,
   CronListPageResult,
@@ -25,9 +26,8 @@ type GatewayCronJobInventory = GatewayCronListPage & { jobs: CronJob[] };
 /** Recognize the explicit protocol-v4 capability boundary, not transport failures. */
 export function isUnknownCronGetMethodError(error: unknown): error is Error {
   return (
-    error instanceof Error &&
-    error.name === "GatewayClientRequestError" &&
-    (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+    error instanceof GatewayClientRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
     error.message.includes("unknown method: cron.get")
   );
 }
@@ -187,9 +187,8 @@ export async function listCronJobsFromGateway(
 function isMissingCronGetError(error: unknown, id: string): error is Error {
   return (
     isUnknownCronGetMethodError(error) ||
-    (error instanceof Error &&
-      error.name === "GatewayClientRequestError" &&
-      (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+    (error instanceof GatewayClientRequestError &&
+      error.gatewayCode === "INVALID_REQUEST" &&
       // Gateways emit the stable "cron job not found" wire wording (kept for older
       // shipped CLI matchers); also accept the renamed form in case it ever changes.
       (error.message.includes(`automation not found: ${id}`) ||

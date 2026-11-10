@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import type { cronJobReadView } from "../../cron/job-read-view.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
@@ -37,15 +36,9 @@ export function registerCronReviewModelPolicyCommand(cron: Command) {
               break;
             }
             try {
-              // SAFETY: cron.get returns the canonical public job projection.
-              const job = (await callGatewayFromCli(
-                "cron.get",
-                opts,
-                { id },
-                { signal },
-              )) as ReturnType<typeof cronJobReadView>;
+              const job = await callGatewayFromCli("cron.get", opts, { id }, { signal });
               signal?.throwIfAborted();
-              if (!job.configRevision) {
+              if (typeof job.configRevision !== "string" || !job.configRevision) {
                 throw new CronCliError(
                   "The Gateway did not return a configuration revision; no change was attempted",
                 );
