@@ -30,6 +30,7 @@ import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { getToolContractFailureCode } from "./tool-contract-error.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
 import { formatToolExecutionGatedMessage, isToolExecutionAllowed } from "./tool-policy-shared.js";
+import { omitDescribedOutputSchema } from "./tool-search-catalog.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -344,10 +345,17 @@ export async function runBridgeRequest(params: {
           parentToolCallId: params.parentToolCallId,
         });
         const { id: _id, sourceName: _sourceName, mcp: _mcp, ...guestDescription } = described;
+        // The declaration renders output types from the schema; describe() returns the raw
+        // output schema only on explicit request because API.read already types the result.
         value =
           values[1] === "declaration"
             ? await createCodeModeToolApiFile(binding.callableName, guestDescription)
-            : { ...guestDescription, callableName: binding.callableName };
+            : {
+                ...(values[1] === "outputSchema"
+                  ? guestDescription
+                  : omitDescribedOutputSchema(guestDescription)),
+                callableName: binding.callableName,
+              };
         break;
       }
       case "callValue": {

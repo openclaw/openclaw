@@ -270,6 +270,30 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(incomplete.execute).not.toHaveBeenCalled();
   });
 
+  it("returns raw output schemas from describe() only on explicit request", async () => {
+    const { ctx } = catalog([contractedTool("contracted_tool")]);
+    const result = await runCodeModeScriptHeadless({
+      ctx,
+      code: `return {
+        plain: await contracted_tool.describe(),
+        requested: await contracted_tool.describe({ includeRarelyNeededOutputSchema: true }),
+        declaration: (await API.read("tools/contracted_tool.d.ts")).content,
+      };`,
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        plain: { callableName: "contracted_tool", output: "{ ok: boolean }" },
+        requested: {
+          outputSchema: { type: "object", properties: { ok: { type: "boolean" } } },
+        },
+      },
+    });
+    const value = (result as { value: Record<string, unknown> }).value;
+    expect(value.plain).not.toHaveProperty("outputSchema");
+    expect(value.declaration).toContain("ok: boolean");
+  });
+
   function catalogIndex(targets: AnyAgentTool[]) {
     const prompt = catalog(targets).catalogPrompt();
     const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
