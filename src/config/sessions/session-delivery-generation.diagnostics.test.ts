@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { flushLogger, getLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
@@ -311,7 +312,7 @@ it.each([false, true])(
 );
 
 it("projects only bounded package positions and rejects unsafe stack forms", () => {
-  const root = "/package";
+  const root = path.resolve("/package");
   const negative = [
     "/outside/src/a.ts:1:2",
     "/package/node_modules/a.ts:1:2",
@@ -337,7 +338,7 @@ it("projects only bounded package positions and rejects unsafe stack forms", () 
   }
   const stack = Array.from(
     { length: 6 },
-    (_, i) => "    at async fn (file:///package/src/a" + i + ".ts:1:2)",
+    (_, i) => `    at async fn (${pathToFileURL(path.join(root, "src", `a${i}.ts`)).href}:1:2)`,
   ).join("\n");
   expect(projectLeaseDiagnosticFrames(stack, root)).toEqual({
     captured: true,
