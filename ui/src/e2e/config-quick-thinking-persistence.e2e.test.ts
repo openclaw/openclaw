@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   configSnapshot,
@@ -59,10 +62,79 @@ suite.define(() => {
     });
   });
 
+  it("persists distinct Fast and Ultrafast choices with incomplete speed metadata", async () => {
+    await withPage(async ({ context, page }) => {
+      const speedModels = [
+        {
+          ...models[0]!,
+          supportsFastMode: undefined,
+          available: true,
+          serviceTiers: ["ultrafast"],
+        },
+      ];
+      const snapshot = (value: boolean | "ultrafast", hash: string) =>
+        configSnapshot(
+          {
+            agents: {
+              defaults: {
+                model: "openai/gpt-5.5",
+                thinkingDefault: "low",
+                fastModeDefault: value,
+              },
+            },
+          },
+          hash,
+        );
+      const gateway = await installMockGateway(page, {
+        models: speedModels,
+        methodResponses: {
+          "config.get": snapshot("ultrafast", "speed-1"),
+          "config.patch": snapshot(true, "speed-2"),
+        },
+      });
+      await page.goto(modelUrl());
+      const speed = group(page, true);
+      await expectChecked(radio(speed, "Ultrafast"));
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const surface = page.locator("#settings-model-behavior");
+        const frame = await takeControlUiScreenshotFrame(page, surface, [speed], {
+          animations: "disabled",
+          scrollTo: surface,
+        });
+        await writeFile(
+          path.join(
+            suite.artifactDir,
+            `${process.env.OPENCLAW_UI_PROOF_STAGE ?? "after"}-speed.png`,
+          ),
+          frame.png,
+        );
+      }
+      await radio(speed, "Fast").click();
+      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toMatchObject({
+        agents: { defaults: { fastModeDefault: true } },
+      });
+      await expectChecked(radio(speed, "Fast"));
+      await gateway.setMethodResponse("config.patch", snapshot("ultrafast", "speed-3"));
+      await radio(speed, "Ultrafast").click();
+      await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(2);
+      const requests = await gateway.getRequests("config.patch");
+      expect(requestRaw(requests[1]!)).toMatchObject({
+        agents: { defaults: { fastModeDefault: "ultrafast" } },
+      });
+      const fresh = await context.newPage();
+      await installMockGateway(fresh, {
+        models: speedModels,
+        methodResponses: { "config.get": snapshot("ultrafast", "speed-3") },
+      });
+      await fresh.goto(modelUrl());
+      await expectChecked(radio(group(fresh, true), "Ultrafast"));
+    });
+  });
+
   it.each([
     ["thinkingDefault", "low", "high", "Low", "High"],
-    ["fastModeDefault", false, true, "Off", "On"],
-    ["fastModeDefault", true, "auto", "On", "Auto"],
+    ["fastModeDefault", false, true, "Off", "Fast"],
+    ["fastModeDefault", true, "auto", "Fast", "Auto"],
     ["fastModeDefault", "auto", false, "Auto", "Off"],
   ] satisfies [Field, Value, Value, string, string][])(
     "persists %s from %s to %s through autosave",
