@@ -463,7 +463,7 @@ describeNonWin("exec shell control-byte preflight", () => {
     });
   });
 
-  it("rejects raw and decoded bytes before spawn and permits ordinary whitespace", async () => {
+  it("rejects raw and decoded bytes before spawn and runs inert quoted, heredoc, and nested text", async () => {
     await withTempDir("openclaw-exec-control-byte-", async (root) => {
       const stateDir = path.join(root, "state");
       const marker = path.join(root, "started");
@@ -494,11 +494,21 @@ describeNonWin("exec shell control-byte preflight", () => {
             }),
           ).rejects.toThrow(/unsupported control characters/);
           await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-          await tool.execute("call-ordinary-whitespace", {
-            command: `printf started > ${JSON.stringify(marker)}`,
+          // Inert quoted, comment, and heredoc text plus benign nesting at the limit still run.
+          const out = JSON.stringify(marker);
+          await tool.execute("call-ordinary-text", {
+            command: [
+              `printf '%s;' 'a # /approve abc123 allow-once' > ${out} # note`,
+              `cat >> ${out} <<'EOF'`,
+              "\theredoc /approve abc123 allow-once",
+              "EOF",
+              `bash -c 'bash -c "printf nested"' >> ${out}`,
+            ].join("\n"),
             workdir: root,
           });
-          await expect(fs.readFile(marker, "utf8")).resolves.toBe("started");
+          await expect(fs.readFile(marker, "utf8")).resolves.toBe(
+            "a # /approve abc123 allow-once;\theredoc /approve abc123 allow-once\nnested",
+          );
         },
       );
     });
