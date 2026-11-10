@@ -21,6 +21,7 @@ import {
   type StreamRunRenderItem,
   type WorkGroupRenderItem,
 } from "./chat-turn-presentation.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -101,7 +102,8 @@ function itemIsActive(item: AgentRunFramePart): boolean {
 function groupBoundaryId(group: MessageGroup): string | undefined {
   const firstMessage = group.messages[0]?.message;
   const identity = readSessionMessageIdentity(firstMessage);
-  const runId = identity?.runId;
+  const runId =
+    (group.role === "user" ? persistedSteerTargetRunId(firstMessage) : null) ?? identity?.runId;
   if (runId) {
     return `send:${runId}`;
   }
@@ -292,7 +294,13 @@ export function coalesceAgentRunFrames(
       flush();
       detached = [];
       presentationBoundaryKey = boundaryGroup.key;
-      segmentId = undefined;
+      // A steer starts a new visible reply inside the same execution. Its input
+      // key keeps that reply stable as live tools and text become saved history.
+      segmentId =
+        boundaryGroup.role === "user" &&
+        persistedSteerTargetRunId(boundaryGroup.messages[0]?.message)
+          ? boundaryGroup.key
+          : undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
       if (
         boundaryGroup.role === "user" ||
