@@ -4,7 +4,7 @@ import { flattenMarkdownToPlainText } from "./markdown-plain-text.js";
 describe("flattenMarkdownToPlainText", () => {
   it.each([
     ["fences", "a\n````\n```\nx\n```\n````x\nx\n`````\n~~~\nx\n~~~~\n```\nx\n```\nb", "a b"],
-    ["inline code", "**`__i__`** [`**/*`](u) `[x](y)`\0`1` ````z````", "__i__ **/* [x](y)\x001 `"],
+    ["code", "**`_i_`** [`**/*`](u`v`) `[x](y)`\0`\x00` ````z````", "_i_ **/* [x](y)\x00\x00 `"],
     [
       "links and escaped image markers",
       String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,
