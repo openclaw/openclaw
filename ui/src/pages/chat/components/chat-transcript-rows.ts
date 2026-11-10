@@ -23,6 +23,7 @@ export const nativeRows = {
   realtime: RealtimeTalkConversation,
   recap: TurnRecapRow,
   typing: lazy(() => import("./chat-typing-indicator.tsx"), { export: "ChatTypingIndicator" }),
+  automation: lazy(() => import("./chat-subagent-activity.tsx"), { export: "SubagentActivity" }),
 };
 
 export type NativeTranscriptView = {

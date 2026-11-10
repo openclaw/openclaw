@@ -29,6 +29,31 @@ const terminal = (
   endedAt = 200,
 ): SessionRunTerminal => ({ sessionKeys: [running.key], runId, status, endedAt });
 
+it.each([{ siblings: [] }, { siblings: ["other-run"] }])(
+  "leaves automation retirement to authoritative snapshots ($siblings)",
+  ({ siblings }) => {
+    const row: GatewaySessionRow = {
+      ...running,
+      ...timing,
+      status: "failed",
+      lastRunId: "prior-human-run",
+      lastRunError: "Review still needs attention",
+      activeRunIds: ["run-a", ...siblings],
+      automationRuns: [
+        {
+          runId: "run-a",
+          jobId: "watch",
+          name: "Readiness check",
+          startedAt: 250,
+          status: "running",
+        },
+      ],
+    };
+    const result = sessionsResult([row]);
+    expect(reconcileSessionRunTerminal(result, terminal("run-a", "done", 300))).toBe(result);
+  },
+);
+
 describe("reconcileSessionRunTerminal yielded parent", () => {
   it("settles the owned model run while keeping parent work pending", () => {
     const result = sessionsResult([

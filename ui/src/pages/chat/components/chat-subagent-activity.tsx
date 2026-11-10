@@ -9,13 +9,19 @@ import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-sessio
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-subagent-activity.css";
 import type { DetailsSubagent } from "../chat-details-snapshot.ts";
-import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
+
+/** Automation rows carry a real run, never a synthetic child session. */
+export type ExecutionActivityRow = DetailsSubagent & {
+  kind?: "automation";
+  startedAt?: number;
+};
 
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
 
 export type SubagentActivityProps = {
-  rows: readonly ChatSubagentActivity[];
+  rows: readonly ExecutionActivityRow[];
+  label?: string;
   /** A bounded display receipt, never a hydrated child roster. */
   presentation?: readonly DetailsSubagent[];
   onOpenSubagent?: (key: string) => void;
@@ -33,7 +39,7 @@ const STATUS_KEYS = {
   stopped: "chat.sessionDetails.stopped",
 } as const;
 
-function SubagentActivityRow(props: SubagentActivityProps & { row: DetailsSubagent }) {
+function SubagentActivityRow(props: SubagentActivityProps & { row: ExecutionActivityRow }) {
   const status = () => t(STATUS_KEYS[props.row.status]);
   const open = () =>
     props.presentation
@@ -50,7 +56,11 @@ function SubagentActivityRow(props: SubagentActivityProps & { row: DetailsSubage
   const description = () =>
     [props.row.label, status(), props.row.activity, steps()].filter(Boolean).join(". ");
   return (
-    <div role="listitem" data-subagent-session-key={props.row.key}>
+    <div
+      role="listitem"
+      data-subagent-session-key={props.row.kind ? undefined : props.row.key}
+      data-automation-run-id={props.row.kind ? props.row.key : undefined}
+    >
       <Dynamic
         component={open() ? "button" : "div"}
         class={[
@@ -65,10 +75,10 @@ function SubagentActivityRow(props: SubagentActivityProps & { row: DetailsSubage
         <span
           class="chat-details__agent-avatar"
           data-status={props.row.status}
-          style={`--chat-details-avatar-hue: ${fnv1aUtf16(props.row.key) % 360}`}
+          style={{ "--chat-details-avatar-hue": fnv1aUtf16(props.row.key) % 360 }}
           aria-hidden="true"
         >
-          <Icon name="bot" />
+          <Icon name={props.row.kind === "automation" ? "clock" : "bot"} />
         </span>
         <span
           ref={createTextOverflow(() => props.row.label)}
@@ -79,7 +89,11 @@ function SubagentActivityRow(props: SubagentActivityProps & { row: DetailsSubage
         </span>
         <span class="chat-subagent-activity__status">{props.row.activity || status()}</span>
         <span class="chat-subagent-activity__elapsed-compact" aria-hidden="true">
-          <Show when={props.row.status !== "queued" && props.row.session?.startedAt}>
+          <Show
+            when={
+              props.row.status !== "queued" && (props.row.startedAt ?? props.row.session?.startedAt)
+            }
+          >
             {(startedAt) => (
               <ElapsedTime startMs={startedAt()} endMs={props.row.session?.endedAt ?? null} />
             )}
@@ -107,7 +121,11 @@ export function SubagentActivity(props: SubagentActivityProps) {
   const rows = () => props.presentation ?? props.rows;
   return (
     <Show when={rows().length > 0}>
-      <div class="chat-subagent-activity" role="list" aria-label={t("chat.subagentsPanel.title")}>
+      <div
+        class="chat-subagent-activity"
+        role="list"
+        aria-label={props.label ?? t("chat.subagentsPanel.title")}
+      >
         <For
           each={props.limit === undefined ? rows() : rows().slice(0, props.limit)}
           keyed={(row) => row.key}

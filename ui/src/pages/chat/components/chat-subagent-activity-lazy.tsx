@@ -6,7 +6,11 @@ import { SubagentActivity, type SubagentActivityProps } from "./chat-subagent-ac
 const activityLoad = createIdleImport(() => import("./chat-subagent-activity-live.tsx"));
 const Activity = lazy(activityLoad.load, { export: "ChatSubagentActivity" });
 
-export function ChatSubagentActivity(props: SubagentActivityProps) {
+export function ChatSubagentActivity(
+  props: Omit<SubagentActivityProps, "rows"> & {
+    rows: readonly import("../chat-subagent-wait.ts").ChatSubagentActivity[];
+  },
+) {
   onSettled(() => activityLoad.dispose);
   return (
     <ChatLazyBoundary

@@ -87,6 +87,7 @@ export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "w
   hasActiveRun?: boolean;
   backgroundProcessCount?: number;
   activeRunIds?: string[];
+  automationRuns?: import("../shared/session-run-state.js").SessionAutomationRun[];
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;

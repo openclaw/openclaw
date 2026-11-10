@@ -168,6 +168,12 @@ export function prepareReplyTurnRunSource(params: AgentTurnParams, runId: string
             sessionId: params.followupRun.run.sessionId,
             agentId: params.followupRun.run.agentId,
             lifecycleGeneration: captureAgentRunLifecycleGeneration(runId),
+            automation: {
+              runId,
+              jobId: automation.job.id,
+              name: automation.job.name,
+              startedAt: Date.now(),
+            },
             cronRunsByJobId: new Map([
               [
                 automation.job.id,

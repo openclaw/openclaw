@@ -55,6 +55,7 @@ export const detailsSnapshotSchema = json.optional(
           known: json.optional(json.boolean),
           connected: json.optional(json.boolean),
           hasActiveSubagentRun: json.optional(json.boolean),
+          hasActiveAutomationRun: json.optional(json.boolean),
           lastRunError: optionalText,
           childError: optionalText,
           children: json.optional(

@@ -30,8 +30,8 @@ import {
 } from "./chat-details-progress.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import type { GitHubPublicationMobileProps } from "./chat-github-publication-mobile.tsx";
-import "../../../styles/chat/github-publication-mobile.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import "../../../styles/chat/github-publication-mobile.css";
 import { ChatMobilePeopleBody, type ChatMobilePeopleBodyProps } from "./chat-mobile-people.tsx";
 import { getChatOutputsCount } from "./chat-outputs-data.ts";
 import {
@@ -57,8 +57,9 @@ import {
   SessionAutomationRead,
   type SessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
-import "../../../styles/chat/details.css";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
+import "../../../styles/chat/details.css";
+import { sessionAutomationState } from "./session-automation-schedule-non-cron.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -235,15 +236,11 @@ function MobileRoot(
         label: job.name.trim() || job.id,
         // Keep asynchronous schedule reads inside the rendered automations section.
         get description() {
-          return job.autoDisabled
-            ? t("chat.sessionDetails.automationAttention")
-            : !job.enabled
-              ? t("chat.sessionDetails.automationPaused")
-              : inventory.connected() && job.runningAtMs !== undefined
-                ? t("common.running")
-                : job.schedule
-                  ? formatSchedule(job.schedule)
-                  : undefined;
+          return (
+            sessionAutomationState(job, inventory.connected(), () =>
+              job.schedule ? formatSchedule(job.schedule) : "",
+            ).state || undefined
+          );
         },
       })),
       total: inventory.loaded() ? inventory.total() : undefined,

@@ -7,6 +7,7 @@ import {
 import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { isSwarmRunWaitingForCapacity } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { isAgentRunWaitingForCapacity } from "../../infra/agent-run-capacity-wait.js";
+import { projectedRunIdentity } from "../../infra/agent-run-projection.js";
 import {
   resolveProjectedAgentRunProgressState,
   buildProjectedAgentRunIndex,
@@ -260,13 +261,32 @@ export function resolveVisibleActiveSessionRunState(
         directSubagent.schedulerSlotId ?? directSubagent.runId,
         getSubagentRunRuntimeKey(directSubagent),
       ));
+  const projectedAgentRunIndex = params.projectedAgentRunIndex ?? buildProjectedAgentRunIndex();
   const projectedRunState = resolveProjectedAgentRunProgressState({
     sessionKeys: [requestedKey, canonicalKey],
     sessionId: sessionId || undefined,
     agentId: resolvedAgentId || undefined,
     defaultAgentId: defaultAgentId || undefined,
-    index: params.projectedAgentRunIndex,
+    index: projectedAgentRunIndex,
   });
+  const projectionAgentId = resolvedAgentId ?? defaultAgentId;
+  let preserveStatus = false;
+  const automationRuns = [
+    ...new Map(
+      (projectionAgentId ? [requestedKey, canonicalKey] : []).flatMap((key) =>
+        (
+          projectedAgentRunIndex.automationRuns?.get(
+            projectedRunIdentity(projectionAgentId!, key),
+          ) ?? []
+        )
+          .filter((run) => !sessionId || run.sessionId === sessionId)
+          .map(({ sessionId: _sessionId, preserveStatus: preserve, ...run }) => {
+            preserveStatus ||= preserve === true;
+            return [run.runId, run] as const;
+          }),
+      ),
+    ).values(),
+  ].toSorted((a, b) => a.startedAt - b.startedAt || a.runId.localeCompare(b.runId));
   const localResolution = sessionId ? resolveReplyRunForCurrentSessionId(sessionId) : undefined;
   const localOperations = (
     localResolution?.kind === "one"
@@ -336,6 +356,8 @@ export function resolveVisibleActiveSessionRunState(
     !hasTerminalPersistence;
   return {
     active,
+    ...(automationRuns.length ? { automationRuns } : {}),
+    ...(preserveStatus ? { preserveStatus: true } : {}),
     ...(identitiesComplete ? { runIds: runIds.toSorted() } : {}),
     ...(active &&
     !running &&

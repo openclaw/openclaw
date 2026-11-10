@@ -37,7 +37,9 @@ function matchesRun(
 }
 
 /** Details consumes current observer digests without reading child history. */
-export function ChatSubagentActivity(props: SubagentActivityProps) {
+export function ChatSubagentActivity(
+  props: Omit<SubagentActivityProps, "rows"> & { rows: readonly ChatSubagentActivityRow[] },
+) {
   const context = useOptionalApplication();
   // The cache retains only digests belonging to the currently displayed runs.
   const [digests, setDigests] = createStore<Record<string, SessionObserverDigest>>(

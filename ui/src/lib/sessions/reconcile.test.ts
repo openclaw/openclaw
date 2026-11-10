@@ -19,6 +19,37 @@ function sessionRow(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionR
 
 const buildResult = (...sessions: SessionsListResult["sessions"]) => sessionsResult(sessions);
 
+it.each([99, 100, 101])("settles quiet execution only from a newer snapshot (%s)", (snapshotAt) => {
+  const active = sessionRow({
+    sessionId: "quiet-run-session",
+    updatedAt: 50,
+    snapshotAt: 100,
+    hasActiveRun: true,
+    status: "running",
+    automationRuns: [
+      { runId: "run", jobId: "watch", name: "Watch", startedAt: 40, status: "running" },
+    ],
+  });
+  const result = buildResult(active);
+  const settled = {
+    ...active,
+    updatedAt: 20,
+    snapshotAt,
+    hasActiveRun: false,
+    status: "done" as const,
+    automationRuns: [],
+  };
+  const reduced = reconcileSessionChanged(result, {
+    sessionKey: key,
+    agentId: "main",
+    reason: "agent.input.settled",
+    session: settled,
+    ancestorSessions: [],
+    ts: snapshotAt,
+  });
+  expect(reduced.result?.sessions).toEqual([snapshotAt > 100 ? settled : active]);
+});
+
 it("replaces an unknown owner without donating another owner's presentation", () => {
   const row = sessionRow({ key: "unknown", kind: "unknown", sessionId: "shared-session" });
   const current = buildResult({

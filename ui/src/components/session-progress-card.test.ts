@@ -155,6 +155,20 @@ describe("renderSessionProgressCard", () => {
     },
   );
 
+  it("shows automation execution without rewriting an older conversation outcome or saved plan", () => {
+    const input = { sessionStatus: "failed" as const, ...runWindow, hasActiveRun: true };
+    const container = mountCard({
+      ...input,
+      runtime: { known: true, connected: true, hasActiveAutomationRun: true },
+    });
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Working");
+    expect(container.querySelector(".session-run-spinner")).not.toBeNull();
+    expect(container.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
+    render({ ...input, hasActiveRun: false, runtime: { known: true, connected: true } }, container);
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    expect(container.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
+  });
+
   it("refreshes relative time while connected and stops after disconnect", () => {
     const container = createContainer();
     const part = render({ card: { ...progressCard, updatedAt: NOW_MS - 10_000 } }, container);

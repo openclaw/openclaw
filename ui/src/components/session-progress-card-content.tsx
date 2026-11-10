@@ -182,6 +182,9 @@ export function ProgressRuntime(props: {
     if (runtime.hasActiveSubagentRun) {
       return t("sessionProgressCard.runtime.delegated");
     }
+    if (runtime.hasActiveAutomationRun) {
+      return t("sessionProgressCard.runtime.working");
+    }
     if (props.terminalOutcome) {
       return t(`sessionProgressCard.outcome.${props.terminalOutcome}`);
     }

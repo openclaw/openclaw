@@ -15,7 +15,7 @@ const state = await setupAgentRunnerExecutionTestState();
 const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 const registry = await import("../../infra/agent-run-registry.js");
 
-it("keeps a scheduled check off active-session projection without disabling its results", async ({
+it("projects scheduled execution without replacing conversation lifecycle or disabling results", async ({
   onTestFinished,
 }) => {
   const actual = await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
@@ -39,12 +39,12 @@ it("keeps a scheduled check off active-session projection without disabling its 
       params.onExecutionPhase?.({ phase: "model_call_started" });
       const context = registry.getAgentRunContext(runId);
       expect(context).toMatchObject({
-        projectSessionActive: false,
+        projectSessionActive: true,
         projectSessionLifecycle: false,
       });
       expect(context?.isControlUiVisible).not.toBe(false);
       expect(context?.projectSessionMessages).not.toBe(false);
-      expect(registry.buildProjectedAgentRunIndex().sessionKeys.size).toBe(0);
+      expect(registry.buildProjectedAgentRunIndex().sessionKeys.size).toBe(1);
       return {
         payloads: [{ text: "The review is ready.", mediaUrl: "https://example.test/report.png" }],
         meta: {},

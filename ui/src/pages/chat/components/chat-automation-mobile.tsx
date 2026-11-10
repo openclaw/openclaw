@@ -14,6 +14,7 @@ import {
 import "../../../styles/chat/automation-mobile.css";
 import "../../../styles/chat/summary-automations.css";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
+import { sessionAutomationState } from "./session-automation-schedule-non-cron.ts";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
@@ -125,13 +126,7 @@ export function SessionAutomationMobileList(props: SessionAutomationMobileListPr
                   <span class="session-automation-mobile__list-copy">
                     <strong>{job().name || job().id}</strong>
                     <small>
-                      {job().autoDisabled
-                        ? t("chat.sessionDetails.automationAttention")
-                        : !job().enabled
-                          ? t("chat.sessionDetails.automationPaused")
-                          : inventory().connected() && job().runningAtMs !== undefined
-                            ? t("common.running")
-                            : schedule()}
+                      {sessionAutomationState(job(), inventory().connected(), schedule).state}
                     </small>
                   </span>
                   <Icon name="chevronRight" />

@@ -174,20 +174,23 @@ export function progressCardPresentation(
   const hasCurrentRunActivity =
     runtime?.connected !== false &&
     runtime?.known !== false &&
-    (runtime?.hasActiveSubagentRun === true || (hasActiveRun && sessionStatus !== "done")) &&
-    !isProgressCardStaleForRun(card, startedAt) &&
-    (validUpdatedAt === undefined ||
-      (sessionStatus !== "queued" &&
-        (validStartedAt !== undefined || sessionStatus === undefined)));
+    (runtime?.hasActiveAutomationRun === true ||
+      ((runtime?.hasActiveSubagentRun === true || (hasActiveRun && sessionStatus !== "done")) &&
+        !isProgressCardStaleForRun(card, startedAt) &&
+        (validUpdatedAt === undefined ||
+          (sessionStatus !== "queued" &&
+            (validStartedAt !== undefined || sessionStatus === undefined)))));
   const terminalTimestamp =
     runOutcome &&
     !runtime?.hasActiveSubagentRun &&
+    !runtime?.hasActiveAutomationRun &&
     runtime?.connected !== false &&
     runtime?.known !== false
       ? validEndedAt
       : undefined;
   const effectiveSessionStatus =
-    sessionStatus && TERMINAL_RUN_OUTCOMES[sessionStatus] && !terminalTimestamp
+    runtime?.hasActiveAutomationRun ||
+    (sessionStatus && TERMINAL_RUN_OUTCOMES[sessionStatus] && !terminalTimestamp)
       ? undefined
       : sessionStatus;
   const activityTimestamp = terminalTimestamp ?? validUpdatedAt ?? Date.now();

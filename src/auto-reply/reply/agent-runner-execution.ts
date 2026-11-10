@@ -158,9 +158,13 @@ async function executeAgentTurnInternalLoop(
       verboseLevel: params.resolvedVerboseLevel,
       isControlUiVisible: shouldSurfaceToControlUi,
       ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
-      // Scheduled checks must not replace foreground status; their authored results still publish.
+      // Quiet content is not idle execution. Keep the last conversational outcome
+      // intact while the run registry projects the automation's own activity.
       ...(isCronExecutionInputProvenance(params.followupRun.run.inputProvenance)
-        ? { projectSessionActive: false, projectSessionLifecycle: false }
+        ? {
+            projectSessionActive: true,
+            projectSessionLifecycle: false,
+          }
         : {}),
       completionSource: params.completionSource,
       sessionEventDelivery: resolveReplySessionEventDelivery(params.opts, params.followupRun.run),

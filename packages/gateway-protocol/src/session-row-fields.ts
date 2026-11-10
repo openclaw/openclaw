@@ -94,6 +94,7 @@ export const SESSION_SIDEBAR_ROW_FIELDS: ReadonlySet<string> = new Set([
   "backgroundProcessCount",
   "hasActiveSubagentRun",
   "activeRunIds",
+  "automationRuns",
   "subagentRunState",
   "modelSelectionLocked",
   "hasAutomation",

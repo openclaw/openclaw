@@ -791,6 +791,27 @@ it("expands 25 retained jobs in tens independently of RPC pagination and resets 
   expect(current.request).toHaveBeenCalledTimes(3);
 });
 
+it.each([
+  { autoDisabled: undefined },
+  { autoDisabled: { reason: "consecutive-failures" as const, atMs: 1, consecutiveErrors: 3 } },
+])(
+  "shows admitted execution independently of disabled scheduling ($autoDisabled)",
+  async ({ autoDisabled }) => {
+    const current = component(jobsRequest(job({ enabled: false, runningAtMs: 42, autoDisabled })));
+    await current.ready("Running");
+    expect(current.element.querySelectorAll(".session-run-spinner")).toHaveLength(1);
+    expect(current.element.textContent).not.toContain("Paused");
+    const companion = mobile(jobsRequest(job({ enabled: false, runningAtMs: 42, autoDisabled })));
+    await waitForSolid(() => {
+      const rows = companion.container.querySelectorAll(
+        '.session-automation-mobile__list-row, [data-details-destination="automation"]',
+      );
+      expect(rows).toHaveLength(2);
+      rows.forEach((row) => expect(row.textContent).toContain("Running"));
+    });
+  },
+);
+
 it("retains reconnect facts and distinguishes auto-disabled from paused and stale running", async () => {
   const pending = createDeferred<Page>();
   const current = component(

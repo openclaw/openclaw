@@ -52,6 +52,11 @@ export function createSessionRunTerminalReconciler(
       return existing;
     }
     const row = observation?.project(existing) ?? existing;
+    // Registry snapshots own automation retirement. Its chat terminal cannot
+    // replace the conversation's lifecycle or retire an overlapping execution.
+    if (runId && row.automationRuns?.some((run) => run.runId === runId)) {
+      return existing;
+    }
     const wasActive = row.hasActiveRun === true || isSessionRunStateActive(row);
     const previousTerminalRunId = row.lastRunId?.trim();
     const isTerminal = terminal.status !== "queued" && terminal.status !== "running";

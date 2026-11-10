@@ -1,5 +1,6 @@
 import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import type { VerboseLevel } from "../auto-reply/thinking.shared.js";
+import type { SessionAutomationRun } from "../shared/session-run-state.js";
 import type {
   AgentRunApprovalLeases,
   AgentRunApprovalClosureReason,
@@ -45,6 +46,8 @@ export type AgentRunContext = {
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
+  /** Captured invocation identity; job edits cannot replace the run that owns activity. */
+  automation?: Omit<SessionAutomationRun, "status">;
   /** Exact scheduler wait leases; absent during ordinary runtime preparation. */
   capacityWaits?: Set<symbol>;
   /** Whether hidden events may reach exact sessions.messages subscribers.
@@ -114,6 +117,10 @@ export type AgentRunRegistryState = {
 export type ProjectedAgentRunState = "queued" | "running" | "capacity-wait";
 
 export type ProjectedAgentRunIndex = {
+  automationRuns?: ReadonlyMap<
+    string,
+    readonly (SessionAutomationRun & { sessionId?: string; preserveStatus?: true })[]
+  >;
   modelsBySessionId: ReadonlyMap<string, AgentRunModel | null>;
   sessionKeys: ReadonlyMap<string, ProjectedAgentRunState>;
   sessionIds: ReadonlyMap<string, ProjectedAgentRunState>;
