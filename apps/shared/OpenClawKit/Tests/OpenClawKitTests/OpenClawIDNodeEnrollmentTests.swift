@@ -222,7 +222,7 @@ struct OpenClawIDNodeEnrollmentTests {
         #expect(requests
             .allSatisfy { $0.url?.host == "discovery.example" && $0.value(forHTTPHeaderField: "authorization") == nil })
         let mail = try #require(requests.first?.httpBody)
-        #expect(!String(decoding: mail, as: UTF8.self).contains("KioqKioq"))
+        #expect(try #require(String(bytes: mail, encoding: .utf8)).contains("KioqKioq") == false)
         let signed = try #require(requests.first?.value(forHTTPHeaderField: "openclaw-signature"))
         #expect(signed.hasPrefix("keyid=\(identity.signingKey),ts=\(fixture.now),sig="))
     }

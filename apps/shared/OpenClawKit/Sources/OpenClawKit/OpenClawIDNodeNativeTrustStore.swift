@@ -97,6 +97,9 @@ public actor OpenClawIDNodeNativeTrustStore: OpenClawIDNodeTrustStore {
             try OpenClawIDNodeTrust.validateCommit(target.state, replacing: current)
             let merged = try OpenClawIDNodeTrust.mergeObservation(target.state, with: current)
             try Self.write(hostname: target.hostname, state: merged, database: database)
+            guard let evidence = String(bytes: target.evidence, encoding: .utf8) else {
+                throw OpenClawIDNodeEnrollmentError.malformed
+            }
             let query = try database.prepare("""
             INSERT INTO openclaw_id_node_enrollments
               (enrollment_id, discovery_origin, relay_url, server_key, peer_key, evidence_json, hostname)
@@ -111,7 +114,7 @@ public actor OpenClawIDNodeNativeTrustStore: OpenClawIDNodeTrustStore {
                 target.relayURL.absoluteString,
                 target.serverKey,
                 target.peerKey,
-                String(decoding: target.evidence, as: UTF8.self),
+                evidence,
                 target.hostname,
             ].enumerated() {
                 try query.bindText(value, at: Int32(offset + 1))

@@ -130,7 +130,9 @@ indirect enum OpenClawIDCanonicalJSON: Sendable, Equatable {
                 while self.index < self.bytes.count, (48...57).contains(self.bytes[self.index]) {
                     self.index += 1
                 }
-                let text = String(decoding: bytes[start..<self.index], as: UTF8.self)
+                guard let text = String(bytes: bytes[start..<self.index], encoding: .utf8) else {
+                    throw OpenClawIDNodeEnrollmentError.malformed
+                }
                 let digits = text.hasPrefix("-") ? String(text.dropFirst()) : text
                 guard !digits.isEmpty, digits.count == 1 || !digits.hasPrefix("0"),
                       let number = Int64(text), number >= -9_007_199_254_740_991, number <= 9_007_199_254_740_991
@@ -198,8 +200,8 @@ indirect enum OpenClawIDCanonicalJSON: Sendable, Equatable {
 
         mutating func hexScalar() throws -> UInt32 {
             guard self.index + 4 <= self.bytes.count else { throw OpenClawIDNodeEnrollmentError.malformed }
-            let text = String(decoding: bytes[index..<(index + 4)], as: UTF8.self)
-            guard text.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
+            guard let text = String(bytes: bytes[index..<(index + 4)], encoding: .utf8),
+                  text.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
                   let value = UInt32(text, radix: 16)
             else { throw OpenClawIDNodeEnrollmentError.malformed }
             self.index += 4

@@ -103,7 +103,9 @@ public struct OpenClawIDNodeIdentity: Sendable {
         let bytes = Array(text.dropFirst(prefix.count).utf8)
         var result = Data()
         for index in stride(from: 0, to: bytes.count, by: 2) {
-            guard let byte = UInt8(String(decoding: bytes[index...index + 1], as: UTF8.self), radix: 16) else {
+            guard let text = String(bytes: bytes[index...index + 1], encoding: .utf8),
+                  let byte = UInt8(text, radix: 16)
+            else {
                 throw OpenClawIDNodeEnrollmentError.malformed
             }
             result.append(byte)
