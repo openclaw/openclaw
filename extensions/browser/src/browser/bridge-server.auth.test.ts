@@ -53,7 +53,7 @@ describe("startBrowserBridgeServer auth", () => {
     const turn = new AsyncLocalStorage<string>();
     const observed: Array<string | undefined> = [];
     const bridge = await turn.run("finished-turn", async () => {
-      const bridge = await startBridge({
+      const started = await startBridge({
         ...tokenAuth,
         resolveSandboxNoVncToken: () => {
           observed.push(turn.getStore());
@@ -61,7 +61,7 @@ describe("startBrowserBridgeServer auth", () => {
         },
       });
       expect(turn.getStore()).toBe("finished-turn");
-      return bridge;
+      return started;
     });
     const response = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=synthetic`, {
       headers: tokenHeaders,
