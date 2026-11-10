@@ -96,6 +96,54 @@ it.each([
   },
 );
 
+it.each([false, true])(
+  "keeps the invoking installation and retained service distinct with --timeout (capture=%s)",
+  async (captureOriginal) => {
+    prepareTimedUpdate();
+    if (captureOriginal) {
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
+    }
+    const serviceRoot = path.join(path.dirname(fixture.root), "retained-service");
+    fs.mkdirSync(serviceRoot);
+    fs.writeFileSync(
+      path.join(serviceRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
+    );
+    const prepare = vi.mocked(commandRun.prepareUpdateCommand).getMockImplementation()!;
+    vi.mocked(commandRun.prepareUpdateCommand).mockImplementation(async (opts) => ({
+      ...(await prepare(opts)),
+      servicePlan: { rootRedirect: null, serviceRoot },
+    }));
+    const marker = path.join(fixture.root, "admitted-update-effect");
+    let executedRunId: string | undefined;
+    vi.spyOn(execution, "executeMutableUpdate").mockImplementation(async (params) => {
+      const run = params.opts.run!;
+      const fence = run.executorFence!;
+      fence.assertCurrent();
+      expect(executorOwner.captureUpdateCommandExecutorAuthority(fence).installKey).toBe(
+        fs.realpathSync(fixture.root),
+      );
+      executorOwner.assertRetainedUpdateCommandRoot(fence, serviceRoot);
+      fs.writeFileSync(marker, "invoking installation admitted with retained service custody");
+      executedRunId = run.runId;
+      finishUpdateRun(run.runId, { status: "succeeded" }, { env: run.env });
+      return null;
+    });
+
+    const outcome = await runUpdate({ timeout: "60" }).catch((error: unknown) => error);
+    expect(
+      outcome,
+      JSON.stringify(vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0]),
+    ).toBeUndefined();
+
+    expect(fs.readFileSync(marker, "utf8")).toBe(
+      "invoking installation admitted with retained service custody",
+    );
+    expect(getUpdateRun(executedRunId!)).toMatchObject({ status: "succeeded", phase: "finished" });
+  },
+);
+
 afterEach(() => vi.useRealTimers());
 
 it("forwards an inherited activation budget for already-current updates without --timeout", async () => {

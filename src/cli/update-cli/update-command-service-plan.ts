@@ -21,6 +21,7 @@ import {
 } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
+  canPreserveGatewayServiceDefinitionOverrides,
   hasGatewayServiceDefinitionOverrides,
   resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
@@ -487,7 +488,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
       !serviceBun &&
       params.rebind !== false &&
       process.platform !== "win32" &&
-      !hasGatewayServiceDefinitionOverrides(command) &&
+      canPreserveGatewayServiceDefinitionOverrides(command) &&
       inspected.verdict.refreshDefinition
     ) {
       plan.serviceRoot = serviceRoot;

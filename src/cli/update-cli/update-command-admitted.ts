@@ -50,17 +50,26 @@ export async function runAdmittedUpdate(
       ? initialization.refusal.report.serviceRoot
       : initialization.target.managedServiceRoot
     : prepared.servicePlan?.serviceRoot;
+  // Service/state admission may use A while the executor updates B and retains A.
+  const executorRoot = initialization
+    ? initialization.refusal
+      ? initialization.refusal.report.root
+      : initialization.target.root
+    : (prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot);
   let initializedFence: UpdateRecoveryFence | undefined;
   let assertInitializationCurrent: (() => void) | undefined;
   if (initialization) {
-    const root = initialization.refusal
-      ? initialization.refusal.report.root
-      : initialization.target.root;
-    const fence = await initialization.executor.enter(root, { preflight: true, serviceRoot });
+    const fence = await initialization.executor.enter(executorRoot, {
+      preflight: true,
+      serviceRoot,
+    });
     initializedFence = fence;
     assertInitializationCurrent = () => {
       fence.assertCurrent();
-      assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
+      assertUpdatePackageActivationAdmission(executorRoot, {
+        serviceRoot,
+        dryRun: inputOpts.dryRun,
+      });
     };
   }
   recoveryState.triageTarget.root = prepared.discoveredRoot;
@@ -110,14 +119,9 @@ export async function runAdmittedUpdate(
       disposePresentation = presentation.dispose;
       const executeWith = (executor: UpdateCommandExecutor) =>
         withUpdatePreviewSignals(opts, async () => {
-          await admitUpdateRequesterContinuation(
-            run,
-            executor,
-            resolveUpdateCommandAdmissionRoot(prepared),
-            serviceRoot,
-          );
+          await admitUpdateRequesterContinuation(run, executor, executorRoot, serviceRoot);
           if (deadline) {
-            run.executorFence = await executor.enter(resolveUpdateCommandAdmissionRoot(prepared), {
+            run.executorFence = await executor.enter(executorRoot, {
               preflight: true,
               serviceRoot,
             });
@@ -143,13 +147,7 @@ export async function runAdmittedUpdate(
           // A handoff tuple alone never grants authority to an ordinary service caller.
           const fence =
             run.executorFence ??
-            (await executor.enter(
-              prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
-              {
-                preflight: true,
-                serviceRoot: prepared.servicePlan?.serviceRoot,
-              },
-            ));
+            (await executor.enter(executorRoot, { preflight: true, serviceRoot }));
           run.executorFence = fence;
           const runId = run.runId;
           const assertCurrent = () => {
