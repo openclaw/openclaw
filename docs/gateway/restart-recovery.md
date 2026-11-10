@@ -68,6 +68,12 @@ preserving its status, archive, current writer identities, and delivery notice
 without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
 
+After a clean shutdown, the Gateway waits for final cleanup and flushes file logs
+and output pipes. On macOS and Linux, any remaining referenced handles get a
+one-second final drain before the process logs remaining handle types and re-raises
+`SIGTERM`. Failed or retained
+cleanup keeps its existing deadline and exit-status handling.
+
 ## Unexpected exits
 
 The Gateway records each run in its existing SQLite boot lifecycle. A graceful

@@ -201,10 +201,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
+        "src/state/dreaming-startup-admission.test.ts",
         "test/canonical-descendant.integration.test.ts",
         "test/codex-web-search-native.integration.test.ts",
         "test/cron-conversation-delivery.codex.integration.test.ts",
         "test/skill-usage.codex.integration.test.ts",
+        "test/slack-outbound-permanent-rejection-loopback.test.ts",
       ],
       preset: "runtime",
     },
@@ -255,6 +257,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "src/agents/agent-tools.delegated-authority.test.ts",
         "src/agents/session-placement-computer.test.ts",
+        "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
       ],
       preset: "runtime",
     },

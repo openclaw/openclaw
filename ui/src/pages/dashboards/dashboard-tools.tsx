@@ -48,7 +48,6 @@ export function DashboardSearch(props: { query: string; onQueryChange: (query: s
         <span class="dashboards-search-toggle">
           <IconButton
             ref={(element) => (toggle = element)}
-            size={36}
             icon="search"
             label={t("dashboardsPage.searchLabel")}
             onClick={() => setOpen(true)}
@@ -162,7 +161,7 @@ export function DashboardAuthorFilter(props: {
       lazy="while-open"
       placement="bottom-end"
       triggerClass={[
-        iconButtonClass({ size: 36 }),
+        iconButtonClass(),
         "dashboards-tools__trigger",
         { active: selected().length > 0 },
       ]}

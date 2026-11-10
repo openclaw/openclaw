@@ -97,7 +97,7 @@ async function makeFixture(label: string): Promise<Fixture> {
       workspace: { bootstrapFiles: {}, files: [] },
       packages: [{ kind: "plugin", source: "clawhub", ref: pluginName, version }],
       mcpServers: {},
-      cronJobs:
+      automations:
         label === "allowed"
           ? [
               {
