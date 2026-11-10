@@ -552,8 +552,9 @@ or subprocess, and its bounded case retains the real CI selection boundary.
 The regression adds 13 test lines, recorded in its own allocation. It adds no
 fixtures, mocks, timers or parallel discovery path. Independent source review
 found no lost contract or unnecessary scope. Targeted tooling typecheck, lint,
-formatting, source-line and test-line ratchets passed. Full local review, hosted
-CI and landing remain pending.
+formatting, source-line and test-line ratchets passed. Full local ClawSweeper
+review of `6c07f87ef1c397281053836c97af0968d3e6be01` found no actionable issues.
+Hosted CI and landing remain pending.
 
 ## Pending qualification and proof repairs
 
