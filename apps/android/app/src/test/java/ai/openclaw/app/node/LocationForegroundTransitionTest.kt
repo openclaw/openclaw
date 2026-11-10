@@ -40,6 +40,11 @@ class LocationForegroundTransitionTest : NodeHandlerRobolectricTest() {
 
       assertFalse(result.ok)
       assertEquals("LOCATION_BACKGROUND_UNAVAILABLE", result.error?.code)
+      assertEquals(
+        "LOCATION_BACKGROUND_UNAVAILABLE: " +
+          "OpenClaw was backgrounded during location capture. Reopen OpenClaw and retry.",
+        result.error?.message,
+      )
       assertNull("A rejected response must not contain coordinates", result.payloadJson)
     }
 

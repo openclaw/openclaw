@@ -65,7 +65,7 @@ class LocationHandler internal constructor(
       if (!isForeground() && !allowsBackgroundLocation()) {
         return nodeInvokeError(
           "LOCATION_BACKGROUND_UNAVAILABLE",
-          "choose Always and grant background location access",
+          "OpenClaw was backgrounded during location capture. Reopen OpenClaw and retry.",
         )
       }
       val payload =
