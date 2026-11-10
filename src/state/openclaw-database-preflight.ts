@@ -36,7 +36,10 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { isSameOpenClawAgentDatabasePath } from "./openclaw-agent-db.paths.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
-import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
+import {
+  openClawDatabasePreflightClaimKey,
+  preflightAgentDatabasesBounded,
+} from "./openclaw-database-preflight-agent-scheduler.js";
 import { cleanupOpenClawStatePreflight } from "./openclaw-database-preflight-cleanup.js";
 import {
   collectAgentDatabasePreflightTargets,
@@ -703,7 +706,7 @@ export async function preflightOpenClawDatabaseSchemas(
     },
     result,
     options.signal,
-    scheduling,
+    scheduling && { ...scheduling, claimKey: openClawDatabasePreflightClaimKey },
     readerCustody.take,
   );
   if (preparedDiscovery) {

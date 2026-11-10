@@ -53,6 +53,43 @@ type ReaderProcess = {
 
 export type AgentSchemaInspectionSnapshot = { pathname: string; identity: FileIdentityStat };
 
+/** Clean-close startup reads stay on the caller so a busy child does not block them. */
+function readCachedSqliteAgentStartupInspection(
+  input: AgentSchemaInspectionInput,
+): AgentSchemaInspection | undefined {
+  if (!input.requireStartupMigrationReadiness || !readSqliteDatabaseCleanClose(input.pathname)) {
+    return undefined;
+  }
+  const validation = getOrLoadSqliteDatabaseAdmissionForPath(
+    input.pathname,
+    agentDatabaseValidationKey,
+    () => undefined,
+  );
+  const metadata = getOrLoadSqliteDatabaseAdmissionForPath(
+    input.pathname,
+    agentSchemaMetadataKey,
+    () => undefined,
+  );
+  if (
+    validation?.schema?.facts?.userVersion === input.supportedVersion &&
+    Atomics.load(new Int32Array(validation.valid), 0) === 1 &&
+    Atomics.load(new Int32Array(validation.schema.valid), 0) === 1 &&
+    prepareSqliteDatabaseAdmission(input.pathname) ===
+      `${validation.identity}:${validation.birthtime}` &&
+    metadata?.agentId === validation.agentId &&
+    (input.agentId === undefined || input.agentId === validation.agentId) &&
+    metadata.role === "agent" &&
+    metadata.schemaVersion === input.supportedVersion
+  ) {
+    return {
+      version: input.supportedVersion,
+      integrityGateOutcome: "cached",
+      agentSchemaMeta: metadata,
+    };
+  }
+  return undefined;
+}
+
 function retireReader(reader: ReaderProcess): void {
   if (reader.retired) {
     return;
@@ -73,6 +110,7 @@ export function createAgentSchemaInspectionWorker() {
   let reader: ReaderProcess | undefined;
   let disposed = false;
   let busy = false;
+  const childWaiters: Array<() => void> = [];
   let processCount = 0;
   let inspectionCount = 0;
   let snapshotCount = 0;
@@ -117,12 +155,31 @@ export function createAgentSchemaInspectionWorker() {
       const { input, kind } = request;
       const signal = resolveSqliteInspectionSignal(callerSignal);
       signal?.throwIfAborted();
-      if (disposed || busy) {
-        throw new Error(
-          disposed
-            ? "Agent schema inspection worker is closed"
-            : "Agent schema inspection worker is busy",
-        );
+      if (disposed) {
+        throw new Error("Agent schema inspection worker is closed");
+      }
+      // Sealed stores admit from memory while this worker's reader is still in a child.
+      if (kind === "agent" && !snapshotPath && !getDatabaseEngineInput("agent")) {
+        const cached = readCachedSqliteAgentStartupInspection(input);
+        if (cached) {
+          return cached;
+        }
+      }
+      // The in-flight child clears `busy` from its own finally while this wait is pending.
+      // oxlint-disable-next-line no-unmodified-loop-condition -- busy changes across the await, not in this body.
+      while (busy) {
+        await new Promise<void>((resolve) => {
+          childWaiters.push(resolve);
+        });
+        try {
+          signal?.throwIfAborted();
+          if (disposed) {
+            throw new Error("Agent schema inspection worker is closed");
+          }
+        } catch (error) {
+          childWaiters.shift()?.();
+          throw error;
+        }
       }
       busy = true;
       try {
@@ -228,39 +285,10 @@ export function createAgentSchemaInspectionWorker() {
           }
           postgresAgentId = agentId;
         }
-        if (
-          kind !== "state" &&
-          !postgresAgent &&
-          !snapshotPath &&
-          input.requireStartupMigrationReadiness &&
-          readSqliteDatabaseCleanClose(input.pathname)
-        ) {
-          const validation = getOrLoadSqliteDatabaseAdmissionForPath(
-            input.pathname,
-            agentDatabaseValidationKey,
-            () => undefined,
-          );
-          const metadata = getOrLoadSqliteDatabaseAdmissionForPath(
-            input.pathname,
-            agentSchemaMetadataKey,
-            () => undefined,
-          );
-          if (
-            validation?.schema?.facts?.userVersion === input.supportedVersion &&
-            Atomics.load(new Int32Array(validation.valid), 0) === 1 &&
-            Atomics.load(new Int32Array(validation.schema.valid), 0) === 1 &&
-            prepareSqliteDatabaseAdmission(input.pathname) ===
-              `${validation.identity}:${validation.birthtime}` &&
-            metadata?.agentId === validation.agentId &&
-            (input.agentId === undefined || input.agentId === validation.agentId) &&
-            metadata.role === "agent" &&
-            metadata.schemaVersion === input.supportedVersion
-          ) {
-            return {
-              version: input.supportedVersion,
-              integrityGateOutcome: "cached",
-              agentSchemaMeta: metadata,
-            };
+        if (kind !== "state" && !postgresAgent && !snapshotPath) {
+          const cached = readCachedSqliteAgentStartupInspection(input);
+          if (cached) {
+            return cached;
           }
         }
         const snapshot = snapshotPath
@@ -414,6 +442,7 @@ export function createAgentSchemaInspectionWorker() {
         }
       } finally {
         busy = false;
+        childWaiters.shift()?.();
       }
     },
   };

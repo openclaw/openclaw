@@ -5,10 +5,13 @@ import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
+import * as sqliteAdmission from "../infra/sqlite-database-admission.js";
 import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { agentSchemaMetadataKey } from "./openclaw-agent-db-metadata.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
+import { agentDatabaseValidationKey } from "./openclaw-agent-db-validation-facts.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -24,6 +27,69 @@ function createSource(sql: string) {
   using database = sqlite.openNodeSqliteDatabase(pathname);
   database.exec(sql);
   return pathname;
+}
+
+function admittedFlag() {
+  const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  new Int32Array(buffer)[0] = 1;
+  return buffer;
+}
+
+/** A reader child that never replies, so the worker stays on its in-flight request. */
+function hangingReader() {
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  const add = (event: string, listener: (...args: unknown[]) => void) => {
+    const current = listeners.get(event) ?? [];
+    current.push(listener);
+    listeners.set(event, current);
+  };
+  const child = {
+    killed: false,
+    pid: 4242,
+    connected: true,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    stderr: undefined,
+    on(event: string, listener: (...args: unknown[]) => void) {
+      add(event, listener);
+      return child;
+    },
+    once(event: string, listener: (...args: unknown[]) => void) {
+      const wrapped = (...args: unknown[]) => {
+        const current = listeners.get(event);
+        const index = current?.indexOf(wrapped) ?? -1;
+        if (index >= 0) {
+          current?.splice(index, 1);
+        }
+        listener(...args);
+      };
+      add(event, wrapped);
+      return child;
+    },
+    off(event: string, listener: (...args: unknown[]) => void) {
+      const current = listeners.get(event);
+      const index = current?.indexOf(listener) ?? -1;
+      if (index >= 0) {
+        current?.splice(index, 1);
+      }
+      return child;
+    },
+    send(message: unknown, callback?: (error?: Error | null) => void) {
+      callback?.();
+      if (message && typeof message === "object" && "type" in message && message.type === "close") {
+        child.kill();
+      }
+      return true;
+    },
+    kill() {
+      child.killed = true;
+      child.exitCode = 0;
+      for (const listener of (listeners.get("close") ?? []).slice()) {
+        listener(0, null);
+      }
+    },
+  };
+  return child;
 }
 
 function observeChild() {
@@ -210,6 +276,72 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     }
   },
 );
+
+it("reads a clean-close cache while a schema reader child is still busy", async () => {
+  const pathname = createSource("CREATE TABLE probe(value TEXT);");
+  const forkMock = vi.mocked(fork);
+  const implementation = forkMock.getMockImplementation();
+  forkMock.mockImplementation(() => hangingReader() as never);
+  const cleanClose = vi
+    .spyOn(sqliteAdmission, "readSqliteDatabaseCleanClose")
+    .mockReturnValue(true);
+  const identity = vi
+    .spyOn(sqliteAdmission, "prepareSqliteDatabaseAdmission")
+    .mockReturnValue("id:born");
+  const facts = vi
+    .spyOn(sqliteAdmission, "getOrLoadSqliteDatabaseAdmissionForPath")
+    .mockImplementation((_pathname, key) => {
+      if (key === agentDatabaseValidationKey) {
+        return {
+          agentId: "sealed",
+          identity: "id",
+          birthtime: "born",
+          valid: admittedFlag(),
+          schema: { facts: { userVersion: 21 }, valid: admittedFlag() },
+        };
+      }
+      if (key === agentSchemaMetadataKey) {
+        return { agentId: "sealed", role: "agent", schemaVersion: 21 };
+      }
+      return undefined;
+    });
+  try {
+    await using reader = createAgentSchemaInspectionWorker();
+    forkMock.mockClear();
+    const blocked = reader.inspect({ pathname, supportedVersion: 21 });
+    void blocked.catch(() => {});
+    const cached = await reader.inspect({
+      pathname,
+      supportedVersion: 21,
+      agentId: "sealed",
+      requireStartupMigrationReadiness: true,
+    });
+    expect(cached).toMatchObject({
+      version: 21,
+      integrityGateOutcome: "cached",
+      agentSchemaMeta: { agentId: "sealed" },
+    });
+    let finished = false;
+    void blocked.then(
+      () => {
+        finished = true;
+      },
+      () => {
+        finished = true;
+      },
+    );
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    expect(forkMock).toHaveBeenCalledOnce();
+  } finally {
+    cleanClose.mockRestore();
+    identity.mockRestore();
+    facts.mockRestore();
+    if (implementation) {
+      forkMock.mockImplementation(implementation);
+    }
+  }
+});
 
 it("agentSchemaInspection carries a Proxy env across IPC and retains typed migration failures", async () => {
   const pathname = createSource("CREATE TABLE probe(value TEXT); PRAGMA user_version = 1;");

@@ -1,0 +1,2 @@
+# Scheduler regression for duplicate sealed targets behind two slow readers, plus the worker proof that a clean-close cache read proceeds while that reader child is busy. 16 lines cover inherited ceiling debt on this base.
+181
