@@ -166,23 +166,21 @@ describe("dns-cli probe bounds", () => {
               const parentListing = actualSpawnSync("/bin/ls", ["-lde", path.dirname(cur)], {
                 encoding: "utf-8",
               });
-              inheritedParent =
-                parentListing.stdout ??
-                ""
-                  .split("\n")
-                  .map((line) => line.trim())
-                  .filter((line) => /^\d+:\s/.test(line) && line.includes("file_inherit"))
-                  .map((line) =>
-                    line
-                      .replace(/^\d+:\s*/, "")
-                      .replace(/file_inherit/g, "")
-                      .replace(/directory_inherit/g, "")
-                      .replace(/limit_inherit/g, "")
-                      .replace(/only_inherit/g, "")
-                      .replace(/\s+/g, " ")
-                      .trim(),
-                  )
-                  .filter((entry) => entry.length > 0);
+              inheritedParent = (parentListing.stdout ?? "")
+                .split("\n")
+                .map((line) => line.trim())
+                .filter((line) => /^\d+:\s/.test(line) && line.includes("file_inherit"))
+                .map((line) =>
+                  line
+                    .replace(/^\d+:\s*/, "")
+                    .replace(/file_inherit/g, "")
+                    .replace(/directory_inherit/g, "")
+                    .replace(/limit_inherit/g, "")
+                    .replace(/only_inherit/g, "")
+                    .replace(/\s+/g, " ")
+                    .trim(),
+                )
+                .filter((entry) => entry.length > 0);
             }
             return spawnOk(
               JSON.stringify({
