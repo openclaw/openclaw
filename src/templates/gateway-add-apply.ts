@@ -32,7 +32,7 @@ import { plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { bindTemplatePluginInstallConsent } from "./gateway-plugin-consent.js";
 import { bindTemplateSkillWarningConsent } from "./gateway-skill-consent.js";
 import { assertTemplatesLabsEnabled } from "./labs-gate.js";
-import { packageFromAction } from "./package-plan-action.js";
+import { bundledDependencyFromAction, packageFromAction } from "./package-plan-action.js";
 import {
   assertTemplatePluginInstallOwnersCurrent,
   assertTemplatePluginRequirementsEnabled,
@@ -367,7 +367,10 @@ export async function applyTemplateAddForGateway(
                               action.kind === "package" && action.details?.kind === "plugin",
                           )
                           .map((action) => {
-                            const pluginId = packageFromAction(action).installId;
+                            const pluginId =
+                              action.details?.source === "bundled"
+                                ? bundledDependencyFromAction(action).installId
+                                : packageFromAction(action).installId;
                             if (!pluginId) {
                               throw new Error("Template plugin requirement has no install owner");
                             }
