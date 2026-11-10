@@ -281,6 +281,10 @@ custom override. Unchanged claims do not invalidate pending credit. Removing the
 mapping stops using stored organization defaults. Manual details take precedence;
 clearing them restores the organization pair or the existing GitHub fallback.
 
+Organization defaults use one protected metadata slot outside the 128-key user
+preference allowance. Importing them does not consume a user preference slot or
+block sign-in at that limit.
+
 These are organization-supplied credit details. An `email_verified` claim reflects
 the provider's email-verification policy, not proof of a GitHub account. See
 [Git co-author credit](/concepts/user-model#gateway-profile-and-github-credit).

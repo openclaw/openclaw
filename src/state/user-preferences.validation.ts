@@ -3,10 +3,12 @@ import {
   normalizeBackgroundPreference,
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
-import { normalizeGitCoauthorIdentity } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import {
+  normalizeGitCoauthorIdentity,
   GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import {
   USER_PREFS_ENTRY_LIMIT,
   USER_PREFS_VALUE_BYTES,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";

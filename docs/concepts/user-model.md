@@ -195,9 +195,18 @@ Later sign-ins refresh organization defaults without overwriting custom details.
 Explicit or organization addresses require a saved affirmative credit preference;
 the default-on preference for verified GitHub accounts alone does not publish them.
 While a supplied pair is selected, credit stays off until that explicit consent.
+Introducing the first supplied pair resets an older saved-on choice unless you
+explicitly save consent with the pair. This applies to manual preference writes
+and proxy imports as well as Profile saves; an earlier GitHub-only or ineffective
+toggle does not authorize a new supplied address.
 Clearing the pair restores the existing GitHub default when no organization pair applies.
 Removing the proxy mapping stops organization credit. Missing or invalid configured
 claims clear the imported pair at the next successful profile sign-in.
+
+Profile merges preserve the consent belonging to the selected supplied details,
+while retaining an explicit target opt-out. Another profile's consent cannot
+enable unconsented target details, and a previously ineffective target choice
+does not enable unconsented details transferred from the source.
 
 For Enterprise GitHub sessions, credit instead uses the commit address already verified by the sign-in broker, only for the configured enterprise GitHub host and while the existing credit preference permits it. The Profile page explains both public noreply and enterprise address credit because a merged profile's displayed primary account can differ from the account selected for publication. When a profile has current accounts on multiple enterprise hosts and no public primary, the read-only account row has no single identity to display; OpenClaw does not pick one arbitrarily. The co-author toggle still reads and updates the same saved preference for every host. The enterprise address is visible in commit history. No enterprise noreply address is synthesized, and a missing verified address withholds credit without changing the preference. The address stays out of profile responses and does not become a sign-in alias. Moving the principal alias invalidates its recorded identity until authenticated sign-in refreshes it. Explicit profile merges preserve a source enterprise account's saved credit preference when the survivor has no saved choice. Gateway publication selects contributors from its selected GitHub account's host; public-GitHub publication continues using public-GitHub contributors.
 

@@ -6,8 +6,6 @@ export const USER_PREFS_ENTRY_LIMIT = 32;
 export const USER_PREFS_PROFILE_KEY_LIMIT = 128;
 export const USER_PREFS_VALUE_BYTES = 4 * 1024;
 export const GIT_COAUTHOR_PREFERENCE_KEY = "git.coauthor.enabled";
-export const GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY = "git.coauthor.identity";
-export const GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY = "git.coauthor.organization";
 export const PR_ATTRIBUTION_PREFERENCE_KEY = "github.prAttribution.enabled";
 export const PR_ATTRIBUTION_FOOTER = "🦞 Made with [OpenClaw](https://openclaw.ai)";
 

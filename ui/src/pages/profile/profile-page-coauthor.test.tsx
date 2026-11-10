@@ -157,24 +157,30 @@ it("keeps verified publishing-host credit available without a displayed primary 
   expect(page.textContent).not.toContain("Add a co-author name and email to enable credit.");
 });
 
-it("does not activate old inert consent when the first custom pair is saved", async () => {
-  const { page, request } = mount({ [consentKey]: true });
-  const toggle = () =>
-    page.querySelector<HTMLInputElement>('#settings-profile-attribution [role="switch"]');
-  await waitForSolid(() => expect(input(page, "name")?.disabled).toBe(false));
-  edit(page, "name", "Ada Example");
-  edit(page, "email", "ada@example.test");
-  submit(page);
-  await waitForSolid(() =>
-    expect(request).toHaveBeenCalledWith("users.prefs.set", {
-      entries: {
-        [identityKey]: { name: "Ada Example", email: "ada@example.test" },
-        [consentKey]: false,
-      },
-    }),
-  );
-  await waitForSolid(() => expect(toggle()).toMatchObject({ checked: false, disabled: false }));
-});
+it.each([false, true])(
+  "requires renewed consent for the first supplied pair (GitHub available=%s)",
+  async (gitCoauthorAvailable) => {
+    const { page, request } = mount({ [consentKey]: true }, false, {
+      ...modelAccountProfile,
+      gitCoauthorAvailable,
+    });
+    const toggle = () =>
+      page.querySelector<HTMLInputElement>('#settings-profile-attribution [role="switch"]');
+    await waitForSolid(() => expect(input(page, "name")?.disabled).toBe(false));
+    edit(page, "name", "Ada Example");
+    edit(page, "email", "ada@example.test");
+    submit(page);
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("users.prefs.set", {
+        entries: {
+          [identityKey]: { name: "Ada Example", email: "ada@example.test" },
+          [consentKey]: false,
+        },
+      }),
+    );
+    await waitForSolid(() => expect(toggle()).toMatchObject({ checked: false, disabled: false }));
+  },
+);
 
 it("shows organization credit separately and requires explicit consent", async () => {
   const { page, request } = mount({ [organizationKey]: organization });

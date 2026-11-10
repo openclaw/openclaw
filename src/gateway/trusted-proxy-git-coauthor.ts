@@ -1,10 +1,10 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { isDeepStrictEqual } from "node:util";
 import {
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
   normalizeGitCoauthorIdentity,
   type GitCoauthorIdentity,
 } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
-import { GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import {
   getCanonicalUserPreferences,

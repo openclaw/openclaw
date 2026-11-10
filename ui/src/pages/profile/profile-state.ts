@@ -11,12 +11,10 @@ import {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
   normalizeGitCoauthorIdentity,
-  type GitCoauthorIdentity,
-} from "../../../../packages/gateway-protocol/src/schema/git-coauthor-identity.ts";
-import {
   GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
-} from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.ts";
+  type GitCoauthorIdentity,
+} from "../../../../packages/gateway-protocol/src/schema/git-coauthor-identity.ts";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
@@ -327,7 +325,10 @@ export class ProfileState {
     try {
       switch (change.kind) {
         case "git-coauthor-identity": {
-          const resetInertConsent = !this.gitCoauthorAvailable && this.gitCoauthorConsent === true;
+          const resetInertConsent =
+            !this.gitCoauthorIdentity &&
+            !this.gitCoauthorOrganization &&
+            this.gitCoauthorConsent === true;
           const identity = change.clear
             ? undefined
             : normalizeGitCoauthorIdentity({

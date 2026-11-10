@@ -33,7 +33,7 @@ import {
   validateUsersGitHubAuthorizeCancelParams,
   validateUsersGitHubDisconnectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-identity.js";
 import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
@@ -535,7 +535,7 @@ export const usersHandlers: GatewayRequestHandlers = {
           respondError(
             respond,
             ErrorCodes.INVALID_REQUEST,
-            `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount})`,
+            `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount}). Remove a saved preference and try again.`,
             {
               details: {
                 code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,

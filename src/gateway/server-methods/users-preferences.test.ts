@@ -684,7 +684,47 @@ test("users.prefs.set notifies only the current merged profile without main-thre
   });
 });
 
-test("users.prefs.set returns typed profile quota details", async () => {
+test.each([1, 32])(
+  "users.prefs changes notify consent for a %i-entry first credit write",
+  async (count) => {
+    return withPreferenceState(async (prepareProfiles) => {
+      const profile = ensureProfileForEmail("credit-change@example.test");
+      await prepareProfiles();
+      await preferences.setCanonicalUserPreferences(profile.id, { "git.coauthor.enabled": true });
+      const notifications = vi.fn();
+      const context = {
+        getClientConnIds: () => new Set(["credit-viewer"]),
+        broadcastToConnIds: notifications,
+      };
+      const entries = {
+        "git.coauthor.identity": { name: "Alice Example", email: "alice@example.test" },
+        ...Object.fromEntries(
+          Array.from({ length: count - 1 }, (_, index) => [`choice-${index}`, true]),
+        ),
+      };
+      expect(await setPrefs(profile.id, { entries }, context)).toMatchObject({
+        ok: true,
+        payload: { status: "ok" },
+      });
+      expect((await preferences.getCanonicalUserPreferences(profile.id))?.entries).toMatchObject({
+        "git.coauthor.enabled": false,
+      });
+      expect(notifications).toHaveBeenCalledWith(
+        "users.prefs.changed",
+        { profileId: profile.id, keys: Object.keys(entries) },
+        new Set(["credit-viewer"]),
+      );
+      expect(notifications).toHaveBeenCalledWith(
+        "users.prefs.changed",
+        { profileId: profile.id, keys: ["git.coauthor.enabled"] },
+        new Set(["credit-viewer"]),
+      );
+      expect(notifications.mock.calls.every(([, payload]) => payload.keys.length <= 32)).toBe(true);
+    });
+  },
+);
+
+test("users.prefs.set returns typed profile quota details and recovery advice", async () => {
   return withPreferenceState(async () => {
     const profile = ensureProfileForEmail("quota@example.test");
     for (let start = 0; start < 128; start += 32) {
@@ -701,6 +741,7 @@ test("users.prefs.set returns typed profile quota details", async () => {
       ok: false,
       error: {
         code: "INVALID_REQUEST",
+        message: expect.stringContaining("Remove a saved preference and try again"),
         details: {
           code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
           limit: 128,

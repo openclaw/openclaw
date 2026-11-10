@@ -1,7 +1,7 @@
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { describe, expect, it, vi } from "vitest";
-import { GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -34,6 +34,88 @@ const cfg: OpenClawConfig = {
 const authResult = { ok: true, method: "trusted-proxy" as const, user: "oidc:issuer:alice" };
 
 describe("organization credit through authenticated profile admission", () => {
+  it.each(["http", "websocket"] as const)(
+    "admits %s sign-in with 128 saved user preferences while synchronizing organization credit",
+    async (transport) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot(cfg);
+        const profile = await ensureCanonicalUserProfileForEmail(authResult.user);
+        const saved = Object.fromEntries(
+          Array.from({ length: 128 }, (_, index) => [`saved-${index}`, index]),
+        );
+        for (let start = 0; start < 128; start += 32) {
+          expect(
+            await setCanonicalUserPreferences(
+              profile.id,
+              Object.fromEntries(Object.entries(saved).slice(start, start + 32)),
+            ),
+          ).toMatchObject({ ok: true });
+        }
+        const req = new IncomingMessage(new Socket());
+        req.headers = { "x-credit-name": "Alice Example", "x-credit-email": "alice@example.test" };
+        const admit = async () => {
+          if (transport === "http") {
+            const admitted = await resolveAuthenticatedHttpUserProfile({ req, authResult, cfg });
+            return admitted.authenticatedUserProfile?.profileId;
+          }
+          const admitted = await resolveGatewayConnectProfileAdmission({
+            context: {
+              configSnapshot: cfg,
+              handler: {
+                connId: "credit-full-preferences",
+                logWsControl: createSubsystemLogger("test/credit-admission"),
+                close: vi.fn(),
+              },
+              markHandshakeFailure: vi.fn(),
+              sendHandshakeErrorResponse: vi.fn(),
+              releasePendingNodePairingCleanup: async () => {},
+            },
+            state: { authResult, authMethod: "trusted-proxy", role: "operator" },
+            ownerProfileExpected: false,
+            authenticatedUserId: authResult.user,
+            requestHeaders: req.headers,
+            resolveAuthenticatedGitHubIdentity: undefined,
+          });
+          return admitted.ok ? admitted.prepared?.profile.profileId : undefined;
+        };
+        const read = async () => (await getCanonicalUserPreferences(profile.id))!.entries;
+        try {
+          expect(await admit()).toBe(profile.id);
+          expect(await read()).toEqual({
+            ...saved,
+            [GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]: {
+              name: "Alice Example",
+              email: "alice@example.test",
+            },
+          });
+          expect(
+            await setCanonicalUserPreferences(profile.id, { "saved-128": true }),
+          ).toMatchObject({
+            ok: false,
+            error: { code: "profile-key-limit", limit: 128, currentCount: 128 },
+          });
+          req.headers = {
+            "x-credit-name": "Alice Updated",
+            "x-credit-email": "updated@example.test",
+          };
+          expect(await admit()).toBe(profile.id);
+          expect(await read()).toEqual({
+            ...saved,
+            [GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]: {
+              name: "Alice Updated",
+              email: "updated@example.test",
+            },
+          });
+          req.headers = {};
+          expect(await admit()).toBe(profile.id);
+          expect(await read()).toEqual(saved);
+        } finally {
+          req.destroy();
+        }
+      });
+    },
+  );
+
   it("imports defaults when a GitHub-backed profile would otherwise be deferred", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config: OpenClawConfig = { gateway: { auth: cfg.gateway?.auth } };

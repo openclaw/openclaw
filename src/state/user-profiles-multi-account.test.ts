@@ -1,6 +1,10 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
+import {
+  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY as customKey,
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY as organizationKey,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync as closeAsync,
@@ -49,6 +53,197 @@ const directoryRow = (id: string, ...logins: string[]) => ({ id, logins });
 const legacyPerson = { displayName: "Saved Person Name", githubIdentity: { login: "legacy" } };
 
 describe("multi-account people", () => {
+  it.each<{
+    label: string;
+    sourceKey: string;
+    sourceConsent?: boolean;
+    targetKey?: string;
+    targetConsent?: boolean;
+    selected: "source" | "target";
+    expectedConsent?: boolean;
+  }>([
+    {
+      label: "inherits consenting custom credit",
+      sourceKey: customKey,
+      sourceConsent: true,
+      selected: "source",
+      expectedConsent: true,
+    },
+    {
+      label: "inherits consenting organization credit",
+      sourceKey: organizationKey,
+      sourceConsent: true,
+      selected: "source",
+      expectedConsent: true,
+    },
+    {
+      label: "preserves target opt-out",
+      sourceKey: customKey,
+      sourceConsent: true,
+      targetConsent: false,
+      selected: "source",
+      expectedConsent: false,
+    },
+    {
+      label: "does not reuse inert target consent for an opted-out source",
+      sourceKey: customKey,
+      sourceConsent: false,
+      targetConsent: true,
+      selected: "source",
+      expectedConsent: false,
+    },
+    {
+      label: "does not reuse inert target consent for an unsigned source",
+      sourceKey: customKey,
+      targetConsent: true,
+      selected: "source",
+    },
+    {
+      label: "does not apply source consent to target custom details",
+      sourceKey: organizationKey,
+      sourceConsent: true,
+      targetKey: customKey,
+      selected: "target",
+    },
+    {
+      label: "retains target custom details and opt-out",
+      sourceKey: customKey,
+      sourceConsent: true,
+      targetKey: customKey,
+      targetConsent: false,
+      selected: "target",
+      expectedConsent: false,
+    },
+    {
+      label: "uses custom source consent ahead of target organization defaults",
+      sourceKey: customKey,
+      sourceConsent: false,
+      targetKey: organizationKey,
+      targetConsent: true,
+      selected: "source",
+      expectedConsent: false,
+    },
+    {
+      label: "inherits consenting custom details ahead of target organization defaults",
+      sourceKey: customKey,
+      sourceConsent: true,
+      targetKey: organizationKey,
+      targetConsent: true,
+      selected: "source",
+      expectedConsent: true,
+    },
+    {
+      label: "does not apply source consent to target organization defaults",
+      sourceKey: organizationKey,
+      sourceConsent: true,
+      targetKey: organizationKey,
+      selected: "target",
+    },
+  ])("merges supplied credit: $label", async (scenario) => {
+    const source = ensureProfileForEmail("source@example.test", options);
+    const target = ensureProfileForEmail("target@example.test", options);
+    const sourcePair = { name: "Source Person", email: "source-credit@example.test" };
+    const targetPair = { name: "Target Person", email: "target-credit@example.test" };
+    expect(
+      setUserPreferences(
+        source.id,
+        {
+          [scenario.sourceKey]: sourcePair,
+          ...(scenario.sourceConsent === undefined ? {} : publicCredit(scenario.sourceConsent)),
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      ),
+    ).toMatchObject({ ok: true });
+    if (scenario.sourceConsent === undefined) {
+      expect(
+        setUserPreferences(source.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: null }, options),
+      ).toMatchObject({ ok: true });
+    }
+    expect(
+      setUserPreferences(
+        target.id,
+        {
+          ...(scenario.targetKey ? { [scenario.targetKey]: targetPair } : {}),
+          ...(scenario.targetConsent === undefined ? {} : publicCredit(scenario.targetConsent)),
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      ),
+    ).toMatchObject({ ok: true });
+    if (scenario.targetConsent === undefined && scenario.targetKey) {
+      expect(
+        setUserPreferences(target.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: null }, options),
+      ).toMatchObject({ ok: true });
+    }
+
+    linkEmail("source@example.test", target.id, options);
+
+    expect(readConsent(target.id)).toEqual(
+      scenario.expectedConsent === undefined ? {} : publicCredit(scenario.expectedConsent),
+    );
+    const selected = scenario.selected === "source" ? sourcePair : targetPair;
+    const selectedKey = scenario.selected === "source" ? scenario.sourceKey : scenario.targetKey!;
+    expect(getUserPreferences(target.id, [selectedKey], options)).toEqual({
+      [selectedKey]: selected,
+    });
+    const credit = await resolveAttribution([source.id, target.id], {
+      ...options,
+      organizationDefaults: true,
+    });
+    const expected =
+      scenario.expectedConsent === true
+        ? { ...selected, source: selectedKey === customKey ? "explicit" : "organization" }
+        : null;
+    expect(credit.get(source.id)).toEqual(expected);
+    expect(credit.get(target.id)).toEqual(expected);
+  });
+
+  it.each([126, 127])(
+    "keeps supplied consent with the retained pair at capacity (%i ordinary keys)",
+    async (ordinaryKeyCount) => {
+      const source = ensureProfileForEmail("source@example.test", options);
+      const target = ensureProfileForEmail("target@example.test", options);
+      const sourcePair = { name: "Source Person", email: "source-credit@example.test" };
+      const targetPair = { name: "Target Person", email: "target-credit@example.test" };
+      expect(
+        setUserPreferences(source.id, { [customKey]: sourcePair, ...publicCredit(true) }, options),
+      ).toMatchObject({ ok: true });
+      expect(
+        setUserPreferences(
+          target.id,
+          { [organizationKey]: targetPair },
+          { ...options, trustedProxyGitCoauthor: true },
+        ),
+      ).toMatchObject({ ok: true });
+      expect(
+        setUserPreferences(target.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: null }, options),
+      ).toMatchObject({ ok: true });
+      for (let start = 0; start < ordinaryKeyCount; start += 32) {
+        const entries = Object.fromEntries(
+          Array.from({ length: Math.min(32, ordinaryKeyCount - start) }, (_, index) => [
+            `ordinary-${start + index}`,
+            true,
+          ]),
+        );
+        expect(setUserPreferences(target.id, entries, options)).toMatchObject({ ok: true });
+      }
+
+      linkEmail("source@example.test", target.id, options);
+
+      expect(getUserPreferences(target.id, [customKey, organizationKey], options)).toEqual({
+        [customKey]: sourcePair,
+        [organizationKey]: targetPair,
+      });
+      expect(readConsent(target.id)).toEqual(ordinaryKeyCount === 126 ? publicCredit(true) : {});
+      const credit = await resolveAttribution([target.id], {
+        ...options,
+        organizationDefaults: true,
+      });
+      expect(credit.get(target.id)).toEqual(
+        ordinaryKeyCount === 126 ? { ...sourcePair, source: "explicit" } : null,
+      );
+    },
+  );
+
   it("retains explicit credit and protected organization defaults under canonical authority", async () => {
     const profile = ensureProfileForEmail("oidc:explicit-credit", options);
     const imported = { name: "Organization Alice", email: "work@example.test" };

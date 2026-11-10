@@ -7,14 +7,17 @@ import {
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
+  normalizeGitCoauthorIdentity,
+  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import {
   parseSidebarSessionReference,
   UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
   UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import {
   GIT_COAUTHOR_PREFERENCE_KEY,
-  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
-  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
   USER_PREFS_PROFILE_KEY_LIMIT,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import {
@@ -163,6 +166,11 @@ function readPreferenceKeys(database: EngineConnection, profileId: string): Set<
   );
 }
 
+function userPreferenceKeyCount(keys: ReadonlySet<string>): number {
+  // One protected, bounded proxy-metadata pair cannot consume a user's preference allowance.
+  return keys.size - Number(keys.has(GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY));
+}
+
 /** Moves one retired profile's preferences without overwriting the merge target's choices. */
 export function mergeUserPreferences(
   database: EngineConnection,
@@ -181,14 +189,21 @@ export function mergeUserPreferences(
       .selectFrom("user_preferences")
       .selectAll()
       .where("profile_id", "=", sourceProfileId)
+      // A full store may drop later keys: never transfer consent ahead of its custom address.
+      .orderBy((eb) =>
+        eb.case().when("pref_key", "=", GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY).then(0).else(1).end(),
+      )
       .orderBy("pref_key", "asc"),
   ).rows;
   for (const row of rows) {
     if (targetKeys.has(row.pref_key)) {
       continue;
     }
-    if (targetKeys.size >= USER_PREFS_PROFILE_KEY_LIMIT) {
-      break;
+    if (
+      row.pref_key !== GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY &&
+      userPreferenceKeyCount(targetKeys) >= USER_PREFS_PROFILE_KEY_LIMIT
+    ) {
+      continue;
     }
     // A discarded source upload must not leave its custom selection dangling on the target.
     const background =
@@ -245,7 +260,8 @@ export function writeUserPreferences(
   profileId: string,
   update: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {
-  const { serialized, deletionKeys, expected } = update;
+  const { deletionKeys, expected } = update;
+  let { serialized } = update;
   if (updatesPersonalSessionPins(update)) {
     assertUserPreferenceWriteNotHeld(sqlite);
   }
@@ -278,17 +294,40 @@ export function writeUserPreferences(
       }
     }
   }
+  const suppliesCredit = serialized.some(
+    ({ prefKey }) =>
+      prefKey === GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY ||
+      prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+  );
+  const choosesConsent =
+    serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
+    deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY);
+  if (suppliesCredit && !choosesConsent) {
+    const previous = readUserPreferences(sqlite, profileId, [
+      GIT_COAUTHOR_PREFERENCE_KEY,
+      GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
+      GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+    ]);
+    if (
+      previous[GIT_COAUTHOR_PREFERENCE_KEY] === true &&
+      !normalizeGitCoauthorIdentity(previous[GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY]) &&
+      !normalizeGitCoauthorIdentity(previous[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY])
+    ) {
+      // Consent saved before any supplied address existed cannot authorize its first disclosure.
+      serialized = [...serialized, { prefKey: GIT_COAUTHOR_PREFERENCE_KEY, valueJson: "false" }];
+    }
+  }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(sqlite);
   if (serialized.length > 0) {
     const currentKeys = readPreferenceKeys(sqlite, profileId);
     const nextKeys = new Set(currentKeys);
     deletionKeys.forEach((key) => nextKeys.delete(key));
     serialized.forEach((entry) => nextKeys.add(entry.prefKey));
-    if (nextKeys.size > USER_PREFS_PROFILE_KEY_LIMIT) {
+    if (userPreferenceKeyCount(nextKeys) > USER_PREFS_PROFILE_KEY_LIMIT) {
       return err({
         code: "profile-key-limit",
         limit: USER_PREFS_PROFILE_KEY_LIMIT,
-        currentCount: currentKeys.size,
+        currentCount: userPreferenceKeyCount(currentKeys),
       });
     }
   }

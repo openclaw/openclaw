@@ -1,9 +1,11 @@
-import { normalizeGitCoauthorIdentity } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import {
+  normalizeGitCoauthorIdentity,
+  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import {
   GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
-  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
-  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
   isGitCoauthorCreditEnabled,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";

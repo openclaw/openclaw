@@ -1,3 +1,5 @@
+import { GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { readResidentUserProfileId } from "../../state/user-profile-list.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -22,10 +24,20 @@ export function publishUserPreferencesChanged(
     );
   });
   if (connIds?.size) {
-    context.broadcastToConnIds(
-      "users.prefs.changed",
-      { profileId: canonicalProfileId, keys },
-      connIds,
-    );
+    const changedKeySets = [keys];
+    if (
+      keys.includes(GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY) &&
+      !keys.includes(GIT_COAUTHOR_PREFERENCE_KEY)
+    ) {
+      // First-address writes can reset consent. Keep full requests within the 32-key event bound.
+      changedKeySets.push([GIT_COAUTHOR_PREFERENCE_KEY]);
+    }
+    for (const changedKeys of changedKeySets) {
+      context.broadcastToConnIds(
+        "users.prefs.changed",
+        { profileId: canonicalProfileId, keys: changedKeys },
+        connIds,
+      );
+    }
   }
 }

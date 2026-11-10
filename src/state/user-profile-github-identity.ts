@@ -1,4 +1,9 @@
 import {
+  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+  normalizeGitCoauthorIdentity,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import {
   GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
@@ -14,7 +19,7 @@ import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import { deleteUserPreference } from "./user-preferences.store.js";
+import { deleteUserPreference, selectUserPreferenceValues } from "./user-preferences.store.js";
 import {
   enterpriseGitHubAccountPairs,
   selectEnterpriseGitHubIdentities,
@@ -394,12 +399,37 @@ export function prepareUserProfileGitHubMerge(
       ? identities.get(survivingSourceProfileId)?.primary?.accountId
       : undefined);
   const enterpriseIdentities = selectEnterpriseGitHubProfileIdsForMerge(db, sourceProfileIds);
+  const profileIds = [targetProfileId, ...sourceProfileIds];
+  // Match preference transfer: the target keeps each stored key; custom credit precedes defaults.
+  const suppliedOwner = [
+    GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
+    GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+  ]
+    .map((key) => {
+      const values = selectUserPreferenceValues(db, profileIds, key);
+      const owner = profileIds.find((id) => values.has(id));
+      return owner && normalizeGitCoauthorIdentity(values.get(owner)) ? owner : undefined;
+    })
+    .find(Boolean);
+  if (suppliedOwner && suppliedOwner !== targetProfileId) {
+    const choices = selectUserPreferenceValues(
+      db,
+      [targetProfileId, suppliedOwner],
+      GIT_COAUTHOR_PREFERENCE_KEY,
+    );
+    if (choices.get(suppliedOwner) !== true && choices.get(targetProfileId) === true) {
+      // Consent to another address cannot activate the inherited pair. Target opt-out still wins.
+      deleteUserPreference(db, targetProfileId, GIT_COAUTHOR_PREFERENCE_KEY);
+    }
+  }
   for (const sourceProfileId of sourceProfileIds) {
     const sourceIdentity = identities.get(sourceProfileId)?.primary;
     // Retained enterprise accounts keep consent even while merged bindings need fresh sign-in.
     if (
-      !enterpriseIdentities.has(sourceProfileId) &&
-      (!sourceIdentity || sourceIdentity.accountId !== survivingAccountId)
+      suppliedOwner
+        ? sourceProfileId !== suppliedOwner
+        : !enterpriseIdentities.has(sourceProfileId) &&
+          (!sourceIdentity || sourceIdentity.accountId !== survivingAccountId)
     ) {
       deleteUserPreference(db, sourceProfileId, GIT_COAUTHOR_PREFERENCE_KEY);
     }

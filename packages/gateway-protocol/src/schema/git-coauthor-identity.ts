@@ -1,3 +1,6 @@
+export const GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY = "git.coauthor.identity";
+export const GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY = "git.coauthor.organization";
+
 export type GitCoauthorIdentity = { name: string; email: string };
 
 /** A complete credit pair forms exactly one Git trailer, never another header or identity. */
