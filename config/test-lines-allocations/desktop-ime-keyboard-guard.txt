@@ -1,0 +1,4 @@
+# Desktop keyboard composition guard: composing Enter stays off the noVNC wire while a plain
+# Enter still reaches the remote, folded into the existing mobile-keyboard suite (no new test
+# file); exact net growth +36 (43 added / 7 removed).
+36

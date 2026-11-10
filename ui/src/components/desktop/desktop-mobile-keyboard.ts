@@ -1,4 +1,5 @@
 import { onSettled } from "solid-js";
+import { clearCompositionEnd, isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
@@ -90,6 +91,19 @@ export function createDesktopMobileKeyboard(
       } else {
         modifiers.delete(event.code);
       }
+    }
+    const composing = isComposingKeyboardEvent(event);
+    if (event.type === "keyup") {
+      clearCompositionEnd(event);
+    }
+    // The composition owns plain keystrokes: committed text reaches the remote through
+    // handleInput, so forwarding a composing Enter would submit on the far side. Modifiers
+    // and shortcut chords keep their existing pairing.
+    const chord = event.ctrlKey || event.metaKey || event.altKey;
+    const modifierKey = ["Meta", "Control", "Shift", "Alt"].includes(event.key);
+    if (composing && !chord && !modifierKey) {
+      event.preventDefault();
+      return;
     }
     connection.sendKeyboardEvent(event);
     event.preventDefault();

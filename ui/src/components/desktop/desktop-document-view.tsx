@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
+import { clearCompositionEnd, recordCompositionEnd } from "../../lib/ime.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
@@ -47,6 +48,8 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
               tabindex={-1}
               aria-label={t("desktop.keyboardInput")}
               disabled={props.state !== "connected" || !props.controlling}
+              onCompositionEnd={recordCompositionEnd}
+              onFocusOut={clearCompositionEnd}
               onKeyDown={(event) => props.keyboard.handleKeyboardEvent(event)}
               onKeyUp={(event) => props.keyboard.handleKeyboardEvent(event)}
               onInput={(event) => props.keyboard.handleInput(event)}
