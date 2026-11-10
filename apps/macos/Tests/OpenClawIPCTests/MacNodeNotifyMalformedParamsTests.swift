@@ -26,15 +26,17 @@ struct MacNodeNotifyMalformedParamsTests {
 
     @Test(arguments: [nil, "{", "{}"] as [String?])
     func rejectsMalformedCanvasNavigateParams(_ paramsJSON: String?) async {
-        let runtime = self.makeRuntime()
-        let response = await runtime.handleInvoke(BridgeInvokeRequest(
-            id: "canvas-navigate-malformed", command: "canvas.navigate", paramsJSON: paramsJSON))
+        await TestIsolation.withUserDefaultsValues([canvasEnabledKey: true]) {
+            let runtime = self.makeRuntime()
+            let response = await runtime.handleInvoke(BridgeInvokeRequest(
+                id: "canvas-navigate-malformed", command: "canvas.navigate", paramsJSON: paramsJSON))
 
-        #expect(response.id == "canvas-navigate-malformed")
-        #expect(!response.ok)
-        #expect(response.payloadJSON == nil)
-        #expect(response.error?.code == .invalidRequest)
-        #expect(response.error?.message == "INVALID_REQUEST: invalid canvas.navigate params")
+            #expect(response.id == "canvas-navigate-malformed")
+            #expect(!response.ok)
+            #expect(response.payloadJSON == nil)
+            #expect(response.error?.code == .invalidRequest)
+            #expect(response.error?.message == "INVALID_REQUEST: invalid canvas.navigate params")
+        }
     }
 
     @Test func preservesEmptyNotificationValidation() async {
