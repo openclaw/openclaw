@@ -30,7 +30,7 @@ const ALL_CASES = [
     ".agent-chat__input, .agent-chat__input--dictating::after, .agent-chat__disabled-banner, .agent-chat__composer-notices .chat-composer-neighbor-card, .agent-chat__composer-alert, .agent-chat__talk-status",
   ),
   ...corners("9999px", "9999px", ".chip, .statusDot, .circular-icon"),
-  ...corners("10px", "10px", ".run-inspector__panel"),
+  ...corners("10px", "10px", ".run-inspector__panel, .oc-icon-button--28"),
   // Row controls share --field-radius, which scales with the engine like .btn; no superellipse.
   ...corners(
     "10px",
@@ -67,6 +67,7 @@ const markup = `<main>
   <span class="chip">Chip</span><span class="statusDot"></span><div class="run-inspector__panel">Surface</div>
   <div class="settings-group"><div class="settings-segmented">Segmented</div></div>
   <button class="oc-icon-button" type="button">Action</button>
+  <button class="oc-icon-button oc-icon-button--28" type="button">Compact action</button>
   <button class="oc-icon-button circular-icon" style="--icon-button-radius: 9999px" type="button">Round action</button>
   <div class="agent-scope-control"><button class="agent-select__trigger" type="button">Agent</button></div>
   <div class="data-table-pagination__controls"><button type="button">Next</button></div>

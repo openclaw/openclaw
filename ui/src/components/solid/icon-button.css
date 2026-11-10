@@ -28,6 +28,7 @@
 
 .oc-icon-button--28 {
   --oc-icon-button-size: 28px;
+  border-radius: var(--icon-button-radius, var(--radius-md));
 }
 
 .oc-icon-button--36 {
