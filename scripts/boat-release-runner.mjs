@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout } from "node:timers/promises";
 
 // Receipts cross jobs in the same workflow through needs.<job>.outputs. Never
 // export the Crabbox claim: it contains SSH access and local workspace state.
@@ -264,31 +265,55 @@ if (command === "provision") {
       ) {
         throw new Error("Boat VM creation identity changed; refusing deletion.");
       }
-      const result = run("boat", ["--no-update", "--json", "delete", receipt.id, "--yes"]);
-      let operation;
-      try {
-        operation = JSON.parse(result.stdout).operation;
-      } catch {
-        /* Report unconfirmed deletion below. */
-      }
-      if (
-        !operation ||
-        !/^bdop_[a-f0-9]{32}$/.test(operation.id) ||
-        operation.targetId !== receipt.id ||
-        !["box", "sandbox"].includes(operation.kind)
-      ) {
-        throw new Error(
-          `Boat deletion is unconfirmed for ${receipt.id}; reconcile before retrying.`,
-        );
-      }
-      if (
-        result.error ||
-        result.status !== 0 ||
-        operation.status !== "completed" ||
-        !Number.isFinite(Date.parse(operation.completedAt))
-      ) {
-        throw new Error(
-          `Boat deletion ${operation.id} is not confirmed complete; inspect it with boat deletion status.`,
+      const deadline = performance.now() + 180_000;
+      let result = run("boat", ["--no-update", "--json", "delete", receipt.id, "--yes"], 30_000);
+      let deletion;
+      for (;;) {
+        let operation;
+        try {
+          operation = JSON.parse(result.stdout).operation;
+        } catch {
+          /* Report unconfirmed deletion below. */
+        }
+        if (
+          !operation ||
+          !/^bdop_[a-f0-9]{32}$/.test(operation.id) ||
+          operation.targetId !== receipt.id ||
+          !["box", "sandbox"].includes(operation.kind) ||
+          (deletion && (operation.id !== deletion.id || operation.kind !== deletion.kind))
+        ) {
+          throw new Error(
+            `Boat deletion is unconfirmed for ${receipt.id}; reconcile before retrying.`,
+          );
+        }
+        deletion ??= operation;
+        if (
+          result.error ||
+          result.status !== 0 ||
+          !["pending", "processing", "blocked", "completed"].includes(operation.status) ||
+          (operation.status === "completed" &&
+            !Number.isFinite(Date.parse(operation.completedAt))) ||
+          performance.now() >= deadline
+        ) {
+          throw new Error(
+            `Boat deletion ${deletion.id} is not confirmed complete; inspect it with boat deletion status.`,
+          );
+        }
+        if (operation.status === "completed") {
+          break;
+        }
+        // A successful delete request can return before the operation finishes.
+        await setTimeout(Math.min(2000, deadline - performance.now()));
+        const remaining = Math.floor(deadline - performance.now());
+        if (remaining <= 0) {
+          throw new Error(
+            `Boat deletion ${deletion.id} is not confirmed complete; inspect it with boat deletion status.`,
+          );
+        }
+        result = run(
+          "boat",
+          ["--no-update", "--json", "deletion", "status", deletion.id],
+          Math.min(30_000, remaining),
         );
       }
     } catch (error) {

@@ -37,7 +37,16 @@ if (args[0] === "actions" && args[1] === "register") {
 }
 if (args[0] === "actions" && args[1] === "unregister" && process.env.FIXTURE_MODE === "unregister-failed") process.exit(1);
 if (args.includes("info")) console.log(JSON.stringify({sandbox: {id: "bx_owned", createdAt: process.env.FIXTURE_MODE === "changed-vm" ? "2000-01-01T00:00:00Z" : state.createdAt}}));
-if (args.includes("delete")) console.log(JSON.stringify({operation: {id: "bdop_" + "a".repeat(32), kind: "sandbox", targetId: "bx_owned", status: "completed", completedAt: new Date().toISOString()}}));
+const operation = {id: "bdop_" + "a".repeat(32), kind: "sandbox", targetId: "bx_owned", status: "completed", completedAt: new Date().toISOString()};
+if (args.includes("delete")) {
+  if (process.env.FIXTURE_MODE.startsWith("delete-")) operation.status = "pending";
+  console.log(JSON.stringify({operation}));
+}
+if (args.includes("deletion")) {
+  if (process.env.FIXTURE_MODE === "delete-failed") operation.status = "failed";
+  if (process.env.FIXTURE_MODE === "delete-mismatch") operation.id = "bdop_" + "b".repeat(32);
+  console.log(JSON.stringify({operation}));
+}
 `;
   for (const name of ["crabbox", "boat"]) {
     writeFileSync(join(root, name), binary, { mode: 0o755 });
@@ -131,4 +140,18 @@ linuxRunnerTest("refuses to delete a VM whose creation identity changed", () => 
     f.run("cleanup", { BOAT_VM_RECEIPT: f.value("vm"), FIXTURE_MODE: "changed-vm" }).status,
   ).not.toBe(0);
   expect(f.calls().some((args) => args.includes("delete"))).toBe(false);
+});
+
+linuxRunnerTest.each([
+  { mode: "delete-pending", status: 0 },
+  { mode: "delete-failed", status: 1 },
+  { mode: "delete-mismatch", status: 1 },
+])("settles asynchronous deletion: $mode", ({ mode, status }) => {
+  const f = fixture(mode);
+  expect(f.run("provision").status).toBe(0);
+  expect(f.run("cleanup", { BOAT_VM_RECEIPT: f.value("vm") }).status).toBe(status);
+  expect(f.calls().filter((args) => args.includes("delete"))).toHaveLength(1);
+  expect(f.calls().filter((args) => args.includes("deletion"))).toEqual([
+    ["--no-update", "--json", "deletion", "status", "bdop_" + "a".repeat(32)],
+  ]);
 });
