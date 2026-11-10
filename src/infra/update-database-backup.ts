@@ -18,6 +18,7 @@ import {
 } from "../state/openclaw-state-maintenance-context.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
+import type { BackupEngine } from "./database-engine/types.js";
 import {
   ensureDurableDirectory,
   requireDirectorySync,
@@ -26,7 +27,6 @@ import {
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessageWithCode } from "./errors.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
-import { hasNodeErrorCode } from "./path-guards.js";
 import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
@@ -125,11 +125,11 @@ type BackupInput = {
 type InspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
 
 async function loadUpdateDatabaseBackupRuntime() {
-  const [{ discoverBackupDatabasePaths }, { readBackupEngine }] = await Promise.all([
+  const [{ discoverBackupDatabasePaths }, { readBackupEngines }] = await Promise.all([
     import("./backup-sqlite-snapshot.js"),
     import("./database-engine/physical-store.js"),
   ]);
-  return { discoverBackupDatabasePaths, readBackupEngine };
+  return { discoverBackupDatabasePaths, readBackupEngines };
 }
 
 let backupRuntime: ReturnType<typeof loadUpdateDatabaseBackupRuntime> | undefined;
@@ -149,14 +149,11 @@ async function inspectRestorableDatabaseFiles(
     // Readers mutate/recreate the transient WAL index; only durable files fence capture.
     for (const suffix of ["", "-wal", "-journal"]) {
       const file = `${database}${suffix}`;
-      let info;
-      try {
-        info = await fs.lstat(file, { bigint: true });
-      } catch (error) {
-        if (suffix && hasNodeErrorCode(error, "ENOENT")) {
-          continue;
-        }
-        throw error;
+      const info = await fs
+        .lstat(file, { bigint: true })
+        .catch((error: unknown) => (suffix ? ignoreMissingPath(error) : Promise.reject(error)));
+      if (!info) {
+        continue;
       }
       if (!info.isFile() || info.nlink !== 1n) {
         throw new Error(
@@ -266,6 +263,8 @@ export async function createUpdateDatabaseBackupInProcess(
     excludedDatabasePaths?: readonly string[];
     /** Source custody prepared by the parent only for manual original-state capture. */
     originalCaptureSourcePaths?: readonly string[];
+    /** Engines the custody-holding parent already classified; each probe copies the source. */
+    sourceEngines?: Readonly<Record<string, BackupEngine>>;
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<UpdateDatabaseBackup> {
@@ -362,6 +361,7 @@ export async function createUpdateDatabaseBackupInProcess(
               }
               const engine =
                 observation?.engine ??
+                input.sourceEngines?.[file] ??
                 (preserveSourceArtifacts || requestedOriginalSources.has(file)
                   ? withArtifactPreservingStateReads(() => readBackupEngine(file))
                   : readBackupEngine(file));
@@ -607,7 +607,7 @@ export async function createUpdateDatabaseBackup({
     }
   }
   const controller = new AbortController();
-  const { discoverBackupDatabasePaths, readBackupEngine } =
+  const { discoverBackupDatabasePaths, readBackupEngines } =
     await prepareUpdateDatabaseBackupRuntime();
   const prepared = Object.values(resolveDatabaseFamilyEngines(input.config)).includes("postgres")
     ? await (await import("./backup-database-discovery.js")).preparePostgresBackupDiscovery(input)
@@ -648,13 +648,12 @@ export async function createUpdateDatabaseBackup({
         acquisition?.mode === "maintenance-owner" &&
         maintenanceOwnerHasSourceCustody(scope, shared) &&
         !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(shared);
-      // Only maintenance admission consumes this classification. Other callers
-      // let the backup worker inspect engines without another full source image.
-      const postgresPaths = custody
-        ? withArtifactPreservingStateReads(() =>
-            prepared.paths.filter((file) => readBackupEngine(file).engine === "postgres"),
-          )
-        : [];
+      // Only maintenance admission classifies here, and its backup worker reuses the
+      // result. Other callers let that worker inspect engines without another source image.
+      const engines = custody
+        ? withArtifactPreservingStateReads(() => readBackupEngines(prepared.paths))
+        : undefined;
+      const postgres = Object.values(engines ?? {}).some(({ engine }) => engine === "postgres");
       const inspectionPlan =
         custody && maintenanceOwnerMayCopySourcesInProcess(scope, shared)
           ? await discoverUpdateStateSchemaInspectionInProcess({
@@ -704,7 +703,7 @@ export async function createUpdateDatabaseBackup({
       const databases = custody
         ? await readUpdateStateDatabaseSizesInProcess(files, signal)
         : await readUpdateStateDatabaseSizes(files, worker);
-      if (custody && postgresPaths.length > 0) {
+      if (postgres) {
         scope!.assertAdmission();
       }
       const backup = parseUpdateStateInspectionWorker(
@@ -716,13 +715,14 @@ export async function createUpdateDatabaseBackup({
             mode: "database-backup",
             inspectionPlan,
             originalCaptureSourcePaths,
+            sourceEngines: engines,
           },
           ...(custody ? { ioBudget: "deadline" as const } : {}),
           databases,
         }),
         UpdateDatabaseBackupSchema,
       );
-      if (custody && postgresPaths.length > 0) {
+      if (postgres) {
         scope!.assertAdmission();
       }
       rehearsal?.assertCurrent();

@@ -14,6 +14,7 @@ import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import * as physicalStore from "./database-engine/physical-store.js";
 import * as durability from "./directory-durability.js";
 import { listDirectoryTreeStrict } from "./directory-walk.js";
 import * as diskSpace from "./disk-space.js";
@@ -369,6 +370,34 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
     }
   },
 );
+
+it("classifies maintenance-owned sources once for the backup worker", async () => {
+  const f = await fixture(true);
+  const worker = vi.spyOn(inspection, "runUpdateStateInspectionWorker");
+  await using scope = maintenanceScope();
+  await scope.run(() =>
+    createUpdateDatabaseBackup({
+      ...f.input,
+      preserveSourceArtifacts: true,
+      backupRoot: path.join(f.root, "maintenance-owned"),
+      acquisition: { mode: "maintenance-owner" },
+    }),
+  );
+  const [engines] = worker.mock.calls.flatMap(([{ input }]) =>
+    input.mode === "database-backup" ? [input.sourceEngines] : [],
+  );
+  const classified = Object.keys(engines ?? {});
+  expect(classified).not.toHaveLength(0);
+
+  // Each engine probe copies the whole source; the worker must not repeat the parent's.
+  const probes = vi.spyOn(physicalStore, "readBackupEngine");
+  await f.capture({
+    preserveSourceArtifacts: true,
+    originalCaptureSourcePaths: classified,
+    sourceEngines: engines,
+  });
+  expect(probes.mock.calls.filter(([file]) => classified.includes(file))).toEqual([]);
+});
 
 it("keeps the verified digest when a snapshot is replaced before backup metadata is recorded", async () => {
   const f = await fixture();
