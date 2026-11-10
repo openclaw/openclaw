@@ -73,6 +73,19 @@ const invisibleTextFilter: TextFilter = {
 
 const profileFilters = new Map<string, readonly TextFilter[]>();
 
+// Activation latches only on the real ``<relevant-memories>`` tag shape (not a bare
+// ``relevant-memories`` mention) so ordinary replies never pay the whole-reply re-scan
+// on every delta; ``createActivatedProjector`` keeps the probe tail bounded.
+const memoriesTextFilter: TextFilter = {
+  transform: stripRelevantMemoriesTags,
+  activationTokens: [
+    "<relevant-memories",
+    "<relevant_memories",
+    "</relevant-memories",
+    "</relevant_memories",
+  ],
+};
+
 export function assistantVisibleTextFilters(
   profile: AssistantVisibleTextSanitizerProfile,
   streaming = false,
@@ -101,10 +114,7 @@ export function assistantVisibleTextFilters(
     const filters = orderInternalScaffoldingStages<TextFilter>({
       reasoning,
       modelTokens: modelSpecialTokensTextFilter,
-      memories: {
-        transform: stripRelevantMemoriesTags,
-        activationTokens: ["relevant-memories", "relevant_memories"],
-      },
+      memories: memoriesTextFilter,
       xml: toolCallXmlTextFilter({}, streaming),
       trace: assistantTraceTextFilter,
       legacy: legacyBracketToolCallTextFilter,
@@ -118,10 +128,7 @@ export function assistantVisibleTextFilters(
   const filters: TextFilter[] = [
     minimaxToolCallTextFilter(streaming),
     modelSpecialTokensTextFilter,
-    {
-      transform: stripRelevantMemoriesTags,
-      activationTokens: ["relevant-memories", "relevant_memories"],
-    },
+    memoriesTextFilter,
     toolCallXmlTextFilter(
       {
         stripFunctionCallsXmlPayloads: profile === "tool-progress",
@@ -143,10 +150,14 @@ export function assistantVisibleTextFilters(
 
 // Activation is a necessary condition only; the canonical parsers still own
 // syntax, code protection, and later corrections once a marker has appeared.
+// Activation latches only on the real tag shape, not a bare ``minimax:tool_call``
+// mention, so ordinary replies never pay the whole-reply re-scan on every delta.
 export function minimaxToolCallTextFilter(streaming = false): TextFilter {
+  const transform = (text: string) =>
+    stripMinimaxToolCallXml(text, { recoverUnclosed: !streaming });
   return {
-    transform: (text) => stripMinimaxToolCallXml(text, { recoverUnclosed: !streaming }),
-    activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
+    transform,
+    activationTokens: ["<minimax:tool_call>", "</minimax:tool_call>", "<]minimax[>[<tool_call>"],
   };
 }
 

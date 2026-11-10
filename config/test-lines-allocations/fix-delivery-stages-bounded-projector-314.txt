@@ -1,0 +1,6 @@
+62
+# BUG-314: add bare-mention vs real-tag gate tests for the relevant-memories and
+# minimax delivery filters. The streaming-work suite had no coverage proving a bare
+# word mention does not latch the whole-reply re-scan (the bug), so these 4 cases
+# (bare memories, real memories tag, bare minimax, real minimax envelope) are the
+# first regression tests for the bounded delivery projector invariant.

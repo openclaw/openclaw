@@ -25,6 +25,68 @@ it.each([
   expect(markdownOwnershipWork.scannedCharacters - before).toBeLessThan(source.length * 16);
 });
 
+// A bare word mention (``relevant-memories`` / ``minimax:tool_call``) is not a real tag:
+// it must not latch the delivery filter, which would re-scan the whole accumulated reply
+// on every delta. Only the actual tag shape should gate activation.
+it("keeps a bare relevant-memories mention off the whole-reply re-scan", () => {
+  // A bare word mention is not a real tag: the delivery transform must not latch on
+  // it and re-scan the whole accumulated reply on every delta. When the stage latches
+  // (the unfixed ``relevant-memories`` activation token), the canonical transform runs
+  // on the whole reply every delta and pays a MEMORY_TAG_QUICK_RE scan over the full
+  // accumulated text. regexWork counts the characters fed to every .test() on a
+  // memories-relevant regex, so a bounded total proves the probe only ever scans a
+  // small tail instead of the growing reply.
+  const source = "The relevant-memories feature stays off the hot path.\n\n"
+    .repeat(64)
+    .slice(0, 4096);
+  const scanned = regexWork(
+    () => {
+      const stream = createAssistantVisibleStreamText("final_answer");
+      streamChunks(source, 4, stream);
+      expect(stream.text).toContain("relevant-memories feature");
+    },
+    (re) => String(re).includes("relevant") && /memor/i.test(String(re)),
+  );
+  expect(scanned).toBeLessThan(source.length * 8);
+});
+
+// A real ``<relevant-memories>`` tag still gates on and is stripped exactly once.
+it("strips a real relevant-memories tag when it appears", () => {
+  const source = "Intro.\n\n<relevant-memories>\nsecret\n</relevant-memories>\n\nAfter.\n";
+  const stream = createAssistantVisibleStreamText("final_answer");
+  streamChunks(source, 4, stream);
+  expect(stream.text).not.toContain("secret");
+  expect(stream.text).toContain("Intro.");
+  expect(stream.text).toContain("After.");
+});
+
+// Same gate for the minimax stage: a bare ``minimax:tool_call`` mention must not latch
+// the whole-reply re-scan either.
+it("keeps a bare minimax:tool_call mention off the whole-reply re-scan", () => {
+  const source = "The minimax:tool_call feature stays off the hot path.\n\n"
+    .repeat(64)
+    .slice(0, 4096);
+  const stream = createAssistantVisibleStreamText("final_answer");
+  markdownOwnershipWork.scannedCharacters = 0;
+  streamChunks(source, 4, stream);
+  const md = markdownOwnershipWork.scannedCharacters;
+  expect(stream.text).toContain("minimax:tool_call feature");
+  expect(md).toBe(0);
+});
+
+// A real minimax tool-call envelope still gates on and is stripped by the existing
+// canonical parser (covered in depth by assistant-visible-text.minimax.test.ts); the
+// gate change here only keeps a bare mention from latching the whole-reply re-scan.
+it("strips a real minimax tool_call envelope when it appears", () => {
+  const source =
+    'Intro.\n\n<minimax:tool_call><invoke name="exec">secret</invoke></minimax:tool_call>\n\nAfter.\n';
+  const stream = createAssistantVisibleStreamText("final_answer");
+  streamChunks(source, 4, stream);
+  expect(stream.text).not.toContain("secret");
+  expect(stream.text).toContain("Intro.");
+  expect(stream.text).toContain("After.");
+});
+
 it("keeps a split tool header across an unbounded whitespace gap", () => {
   const chunks = ["Before\n[too", "l:write]", "\r\n" + " ".repeat(5000), '{"content":"ok"}\nDone.'];
   const stream = createAssistantVisibleStreamText("final_answer");
