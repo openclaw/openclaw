@@ -271,6 +271,17 @@ export async function prepareEmbeddedAttemptHistory(
     isOpenAIResponsesApi,
     warn: (message) => log.warn(message),
   });
+  if (prepared.contextBounded && !isSettledTurnFinalization) {
+    // The host byte bound omitted stored history from this turn's model
+    // context. The preflight cannot know the assembly outcome yet, so the
+    // omission warning is delivered here, from the confirmed selection.
+    // The observer is advisory: its failure must not abort the turn.
+    try {
+      await attempt.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
+    } catch (error) {
+      log.warn(`bounded context notice failed: ${String(error)}`);
+    }
+  }
   input.setup.prepStages.mark("context-engine");
   // Seal restored model history once; transcript admission already seals retained messages.
   for (const message of messages) {

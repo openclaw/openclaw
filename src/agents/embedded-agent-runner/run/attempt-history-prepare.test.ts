@@ -1,6 +1,6 @@
 import * as crypto from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { model } from "../../../../packages/agent-core/src/agent-loop.test-support.js";
 import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
 import {
@@ -13,12 +13,16 @@ import { createAssistantOutput } from "../../../../packages/ai/src/transports/as
 import { convertResponsesMessages } from "../../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { registerContextEngineForOwner } from "../../../context-engine/registry.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import {
   freezeJsonSnapshot,
   isDeeplyFrozenPlainData,
   isPlainData,
 } from "../../../shared/immutable-data.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
+import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
+import { createContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
@@ -403,3 +407,71 @@ it.each([
     }
   },
 );
+
+let attemptEngineIdCounter = 0;
+async function leaseTestContextEngine(
+  assemble: ContextEngine["assemble"],
+  maxActiveTranscriptBytes = 1024,
+) {
+  const id = `attempt-context-engine-${++attemptEngineIdCounter}`;
+  await registerContextEngineForOwner(
+    id,
+    () => createContextEngine({ info: { id, name: id }, assemble }),
+    `test:${id}`,
+    { allowSameOwnerRefresh: true },
+  );
+  const lease = await createContextEngineLogicalTurnLease({
+    identity: { runId: id, sessionId: "parent-session" },
+    config: {
+      plugins: { slots: { contextEngine: id } },
+      agents: { defaults: { compaction: { maxActiveTranscriptBytes } } },
+    },
+  });
+  onTestFinished(() => lease.dispose());
+  return lease;
+}
+
+it("emits a bounded-context notice only when host bounding omits history", async () => {
+  const fixture = createFixture();
+  mocks.readEntry.mockResolvedValue(undefined);
+  const lease = await leaseTestContextEngine(async ({ messages: input }) => ({
+    messages: input,
+    estimatedTokens: 0,
+  }));
+  const onAgentEvent = vi.fn();
+  fixture.input.activeContextEngine = lease.engine;
+  fixture.input.attempt.onAgentEvent = onAgentEvent;
+  fixture.messages.unshift({
+    role: "user",
+    content: "old history ".repeat(500),
+    timestamp: 0,
+  });
+
+  const prepared = await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+
+  expect(prepared.contextBounded).toBe(true);
+  expect(onAgentEvent).toHaveBeenCalledTimes(1);
+  expect(onAgentEvent).toHaveBeenCalledWith({
+    stream: "compaction",
+    data: { phase: "context_bounded" },
+  });
+  expect(fixture.agent.state.messages).toHaveLength(1);
+});
+
+it("emits no bounded-context notice when the engine assembly fits", async () => {
+  const fixture = createFixture();
+  mocks.readEntry.mockResolvedValue(undefined);
+  const lease = await leaseTestContextEngine(async ({ messages: input }) => ({
+    messages: input,
+    estimatedTokens: 0,
+  }));
+  const onAgentEvent = vi.fn();
+  fixture.input.activeContextEngine = lease.engine;
+  fixture.input.attempt.onAgentEvent = onAgentEvent;
+
+  const prepared = await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+
+  expect(prepared.contextBounded).toBe(false);
+  expect(onAgentEvent).not.toHaveBeenCalled();
+  expect(fixture.agent.state.messages).toHaveLength(1);
+});
