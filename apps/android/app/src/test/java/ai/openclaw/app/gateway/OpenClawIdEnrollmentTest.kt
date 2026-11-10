@@ -165,13 +165,11 @@ class OpenClawIdEnrollmentTest {
     val first = assess().state!!
     assertEquals("binding_rollback", assess(state = first.copy(bindingSeq = 2)).failure)
     assertEquals("snapshot_replayed", assess(state = first.copy(snapshotSeq = 3)).failure)
-    val newerBinding = assess(changedSnapshot("binding_seq" to JsonPrimitive(2), "seq" to JsonPrimitive(3)))
-    assertEquals("stale_binding", newerBinding.failure)
-    assertEquals(2L, newerBinding.state!!.snapshotBindingSeq)
-    assertEquals("stale_binding", assess(state = newerBinding.state).failure)
-    val higherSeqOldBinding = assess(changedSnapshot("seq" to JsonPrimitive(4)), newerBinding.state)
-    assertEquals("stale_binding", higherSeqOldBinding.failure)
-    assertEquals(2L, higherSeqOldBinding.state!!.snapshotBindingSeq)
+    // J5: a K_gw-signed claim of binding 2 under binding 1 is refused and none of it is kept;
+    // retirement comes only from R-verified bindings (OpenClawIdTrustRebindTest).
+    val claimed = assess(changedSnapshot("binding_seq" to JsonPrimitive(2), "seq" to JsonPrimitive(3)), first)
+    assertEquals("snapshot_ahead", claimed.failure)
+    assertEquals(first, claimed.state)
     val future = assess(changedSnapshot("issued_at" to JsonPrimitive(now + 301), "seq" to JsonPrimitive(99)), first)
     assertEquals("snapshot_future", future.failure)
     assertEquals(first.snapshotSeq, future.state!!.snapshotSeq)

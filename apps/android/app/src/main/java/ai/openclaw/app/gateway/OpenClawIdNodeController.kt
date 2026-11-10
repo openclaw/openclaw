@@ -1,7 +1,5 @@
 package ai.openclaw.app.gateway
 
-import kotlinx.serialization.json.JsonObject
-
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job

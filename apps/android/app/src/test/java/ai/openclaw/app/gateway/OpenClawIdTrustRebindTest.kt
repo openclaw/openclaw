@@ -91,7 +91,7 @@ class OpenClawIdTrustRebindTest {
     assertEquals("snapshot_replayed", verify(binding(2, "invitee"), snapshot("invitee", 1, 2, now), rebound.state, now + 2).failure)
     // The retired binding and key are refused, and they do not move the marker back.
     val retired = verify(binding1, snapshot("gateway", 8, 1, now + 3), rebound.state, now + 3)
-    assertEquals("stale_binding", retired.failure)
+    assertEquals("binding_rollback", retired.failure)
     assertEquals(rebound.state, retired.state)
   }
 
