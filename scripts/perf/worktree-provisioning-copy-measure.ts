@@ -6,10 +6,12 @@
  * node --import ./scripts/tsx.mjs scripts/perf/worktree-provisioning-copy-measure.ts
  *   --root /scratch/btrfs-proof --owner /scratch/owner.mjs --label baseline-1
  * Bundle each revision's provisioned-copy.ts with esbuild --packages=external.
+ * --dependencies selects the 65,880-file directory-include dependency fixture.
  * Install that revision's fs-safe dependency beside the bundle. --profile saves CPU
  * and sampled allocation stacks (including collected objects) outside the repo.
- * Acceptance: >=5x lower wall time and exact V8 allocation for 50,000 selected
- * files; identical bytes/mode/mtime/path set, independent writes and CoW extents.
+ * Acceptance: >=5x lower wall time and exact V8 allocation for 50,000 files or
+ * the 65,880-file dependency fixture; identical bytes/mode/mtime/path set,
+ * independent writes and CoW extents. Gateway provisionCopy must be <10 seconds.
  * Run A/A controls and >=5 interleaved pairs in fresh processes/destinations.
  * Natural GC; verification and cleanup excluded. No production data is read.
  */
@@ -25,25 +27,31 @@ import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import type { copyProvisionedPaths } from "../../src/agents/worktrees/provisioned-copy.js";
 import { listDirectoryTreeStrict } from "../../src/infra/directory-walk.js";
+import {
+  dependencyFileBytes,
+  dependencyFixturePaths,
+  seedDependencyFixture,
+} from "./worktree-provisioning-dependency-fixture.js";
 
 const { values } = parseArgs({
   options: {
     root: { type: "string" },
+    source: { type: "string" },
     owner: { type: "string" },
     label: { type: "string", default: "candidate" },
     seed: { type: "boolean", default: false },
     profile: { type: "string" },
+    dependencies: { type: "boolean", default: false },
   },
 });
 assert(values.root, "--root is required");
 assert(/^[a-zA-Z0-9-]+$/.test(values.label), "--label must be a single filename segment");
 const root = path.resolve(values.root);
-const source = path.join(root, "source");
-const paths = Array.from(
-  { length: 50_000 },
-  (_, i) => `prepared/${Math.floor(i / 100)}/${i % 100}.bin`,
-);
-const payload = Buffer.alloc(20_000, 120);
+const source = path.resolve(values.source ?? path.join(root, "source"));
+const paths = values.dependencies
+  ? dependencyFixturePaths()
+  : Array.from({ length: 50_000 }, (_, i) => `prepared/${Math.floor(i / 100)}/${i % 100}.bin`);
+const payload = Buffer.alloc(values.dependencies ? dependencyFileBytes : 20_000, 120);
 const ticksPerSecond = Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }));
 const childCpuMs = () => {
   const fields = readFileSync("/proc/self/stat", "utf8").split(") ")[1]!.split(" ");
@@ -52,19 +60,29 @@ const childCpuMs = () => {
 const timestamp = new Date("2020-01-02T03:04:05Z");
 if (values.seed) {
   await fs.mkdir(source);
-  for (let i = 0; i < 62_000; i++) {
-    const relative = i < paths.length ? paths[i]! : `source/${Math.floor(i / 100)}/${i % 100}.bin`;
-    const file = path.join(source, relative);
-    if (i % 100 === 0) {
-      await fs.mkdir(path.dirname(file), { recursive: true });
+  if (values.dependencies) {
+    await seedDependencyFixture(source);
+  } else {
+    for (let i = 0; i < 62_000; i++) {
+      const relative =
+        i < paths.length ? paths[i]! : `source/${Math.floor(i / 100)}/${i % 100}.bin`;
+      const file = path.join(source, relative);
+      if (i % 100 === 0) {
+        await fs.mkdir(path.dirname(file), { recursive: true });
+      }
+      payload.writeUInt32LE(i, 0);
+      await fs.writeFile(file, payload, { mode: 0o640 });
+      await fs.utimes(file, timestamp, timestamp);
     }
-    payload.writeUInt32LE(i, 0);
-    await fs.writeFile(file, payload, { mode: 0o640 });
-    await fs.utimes(file, timestamp, timestamp);
+    await fs.writeFile(path.join(source, ".gitignore"), "prepared/\n");
+    await fs.writeFile(path.join(source, ".worktreeinclude"), "prepared/**\n");
   }
-  await fs.writeFile(path.join(source, ".gitignore"), "prepared/\n");
-  await fs.writeFile(path.join(source, ".worktreeinclude"), "prepared/**\n");
-  console.log(JSON.stringify({ files: 62_000, bytes: 62_000 * payload.length }));
+  console.log(
+    JSON.stringify({
+      files: values.dependencies ? paths.length : 62_000,
+      bytes: (values.dependencies ? paths.length : 62_000) * payload.length,
+    }),
+  );
 } else {
   assert(values.owner, "--owner is required");
   const owner: { copyProvisionedPaths: typeof copyProvisionedPaths } = await import(
@@ -125,7 +143,7 @@ if (values.seed) {
     for (let i = 0; i < paths.length; i++) {
       const file = path.join(destination, paths[i]!);
       const stat = await fs.stat(file);
-      assert.equal(stat.mode & 0o7777, 0o640);
+      assert.equal(stat.mode & 0o7777, values.dependencies && i % 97 === 0 ? 0o755 : 0o640);
       assert.equal(stat.mtimeMs, timestamp.getTime());
       payload.writeUInt32LE(i, 0);
       assert.deepEqual(await fs.readFile(file), payload);

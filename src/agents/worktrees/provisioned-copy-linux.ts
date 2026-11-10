@@ -184,6 +184,8 @@ export async function copyProvisionedPathsLinux(
         }
       }
       check();
+      options.assertCurrent?.();
+      check();
     }
     for (const [name, child] of node.directories) {
       check();

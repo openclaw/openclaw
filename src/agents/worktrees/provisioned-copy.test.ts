@@ -167,7 +167,7 @@ it.skipIf(process.platform !== "linux")(
     const result = await copyProvisionedPaths(source, destination, [...names, "skipped/link"], {
       assertCurrent: authority,
     });
-    expect(authority.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(authority.mock.calls.length).toBeLessThanOrEqual(4);
     expect(swapped).toBe(true);
     expect(result).toEqual(names.toSorted());
     expect(await fs.readdir(destination)).toEqual(["selected"]);
@@ -242,5 +242,37 @@ it.skipIf(process.platform !== "linux")(
     await expect(copyProvisionedPaths(source, destination, ["file"], {})).rejects.toThrow();
     expect(replaced).toBe(true);
     expect(await fs.readdir(destination)).toEqual([]);
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "refuses another batch after authority revocation without an abort signal",
+  async () => {
+    const { source, destination } = fixture();
+    const names = Array.from({ length: 256 }, (_, index) => `${index}`);
+    for (const name of names) {
+      await fs.writeFile(path.join(source, name), name);
+    }
+    let current = true;
+    const failure = new Error("copy authority retired");
+    const spawn = childProcess.spawn.bind(childProcess);
+    const copies = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+      const child = spawn(...args);
+      child.once("close", () => {
+        current = false;
+      });
+      return child;
+    });
+    await expect(
+      copyProvisionedPaths(source, destination, names, {
+        assertCurrent() {
+          if (!current) {
+            throw failure;
+          }
+        },
+      }),
+    ).rejects.toBe(failure);
+    expect(copies).toHaveBeenCalledTimes(1);
+    expect((await fs.readdir(destination)).toSorted()).toEqual(names.slice(0, 128).toSorted());
   },
 );
