@@ -270,6 +270,12 @@ Discovery's snapshot (`getSnapshot`, untrusted):
 4. Not fresh: `enforce` refuses with `freshness_unavailable` (no socket, no credential); `report`
    dials and records the gap. Rule 2 applies under both policies.
 
+Retained state keeps two independent high-water facts from verified snapshots: the newest
+`(seq, issued_at)` and the highest `binding_seq`. Keep both even when refusing a refresh;
+a later signed snapshot with a newer membership order must not erase earlier evidence
+that a server binding was retired. This local marker is not a signed snapshot and never
+supplies membership or protocol authorization.
+
 A snapshot from the future is never stored. The Gateway re-signs at least every
 `SNAPSHOT_REPUBLISH_SECONDS` (1 h), so an honest claw's snapshot is always well inside the 3 h
 window. A K_srv rotation must publish the new binding and a snapshot with its binding_seq together.

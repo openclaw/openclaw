@@ -19,7 +19,14 @@ const controlUiBootModules = JSON.parse(
   entries: Record<"shared" | "new" | "chat", string[]>;
 };
 
-const chatVisibleModules = new Set([
+const chatPresentationModules = new Set([
+  "ui/src/pages/chat/components/chat-thread-view.tsx",
+  "ui/src/pages/chat/components/chat-transcript-layout-solid.tsx",
+  "ui/src/pages/chat/components/chat-message-group-view.tsx",
+  "ui/src/pages/chat/components/chat-divider.tsx",
+  "ui/src/pages/chat/components/chat-composer-dom.ts",
+  "ui/src/components/markdown-blocks-owner.ts",
+  "ui/src/lib/chat/message-visibility.ts",
   "ui/src/pages/chat/components/chat-tool-card-chrome.tsx",
   "ui/src/pages/chat/components/chat-tool-outcome-summary.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-render-model.ts",
@@ -240,7 +247,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/agent-select.tsx":
     case "ui/src/components/agent-select-registration.ts":
     case "ui/src/lib/sessions/session-placement-recovery.ts":
-    case "ui/src/components/solid/connect-command.tsx":
     case "ui/src/components/cloud-profile-icon-data.ts":
     case "ui/src/components/solid/cloud-profile-icon.tsx":
       // Creation fetches these together; keep their compression without a whole route.
@@ -490,6 +496,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-tables.ts":
     case "ui/src/components/markdown-text-replacements.ts":
     case "ui/src/components/markdown-text.ts":
+    case "ui/src/components/markdown-windows-paths.ts":
     case "ui/src/lib/markdown-content.ts":
     case "ui/src/i18n/locales/en-chat-media.ts":
     case "ui/src/i18n/locales/en-code-blocks.ts":
@@ -624,6 +631,13 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/pages/new-session/preferences.ts");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
+                // Keep existing cross-route config writers in their shared boot chunk.
+                modules.add("ui/src/lib/config/config-mutation-runner.ts");
+                modules.add("ui/src/lib/plugins/index.ts");
+                // Shared roster and dialog controls copy without loading Chat.
+                modules.add("ui/src/lib/clipboard.ts");
+                modules.add("ui/src/components/copy-button-state.ts");
+                modules.add("ui/src/components/solid/copy-button.tsx");
                 // Cross-route labels must not pull the New Session or Chat renderers.
                 modules.add("ui/src/i18n/locales/en-chat-welcome.ts");
                 modules.add("ui/src/i18n/locales/en-session-people.ts");
@@ -643,7 +657,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 test: (id: string) => modules.has(controlUiBootManifestKey(id)),
                 // Shared dependencies must be assigned first, or a route group pulls
                 // them (and therefore other routes) into its eagerly imported chunk.
-                priority: 8 - index,
+                priority: route === "chat" ? 5 : 8 - index,
                 includeDependenciesRecursively: true,
                 // Keep each measured boot partition together instead of queueing
                 // several fragments over HTTP/1.1. Shared and route-only code
@@ -658,6 +672,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
               );
               if (route === "shared") {
                 styles.add("ui/src/components/solid/text-overflow.css");
+                // Copy controls also serve dialogs outside the Chat route.
+                styles.add("ui/src/styles/copy-button.css");
                 // Document styles also serve Agents without loading Chat's visible renderers.
                 styles.add("ui/src/styles/sidebar-markdown.css");
                 styles.add("ui/src/styles/mcp-app-extensions.css");
@@ -666,6 +682,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
               }
               if (route === "chat") {
                 styles.delete("ui/src/components/solid/text-overflow.css");
+                styles.delete("ui/src/styles/copy-button.css");
                 styles.delete("ui/src/styles/sidebar-markdown.css");
                 styles.delete("ui/src/styles/mcp-app-extensions.css");
                 styles.delete("ui/src/styles/session-panel-rail.css");
@@ -681,12 +698,16 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 test: (id: string) =>
                   !/[?&]inline(?:[=&]|$)/u.test(id) &&
                   (styles.has(controlUiBootManifestKey(id)) ||
-                    (route === "chat" && chatVisibleModules.has(controlUiBootManifestKey(id))) ||
+                    (route === "chat" &&
+                      chatPresentationModules.has(controlUiBootManifestKey(id))) ||
                     (route === "shared" &&
                       controlUiBootManifestKey(id) === "ui/src/components/solid/text-overflow.ts")),
                 // One stylesheet per measured route set, without per-page JS facades.
                 // Keep it separate from core CSS to preserve its existing size ceiling.
-                priority: 9,
+                // Custodian shares presentation, not Chat's pane and composer.
+                // Integer priorities keep shared/New Session owners ahead of it.
+                priority: route === "chat" ? 6 : 9,
+                includeDependenciesRecursively: route === "chat",
               };
             }),
           ]),

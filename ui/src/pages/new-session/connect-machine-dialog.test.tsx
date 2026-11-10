@@ -10,6 +10,15 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 
+const content = vi.hoisted(() => {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  return { promise, release: () => resolve() };
+});
+vi.mock("./connect-machine-dialog-content.tsx", async (original) => {
+  await content.promise;
+  return original();
+});
+
 function code(id: string): DevicePairJoinSetup {
   return {
     setupId: id,
@@ -57,6 +66,35 @@ function mountSetup() {
 }
 
 describe("machine connection presentation", () => {
+  it("keeps the modal cancellable while its body loads and displays the current request on reopen", async () => {
+    onTestFinished(content.release);
+    const { gateway, view } = mountSetup();
+    const retired = createDeferred<DevicePairJoinSetup>();
+    const current = createDeferred<DevicePairJoinSetup>();
+    const request = vi
+      .spyOn(gateway.client, "request")
+      .mockReturnValueOnce(retired.promise)
+      .mockReturnValueOnce(current.promise);
+    view.getByRole<HTMLButtonElement>("button", { name: "Connect" }).click();
+    flush();
+    expect(view.container.querySelector("openclaw-modal-dialog")).not.toBeNull();
+    await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+    view.getByRole<HTMLButtonElement>("button", { name: "Close" }).click();
+    flush();
+    expect(view.container.querySelector("openclaw-modal-dialog")).toBeNull();
+
+    view.getByRole<HTMLButtonElement>("button", { name: "Connect" }).click();
+    content.release();
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForSolid(() =>
+      expect(view.getByRole("status").textContent).toBe("Creating a secure connection link…"),
+    );
+    current.resolve(code("current"));
+    await waitForSolid(() => expect(view.getByText(code("current").command)).toBeDefined());
+    retired.resolve(code("retired"));
+    await waitForSolid(() => expect(view.queryByText(code("retired").command)).toBeNull());
+  });
+
   it("opens while minting and retains the command and dialog through refresh failure and retry", async () => {
     const { gateway, view } = mountSetup();
     const initial = createDeferred<DevicePairJoinSetup>();

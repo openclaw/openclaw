@@ -17,6 +17,8 @@ permissions:
 
 concurrency:
   group: postgres-conformance-weekly
+  # Keep manual qualification pending when a scheduled run joins the same queue.
+  queue: max
   cancel-in-progress: false
 
 jobs:

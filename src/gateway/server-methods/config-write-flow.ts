@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -23,6 +24,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewayRestart } from "../../infra/restart.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { isRecord } from "../../utils.js";
@@ -225,6 +227,87 @@ export function shouldAwaitGatewayConfigApplication(params: {
   );
 }
 
+type ModelRouteFields = Partial<Record<"model" | "models" | "subagents" | "heartbeat", unknown>>;
+const pickModelRouteKeys = (value: ModelRouteFields | undefined) => [
+  value?.model,
+  value?.models,
+  value?.subagents,
+  value?.heartbeat,
+];
+
+/** The config inputs a billing route depends on; workspace, tools, and identity edits are not. */
+function billingRouteInputs(cfg: OpenClawConfig) {
+  return {
+    models: cfg.models,
+    auth: cfg.auth,
+    // A required cloud worker profile forces the embedded runtime for every model.
+    requiredProfile: cfg.cloudWorkers?.requiredProfile,
+    defaults: pickModelRouteKeys(cfg.agents?.defaults),
+    entries: Object.entries(cfg.agents?.entries ?? {}).map(([id, entry]) => [
+      id,
+      pickModelRouteKeys(entry),
+    ]),
+    refs: collectConfiguredModelRefs(cfg),
+  };
+}
+
+/**
+ * Names model consumers whose billing route (API key, subscription, or a CLI runtime's own
+ * login) the committed write moved. Advisory: the write already succeeded, so a comparison
+ * failure is logged and never fails the response.
+ */
+async function collectConfigWriteBillingRouteWarnings(params: {
+  before: OpenClawConfig | undefined;
+  after: OpenClawConfig;
+  context?: GatewayRequestContext;
+}): Promise<string[]> {
+  // A first write has no source config yet.
+  const before = params.before ?? {};
+  const { after } = params;
+  try {
+    // Most writes touch no model or credential input; skip the auth-store reads for them.
+    if (isDeepStrictEqual(billingRouteInputs(before), billingRouteInputs(after))) {
+      return [];
+    }
+    const { collectModelBillingRouteMigrationWarnings } =
+      await import("../../commands/doctor/shared/model-billing-route-migration.js");
+    const warnings = collectModelBillingRouteMigrationWarnings({
+      before,
+      after,
+      // The published snapshot can predate this write's plugin changes; a write that also
+      // installs or removes a provider plugin may compare that provider's refs without it.
+      metadataSnapshot: getCurrentPluginMetadataSnapshot({ config: after }),
+    });
+    // The success reply logs these; an error reply means the write moved nothing.
+    return warnings;
+  } catch (error) {
+    params.context?.logGateway?.warn(`billing route comparison skipped: ${String(error)}`);
+    return [];
+  }
+}
+
+/**
+ * Success replies carry and log the write's billing-route warnings. Error replies, including a
+ * write that persisted but was not applied, moved no route and stay unchanged.
+ */
+export function replyWithBillingRouteWarnings(
+  respond: RespondFn | undefined,
+  warnings: readonly string[],
+  context: GatewayRequestContext | undefined,
+): RespondFn {
+  return (...args) => {
+    const [ok, payload] = args;
+    if (ok && warnings.length > 0 && isRecord(payload)) {
+      for (const warning of warnings) {
+        context?.logGateway?.warn(warning);
+      }
+      args[1] = { ...payload, billingRouteWarnings: warnings };
+    }
+    // Forward the caller's exact arguments; responders and tests observe their arity.
+    respond?.(...args);
+  };
+}
+
 /** Persists a gateway config write and returns follow-up work that must run after response. */
 export async function commitGatewayConfigWrite(params: {
   snapshot: ConfigWriteSnapshot;
@@ -259,9 +342,16 @@ export async function commitGatewayConfigWrite(params: {
     ),
     afterWrite: { mode: "auto" },
   });
+  const billingRouteWarnings = await collectConfigWriteBillingRouteWarnings({
+    before: params.snapshot.sourceConfig,
+    after: params.nextConfig,
+    context: params.context,
+  });
   return {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,
+    ...(billingRouteWarnings.length > 0 ? { billingRouteWarnings } : {}),
+    reply: replyWithBillingRouteWarnings(params.respond, billingRouteWarnings, params.context),
     // Acknowledge this commit; a later config.get can observe an external edit.
     hash: result.persistedHash,
     ...(application
