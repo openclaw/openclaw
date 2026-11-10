@@ -1,13 +1,15 @@
-# Side-panel scrolling investigation
+# Side-panel scrolling candidate and investigation
 
-**Draft investigation only. No verified fix. Do not merge or deploy this packet.**
+**Draft candidate fix. No verified iPad fix yet. Do not merge or deploy without the pending checks.**
 
 Operation: `side-panel-scrolling-20261110`.
 
-This packet supports evidence collection for an iPad Pro Safari report: the
-Mergebeat dashboard cannot always be scrolled to its bottom as a side panel,
-while expanding the panel works. It changes no production code, configuration,
-permissions, or tests. It is not proof that current main reproduces the defect.
+The reported iPad Pro Safari symptom is that the lower Mergebeat dashboard can
+be pulled into view in a side panel but returns when the finger is released.
+Expanded presentation works. The original investigation is retained below;
+the draft now includes a CSS candidate and a browser geometry regression.
+It is not a confirmed Safari fix, and it changes no saved widget data,
+configuration, permissions, height caps, or touch-input handlers.
 
 ## Source and ownership
 
@@ -21,6 +23,36 @@ permissions, or tests. It is not proof that current main reproduces the defect.
   owning branch, create a competing fix, merge, or deploy.
 - Record the actual live build separately from the local checkout's commit.
   The published draft's exact head must be recorded with every local result.
+
+## Candidate for later testing
+
+The candidate moves the existing page-mode viewport-fitting rule out of its
+main/focused-only styling branch. A single page-mode dashboard therefore fits
+the available side-panel height too, leaving its document to own scrolling.
+Side-panel card borders, padding and controls stay unchanged. Ordinary grids
+continue to use saved row sizing and outer-board scrolling. The same iframe
+is retained across expansion and restoration.
+
+The regression in `../components/board/board-view.browser.test.ts` checks
+viewport containment at 480×634 and 354×178, expanded/restored transitions,
+frame identity, and the ordinary-grid control. It tests layout, not native
+finger-release behavior. Baseline and candidate browser execution are blocked
+before assertions by unavailable Chromium/system-library prerequisites.
+Do not call this red/green proof or native Safari validation.
+
+When a browser-ready checkout is available, run the existing browser file:
+
+```sh
+node scripts/run-vitest.mjs run --config ui/vitest.config.ts --configLoader runner --project browser ui/src/components/board/board-view.browser.test.ts --maxWorkers=1
+```
+
+For the later iPad check, open the candidate build, scroll over ordinary
+dashboard content to the final chart and footer, then release the finger.
+The footer must remain reachable without dragging an outer gutter. Compare
+expanded mode and restored split, then verify that an ordinary multi-widget
+board still scrolls. Record the candidate build; the live server is not
+automatically updated by this draft. Before/after implementation screenshots
+and the iPad retest remain pending.
 
 ## Established observations and open hypotheses
 
@@ -104,7 +136,7 @@ then expanded and restored split. A helper-only scroll assignment can establish
 geometry, not native gesture handling. Chromium mobile emulation and desktop
 WebKit results must be labeled separately from physical iPad Safari.
 
-## Validation status at draft creation
+## Historical validation at investigation-only draft creation
 
 - Passed: JavaScript syntax checks for the two probe snippets and whitespace
   inspection of this investigation-only packet.

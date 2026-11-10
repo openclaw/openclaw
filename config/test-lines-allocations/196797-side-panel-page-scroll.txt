@@ -1,0 +1,2 @@
+47
+# Page-dashboard viewport containment across side/expanded/restored layouts at desktop and dock sizes, with ordinary-grid and iframe-retention controls.
