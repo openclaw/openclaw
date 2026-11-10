@@ -326,7 +326,7 @@ describe("dreams file publication on an unwritable parent", () => {
         // identical bytes would leave the content unchanged, so content
         // alone cannot prove the rejection performed no write.
         for (const method of ["write", "writeFile", "truncate"] as const) {
-          const original = handle[method].bind(handle);
+          const original = handle[method].bind(handle) as (...args: unknown[]) => unknown;
           Object.defineProperty(handle, method, {
             value: (...callArgs: never[]) => {
               mutationCalls.push(method);
