@@ -3,7 +3,7 @@
 .palette-session-settings__title,
 .palette-session-settings__machine {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   line-height: 1.2;
@@ -74,10 +74,12 @@
   display: grid;
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
   grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
+  /* The unsized status row is intrinsic: zero until a failed Settings save occupies it. */
   grid-template-areas:
     "nav topbar"
     "nav notice"
-    "nav content";
+    "nav content"
+    "nav save-status";
   gap: 0;
   transition:
     grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease),
@@ -109,7 +111,7 @@
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--control-ui-environment-color) 16%, transparent);
   color: var(--control-ui-environment-ink);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
   line-height: 1;
 }
@@ -381,7 +383,7 @@ div.shell.shell--onboarding {
 }
 
 .shell--settings:not(.shell--mobile-nav) .page-title {
-  font-size: 26px;
+  font-size: calc(26px * var(--control-ui-text-scale));
 }
 
 .shell--settings .content-header,
@@ -650,7 +652,7 @@ div.shell.shell--onboarding {
   min-width: 0;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -667,7 +669,7 @@ div.shell.shell--onboarding {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -959,7 +961,7 @@ div.shell.shell--onboarding {
   padding: 8px;
   border-top: 2px solid var(--accent);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-sessions--removal-drop {
@@ -1073,7 +1075,7 @@ div.shell.shell--onboarding {
   box-shadow: none;
   color: var(--danger);
   font-size: calc(12px * var(--control-ui-text-scale));
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .sidebar-session-tree__children > .sidebar-session-error .sidebar-session-tree__show-more {
@@ -1718,7 +1720,7 @@ div.shell.shell--onboarding {
   background: transparent;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .sidebar-session-pagination__button:hover:not(:disabled),
@@ -1744,7 +1746,7 @@ div.shell.shell--onboarding {
   margin: 0;
   padding-block: 2px 14px;
   font-size: calc(12.5px * var(--control-ui-text-scale));
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .sidebar-session-empty-hint--startup,
@@ -3143,13 +3145,13 @@ openclaw-sidebar-attention {
   color: var(--text-strong);
   font-size: calc(13.5px * var(--control-ui-text-scale));
   font-weight: 600;
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .sidebar-identity-card__gateway {
   color: var(--muted);
-  font-size: 11px;
-  line-height: 14px;
+  font-size: var(--control-ui-text-xs);
+  line-height: var(--control-ui-text-md);
 }
 
 .sidebar-gateway-name,
@@ -3168,7 +3170,7 @@ openclaw-sidebar-attention {
 .sidebar-gateway-primary {
   flex: none;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-gateway-health {
@@ -3698,7 +3700,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
     }
 
     .page-title {
-      font-size: 15px;
+      font-size: calc(15px * var(--control-ui-text-scale));
       font-weight: 600;
       letter-spacing: -0.01em;
       line-height: 1;
@@ -3810,7 +3812,7 @@ html.openclaw-native-web-chrome
 
 .page-title {
   margin: 0;
-  font-size: 22px;
+  font-size: calc(22px * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
@@ -3858,16 +3860,6 @@ html.openclaw-native-web-chrome
 }
 
 @media (max-width: 900px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .shell--mobile-nav {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto auto minmax(0, 1fr);
-    grid-template-areas:
-      "topbar"
-      "nav"
-      "notice"
-      "content";
-  }
-
   .shell--mobile-nav .topbar {
     position: static;
     padding: 6px 12px;
@@ -3978,7 +3970,7 @@ html.openclaw-native-web-chrome
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: calc(12.5px * var(--control-ui-text-scale));
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
   letter-spacing: 0;
   color: var(--session-row-muted, var(--muted));
 }
@@ -3986,7 +3978,7 @@ html.openclaw-native-web-chrome
 .sidebar-recent-session__channel {
   max-width: 120px;
   font-size: calc(12px * var(--control-ui-text-scale));
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
   letter-spacing: 0;
 }
 
@@ -4120,8 +4112,8 @@ html.openclaw-native-web-chrome
   position: relative;
   margin: 0;
   color: var(--text-strong);
-  font-size: 22px;
-  line-height: 28px;
+  font-size: calc(22px * var(--control-ui-text-scale));
+  line-height: calc(28px * var(--control-ui-text-scale));
   letter-spacing: -0.01em;
   font-weight: 600;
   text-wrap: balance;
@@ -4129,8 +4121,8 @@ html.openclaw-native-web-chrome
 .gateway-connection-view__description {
   margin: 6px 0 0;
   color: var(--muted);
-  font-size: 14px;
-  line-height: 21px;
+  font-size: var(--control-ui-text-md);
+  line-height: calc(21px * var(--control-ui-text-scale));
   text-wrap: pretty;
 }
 .gateway-connection-view__actions {
@@ -4147,7 +4139,7 @@ html.openclaw-native-web-chrome
 .gateway-connection-view__actions .btn {
   height: 32px;
   padding: 0 14px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
 }
 
@@ -4222,7 +4214,7 @@ html.openclaw-native-web-chrome
   .gateway-connection-view__actions .btn {
     height: 36px;
     padding: 0 16px;
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
   }
 }
 
@@ -4235,8 +4227,8 @@ html.openclaw-native-web-chrome
     transform: none;
   }
   .gateway-connection-view h1 {
-    font-size: 20px;
-    line-height: 26px;
+    font-size: calc(20px * var(--control-ui-text-scale));
+    line-height: calc(26px * var(--control-ui-text-scale));
   }
 }
 

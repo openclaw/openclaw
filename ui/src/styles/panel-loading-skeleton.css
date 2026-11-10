@@ -32,7 +32,7 @@ openclaw-panel-loading-skeleton {
     align-items: center;
     gap: 12px;
     text-align: center;
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
 
   .desktop-spinner {

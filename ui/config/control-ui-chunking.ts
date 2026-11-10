@@ -19,7 +19,14 @@ const controlUiBootModules = JSON.parse(
   entries: Record<"shared" | "new" | "chat", string[]>;
 };
 
-const chatVisibleModules = new Set([
+const chatPresentationModules = new Set([
+  "ui/src/pages/chat/components/chat-thread-view.tsx",
+  "ui/src/pages/chat/components/chat-transcript-layout-solid.tsx",
+  "ui/src/pages/chat/components/chat-message-group-view.tsx",
+  "ui/src/pages/chat/components/chat-divider.tsx",
+  "ui/src/pages/chat/components/chat-composer-dom.ts",
+  "ui/src/components/markdown-blocks-owner.ts",
+  "ui/src/lib/chat/message-visibility.ts",
   "ui/src/pages/chat/components/chat-tool-card-chrome.tsx",
   "ui/src/pages/chat/components/chat-tool-outcome-summary.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-render-model.ts",
@@ -160,6 +167,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Config search shares this helper without loading optional session UI.
       return "control-ui-boot-shared";
     case "ui/src/lib/text-diff.ts":
+    case "ui/src/pages/chat/components/chat-message-media.ts":
+    case "ui/src/pages/chat/components/chat-message-deferred.tsx":
+    case "ui/src/pages/chat/components/widget-preview-layout.ts":
+    case "ui/src/lib/chat/youtube-video.ts":
+    case "ui/src/lib/gateway-client-kind.ts":
+    // Activity uses media custody, deferred facades, and client labels, not Chat presentation.
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
@@ -650,7 +663,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 test: (id: string) => modules.has(controlUiBootManifestKey(id)),
                 // Shared dependencies must be assigned first, or a route group pulls
                 // them (and therefore other routes) into its eagerly imported chunk.
-                priority: 8 - index,
+                priority: route === "chat" ? 5 : 8 - index,
                 includeDependenciesRecursively: true,
                 // Keep each measured boot partition together instead of queueing
                 // several fragments over HTTP/1.1. Shared and route-only code
@@ -691,12 +704,16 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 test: (id: string) =>
                   !/[?&]inline(?:[=&]|$)/u.test(id) &&
                   (styles.has(controlUiBootManifestKey(id)) ||
-                    (route === "chat" && chatVisibleModules.has(controlUiBootManifestKey(id))) ||
+                    (route === "chat" &&
+                      chatPresentationModules.has(controlUiBootManifestKey(id))) ||
                     (route === "shared" &&
                       controlUiBootManifestKey(id) === "ui/src/components/solid/text-overflow.ts")),
                 // One stylesheet per measured route set, without per-page JS facades.
                 // Keep it separate from core CSS to preserve its existing size ceiling.
-                priority: 9,
+                // Custodian shares presentation, not Chat's pane and composer.
+                // Integer priorities keep shared/New Session owners ahead of it.
+                priority: route === "chat" ? 6 : 9,
+                includeDependenciesRecursively: route === "chat",
               };
             }),
           ]),

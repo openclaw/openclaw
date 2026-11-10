@@ -117,6 +117,12 @@ export const modelsHandlers: GatewayRequestHandlers = {
           });
           void owner?.recheckNativeLogin?.();
           if (!params.preparedOnly && params.view !== "provider-config") {
+            void owner
+              ?.loadFullModelCatalog?.({
+                changedOnly: true,
+                ...(params.provider ? { providerIds: [params.provider] } : {}),
+              })
+              .catch(() => undefined);
             void owner?.loadNativeModelCatalog?.().catch(() => undefined);
           }
         }

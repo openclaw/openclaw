@@ -194,7 +194,9 @@ export function resolveSessionCatalogProfiles(
   const profileId = sessionEntry?.authProfileOverride?.trim();
   const runtime = sessionEntry?.agentRuntimeOverride?.trim();
   const provider =
-    sessionEntry?.providerOverride ??
+    (sessionEntry?.modelOverrideSource === "default"
+      ? undefined
+      : sessionEntry?.providerOverride) ??
     (runtime
       ? resolveSessionModelRef(config, sessionEntry, agentId, {
           allowPluginNormalization: false,
@@ -292,7 +294,7 @@ export function projectSessionModelCatalog(
   );
   const ambientWorkerModel =
     workerAuth &&
-    !entry?.modelOverride?.trim() &&
+    (entry?.modelOverrideSource === "default" || !entry?.modelOverride?.trim()) &&
     !entry?.agentRuntimeOverride?.trim() &&
     (readParams.sessionKey !== undefined || readParams.workerInference === "worker");
   const renderedModel =

@@ -1,12 +1,23 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import {
+  formatEd25519PublicKey,
+  formatIrohEndpointKey,
+  generateEd25519Signer,
+} from "../../../packages/openclaw-id-protocol/src/index.ts";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.ts";
+import type {
+  OpenClawIdLinkPreparation,
+  OpenClawIdPublication,
+  OpenClawIdStatusResult,
+} from "../lib/openclaw-id/types.ts";
 import {
   createControlUiMockBootstrapConfig,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import { requireRecord } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -16,6 +27,144 @@ const suite = createControlUiE2eSuite({ name: "OpenClaw ID account menu" });
 const label = "Sign in with OpenClaw ID";
 
 suite.define(() => {
+  it("keeps remote-access completion compact and actions reachable after the real ceremony", async () => {
+    const signer = await generateEd25519Signer();
+    const preparation: OpenClawIdLinkPreparation = {
+      claw_id: "78".repeat(16),
+      hostname: "studio-test.claws.example.test",
+      k_srv: formatIrohEndpointKey(signer.publicKey),
+      k_gw: formatEd25519PublicKey(signer.publicKey),
+      binding_seq: 1,
+      root_epoch: 1,
+    };
+    for (const published of [true, false]) {
+      await suite.withPage(
+        { ...createControlUiE2eContextOptions(), viewport: { width: 390, height: 360 } },
+        async ({ page }) => {
+          const status: OpenClawIdStatusResult = {
+            status: { state: "on", tunnel: { state: "running", relayOnline: published } },
+            channel: "local_operator",
+            owner: true,
+            ownerDeviceCount: 0,
+            connection: { kind: "local", accountEmail: "owner@example.test" },
+            link: { linked: false },
+            services: {
+              issuerUrl: "https://issuer.example.test",
+              discoveryUrl: "https://discovery.example.test",
+              clientId: "control-ui",
+              loaderDomain: "claws.example.test",
+            },
+          };
+          const publication: OpenClawIdPublication = published
+            ? { state: "published", ownerAccountId: "fixture-owner", snapshotSeq: 1 }
+            : {
+                state: "failed",
+                code: "unavailable",
+                message: "Synthetic publication unavailable",
+                retryable: true,
+              };
+          const scenario = {
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              "openclawId.status",
+              "openclawId.authority",
+            ],
+            methodResponses: { "openclawId.status": status },
+          };
+          const gateway = await installMockGateway(page, scenario, {
+            requestHandlers: {
+              "openclawId.authority": (input) => {
+                const params = requireRecord(input);
+                if (params.action === "account_link_code") {
+                  return { code: "synthetic-code" };
+                }
+                if (params.action === "check_name") {
+                  return {
+                    name: "claw",
+                    accountTag: "test",
+                    hostname: preparation.hostname,
+                    available: true,
+                  };
+                }
+                if (params.action === "prepare") {
+                  return preparation;
+                }
+                if (params.action === "commit") {
+                  return { publication };
+                }
+                throw new Error("Unexpected authority operation");
+              },
+            },
+          });
+          await page.route("**" + CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (route) =>
+            route.fulfill({
+              contentType: "application/json",
+              body: JSON.stringify({
+                ...createControlUiMockBootstrapConfig(scenario),
+                openclawIdEnabled: true,
+              }),
+            }),
+          );
+          await page.addInitScript(() =>
+            localStorage.setItem(
+              "openclaw.openclawId.account",
+              JSON.stringify({
+                sub: "fixture-owner",
+                exp: 4102444800,
+                email: "owner@example.test",
+                name: "Demo owner",
+                idToken: "synthetic-not-a-token",
+              }),
+            ),
+          );
+          await page.goto(suite.server.baseUrl + "new");
+          await navigationDrawerToggle(page).click();
+          await page.locator("openclaw-app-sidebar:visible .sidebar-identity-card").click();
+          await page.locator('[data-value="openclaw-id:make-reachable"]').click();
+          const dialog = page.getByRole("dialog", { name: "Turn on remote access", exact: true });
+          await dialog.getByText(/Available: https/).waitFor();
+          await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+          await dialog.getByRole("button", { name: "Create recovery kit", exact: true }).click();
+          const password = dialog.locator('input[autocomplete="new-password"]');
+          await password.waitFor();
+          expect(await password.getAttribute("type")).toBe("password");
+          expect(
+            await dialog.getByRole("button", { name: "Continue", exact: true }).isDisabled(),
+          ).toBe(true);
+          await dialog.locator('input[type="checkbox"]').check();
+          await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+          await gateway.waitForRequest("openclawId.authority", { match: { action: "commit" } });
+          const done = dialog.getByRole("button", { name: "Done", exact: true });
+          await done.waitFor();
+          const glyphSizes = await dialog
+            .locator("svg")
+            .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().height));
+          expect.soft(glyphSizes.every((size) => size <= 32)).toBe(true);
+          if (!published) {
+            await dialog
+              .getByText("Remote access is not connected yet", { exact: false })
+              .waitFor();
+          }
+          await done.scrollIntoViewIfNeeded();
+          expect(
+            await done.evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              return (
+                box.top >= 0 &&
+                box.bottom <= innerHeight &&
+                element.contains(
+                  document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+                )
+              );
+            }),
+          ).toBe(true);
+          await done.click();
+          await dialog.waitFor({ state: "hidden" });
+        },
+      );
+    }
+  });
+
   it("uses one accessible sign-in button and contains signed-in multiline rows", async () => {
     for (const width of [1280, 390]) {
       for (const colorScheme of ["light", "dark"] as const) {

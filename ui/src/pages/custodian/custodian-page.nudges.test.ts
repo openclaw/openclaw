@@ -330,11 +330,9 @@ describe("custodian page nudges", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
     pendingQuestion.resolve(chatReply("Moving on."));
 
-    await Promise.resolve();
-    await page.updateComplete;
     // The authoritative rejoin wins over the interrupted reply.
+    await waitForFast(() => expect(page.textContent).toContain("Welcome back."));
     expect(page.textContent).not.toContain("Moving on.");
-    expect(page.textContent).toContain("Welcome back.");
     const action = nudgeAction(page);
     expect(action.disabled).toBe(false);
   });

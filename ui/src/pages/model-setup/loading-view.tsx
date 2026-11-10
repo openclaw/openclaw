@@ -1,4 +1,5 @@
 import { Repeat } from "solid-js";
+import { SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderNativeModelSetupLoading } from "./native-model-setup.tsx";
@@ -11,15 +12,7 @@ function renderLoadingSection(
 ) {
   return (
     <section class={["settings-section", params.className]}>
-      <div class="settings-section__header">
-        <h2>{title}</h2>
-      </div>
-      {params.intro ? (
-        <>
-          {" "}
-          <p class="muted model-setup__loading-intro">{params.intro}</p>{" "}
-        </>
-      ) : undefined}
+      <SettingsSectionHeader title={title} description={params.intro} />
       <div class="model-setup__rows">
         <Repeat count={params.rows ?? 1}>
           {(index) => (
