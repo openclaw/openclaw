@@ -45,6 +45,7 @@ const runtimeOnlyUnitFiles = new Set([
   "src/gateway/server.beam-owned-view.test.ts",
   "src/gateway/talk/client-permission-parity.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
+  "src/plugins/doctor-repair-setup.test.ts",
   "src/plugins/loader.runtime-registry.test.ts",
   "src/plugins/plugin-generation-source-inspection.worker.test.ts",
   "src/plugins/plugin-generation-worker.test.ts",

@@ -162,7 +162,8 @@ child.
 
 Imported conversations can remain grouped under their original session source,
 such as Beam. After conversion, they use the normal session controls, including
-rename, pin, and archive; the source group does not require another import.
+rename, pin, and archive. Their child-session disclosure opens the normal nested
+conversation tree; the source group does not require another import.
 
 ## Automatic session names
 
