@@ -31,11 +31,22 @@ struct OnboardingOpenClawIDRenderTests {
             ("id-connected", .connected(claw: "studio-fixture")),
             ("id-reachable", .reachable(hostname: "studio-fixture")),
         ]
+        let dependencies = [
+            "id-sign-in": "native account callback",
+            "id-claws": "native account callback and authenticated claw-list wiring",
+            "id-recovery-kit": "owner signer/kit custody",
+            "id-add-mac": "#194201/#196445 enrollment wiring",
+            "id-compare-code": "#194201/#196445 enrollment wiring",
+            "id-chat-approval": "member/operator enrollment",
+            "id-connected": "#194201/#196445 enrollment wiring and member/operator enrollment",
+            "id-reachable": "owner signer/kit custody and native account callback",
+        ]
         for (name, step) in cases {
+            let dependency = try #require(dependencies[name])
             try OnboardingRenderTests.capture(
                 OnboardingOpenClawIDContent(step: step, unavailableReason: nil, action: { _ in }),
                 name: name,
-                label: "Native SwiftUI · FIXTURE data · enrollment not implemented",
+                label: "Native SwiftUI · FIXTURE data\nMissing: \(dependency)",
                 output: output)
         }
     }
