@@ -70,7 +70,6 @@ vi.mock("../openclaw-tools.js", async (importOriginal) => {
     createOpenClawToolsWithPreparation: async (
       options: Parameters<typeof actual.createOpenClawToolsWithPreparation>[0],
     ) => createOpenClawToolsMock(options),
-    filterToolsByClientCaps: actual.filterToolsByClientCaps,
     testing: {
       setDepsForTest: () => {},
     },

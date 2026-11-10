@@ -9,7 +9,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
-import { planOpenClawModelsJsonSource } from "./models-config.js";
+import { planOpenClawModelsJsonSourceWithInput } from "./models-config.core.js";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
@@ -201,7 +201,7 @@ it.each<[string, Partial<Cost> | undefined, Cost, boolean?, Partial<Cost>?]>([
       // Missing top-level runtime state makes this an independent supplied config.
       setRuntimeConfigSnapshot({ ...cfg, gateway: { mode: "local" } }, sourceConfigForSecrets);
       await withOpenClawTestState({ label: "independent-model-cost" }, async (state) => {
-        const plan = await planOpenClawModelsJsonSource(cfg, state.agentDir(), {
+        const plan = await planOpenClawModelsJsonSourceWithInput(cfg, state.agentDir(), {
           ...options,
           env: state.env,
         });

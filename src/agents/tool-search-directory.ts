@@ -29,7 +29,7 @@ const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
 const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 // About 1k tokens: less than one measured tool_search result (~5.8 kB), which
 // is also re-sent on every later request of the conversation.
-export const MAX_MCP_TOOL_DIRECTORY_BYTES = 4_096;
+const MAX_MCP_TOOL_DIRECTORY_BYTES = 4_096;
 const MCP_TOOL_DIRECTORY_DESCRIPTION_CHARS = 96;
 const MCP_TOOL_DIRECTORY_CACHE_KEY = "mcp-tool-search";
 const MCP_TOOL_DIRECTORY_HEADING =
@@ -255,7 +255,7 @@ type McpDirectoryServer = { name: string; rows: ToolDirectoryRow[]; unlisted: nu
  * One-line, bounded projection of untrusted server-provided text. Rows cannot
  * start new lines, so a description cannot fake the trusted heading or footer.
  */
-export function sanitizeMcpToolDirectoryDescription(description: string): string {
+function sanitizeMcpToolDirectoryDescription(description: string): string {
   const maxChars = MCP_TOOL_DIRECTORY_DESCRIPTION_CHARS;
   // Bound the scanned prefix before normalization; attacker-sized text costs bounded work.
   const prefix = truncateUtf16Safe(description, maxChars * 4);

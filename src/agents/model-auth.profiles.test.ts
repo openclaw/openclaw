@@ -22,6 +22,7 @@ import {
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { refreshAuthProfileFileState } from "./auth-profiles/file-state.js";
 import { clearAuthProfileMigrationDiagnostics } from "./auth-profiles/legacy-source-diagnostic.js";
+import { mockOAuthProviderOperations } from "./auth-profiles/oauth-native-provider.test-support.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -128,10 +129,12 @@ vi.mock("../plugins/provider-external-auth-core.js", async () =>
   (await import("../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
 );
 
+// mock-isolation: Credential selection fixtures do not discover installed provider hints.
+vi.mock("./auth-profiles/doctor.js", () => ({ formatAuthDoctorHint: async () => "" }));
+
+// mock-isolation: Auth precedence tests isolate synthetic provider hooks from live runtimes.
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
-  formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
-  refreshProviderOAuthCredentialWithPlugin: async () => null,
   resolveProviderDeprecatedAuthProfileIds: ({ provider }: { provider: string }) =>
     provider === "anthropic" || provider === "claude-cli" ? ["anthropic:claude-cli"] : [],
   prepareProviderExternalAuthWithPlugin: async () => undefined,
@@ -161,6 +164,7 @@ const cliCredentialMocks = vi.hoisted(() => ({
 vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
+  mockOAuthProviderOperations();
   prepareSharedAuthStoreOwnershipForNative();
   clearRuntimeAuthProfileStoreSnapshots();
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
@@ -168,6 +172,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
   clearRuntimeConfigSnapshot();
 });

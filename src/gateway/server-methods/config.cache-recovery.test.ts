@@ -4,7 +4,7 @@ import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { invalidateConfigGetResponseCache } from "../config-get-response.js";
 import { SerializedJsonPayload, serializeGatewayFrame } from "../serialized-json.js";
-import { replyWithBillingRouteWarnings } from "./config-write-flow.js";
+import { replyWithBillingRouteWarnings } from "./config-write-reply.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 import type { RespondFn } from "./types.js";
