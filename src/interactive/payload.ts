@@ -829,29 +829,6 @@ function normalizePresentationBlock(
   return normalizeInteractiveControls(record, type);
 }
 
-/**
- * Reject captionless table blocks before normalization drops them.
- * Table normalization is atomic and drops invalid tables instead of
- * repairing them, so a send boundary must fail loudly here rather than
- * deliver a message with the table silently missing.
- */
-export function assertMessagePresentationTablesHaveCaptions(raw: unknown): void {
-  const record = toRecord(raw);
-  const blocks = record && Array.isArray(record.blocks) ? record.blocks : [];
-  for (const block of blocks) {
-    const table = toRecord(block);
-    if (normalizeOptionalLowercaseString(table?.type) !== "table") {
-      continue;
-    }
-    if (normalizeOptionalString(table.caption)) {
-      continue;
-    }
-    throw new Error(
-      "Table blocks require a caption. Add a short caption describing the table and retry the send.",
-    );
-  }
-}
-
 export function normalizeMessagePresentation(raw: unknown): MessagePresentation | undefined {
   const record = toRecord(raw);
   if (!record) {
