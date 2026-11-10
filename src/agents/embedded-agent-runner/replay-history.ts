@@ -683,17 +683,18 @@ export async function sanitizeSessionHistory(
     const pluginParams = createProviderReplayPluginParams({ ...params, provider });
     const replaySession = createProviderReplaySessionState(params.sessionManager);
     try {
+      const context = {
+        ...pluginParams.context,
+        sessionId: params.sessionId ?? "",
+        messages,
+        allowedToolNames: params.allowedToolNames,
+        sessionState: replaySession.state,
+      };
       const providerResult = await sanitizeProviderReplayHistoryWithPluginAsync({
         ...pluginParams,
-        context: {
-          ...pluginParams.context,
-          sessionId: params.sessionId ?? "",
-          messages,
-          allowedToolNames: params.allowedToolNames,
-          sessionState: replaySession.state,
-        },
+        context,
       });
-      messages = providerResult ?? messages;
+      messages = providerResult ?? context.messages;
     } finally {
       replaySession.close();
     }
@@ -743,24 +744,22 @@ export async function validateReplayTurns(
   },
 ): Promise<AgentMessage[]> {
   const policy = resolveReplayPolicy(params);
+  let messages = params.messages;
   const provider = params.provider?.trim();
   if (provider) {
     const pluginParams = createProviderReplayPluginParams({ ...params, provider });
+    const context = { ...pluginParams.context, messages };
     const providerValidated = await validateProviderReplayTurnsWithPlugin({
       ...pluginParams,
-      context: {
-        ...pluginParams.context,
-        messages: params.messages,
-      },
+      context,
     });
     if (providerValidated) {
       return providerValidated;
     }
+    messages = context.messages;
   }
 
-  const validatedGemini = policy.validateGeminiTurns
-    ? validateGeminiTurns(params.messages)
-    : params.messages;
+  const validatedGemini = policy.validateGeminiTurns ? validateGeminiTurns(messages) : messages;
   return policy.validateAnthropicTurns
     ? validateAnthropicTurns(validatedGemini, {
         mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, params.modelApi),

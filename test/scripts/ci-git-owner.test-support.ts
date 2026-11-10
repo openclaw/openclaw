@@ -225,6 +225,8 @@ export async function runCiGitStep(options: {
   if (!step?.run) {
     throw new Error("Missing executable action step");
   }
+  const selectedSourceBootstrap =
+    isWorkflow("linux-app-release") && step.name === "Checkout selected tag";
   let env: Record<string, string>;
   let performanceFixture: ReturnType<typeof preparePerformanceFixture> | undefined;
   let publisherFixture: ReturnType<typeof prepareGeneratedPublisherFixture> | undefined;
@@ -299,9 +301,9 @@ export async function runCiGitStep(options: {
           write(path.join(publish, ".previous-checkout"), "stale\n");
         }
       }
-      if (externalOwner) {
-        // Workflow bodies follow actions/checkout; selected-source bootstrap must
-        // still create its own directory, while later selected steps inherit one.
+      if (externalOwner && !selectedSourceBootstrap) {
+        // Workflow bodies normally follow actions/checkout. Selected-source bootstrap
+        // creates the checkout itself; later selected steps inherit one.
         for (const directory of [
           workspace,
           ...(!publisher && step["working-directory"]

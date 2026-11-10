@@ -16,7 +16,7 @@
   min-height: 260px;
   padding: 24px;
   color: var(--muted);
-  font: 14px/21px var(--font-body);
+  font: var(--control-ui-text-md)/calc(21px * var(--control-ui-text-scale)) var(--font-body);
   text-align: center;
 }
 
@@ -30,9 +30,9 @@
 .chat-history-error__stage h2 {
   margin: 0;
   color: var(--text);
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
   font-weight: 500;
-  line-height: 24px;
+  line-height: calc(24px * var(--control-ui-text-scale));
   letter-spacing: -0.3px;
 }
 

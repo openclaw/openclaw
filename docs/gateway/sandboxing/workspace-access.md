@@ -198,6 +198,11 @@ disposable build/cache roots are excluded before hashing and result-size account
 their local bytes remain available to the sandbox. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
 
+Use `.openclaw/tmp/` for disposable output files that workspace file tools need
+to read or write later. Keep `TMPDIR`, `TMP`, and `TEMP` at their inherited system
+paths: native tools such as Chromium need short temporary paths for Unix sockets,
+and a deeply nested checkout can exceed that limit.
+
 pnpm can select `.openclaw/.pnpm-store/` when installing beneath a protected
 `.openclaw` mount and its home store cannot hard-link into that project.
 Managed binary installers use `.openclaw/tools/` for re-downloadable tools such as Crabbox.
@@ -368,8 +373,12 @@ return to a supporting version before continuing guest work.
 With the OpenShell backend, `mirror` mode still uses the local workspace as the source of truth between exec turns, and `remote` mode uses the remote OpenShell workspace as the source of truth after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
-Later conversation turns load retained images from that same staged copy.
-Missing copies and paths outside the active sandbox remain unavailable.
+Image facts that retain a staged path load that copy on later turns; missing
+copies and paths outside the active sandbox remain unavailable. Admitted native
+attachments recorded only as managed `media://inbound/` references load their
+originals from the Gateway media store, including after a restart or workspace
+template reuse. They do not require a guessed sandbox filename. This does not
+grant file tools or image paths written in prompt text access to the host store.
 If a previously included image becomes unavailable, replay keeps a resend notice
 and stops retrying that image for the retained session decision. Resend the image
 as a new attachment to make another attempt; other attachments remain available.

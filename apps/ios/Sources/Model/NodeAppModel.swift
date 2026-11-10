@@ -1709,6 +1709,11 @@ final class NodeAppModel {
         let currentSelectedAgentId = self.selectedAgentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedAgentChanged = currentSelectedAgentId != nextSelectedAgentId
         let stableID = GatewayStableIdentifier.exact(self.connectedGatewayID)
+        if selectedAgentChanged {
+            // Watch-started Talk may already target the next agent, so its key
+            // comparison cannot retire recognition captured for the old agent.
+            self.voiceWake.discardCaptureForRouteChange()
+        }
         self.selectedAgentId = nextSelectedAgentId
         if let stableID {
             GatewaySettingsStore.saveGatewaySelectedAgentId(
@@ -3253,7 +3258,14 @@ extension NodeAppModel {
     }
 
     func focusChatSession(_ sessionKey: String?) {
-        self.focusedChatSessionKey = Self.trimmedOrNil(sessionKey)
+        let previousSessionKey = self.chatSessionKey
+        let nextSessionKey = Self.trimmedOrNil(sessionKey)
+        // Talk can temporarily target a Watch-selected chat. Wake still belongs
+        // to phone focus, even when Talk already has the destination key.
+        if previousSessionKey != (nextSessionKey ?? self.mainSessionKey) {
+            self.voiceWake.discardCaptureForRouteChange()
+        }
+        self.focusedChatSessionKey = nextSessionKey
         if let stableID = self.connectedGatewayID {
             GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
                 stableID: stableID, sessionKey: self.focusedChatSessionKey)
@@ -3267,7 +3279,7 @@ extension NodeAppModel {
         let effectiveSessionKey = sessionKey ?? self.chatSessionKey
         guard !self.talkMode.isUsingMainSessionKey(effectiveSessionKey) else { return }
         self.talkPttCommandEpoch &+= 1
-        self.voiceWake.invalidatePendingCommand()
+        self.voiceWake.discardCaptureForRouteChange()
         self.talkMode.updateMainSessionKey(effectiveSessionKey)
     }
 
@@ -3464,7 +3476,7 @@ extension NodeAppModel {
         let nodeGatewayTask = self.nodeGatewayTask
         let operatorGatewayTask = self.operatorGatewayTask
         self.talkMode.updateGatewayConnected(false)
-        self.voiceWake.invalidatePendingCommand()
+        self.voiceWake.discardCaptureForRouteChange()
         self.gatewayRouteGeneration &+= 1
         self.stopNodeHostStatsPublisher()
         nodeGatewayTask?.cancel()
@@ -4642,7 +4654,7 @@ extension NodeAppModel {
 
     func invalidateNodePushToTalkRoute() {
         self.talkPttCommandEpoch &+= 1
-        self.voiceWake.invalidatePendingCommand()
+        self.voiceWake.discardCaptureForRouteChange()
         _ = self.talkMode.cancelPushToTalk(expectedTranscriptionOnly: false)
     }
 

@@ -60,7 +60,7 @@ openclaw-assistant-panel {
   min-width: 0;
   gap: 7px;
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .assistant-panel-title openclaw-mascot {

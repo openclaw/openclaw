@@ -270,6 +270,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : {
                 resolutionCwd: options.codingRoot,
+                containmentSource: options.applyPatchContainmentSource,
                 normalizeGuardedPathParams: true,
                 allowLinkedWorktrees: tool.name !== "ls",
               },
@@ -343,6 +344,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : {
                 additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
+                containmentSource: options.applyPatchContainmentSource,
                 allowLinkedWorktrees: true,
                 resolutionCwd: options.codingRoot,
                 normalizeGuardedPathParams: true,
