@@ -12,7 +12,10 @@ import {
   createChatMetadataHarness,
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
-import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
+import {
+  projectSessionModelCatalog,
+  resolveSessionCatalogProfiles,
+} from "./chat-metadata-session-projection.js";
 
 const sol = { provider: "openai", id: "gpt-5.6-sol", name: "Sol" };
 const luna = { provider: "openai", id: "gpt-5.6-luna", name: "Luna" };
@@ -67,6 +70,30 @@ describe("gateway chat metadata native session ownership", () => {
         }),
       ).toEqual(models);
     }
+  });
+
+  test("uses the current default for inherited model snapshots and worker availability", () => {
+    const sessionEntry = {
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "default" as const,
+    };
+    expect(resolveSessionCatalogProfiles(sessionEntry, nativeConfig(), "main")).toEqual({});
+    expect(
+      resolveSessionCatalogProfiles(
+        { ...sessionEntry, agentRuntimeOverride: "openclaw" },
+        nativeConfig(),
+        "main",
+      ),
+    ).toEqual({ profileProvider: "openai", runtimeOverride: "openclaw" });
+    expect(
+      projectSessionModelCatalog(
+        { agentId: "main", workerInference: "worker", sessionEntry },
+        [{ ...sol, available: false, unavailableReason: "missing-auth" }],
+        nativeConfig(),
+        undefined,
+      ),
+    ).toEqual([sol]);
   });
 
   test.each([false, true])(

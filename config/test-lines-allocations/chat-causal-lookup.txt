@@ -1,0 +1,3 @@
+# Fixed-transcript causal lookup: repeated work, distinct observed inputs, and cached misses.
+# Exact net regression growth for the causal-lookup performance change.
+54

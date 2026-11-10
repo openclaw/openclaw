@@ -387,10 +387,11 @@ vi.mock("./model-discovery-context.js", async (importOriginal) => {
   return { resolveModelWorkspaceDir, resolveModelPluginMetadataSnapshot: () => undefined };
 });
 
-vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: (...args: unknown[]) =>
+// mock-isolation: Lifecycle fixtures control model planning/publication timing and failures without initializing real persistence state.
+vi.mock("./models-config.core.js", () => ({
+  ensureOpenClawModelsJsonWithInput: (...args: unknown[]) =>
     preparedModelRuntimeMocks.ensureOpenClawModelsJson(...args),
-  planOpenClawModelsJsonSource: (...args: unknown[]) =>
+  planOpenClawModelsJsonSourceWithInput: (...args: unknown[]) =>
     preparedModelRuntimeMocks.planOpenClawModelsJsonSource(...args),
 }));
 

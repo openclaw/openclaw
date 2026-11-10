@@ -2,9 +2,10 @@
 
 Prepare the next Gateway patch for the active `extended-stable` line: the
 `openclaw` npm package, official npm plugins, and matching Docker Gateway
-images. Discover the complete candidate set, obtain approval, and prepare one
-coordinated PR. Commits are canonical; PRs, issues, ClawSweeper reports, and
-advisories provide context.
+images. Discover the complete candidate set, obtain approval, and apply individual
+backports directly to the canonical release branch, without backport PRs.
+Commits are canonical; PRs, issues, ClawSweeper reports, and advisories provide
+context.
 
 Read `backport-discovery.md` first. Its evidence-driven inventory, detached
 baseline applicability probes, advisory reconciliation, and durable unreleased
@@ -31,8 +32,9 @@ extended-stable package and publication constraints.
   Do not stop after the first obvious fixes or consider public PRs, titles, or
   dependency bumps the complete source set.
 - Present the full proposed release set before changing release refs.
-- Never push directly to the canonical branch, create a release tag, publish a
-  package, or mutate an npm dist-tag during discovery or staging.
+- Discovery is read-only. After set approval, push individual backports directly
+  to the canonical branch. Preparation does not authorize release tags, package
+  publication, or npm dist-tag mutation.
 - Never use `bypass_extended_stable_guard=true` for production.
 - Reject features, broad refactors, speculative hardening, and changes that
   require new config, migrations, APIs, protocols, dependencies, runtime
@@ -63,26 +65,26 @@ key, default, migration, compatibility alias, or generated baseline update
 merely because it makes a backport apply. If a surface change remains useful,
 flag it rather than treating a clean cherry-pick as enough evidence.
 
-The ledger and staging PR must show the warning, source commit, published
+The release ledger must show the warning, source commit, published
 maintenance-line impact, no-surface-change adaptation considered, affected
 public SDK/config records, focused proof, and the maintainer decision. Treat a
 consumer bug that happens to need a new SDK/config capability as particularly
 high risk; a material security or reliability defect owned by the SDK/config
 surface is important context, not an implicit approval.
 
-Before the staging PR, collect this evidence against the exact canonical branch
+Before qualification, collect this evidence against the exact canonical branch
 tip recorded before applying any candidates. The first command is optional
 owner-path context for investigating a warning. Capture both commits in the
-staging checkout, then run the comparison from the checkout pinned to the
+release checkout, then run the comparison from the checkout pinned to the
 current `origin/main` tooling SHA so older maintenance branches do not supply
 obsolete release tooling:
 
 ```bash
 baseline_sha=<canonical-extended-stable-tip-before-backports>
-staging_sha=$(git rev-parse HEAD)
+candidate_sha=$(git rev-parse HEAD)
 
 # Run the remaining commands from the pinned current-main tooling checkout.
-git diff --name-status "$baseline_sha".."$staging_sha" -- \
+git diff --name-status "$baseline_sha".."$candidate_sha" -- \
   src/plugin-sdk \
   src/plugins/contracts \
   src/config \
@@ -96,17 +98,17 @@ git diff --name-status "$baseline_sha".."$staging_sha" -- \
 
 pnpm plugin-sdk:api:diff -- \
   --base "$baseline_sha" \
-  --head "$staging_sha" \
+  --head "$candidate_sha" \
   --json .artifacts/extended-stable-plugin-sdk-api-diff.json
 
-git diff --numstat "$baseline_sha".."$staging_sha" -- \
+git diff --numstat "$baseline_sha".."$candidate_sha" -- \
   docs/.generated/config-baseline.sha256 \
   docs/.generated/config-baseline.counts.json
 ```
 
 Any Plugin SDK API change in the readable report, or nonempty config-manifest
 output, is the warning. Include the report and changed config records in the
-release ledger and PR body, then either remove the unnecessary surface change
+release ledger, then either remove the unnecessary surface change
 or record why the maintainer accepted it. Owner-path output without a public
 API or config-manifest change is optional review context, not a warning by
 itself. A recorded decision is not a reusable waiver.
@@ -114,8 +116,8 @@ itself. A recorded decision is not a reusable waiver.
 Do not use a SHA of all SDK/config source as an automated warning: it would
 noise on harmless implementation-only repairs. The exact-SHA readable SDK diff
 and config hash manifest are the stable public-contract signals. If this becomes
-CI, run the comparison after `pnpm release:prep` and annotate the staging PR with
-changed records and the required maintainer decision; do not add a
+CI, run the comparison after `pnpm release:prep` and put the changed records
+and required maintainer decision in the release ledger; do not add a
 caller-controlled bypass.
 
 ## Resolve the Active Line
@@ -178,7 +180,8 @@ order:
 3. an explicitly audited maintainer-provided mainline cursor when histories are
    unrelated.
 
-Never reuse a cursor from an open, abandoned, partially landed, or rejected PR.
+Never reuse a cursor from an incomplete, abandoned, partially applied, or rejected
+backport set.
 Load unresolved `blocked` candidates from the accepted prior evidence before
 classifying new commits. Advance the cursor only when those candidates remain
 durably recorded for the next run.
@@ -316,28 +319,31 @@ ledger and release set before changing branches.
 1. Resolve the exact target commit. In existing-line mode, use the canonical
    remote head. In bootstrap mode, use the approved base commit; after release
    set approval, create the canonical branch from that exact commit if it is
-   still absent. Re-fetch and verify it before creating a separate staging
-   branch.
+   still absent. Re-fetch and verify it before applying backports in an isolated
+   checkout of that canonical branch; do not create a staging PR branch.
 2. Apply each approved public source commit in dependency order with
-   `git cherry-pick -x`. Keep commits separate and avoid unrelated cleanup.
+   `git cherry-pick -x`, one at a time directly to the canonical branch. Keep
+   commits separate and avoid unrelated cleanup; no backport PRs.
 3. Compare every result with the source diff and maintenance branch. Return a
    candidate to `blocked` if adaptation becomes architectural.
 4. Backport or add focused regression tests where practical. Run focused proof
    per fix, then combined changed-surface and release-relevant checks. Use
    Crabbox/Testbox for broad, package, cross-OS, release, or E2E proof.
-5. Set the intended root version and run `pnpm release:prep` on the same staging
-   branch. Verify every publishable official plugin package has that exact
-   version. Do not create the tag or dispatch publication before the PR lands.
+5. Set the intended root version and run `pnpm release:prep` on the canonical
+   release branch. Verify every publishable official plugin package has that
+   exact version. Commit release metadata directly; tagging and publication
+   still require final qualification and their existing authority.
 6. Run the **Flag SDK and Config Backports** comparison against the recorded
    canonical tip. For nonempty manifest output, attach the warning evidence and
    maintainer decision before continuing.
 7. Run `$autoreview` until no accepted/actionable findings remain.
-8. Open one coordinated PR targeting the canonical extended-stable branch.
-   Never target `main` and never push the target branch directly.
+8. Push the separate backport and release-preparation commits directly to the
+   canonical extended-stable branch and verify the remote tip. Do not open a
+   coordinated PR, including for the initial backports or CI stabilization.
 9. Keep unpublished security work in the approved private advisory fork until
    disclosure is authorized.
 
-The PR body must list the intended maintenance tag, exact npm publication
+The release ledger must list the intended maintenance tag, exact npm publication
 inventory, every source commit and optional PR, impact, adaptations, focused
 and combined proof, security status, rollback considerations, exact scan
 bounds, and the SDK/config warning result. For a flagged candidate, include the
@@ -350,14 +356,16 @@ only after the canonical branch or tag has that exact final version and SHA.
 ## Stabilize the landed candidate
 
 Keep product backports separate from release-tooling compatibility. After the
-coordinated PR lands:
+individual backports reach the canonical branch:
 
 1. Verify the branch tip, root/plugin versions, and complete Docker
    release-channel unit identify one candidate.
 2. Run focused proof, npm preflight, and complete branch-owned validation.
-3. Use another approved PR for product defects; use the smallest
-   behavior-preserving repair for frozen-target tooling; retry external failures
-   without changing the candidate.
+3. Repair CI after backporting without opening a release-branch PR. Follow
+   [backports and new fixes](../SKILL.md#backports-and-new-fixes): direct backports
+   for existing main fixes; individual main PRs first for new fixes, or urgent
+   direct release fixes with owned post-release forward-ports. Keep frozen-target
+   tooling repairs minimal; retry external failures without changing the candidate.
 4. Record repairs and omitted unsupported scenarios. Any branch change requires
    new exact-head evidence. Tag only the final green tip.
 
@@ -367,14 +375,14 @@ Report:
 
 - mode, published `openclaw@extended-stable` version or approved bootstrap
   base, and canonical branch;
-- intended maintenance tag and final staging head;
+- intended maintenance tag and verified canonical branch head;
 - included, skipped, blocked, not-affected, and already-covered candidates;
 - affected core/plugin packages, adaptations, and commit order;
 - proof commands, run IDs, and autoreview result;
 - candidate-stabilization failures, their classification, every workflow or
   harness compatibility repair, and superseded validation runs;
 - remaining security, release, or maintainer approvals;
-- the coordinated PR URL or why no PR was opened;
+- source-to-backport commit mapping and any owned post-release forward-ports;
 - exact intended Docker images and aliases, GitHub Release evidence assets, and
   explicit confirmation that no native or ClawHub artifacts are planned.
 

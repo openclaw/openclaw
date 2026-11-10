@@ -30,6 +30,12 @@ For any agent/surface handling untrusted content, deny these by default:
 
 `commands.restart=false` disables `/restart`, `/update`, external-chat `gateway` update/restart actions, and external `SIGUSR2` restart requests. Cleanup does not stop the Gateway and does not depend on this flag. Tool maintenance keeps owner/operator and tool-policy gates; it does not require the separate setup-delegation approval path.
 
+## Owner authority after network reads
+
+Network tool results mark the current turn as tainted. That taint stays set, including across retries, but does not by itself remove an explicitly attributed owner's live authority. For example, an authorized owner can ask the agent to look up a GitHub profile and then assign a role without the lookup alone blocking the assignment. This is shared owner-tool behavior, not an exemption limited to role assignment or the `openclaw` tool.
+
+External content remains [untrusted input](/gateway/security/prompt-injection), not owner instructions or authorization for additional actions. Tool policy, required operator scopes, sandbox and operation restrictions, and applicable approvals still apply. Live authority is revalidated before effects; revocation still prevents execution. Inherited operator authority without explicit owner attribution remains subject to the network-taint veto and its narrower retained-tool eligibility.
+
 ## Cross-provider messaging
 
 Agents with message-tool access can send across conversations and channel providers by default. For example, a WebChat session can send to a configured Discord channel without opting in to cross-provider delivery. Tool access, message-action allowlists, channel/account policy, and the provider's own permissions still apply.

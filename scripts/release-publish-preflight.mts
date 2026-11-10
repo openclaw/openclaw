@@ -43,6 +43,7 @@ import {
   observeReleaseNpmState,
   readReleasePublicationPackages,
 } from "./lib/release-publish-state.mts";
+import { validateRetiredLineReason } from "./lib/release-version.mjs";
 import { verifyReleasePreflightToolingIdentity } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPublishBoundary } from "./openclaw-npm-extended-stable-release.mjs";
 import { verifyOpenClawNpmResumeRun } from "./openclaw-npm-resume-run.mts";
@@ -133,10 +134,11 @@ export async function runReleasePublishPreflight(
       ) {
         throw new Error("Core npm publication requires plugin_publish_scope=all-publishable.");
       }
-      if (options.publishOpenclawNpm !== false && options.npmDistTag === "extended-stable") {
-        throw new Error(
-          "Extended-stable core npm publication uses its canonical extended-stable workflow.",
-        );
+      if (options.retiredLinePublicationReason !== undefined) {
+        validateRetiredLineReason(options.retiredLinePublicationReason);
+        if (options.npmDistTag !== "extended-stable") {
+          throw new Error("A retired-line decision requires the extended-stable npm dist-tag.");
+        }
       }
       if (
         options.pluginPublishScope === "selected"

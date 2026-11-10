@@ -658,8 +658,9 @@ it("discovers native models without a turn, resolving aliases and retaining unma
     expect.objectContaining({
       id: "claude-future[1m]",
       name: "Future",
+      // An unknown Claude model gets the strict contract: thinking cannot be turned off.
       thinkingLevelMap: {
-        off: "off",
+        off: null,
         minimal: null,
         low: "low",
         medium: null,
@@ -675,4 +676,49 @@ it("discovers native models without a turn, resolving aliases and retaining unma
     }),
     expect.objectContaining({ id: "claude-hidden", name: "Default (recommended)" }),
   ]);
+});
+
+// Shape captured from Claude Code 2.1.314's logged-in initialize menu on 2026-11-10.
+it("keeps Claude Code's alias selectors on the models its menu resolves them to", async () => {
+  const models = [
+    ["default", "claude-opus-5-5", "Default (recommended)"],
+    ["opus", "claude-opus-5-5", "Opus 5.5"],
+    ["claude-fable-5-2", "claude-fable-5-2", "Fable 5.2"],
+    ["sonnet", "claude-sonnet-5-5", "Sonnet 5.5"],
+    ["haiku", "claude-haiku-5-5", "Haiku 5.5"],
+    ["fable", "claude-fable-5-1", "Fable 5.1"],
+    ["claude-opus-5", "claude-opus-5", "Opus 5"],
+  ].map(([value, resolvedModel, displayName]) => ({
+    value,
+    resolvedModel,
+    displayName,
+    description: `${displayName} description`,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+  }));
+  const context = await contextForChild(`
+    ${PROTOCOL_SETUP}
+    createInterface({ input: process.stdin }).on("line", (line) => {
+      const message = JSON.parse(line);
+      send({ type: "control_response", response: {
+        subtype: "success", request_id: message.request_id,
+        response: { models: ${JSON.stringify(models)} },
+      } });
+    });
+  `);
+  interceptSpawn(
+    (_owner, spawn) => (options) =>
+      spawn({ ...options, command: context.command, args: context.args }),
+  );
+  const discovered = await discoverClaudeCliModels({ env: context.env });
+  const aliasesById = Object.fromEntries(
+    discovered.map((model) => [model.id, model.params?.nativeModelAliases]),
+  );
+  expect(aliasesById).toEqual({
+    "claude-opus-5-5": ["opus"],
+    "claude-fable-5-2": undefined,
+    "claude-sonnet-5-5": ["sonnet"],
+    "claude-haiku-5-5": ["haiku"],
+    "claude-fable-5-1": ["fable"],
+    "claude-opus-5": undefined,
+  });
 });

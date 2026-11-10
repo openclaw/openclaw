@@ -2486,9 +2486,10 @@ function databaseRead(pathname, callback) {
   }
 }
 
-function verifyStateCompatibility(databasePath, existing, candidate, inspectAgent, captured = [], beforeAgentRead) {
+function verifyStateCompatibility(databasePath, existing, candidate, inspectAgent, captured = [], beforeAgentRead, inspectRetiredAgents) {
   const stateRoot = dirname(dirname(databasePath));
   const agents = new Map();
+  let retiredAgents;
   const recordAgent = (pathname, agentId) => {
     // Discovery sources must agree; canonical layout cannot erase a conflicting registration.
     if (agents.has(pathname) && agents.get(pathname) !== agentId)
@@ -2531,6 +2532,7 @@ function verifyStateCompatibility(databasePath, existing, candidate, inspectAgen
         recordAgent(pathname, row.agent_id);
       }
     }
+    retiredAgents = inspectRetiredAgents?.(database);
     return observed;
   });
   // Package versions are reader ceilings; a failed boot need not have advanced live state.
@@ -2560,6 +2562,7 @@ function verifyStateCompatibility(databasePath, existing, candidate, inspectAgen
     recordAgent(pathname, agentId);
     if (agents.size > 256) reject("captured agent databases exceed the bounded compatibility budget");
   }
+  for (const pathname of retiredAgents ?? []) agents.delete(pathname);
   const stateOwner = lstatSync(stateRoot);
   function historicalIdentity(pathname) {
     const [, , device, inode] = historical.get(pathname);
@@ -2993,19 +2996,27 @@ function retainedRepairInput(request, building = false) {
 }
 
 function retainedRepairTranscriptPreservationFailure(database, sessionKey, sessionId, windowKey, generation) {
+  // Reset preserves canonical history even after the current entry drops its
+  // direct previous-session reference. Rewrites still require the exact token.
+  if (sessionId && windowKey && generation && database.prepare(`
+    SELECT 1 FROM session_windows w
+    JOIN session_nodes n ON n.session_key = w.session_key
+    JOIN transcript_rewrite_watermarks t ON t.session_id = w.session_id
+    WHERE w.session_id = ? AND w.session_key = ? AND t.generation = ?
+  `).get(sessionId, windowKey, generation)) return undefined;
   if (generation !== null || !sessionId || !windowKey)
     return transcriptPreservationFailure(database, sessionKey, sessionId, windowKey, generation);
-  // Metadata-only creation has no rewrite token. Retain the exact original
-  // node/window; a later first append may materialize its real generation.
+  // Metadata-only creation has no rewrite token. Retain the original window;
+  // a later first append may materialize its real generation.
   const live = database.prepare(`
     SELECT t.generation FROM session_windows w
-    JOIN session_nodes n ON n.session_key = ? AND n.current_session_id = w.session_id
-    JOIN session_nodes owner ON owner.session_key = w.session_key AND owner.current_session_id = w.session_id
+    JOIN session_nodes n ON n.session_key = ?
+    JOIN session_nodes owner ON owner.session_key = w.session_key
     LEFT JOIN transcript_rewrite_watermarks t ON t.session_id = w.session_id
     WHERE w.session_id = ? AND w.session_key = ?
   `).get(sessionKey, sessionId, windowKey);
   if (live?.generation)
-    return transcriptPreservationFailure(database, sessionKey, sessionId, windowKey, live.generation);
+    return retainedRepairTranscriptPreservationFailure(database, sessionKey, sessionId, windowKey, live.generation);
   // Absence is valid only while the retained window is provably empty across
   // every canonical transcript tier. Never ignore unwatermarked content.
   if (live?.generation === null && !database.prepare(`
@@ -3017,7 +3028,9 @@ function retainedRepairTranscriptPreservationFailure(database, sessionKey, sessi
   return transcriptPreservationFailure(database, sessionKey, sessionId, windowKey, generation);
 }
 
-function retainedRepairWitness(schemas, databasePath, saved) {
+function retainedRepairWitness(record, saved, rewriteEvidence, scope = "captured-floor") {
+  const schemas = record.candidate.schemaVersions, databasePath = record.protectedPaths[1].path;
+  const accepted = rewriteEvidence?.accepted && new Set(rewriteEvidence.accepted);
   const pending = new Map();
   for (const tuple of sessionWitnessTuples(saved ?? [])) {
     const key = JSON.stringify(tuple.slice(0, 4));
@@ -3034,8 +3047,26 @@ function retainedRepairWitness(schemas, databasePath, saved) {
       const id = [agentId, realpathSync(pathname), entry.dev, entry.ino],
         key = JSON.stringify(id);
       for (const tuple of pending.get(key) ?? []) {
-        if (retainedRepairTranscriptPreservationFailure(database, ...tuple.slice(4)))
-          reject("retained preparation requires strict original and current transcript continuity");
+        const failure = retainedRepairTranscriptPreservationFailure(database, ...tuple.slice(4));
+        if (!failure) continue;
+        // Physical identity is already bound by pending's key. Only a selected
+        // candidate, or its sealed accepted generation, can explain this rewrite.
+        const live = rewriteEvidence && tuple[7] && database.prepare(`
+          SELECT t.*, n.current_session_id, owner.current_session_id AS owner_session_id FROM session_windows w
+          LEFT JOIN session_nodes n ON n.session_key = ?
+          JOIN session_nodes owner ON owner.session_key = w.session_key
+          JOIN transcript_rewrite_watermarks t ON t.session_id = w.session_id
+          WHERE w.session_id = ? AND w.session_key = ?
+        `).get(tuple[4], tuple[5], tuple[6]);
+        const reason = !rewriteEvidence ? "no-rewrite-authority" : !live?.generation ? "rewrite-window-missing" :
+          !Number.isSafeInteger(live.updated_at) ? "rewrite-time-invalid" :
+          !(live.updated_at > Date.parse(record.createdAt)) ? "rewrite-not-after-incident" :
+          live.updated_at > Date.now() ? "rewrite-in-future" :
+          ((rewriteEvidence.selectedCandidate && live.current_session_id === tuple[5] && live.owner_session_id === tuple[5]) ||
+            accepted?.has(JSON.stringify([...tuple.slice(0, 7), live.generation]))) ? undefined :
+          rewriteEvidence.selectedCandidate ? "rewrite-owner-mismatch" : "rewrite-generation-not-accepted";
+        if (reason)
+          reject(`RETAINED_CONTINUITY_SAVED_TUPLE scope=${scope} reason=${reason} live=${failure.live} archive=${failure.archive}: retained preparation requires strict original and current transcript continuity`);
       }
       pending.delete(key);
       for (const row of database
@@ -3055,16 +3086,15 @@ function retainedRepairWitness(schemas, databasePath, saved) {
           )
         )
           continue;
-        if (
-          retainedRepairTranscriptPreservationFailure(
-            database,
-            row.session_key,
-            row.current_session_id,
-            row.window_key,
-            row.generation,
-          )
-        )
-          reject("retained preparation refuses an incomplete current transcript witness");
+        const failure = retainedRepairTranscriptPreservationFailure(
+          database,
+          row.session_key,
+          row.current_session_id,
+          row.window_key,
+          row.generation,
+        );
+        if (failure)
+          reject(`RETAINED_CONTINUITY_CURRENT_TUPLE scope=${scope} live=${failure.live} archive=${failure.archive}: retained preparation refuses an incomplete current transcript witness`);
         captured.push(
           JSON.stringify([
             ...id,
@@ -3077,8 +3107,32 @@ function retainedRepairWitness(schemas, databasePath, saved) {
       }
     },
     [...pending.values()].map((values) => values[0]),
+    undefined,
+    (database) => {
+      const retired = new Set();
+      if (!database.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='agent_deletion_journal'").get())
+        return retired;
+      const deletion = database.prepare(`SELECT operation_id, phase, database_paths_json,
+        created_at, cleanup_completed, delete_files FROM agent_deletion_journal WHERE agent_id = ?`);
+      for (const [key, tuples] of pending) {
+        const [agentId, pathname, device, inode] = tuples[0], row = deletion.get(agentId);
+        // Completion is the native purge owner's receipt. Pending intent, an old
+        // incarnation, or a path not owned by that deletion cannot explain loss.
+        if (!row?.operation_id || row.cleanup_completed !== 1 || ![0, 1].includes(row.delete_files) ||
+            (row.phase !== null && row.phase !== "retiring") ||
+            !(row.created_at >= Date.parse(record.createdAt) && row.created_at <= Date.now())) continue;
+        const paths = JSON.parse(row.database_paths_json);
+        if (!Array.isArray(paths) || !paths.includes(pathname)) continue;
+        const entry = lstatSync(pathname, { throwIfNoEntry: false });
+        if (entry ? !entry.isFile() || entry.dev !== device || entry.ino !== inode
+          : row.delete_files !== 1) continue;
+        retired.add(pathname);
+        pending.delete(key);
+      }
+      return retired;
+    },
   );
-  if (pending.size) reject("retained preparation lost a witnessed physical database");
+  if (pending.size) reject(`RETAINED_CONTINUITY_DATABASE scope=${scope}: retained preparation lost a witnessed physical database`);
   if (Buffer.byteLength(JSON.stringify(captured) + "\n") > migrationJsonLimit)
     reject("retained transcript witness exceeds its bounded evidence budget");
   return captured.sort();
@@ -3199,18 +3253,10 @@ function retainedRepairSnapshot(root, rawRequest, expected, building = false, ar
   const { name, ...originalDescriptor } = record.originalWitness;
   const witnessPath = join(namespace.directory, name);
   const originalWitnessDescriptor = { path: witnessPath, ...originalDescriptor };
-  const currentWitness = retainedRepairWitness(
-    record.candidate.schemaVersions,
-    record.protectedPaths[1].path,
-    migrationJson(original),
-  );
+  const currentWitness = retainedRepairWitness(record, migrationJson(original), { selectedCandidate: current }, "original");
   // A retry verifies the captured floor, not equality with an empty/new baseline.
   if (expected)
-    retainedRepairWitness(
-      record.candidate.schemaVersions,
-      record.protectedPaths[1].path,
-      expected.currentWitness,
-    );
+    retainedRepairWitness(record, expected.currentWitness, undefined, building ? "build-floor" : "preparation-floor");
   const configPath = record.protectedPaths[0].path,
     configOwner = lstatSync(configPath);
   const config = migrationFile(configPath, configOwner.uid, {
@@ -3576,7 +3622,7 @@ function retainedRepairBuild(action, root, input) {
   if (action === "request") {
     suspensionObject(
       input,
-      ["operation", "target", "current", "pid", "generation", "journalSha256", ...(Object.hasOwn(input, "configSha256") ? ["configSha256"] : [])],
+      ["operation", "target", "current", "pid", "generation", "journalSha256", ...(Object.hasOwn(input, "configSha256") ? ["configSha256"] : []), ...(input.target === "main" ? ["frozenMain"] : [])],
       "retained build binding",
     );
     const paths = retainedRepairPaths(root, input.operation);
@@ -3589,12 +3635,20 @@ function retainedRepairBuild(action, root, input) {
       migrationJson(source.bytes).candidate?.sha !== input.current
     )
       reject("retained build incident binding changed");
+    let target = input.target;
+    if (target === "main") {
+      const intentPath = `${paths.prefix}.build-intent.json`;
+      // begin validates the full captured binding; replay never selects a newer target.
+      target = lstatSync(intentPath, { throwIfNoEntry: false })
+        ? migrationJson(migrationFile(intentPath, paths.owner, { mode: 0o600, limit: retainedSnapshotLimit }).bytes).request.target.sha
+        : input.frozenMain;
+    }
     return retainedRepairInput(
       {
         version: 1,
         operation: input.operation,
         source: source.descriptor,
-        target: { sha: input.target },
+        target: { sha: target },
         process: { pid: input.pid, generation: input.generation },
         ...(Object.hasOwn(input, "configSha256") ? { configSha256: input.configSha256 } : {}),
       },
@@ -3605,6 +3659,8 @@ function retainedRepairBuild(action, root, input) {
     retainedRepairInput(input, true);
     const paths = retainedRepairPaths(root, input.operation),
       pathname = `${paths.prefix}.build-intent.json`;
+    if (lstatSync(join(paths.directory, `retired-build-${input.operation}`), { throwIfNoEntry: false }))
+      reject("retained build operation is retired");
     let snapshot;
     if (lstatSync(pathname, { throwIfNoEntry: false })) {
       snapshot = retainedRepairBuildSnapshot(root, input.operation).snapshot;
@@ -3820,14 +3876,14 @@ function retainedRepairStatic(root, snapshot, build, record) {
   if (!isDeepStrictEqual(validateFrozenRelease(join(root, "releases", snapshot.request.target.sha),
       snapshot.request.target.sha, snapshot.request.target.manifestSha256, owner), snapshot.target))
     reject("repair frozen target changed");
-  retainedRepairBoundFile(snapshot.originalWitness);
-  for (const floor of [migrationJson(retainedRepairBoundFile(snapshot.originalWitness).bytes),
-      build.currentWitness, snapshot.currentWitness])
-    retainedRepairWitness(legacy.candidate.schemaVersions, legacy.protectedPaths[1].path, floor);
+  retainedRepairWitness(legacy, migrationJson(retainedRepairBoundFile(snapshot.originalWitness).bytes),
+    { accepted: build.currentWitness }, "original");
+  for (const floor of [build.currentWitness, snapshot.currentWitness])
+    retainedRepairWitness(legacy, floor);
   if (record.lifecycle?.stopped) {
     const stopped = record.lifecycle.stopped;
     const floor = migrationJson(retainedRepairBoundFile(stopped.floor).bytes);
-    retainedRepairWitness(legacy.candidate.schemaVersions, legacy.protectedPaths[1].path, floor);
+    retainedRepairWitness(legacy, floor);
   }
 }
 function retainedRepairTransactionEvidence(context, record) {
@@ -3836,7 +3892,7 @@ function retainedRepairTransactionEvidence(context, record) {
       record.floor.path !== `${paths.prefix}.transaction-floor.json`)
     reject("retained repair journal operation changed");
   const floor = migrationJson(retainedRepairBoundFile(record.floor).bytes), legacy = snapshot.evidence.record;
-  retainedRepairWitness(legacy.candidate.schemaVersions, legacy.protectedPaths[1].path, floor);
+  retainedRepairWitness(legacy, floor);
   for (const [name, value] of Object.entries(record.lifecycle ?? {})) {
     const saved = migrationJson(retainedRepairRead(`${paths.prefix}.lifecycle-${name}.json`).bytes);
     if (!isDeepStrictEqual(saved, value)) reject("repair lifecycle receipt differs from canonical state");
@@ -3903,18 +3959,10 @@ function retainedRepairTransaction(action, root, input) {
     const floor = lstatSync(floorPath, { throwIfNoEntry: false })
       ? migrationJson(
           retainedRepairRead(floorPath, (bytes) => {
-            retainedRepairWitness(
-              canonical.candidate.schemaVersions,
-              canonical.protectedPaths[1].path,
-              migrationJson(bytes),
-            );
+            retainedRepairWitness(canonical, migrationJson(bytes));
           }).bytes,
         )
-      : retainedRepairWitness(
-          canonical.candidate.schemaVersions,
-          canonical.protectedPaths[1].path,
-          snapshot.currentWitness,
-        );
+      : retainedRepairWitness(canonical, snapshot.currentWitness);
     const floorDescriptor = retainedRepairFile(
       `${paths.prefix}.transaction-floor.json`,
       Buffer.from(JSON.stringify(floor) + "\n"),
@@ -4195,13 +4243,13 @@ function retainedRepairFloor(context) {
   const previous = migrationJson(retainedRepairBoundFile(context.record.floor).bytes);
   const value = lstatSync(path, { throwIfNoEntry: false })
     ? migrationJson(retainedRepairRead(path).bytes)
-    : retainedRepairWitness(legacy.candidate.schemaVersions, legacy.protectedPaths[1].path, previous);
-  retainedRepairWitness(legacy.candidate.schemaVersions, legacy.protectedPaths[1].path, value);
+    : retainedRepairWitness(legacy, previous);
+  retainedRepairWitness(legacy, value);
   return retainedRepairFile(path, Buffer.from(JSON.stringify(value) + "\n"));
 }
 function retainedRepairWriters(context) {
   const legacy = context.snapshot.evidence.record;
-  const witness = retainedRepairWitness(legacy.candidate.schemaVersions, legacy.protectedPaths[1].path,
+  const witness = retainedRepairWitness(legacy,
     migrationJson(retainedRepairBoundFile(context.record.floor).bytes));
   const stores = new Set([legacy.protectedPaths[1].path, ...sessionWitnessTuples(witness).map(tuple => tuple[1])]);
   assertDatabaseWritersStopped(new Set([legacy.protectedPaths[0].path,
@@ -6127,7 +6175,7 @@ function retainedRepairRemoveGuard(root, operation) {
 
 function retainedRepairTargets(context) {
   const legacy = context.snapshot.evidence.record;
-  const witness = retainedRepairWitness(legacy.candidate.schemaVersions, legacy.protectedPaths[1].path,
+  const witness = retainedRepairWitness(legacy,
     migrationJson(retainedRepairBoundFile(context.record.floor).bytes));
   return [...new Set([legacy.protectedPaths[0].path, legacy.protectedPaths[1].path,
     ...sessionWitnessTuples(witness).map(tuple => tuple[1])].flatMap((path, index) => index === 0 ? [path] : [path, `${path}-wal`, `${path}-shm`]))].sort();
@@ -6156,7 +6204,7 @@ function retainedRepairClaimEvidence(root, record) {
   for(const floor of [snapshot.currentWitness,migrationJson(repairNativeBoundArtifact(record.floor).bytes),
       migrationJson(repairNativeBoundArtifact(record.lifecycle.startIntent.stopped).bytes).floor]) {
     const value=Array.isArray(floor)?floor:migrationJson(repairNativeBoundArtifact(floor).bytes);
-    retainedRepairWitness(legacy.candidate.schemaVersions,legacy.protectedPaths[1].path,value);
+    retainedRepairWitness(legacy,value);
   }
   if(!isDeepStrictEqual(runtimeCurrent(root,false),snapshot.runtime)) reject("repair claim runtime changed");
 }
@@ -6770,6 +6818,99 @@ function retainedAdoptionRetirePrestart(root, request, inspectOnly = false) {
   if (!isDeepStrictEqual(retainedRepairRead(paths.pathname).descriptor, restored)) reject("prestart restoration changed");
   return receipt;
 }
+function retainedAdoptionRetireBuild(root, input, inspectOnly = false) {
+  suspensionObject(input, ["adoption", "buildIntent"], "prebuild retirement request");
+  const request = input.adoption, paths = retainedAdoptionRequest(root, request), lock = retainedRepairLock();
+  retainedAdoptionRunner(request);
+  const gate = retainedAdoptionGate(paths);
+  const previous = retainedAdoptionCompletion(root, { operation: gate.value.operation, intentSha256: gate.value.intent.sha256 });
+  if (!isDeepStrictEqual(previous.value.closure, request.oldClosure) ||
+      !isDeepStrictEqual(previous.intent.request.source, request.source))
+    reject("RETAINED_BUILD_INCUMBENT: prebuild retirement incumbent or source changed");
+  retainedAdoptionLegacy(paths, request.source);
+  for (let index = 0; index < 4; index++) {
+    const approved = request.replacement[index];
+    if (!isDeepStrictEqual(migrationFile(approved.path, paths.owner, { privateOnly: false, mode: index ? 0o644 : 0o755, limit: migrationJournalLimit }).descriptor, approved))
+      reject("RETAINED_BUILD_REPLACEMENT: prebuild retirement replacement changed");
+  }
+  validMigrationDescriptor(input.buildIntent, "path", "prebuild retirement intent");
+  const name = basename(input.buildIntent.path), operation = name.slice(7, 43);
+  const build = retainedRepairPaths(root, operation);
+  if (input.buildIntent.path !== build.prefix + ".build-intent.json") reject("RETAINED_BUILD_NAMESPACE: prebuild retirement intent path is not canonical");
+  const archive = join(paths.directory, "retired-build-" + operation), intentPath = join(archive, "intent.json");
+  let intent;
+  if (lstatSync(intentPath, { throwIfNoEntry: false })) {
+    intent = migrationJson(retainedRepairRead(intentPath).bytes);
+    if (intent.version !== 1 || intent.kind !== "retained-repair-build-retirement" ||
+        !isDeepStrictEqual(intent.request, input) || !isDeepStrictEqual(intent.lock, lock))
+      reject("RETAINED_BUILD_REPLAY: prebuild retirement retry changed request or lock");
+  } else {
+    // Retirement archives immutable prebuild evidence, not a currently admissible
+    // build. Traffic and completed adoption may have invalidated its live floor.
+    const captured = retainedRepairRead(input.buildIntent.path);
+    if (!isDeepStrictEqual(captured.descriptor, input.buildIntent))
+      reject("RETAINED_BUILD_INTENT: prebuild retirement intent changed");
+    const snapshot = migrationJson(captured.bytes);
+    if (snapshot.version !== 2 || snapshot.kind !== "retained-repair-build" || snapshot.phase !== "BUILD_PREPARED" ||
+        snapshot.request?.operation !== operation || !isDeepStrictEqual(snapshot.request.source, request.source) ||
+        !isDeepStrictEqual(snapshot.lock, lock))
+      reject("RETAINED_BUILD_SNAPSHOT: prebuild retirement snapshot operation, source or lock differs");
+    retainedRepairInput(snapshot.request, true);
+    let ancestor = previous;
+    // A pre-gate capture belongs to the first adoption's archived old closure.
+    while (!(snapshot.adoption === undefined ? !ancestor.intent.predecessor :
+      isDeepStrictEqual(snapshot.adoption, { operation: ancestor.value.operation,
+        intent: ancestor.file.descriptor, complete: ancestor.complete.descriptor, closure: ancestor.value.closure }))) {
+      if (!ancestor.intent.predecessor || !isDeepStrictEqual(ancestor.intent.request.source, request.source))
+        reject("RETAINED_BUILD_ADOPTION: prebuild retirement lacks its completed incumbent ancestry");
+      ancestor = retainedAdoptionPredecessor(root, ancestor.paths, ancestor.intent.predecessor, ancestor.intent.request);
+    }
+    if (!isDeepStrictEqual(snapshot.closure, snapshot.adoption === undefined ? ancestor.intent.request.oldClosure : ancestor.value.closure) ||
+        !isDeepStrictEqual(ancestor.intent.request.source, request.source))
+      reject("RETAINED_BUILD_CLOSURE: prebuild retirement captured closure or incident differs");
+    const original = retainedRepairRead(build.prefix + ".build-original.json"),
+      witness = retainedRepairRead(build.prefix + ".build-witness.json");
+    if (original.descriptor.sha256 !== request.source.sha256 ||
+        !isDeepStrictEqual(snapshot.evidence?.record, migrationJson(original.bytes)))
+      reject("RETAINED_BUILD_ORIGINAL: prebuild retirement original source differs");
+    if (!isDeepStrictEqual(migrationJson(witness.bytes), snapshot.currentWitness))
+      reject("RETAINED_BUILD_WITNESS: prebuild retirement captured witness differs");
+    sessionWitnessTuples(snapshot.currentWitness);
+    const current = selectedConfigProcess(root, snapshot.evidence.record, snapshot.request.process);
+    const owner = retainedRepairNative(root, { snapshot, record: {} }, "live-b");
+    if (snapshot.process.pid !== current.pid || snapshot.process.generation !== current.generation ||
+        snapshot.process.boot !== owner.process.bootId)
+      reject("RETAINED_BUILD_PROCESS: prebuild retirement captured process changed");
+    const artifacts = [captured, original, witness].map(file => file.descriptor);
+    intent = { version: 1, kind: "retained-repair-build-retirement", request: input, lock, owner, artifacts };
+  }
+  // No origin observation means this operation never reached off-path publication.
+  if (readdirSync(paths.directory).some(name => name.startsWith(basename(build.prefix) + ".") &&
+      !intent.artifacts.some(file => basename(file.path) === name)) ||
+      lstatSync(repairNativeGuardPath(root, operation), { throwIfNoEntry: false }))
+    reject("RETAINED_BUILD_EFFECTS: prebuild retirement refuses origin, build or lifecycle effects");
+  const files = intent.artifacts.map(source => {
+    const archived = { ...source, path: join(archive, basename(source.path)) };
+    const moved = lstatSync(archived.path, { throwIfNoEntry: false });
+    if (moved && lstatSync(source.path, { throwIfNoEntry: false })) reject("RETAINED_BUILD_DUPLICATE: prebuild retirement has duplicate active evidence");
+    retainedRepairBoundFile(moved ? archived : source);
+    return { source, archived, moved: Boolean(moved) };
+  });
+  const { bootId, cgroup, ...binding } = intent.owner.process;
+  if (!isDeepStrictEqual(retainedRepairObserveLive(root, binding), intent.owner)) reject("RETAINED_BUILD_LIVE_OWNER: prebuild retirement live owner changed");
+  retainedAdoptionLegacy(paths, request.source);
+  if (!isDeepStrictEqual(retainedAdoptionReadClosure(paths).map(file => file.descriptor), request.oldClosure) ||
+      !isDeepStrictEqual(retainedRepairLock(), lock)) reject("RETAINED_BUILD_AUTHORITY: prebuild retirement authority changed");
+  if (inspectOnly) return { phase: "BUILD_PREPARED", buildIntent: input.buildIntent, owner: intent.owner, artifacts: intent.artifacts };
+  if (!lstatSync(archive, { throwIfNoEntry: false })) { mkdirSync(archive, { mode: 0o700 }); syncPath(paths.directory); }
+  exactDirectory(archive, paths.owner, "prebuild retirement archive", { privateOnly: true });
+  retainedAdoptionJSON(intentPath, intent);
+  for (const file of files) if (!file.moved) renameSync(file.source.path, file.archived.path);
+  syncPath(archive); syncPath(paths.directory);
+  const receipt = { ...intent, phase: "BUILD_RETIRED", artifacts: files.map(({ source, archived }) => ({ source, archived })) };
+  retainedAdoptionJSON(join(archive, "retirement.json"), receipt);
+  return receipt;
+}
 function retainedAdoptionPredecessor(root, paths, predecessor, request) {
   suspensionObject(predecessor, ["gate", "archive", "complete"], "controller adoption predecessor");
   for (const descriptor of Object.values(predecessor)) validMigrationDescriptor(descriptor, "path", "controller adoption predecessor artifact");
@@ -6985,6 +7126,8 @@ function retainedAdoptionEntryGuard(entryCommand, entryArgs) {
 }
 function retainedControllerAdoption(action, root, input) {
   switch (action) {
+    case "inspect-build": return retainedAdoptionRetireBuild(root, input, true);
+    case "retire-build": return retainedAdoptionRetireBuild(root, input);
     case "inspect-prestart": return retainedAdoptionRetirePrestart(root, input, true);
     case "retire-prestart": return retainedAdoptionRetirePrestart(root, input);
     case "bootstrap": return retainedBootstrap(root, input);
@@ -7741,13 +7884,14 @@ try {
       result = readinessWaived || channelsWaived ? "READY_CPU_DEGRADED_OPERATOR_WAIVED" : "READY";
       break;
     }
+    case "suspension-handoff-failure":
     case "suspension-poll-failure":
     case "suspension-prepare-failure": {
       if (args.length !== 2 || args[0] !== "@stdin") reject("invalid suspension failure diagnostic arguments");
       const exit = integer(args[1], "suspension failure exit");
       if (exit < 1 || exit > 255) reject("invalid suspension failure exit");
       // Child stdout may include private config or auth text. Parse a bounded input
-      // and emit only fixed categories, never error messages or arbitrary fields.
+      // and emit only fixed categories or bounded owner-recorded holder facts.
       const bytes = Buffer.alloc(16 * 1024 + 1);
       let length = 0;
       while (length < bytes.length) {
@@ -7758,6 +7902,22 @@ try {
       let payload;
       if (length < bytes.length) {
         try { payload = JSON.parse(bytes.toString("utf8", 0, length)); } catch {}
+      }
+      if (command === "suspension-handoff-failure") {
+        const error = payload?.ok === false ? payload.error : undefined;
+        const pending = error?.details?.terminalPersistence;
+        result = "unclassified";
+        if (error?.type === "gateway_request_error" && error.code === "UNAVAILABLE" &&
+            Number.isSafeInteger(pending?.count) && pending.count > 0 &&
+            (pending.oldestAgeMs === null || (Number.isSafeInteger(pending.oldestAgeMs) && pending.oldestAgeMs >= 0)) &&
+            Array.isArray(pending.runIds) && pending.runIds.length <= Math.min(8, pending.count) &&
+            pending.runIds.every(id => typeof id === "string" && id.length > 0 && id.length <= 256 && !/[\x00-\x1f\x7f]/.test(id))) {
+          // The Gateway redacts these IDs at its RPC egress; never forward message or other fields.
+          result = JSON.stringify({ terminalPersistence: {
+            count: pending.count, oldestAgeMs: pending.oldestAgeMs, runIds: pending.runIds,
+          } });
+        }
+        break;
       }
       if (command === "suspension-poll-failure") {
         // Protocol/authentication refusals remain fatal even when the subprocess

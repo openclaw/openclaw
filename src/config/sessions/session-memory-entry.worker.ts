@@ -154,7 +154,12 @@ async function prepareSessionMemoryEntries(
         } else {
           retainSnapshot(snapshotKey(request), snapshot);
           const entry = snapshot
-            ? await renderSessionEntrySnapshot(request.absPath, request.options, snapshot)
+            ? await renderSessionEntrySnapshot(
+                request.absPath,
+                request.options,
+                snapshot,
+                snapshot.stats.sizeBytes > MAX_SNAPSHOT_BYTES,
+              )
             : null;
           value = {
             entry,

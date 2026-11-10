@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.core.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"],
+    "types": [],
+    "rootDir": "./src",
+    "incremental": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}
