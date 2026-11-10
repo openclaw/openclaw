@@ -630,22 +630,26 @@ it.each<[string, Partial<SessionEntry>, string]>([
   ).resolves.toEqual([]);
 });
 
-it("refuses a subagent result whose producer loses custody after admission", async () => {
+it("refuses a prepared subagent result whose producer loses custody before the write", async () => {
   const target = await createTarget();
-  let checks = 0;
+  let prepared = false;
   await expect(
     target.commit({
       provenance: { kind: "subagent-completion" },
-      // The first check admits the mutation; custody is revoked before the write.
+      // Display preparation is the last step before persistence: custody is
+      // revoked only after the result is fully prepared for the write.
+      prepareDisplayContent: async () => {
+        prepared = true;
+        return [{ type: "text", text: "Prepared child result" }];
+      },
       assertCurrent: () => {
-        checks += 1;
-        if (checks > 1) {
+        if (prepared) {
           throw new Error("completion custody revoked");
         }
       },
     }),
   ).rejects.toThrow("completion custody revoked");
-  expect(checks).toBeGreaterThan(1);
+  expect(prepared).toBe(true);
   expect(await loadTranscriptEvents(target.scope)).toEqual([]);
 });
 
