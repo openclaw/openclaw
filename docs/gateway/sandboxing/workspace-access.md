@@ -438,7 +438,8 @@ Generated skill copies carry their own Git ignore rule, so ordinary Git discover
 omits them while tracked changes and other project files remain visible.
 The Gateway refreshes its own mirrored copies even when an earlier copy inherited
 read-only directory permissions; no manual permission repair is needed.
-Unchanged skill snapshots reuse their mirrored copies. When supporting files
+Unchanged skill snapshots reuse their mirrored copies. Docker and Podman retain
+this reuse after large bursts of different sandbox preparations. When supporting files
 change, the Gateway reconciles regular skill trees incrementally: changed files
 are replaced, removed files are pruned, and unchanged copies are retained.
 SSH and OpenShell shell execution relies on the remote host or OpenShell policy
