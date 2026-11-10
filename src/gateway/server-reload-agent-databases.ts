@@ -4,7 +4,7 @@ import { getRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureDeletedAgentDatabaseFences } from "../infra/agent-database-readers.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 
 let reconciliation: Promise<void> = Promise.resolve();
 const departedWorkAdmissions = new Map<string, () => void>();
@@ -143,8 +143,10 @@ async function releaseDepartedAgentDatabase(
   nextConfig: OpenClawConfig,
 ): Promise<void> {
   const normalized = normalizeAgentId(agentId);
-  await blockDepartedAgentWork(normalized);
+  // The interrupted turn persists before new writes are refused. Closing
+  // admission first rejects that terminal write with our own fence.
   await drainDepartedAgentWork(normalized);
+  await blockDepartedAgentWork(normalized);
   const [
     { prepareAgentDeleteDatabases, isPathOwnedBySurvivingAgent },
     { resolveEffectiveAgentDir },
@@ -216,7 +218,7 @@ async function releaseDepartedAgentDatabase(
   }
 }
 
-/** New session writes stop before the database close. Re-admission releases the fence. */
+/** New session writes stop after the interrupted turn has persisted. */
 async function blockDepartedAgentWork(agentId: string): Promise<void> {
   if (departedWorkAdmissions.has(agentId)) {
     return;
@@ -268,17 +270,31 @@ function releaseAdmittedWorkClosures(admitted: ReadonlySet<string>): void {
 }
 
 /**
- * Same running-effect settlement agents.delete waits on before it retires
- * persistence owners. The effect releases only after its terminal write, so
- * history and database close cannot revoke that write.
+ * agents.delete interrupts running turns, lets their terminal session writes
+ * land, and only then closes admission. Effect release can precede that write:
+ * abort clears the model wait while the call and its persistence are still in
+ * flight, so this also joins embedded runs and source-tracked persistence.
  */
 async function drainDepartedAgentWork(agentId: string): Promise<void> {
-  const [{ startAgentWorkAdmissionInterruption }, { createAgentRunDirectAbortError }] =
-    await Promise.all([
-      import("../sessions/session-controller.lifecycle.js"),
-      import("../agents/run-termination.js"),
-    ]);
-  await startAgentWorkAdmissionInterruption({
+  const [
+    { startAgentWorkAdmissionInterruption },
+    { createAgentRunDirectAbortError },
+    { nativeAttemptAttachments },
+    { captureEmbeddedRunDrainTarget },
+  ] = await Promise.all([
+    import("../sessions/session-controller.lifecycle.js"),
+    import("../agents/run-termination.js"),
+    import("../agents/embedded-agent-runner/run-state.js"),
+    import("../agents/embedded-agent-runner/runs.js"),
+  ]);
+  const runs: Array<NonNullable<ReturnType<typeof captureEmbeddedRunDrainTarget>>> = [];
+  for (const attachment of nativeAttemptAttachments()) {
+    const run = captureEmbeddedRunDrainTarget(attachment, { agentId });
+    if (run) {
+      runs.push(run);
+    }
+  }
+  const interruption = startAgentWorkAdmissionInterruption({
     agentId,
     reason: createAgentRunDirectAbortError(),
     assertCurrent: () => {
@@ -286,5 +302,61 @@ async function drainDepartedAgentWork(agentId: string): Promise<void> {
         throw new Error(`Agent ${agentId} returned to the roster during work drain.`);
       }
     },
-  }).released;
+  });
+  try {
+    for (const run of runs) {
+      run.abort();
+    }
+    await Promise.all([interruption.released, ...runs.map((run) => run.waitForEnd(null))]);
+    await awaitDepartedTerminalPersistence(agentId);
+  } finally {
+    for (const run of runs) {
+      run.release();
+    }
+  }
+}
+
+/** Source work and Gateway terminal persistence can settle after effect release. */
+async function awaitDepartedTerminalPersistence(agentId: string): Promise<void> {
+  const { getRpcSourceIdentity, listRpcSourceEntries } =
+    await import("../sessions/session-controller.rpc-sources.js");
+  const seen = new WeakSet<Promise<unknown>>();
+  let stalled = false;
+  for (;;) {
+    const work: Promise<unknown>[] = [];
+    let awaitingOwner = false;
+    for (const [, source] of listRpcSourceEntries()) {
+      const identity = getRpcSourceIdentity(source);
+      const owner = identity.agentId ?? parseAgentSessionKey(identity.sessionKey)?.agentId;
+      if (!owner || normalizeAgentId(owner) !== agentId) {
+        continue;
+      }
+      const persistence = source.adapter.projectSessionTerminalPersistence;
+      if (persistence) {
+        work.push(persistence);
+      } else if (source.adapter.projectSessionTerminalPending === true) {
+        awaitingOwner = true;
+      }
+      for (const pending of source.input.custody.work ?? []) {
+        work.push(pending);
+      }
+    }
+    const fresh = work.filter((pending) => !seen.has(pending));
+    for (const pending of fresh) {
+      seen.add(pending);
+    }
+    if (!fresh.length && !awaitingOwner) {
+      return;
+    }
+    if (!fresh.length) {
+      if (stalled) {
+        throw new Error(`Agent ${agentId} terminal session persistence did not start.`);
+      }
+      stalled = true;
+      await Promise.resolve();
+      continue;
+    }
+    stalled = false;
+    await Promise.allSettled(fresh);
+  }
 }

@@ -14,7 +14,11 @@ import {
   assertAgentSessionWriteAdmission,
   sessionWorkAdmissionClosures,
 } from "../sessions/session-agent-work-admission.js";
-import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
+import { resetSessionControllerStateForTest } from "../sessions/session-lifecycle-admission.test-support.js";
 import { useAgentDatabaseDirectories } from "../state/openclaw-agent-db-lifecycle.test-support.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -22,6 +26,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { createRecoveryRestartMock } from "./config-reload.test-support.js";
 import {
@@ -293,6 +298,74 @@ it("settles an active turn before closing the removed agent's database", async (
   await removal;
   expect(holderIds()).not.toContain("worker");
   expect(isDeletedAgentDatabasePath(worker.path)).toBe(true);
+});
+
+it("persists a held model turn's terminal session write before closing its database", async () => {
+  const { opened } = installState(["main", "worker"]);
+  const worker = opened.find((database) => database.agentId === "worker");
+  if (!worker) {
+    throw new Error("fixture did not open worker");
+  }
+  const terminalWrite = createDeferred<void>();
+  let writeError: unknown;
+  let openDuringWrite = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  registerChatAbortController({
+    target: captureSessionTarget({
+      storeScope: worker.path,
+      sessionKey: "agent:worker:main",
+      incarnation: "worker-session",
+      agentId: "worker",
+    }),
+    runId: "worker-held-model",
+    sessionId: "worker-session",
+    sessionKey: "agent:worker:main",
+    agentId: "worker",
+    timeoutMs: 60_000,
+    // The Gateway tracks this promise on the run source. It outlives effect release.
+    sourceWork: terminalWrite.promise,
+  });
+  onTestFinished(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    terminalWrite.resolve();
+    resetSessionControllerStateForTest();
+  });
+  const turn = await beginSessionEffect({
+    agentId: "worker",
+    env: process.env,
+    scope: worker.path,
+    identities: ["agent:worker:main"],
+    owner: Symbol("held-model"),
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      // Abort releases the session effect before the held model call returns.
+      turn.release();
+      timer = setTimeout(() => {
+        void (async () => {
+          try {
+            assertAgentSessionWriteAdmission({ agentId: "worker", env: process.env });
+            openDuringWrite = worker.database.db.isOpen;
+            worker.database.db.exec("PRAGMA user_version = 7");
+          } catch (error) {
+            writeError = error;
+          } finally {
+            terminalWrite.resolve();
+          }
+        })();
+      }, 0);
+    },
+  });
+  try {
+    await commitRoster(createHandlers(), roster(["main"]));
+    expect(writeError).toBeUndefined();
+    expect(openDuringWrite).toBe(true);
+    expect(holderIds()).not.toContain("worker");
+    expect(isDeletedAgentDatabasePath(worker.path)).toBe(true);
+  } finally {
+    turn.release();
+  }
 });
 
 it("clears the session-write block when cleanup fails and the agent is re-added", async () => {
