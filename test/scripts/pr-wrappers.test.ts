@@ -756,6 +756,7 @@ exit "$status"
     expect(record.source).toBe(fixture.source);
     const activeWrapper = result.stdout.match(/^active workflow wrapper (.+)$/m)?.[1] ?? "";
     expect(activeWrapper).toContain("openclaw-pr-anchor-v3.");
+    collectFinishedDependencies(fixture);
     expect(existsSync(join(activeWrapper, ".."))).toBe(false);
   });
 
@@ -2970,6 +2971,7 @@ echo "canonical wrapper executed";`,
       "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
     );
     expect(result.stderr).not.toContain("Refusing to silently substitute");
+    collectFinishedDependencies(fixture);
     const anchors = matchingEntries(fixture.root, "openclaw-pr-anchor-v3.");
     expect(anchors).toHaveLength(0);
   });
@@ -3384,6 +3386,7 @@ node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
       expect(existsSync(ghCalled)).toBe(false);
       expect(existsSync(linkedModules)).toBe(false);
       expect(result.stderr).not.toContain("dev-wrapper opt-in");
+      collectFinishedDependencies(fixture);
       const anchors = matchingEntries(fixture.root, "openclaw-pr-anchor-v3.");
       expect(anchors).toHaveLength(0);
       const dependencyProof = result.stdout
