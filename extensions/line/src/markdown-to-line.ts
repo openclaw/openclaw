@@ -49,6 +49,13 @@ function rangesOverlap(
   return left.start < right.end && right.start < left.end;
 }
 
+/** A link shows its href after the label unless the label already is that address. */
+function linkAddsHref(rawLabel: string, href: string): boolean {
+  const label = rawLabel.trim();
+  const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
+  return Boolean(href && label && label !== href && label !== comparableHref);
+}
+
 function projectPlainText(
   ir: MarkdownIR,
   omitted: MarkdownStyleSpan[] = [],
@@ -61,9 +68,7 @@ function projectPlainText(
       continue;
     }
     const href = link.href.trim();
-    const label = ir.text.slice(link.start, link.end).trim();
-    const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
-    if (href && label && label !== href && label !== comparableHref) {
+    if (linkAddsHref(ir.text.slice(link.start, link.end), href)) {
       insertions.push({ position: link.end, text: ` (${href})` });
     }
   }
@@ -235,8 +240,7 @@ function renderTableCell(cell: MarkdownTableCell): RenderedCell {
     }
     for (const link of cell.links.filter((candidate) => candidate.end === end)) {
       const href = link.href.trim();
-      const label = cell.text.slice(link.start, link.end).trim();
-      if (href && label && label !== href) {
+      if (linkAddsHref(cell.text.slice(link.start, link.end), href)) {
         appendSpan({ type: "span", text: ` (${href})` });
         hasMarkup = true;
       }

@@ -48,6 +48,16 @@ describe("processLineMessage table cards", () => {
     ]);
     expect(result.text).toBe("");
   });
+
+  it("renders a mailto link whose label is the address like plain text", () => {
+    const linked = processLineMessage(`| Name | Contact |
+|---|---|
+| Bob | [bob@example.com](mailto:bob@example.com) |`);
+    const plain = processLineMessage(`| Name | Contact |
+|---|---|
+| Bob | bob@example.com |`);
+    expect(cardBody(linked)).toEqual(cardBody(plain));
+  });
 });
 
 describe("processLineMessage", () => {
