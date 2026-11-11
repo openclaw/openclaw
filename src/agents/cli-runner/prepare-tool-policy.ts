@@ -1,11 +1,16 @@
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
-import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import {
+  prepareConversationCapabilityProfile,
+  type ResolvedConversationCapabilityProfile,
+} from "../conversation-capability-profile.js";
+import { isConversationToolAllowed } from "../conversation-tool-policy-pipeline.js";
 import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import { resolveToolSearchConfig } from "../tool-search-config.js";
+import { resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import type { RunCliAgentParams } from "./types.js";
 
 /**
@@ -201,27 +206,82 @@ export function resolveCliBootstrapFileAccess(input: {
   );
 }
 
-type CliToolAvailability = NonNullable<RunCliAgentParams["cliToolAvailability"]>;
-
 /** Apply a `before_prompt_build` tool cap to both native and mediated CLI tools. */
 export function capCliToolAvailability(
-  availability: CliToolAvailability,
-  toolsAllow: string[],
-): CliToolAvailability {
+  params: RunCliAgentParams,
+  toolsAllow: string[] | undefined,
+): RunCliAgentParams {
+  const availability = params.cliToolAvailability;
+  if (!availability || toolsAllow === undefined) {
+    return params;
+  }
   const cap = (names: string[]) =>
     applyEmbeddedAttemptToolsAllow(
       names.map((name) => ({ name })),
       toolsAllow,
     ).map((tool) => tool.name);
-  return { native: cap(availability.native), openClaw: cap(availability.openClaw) };
+  return {
+    ...params,
+    cliToolAvailability: {
+      ...availability,
+      native: cap(availability.native),
+      openClaw: cap(availability.openClaw),
+    },
+  };
 }
 
-/** Operator-managed native tools that survived every later per-turn cap. */
+/**
+ * Keep an operator-managed native tool only while the run's tool policy allows every
+ * capability it confers (WebSearch confers web_search), so profile, agent, group, sender,
+ * sandbox, and session policy cover the native tool too. Native search also follows the
+ * CLI web-search rule. Capability-free selections never resolve the policy profile.
+ */
+export async function retainPolicyAllowedManagedNativeTools(
+  params: RunCliAgentParams,
+  managedNativeTools: readonly string[],
+  backend: Pick<ResolvedCliBackend, "bundleMcp" | "bundleMcpMode" | "projectNativeToolAuthority">,
+  resolveCapabilityProfile: () => Promise<ResolvedConversationCapabilityProfile>,
+): Promise<RunCliAgentParams> {
+  const conferred = managedNativeTools.map(
+    (name) => [name, backend.projectNativeToolAuthority?.([name]) ?? []] as const,
+  );
+  const availability = params.cliToolAvailability;
+  if (!availability || conferred.every(([, capabilities]) => capabilities.length === 0)) {
+    return params;
+  }
+  const nativeWebSearchEnabled = resolveCliNativeWebSearchEnabled(params, backend);
+  const resolved = await resolveCapabilityProfile();
+  // Like the MCP catalog, a completion omits its requester cap here so it launches the
+  // ordinary list; isCliNativeToolCallable refuses these calls on completions.
+  const profile =
+    resolved.policy.requesterPolicySource === "completion-handoff"
+      ? { ...resolved, policy: { ...resolved.policy, inheritedToolPolicy: undefined } }
+      : resolved;
+  const refused = conferred
+    .filter(
+      ([, capabilities]) =>
+        !capabilities.every(
+          (capability) =>
+            (capability !== "web_search" || nativeWebSearchEnabled) &&
+            isConversationToolAllowed(profile, capability),
+        ),
+    )
+    .map(([name]) => name);
+  const native = availability.native.filter((name) => !refused.includes(name));
+  return { ...params, cliToolAvailability: { ...availability, native } };
+}
+
+/** Operator-managed orchestration tools (no conferred capability) that survived every cap. */
 export function keptManagedNativeTools(
   managedNativeTools: readonly string[],
   params: Pick<RunCliAgentParams, "cliToolAvailability">,
+  backend: Pick<ResolvedCliBackend, "projectNativeToolAuthority">,
 ): string[] {
-  return managedNativeTools.filter((name) => params.cliToolAvailability?.native.includes(name));
+  return managedNativeTools.filter(
+    (name) =>
+      params.cliToolAvailability?.native.includes(name) &&
+      !backend.projectNativeToolAuthority?.([name]).length,
+  );
 }
 
 /** Discovery sees only the final MCP catalog and does not restore native execution tools. */

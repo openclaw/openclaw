@@ -146,6 +146,7 @@ import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
 import {
   capCliToolAvailability,
+  retainPolicyAllowedManagedNativeTools,
   keptManagedNativeTools,
   withCliToolSearch,
   resolveCliBootstrapFileAccess,
@@ -809,7 +810,12 @@ async function prepareCliRunContextWithinReadFence(
         resolveScopedTools: resolveMcpLoopbackScopedTools,
       })
     : { params, tools: [] };
-  params = mcpProjection.params;
+  params = await retainPolicyAllowedManagedNativeTools(
+    mcpProjection.params,
+    managedNativeTools,
+    backendResolved,
+    resolveNativeMcpCapabilityProfile,
+  );
   params.assertCurrent?.();
   const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
     mcpProjection.tools,
@@ -838,13 +844,7 @@ async function prepareCliRunContextWithinReadFence(
       },
     };
   }
-  if (params.cliToolAvailability && promptBuildToolsAllow !== undefined) {
-    const { cliToolAvailability } = params;
-    params = {
-      ...params,
-      cliToolAvailability: capCliToolAvailability(cliToolAvailability, promptBuildToolsAllow),
-    };
-  }
+  params = capCliToolAvailability(params, promptBuildToolsAllow);
   const projectedTools = applyEmbeddedAttemptToolsAllow(
     hookFilteredProjectedTools,
     params.cliToolAvailability?.openClaw,
@@ -1551,7 +1551,7 @@ async function prepareCliRunContextWithinReadFence(
           !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
         thinkLevel: params.thinkLevel,
         // Operator-kept orchestration tools that survived every later native-tool cap.
-        nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params),
+        nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params, backendResolved),
         runtimeContextFragments: params.runtimeContextFragments,
         sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
         context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],

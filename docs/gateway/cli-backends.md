@@ -188,8 +188,8 @@ Discovery grants no tool execution authority. Discovered calls still pass throug
 OpenClaw's MCP policy and approvals. Tool-free turns do not receive `ToolSearch`.
 Reading a schema does not require permission to execute a shell command.
 
-Operators who want Claude Code's native subagents or workflows can opt in per
-agent, or for every agent, through the Anthropic plugin config:
+Operators who want Claude Code's native subagents, workflows, or web search can
+opt in per agent, or for every agent, through the Anthropic plugin config:
 
 ```json5
 {
@@ -198,7 +198,7 @@ agent, or for every agent, through the Anthropic plugin config:
       anthropic: {
         config: {
           managedNativeTools: {
-            default: ["Agent", "Workflow"],
+            default: ["Agent", "Workflow", "WebSearch"],
             agents: { ops: [] }, // per-agent list replaces the default
           },
         },
@@ -208,10 +208,14 @@ agent, or for every agent, through the Anthropic plugin config:
 }
 ```
 
-Only `Agent` and `Workflow` are accepted in this opt-in: they add orchestration without
-granting file, shell, or network authority, so descendants act through the same
-policy-filtered OpenClaw tools as the parent. File and shell tools stay with
-OpenClaw. `Skill` is not offered because managed turns load no Claude skills.
+Only `Agent`, `Workflow`, and `WebSearch` are accepted in this opt-in. `Agent` and
+`Workflow` add orchestration without granting file, shell, or network authority, so
+descendants act through the same policy-filtered OpenClaw tools as the parent.
+`WebSearch` is Claude Code's subscription-backed search, which runs on Anthropic's
+servers; it gives the agent the `web_search` capability without an OpenClaw search
+provider. File and shell tools stay with OpenClaw. `WebFetch` is not offered: it
+fetches URLs from the Gateway host, outside `web_fetch`'s network guards. `Skill` is
+not offered because managed turns load no Claude skills.
 Managed turns also load no user or project settings, so `Agent` offers Claude
 Code's built-in subagent types only; custom subagents in `~/.claude/agents/` or
 a project's `.claude/agents/` are not loaded.
@@ -227,6 +231,15 @@ a project's `.claude/agents/` are not loaded.
   `tools.fs.workspaceOnly` still receive no native execution tools. Read-only
   discovery can remain available for their authorized MCP tools. A capped turn in an
   opted-in session therefore launches with different tool definitions.
+- `WebSearch` is kept only while the agent's tool policy allows `web_search`
+  (tool profiles, `tools.allow`/`tools.deny` including `group:web`, per-agent,
+  group, sender, and sandbox policy) and `tools.web.search` is enabled without a
+  pinned `tools.web.search.provider`; a pinned provider keeps search on OpenClaw's
+  `web_search`. A session that turns web search off drops it from its next turn.
+  Verified child completions keep the definition but refuse `WebSearch` calls,
+  because a completion's requester cap is checked per OpenClaw tool call and a
+  native call has no such check. `before_tool_call` sees these calls as
+  `web_search`.
 - Each native call still passes `before_tool_call` and exec policy: ask
   `on-miss` or `always` routes it through approval, and exec security `deny`,
   or `allowlist` with ask `off`, refuses it. Under those two settings the
