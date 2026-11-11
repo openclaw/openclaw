@@ -332,6 +332,7 @@ export function createOpenClawIdService(params: {
       // Nothing is published under another key; the request stays pending.
       const { reason: code, message } = key.refused;
       lastPublish = { state: "failed", code, message, retryable: false };
+      peopleChanged();
       return lastPublish;
     }
     const { signer } = key;
@@ -354,6 +355,7 @@ export function createOpenClawIdService(params: {
         enrollmentCode: code,
       }));
     lastPublish = outcome;
+    peopleChanged();
     if (outcome.state === "published") {
       const bindingSeq = record.binding?.body.binding_seq ?? 0;
       if (rebindPublication.published(bindingSeq, record.discovery.published_binding_seq)) {

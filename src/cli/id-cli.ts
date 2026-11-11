@@ -5,20 +5,17 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { password } from "@clack/prompts";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import type { Command } from "commander";
-import type {
-  Ed25519PublicKey,
-  IrohEndpointKey,
+import {
+  signRebind,
+  type Ed25519PublicKey,
+  type IrohEndpointKey,
+  type RebindPreparation,
+  type RebindSignRefusal,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { RebindCommitResult } from "../gateway/openclaw-id/service-rebind.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
-import {
-  describeRebind,
-  displayKey,
-  signRebind,
-  type RebindPreparation,
-  type RebindSignRefusal,
-} from "./id-cli-rebind.js";
+import { describeRebind, displayKey } from "./id-cli-rebind.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { promptYesNo } from "./prompt.js";
 
