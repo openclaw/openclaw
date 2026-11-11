@@ -345,9 +345,16 @@ export type CliBackendParseJsonlEvent = (
   ctx: CliBackendParseJsonlEventContext,
 ) => CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[] | null | undefined;
 
+/** Sizes and trigger the CLI reports with a completed native compaction. */
+export type CliCompactionMeasurement = {
+  trigger?: "auto" | "manual";
+  tokensBefore?: number;
+  tokensAfter?: number;
+};
+
 export type CliBackendParsedJsonlLifecycleEvent =
   | { kind: "compaction"; phase: "start" }
-  | { kind: "compaction"; phase: "end"; completed: boolean };
+  | ({ kind: "compaction"; phase: "end"; completed: boolean } & CliCompactionMeasurement);
 
 export type CliBackendParseJsonlLifecycleEvent = (
   line: string,

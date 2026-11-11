@@ -1328,6 +1328,11 @@ does not wait on a separate coordination database. Explicit synchronous
 checkpoint and close operations retain their synchronous contract. These changes
 require no state migration.
 
+Shared-state retirement, including an agent worker's shared-state borrow, uses a
+zero busy timeout for its final checkpoint. Peer readers can keep their snapshot
+and WAL without delaying retirement by the normal write timeout. Clean-close proof
+still requires a completed checkpoint, native close, and empty journals.
+
 The warning includes observed WAL and database sizes, checkpointed and total WAL
 frames, the last observed complete checkpoint, the consecutive blocked count,
 the observation time, and up to eight process-local active reader owners when

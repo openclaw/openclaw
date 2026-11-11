@@ -288,6 +288,14 @@ history. Larger summaries increase context usage and replay cost on subsequent
 requests. They do not increase the summarizer's input or output allowance, recover
 facts already lost from earlier summaries, or change provider-native compaction.
 
+After the capped summary, client-side compaction appends a deterministic record of
+the compacted region, built without a model: recent user-role messages quoted with
+their recorded origin, the most-referenced identifiers, and the last assistant
+replies, with credential shapes redacted. It has its own budget of up to 6,000
+characters (never more than `maxSummaryChars`) outside the summary ceiling. It
+shrinks or is dropped when the active model's token budget has no room for it.
+Each compaction replaces the previous record instead of summarizing it again.
+
 ### Identifier preservation
 
 Compaction summarization requests exact opaque identifier retention by default (`agents.defaults.compaction.identifierPolicy: "strict"`). Degraded summaries may omit identifiers that cannot fit. Set `agents.defaults.compaction.identifierPolicy: "off"` to disable the retention guidance. Custom guidance belongs in a compaction provider's `summarize()` implementation.
