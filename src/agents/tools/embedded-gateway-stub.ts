@@ -74,6 +74,36 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   );
 }
 
+async function handleSessionsDescribe(params: Record<string, unknown>) {
+  const key = readToolStringParam(params, "key", { required: true });
+  const agentId = readToolStringParam(params, "agentId");
+  if (params.includeNativeSubagents || params.includeDerivedTitles || params.includeLastMessage) {
+    throw new Error("Session description enrichment requires a running gateway");
+  }
+  const rt = await getRuntime();
+  const publication = sessionProjection;
+  const query = (cfg: Parameters<typeof rt.resolveRequestedSessionAgentId>[0]) => {
+    const resolved = rt.resolveRequestedSessionAgentId(cfg, key, agentId, "read");
+    if (!resolved.ok) {
+      throw new Error(resolved.error.message);
+    }
+    return { key, agentId: resolved.agentId };
+  };
+  return rt.withReadySessionRows(
+    await borrowSessionRowProjection(),
+    (cfg) => [query(cfg)],
+    (read) => {
+      if (sessionProjection !== publication) {
+        throw new Error(
+          "Session projection changed while describing the session; retry the request",
+        );
+      }
+      const { row } = rt.prepareProjectedSessionPresentation(read).snapshot(query(read.state.cfg));
+      return { session: row };
+    },
+  );
+}
+
 async function handleSessionsSearch(params: Record<string, unknown>) {
   const rt = await getRuntime();
   const cfg = rt.getRuntimeConfig();
@@ -183,17 +213,18 @@ async function handleChatHistory(params: Record<string, unknown>) {
   }
 
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-  const { cfg, storePath, entry, canonicalKey } = rt.loadSessionEntry(
-    sessionKey,
-    sessionLoadOptions,
-  );
+  const { cfg, storePath, entry, canonicalKey } = await rt.loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: rt.getRuntimeConfig(),
+    key: sessionKey,
+    ...sessionLoadOptions,
+  });
   const sessionAgentId = rt.resolveSessionAgentId({
     sessionKey,
     config: cfg,
     agentId: requestedAgentId,
   });
   if (requestedSessionId) {
-    const transcriptSessionKey = rt.resolveTranscriptSessionKeyBySessionId({
+    const transcriptSessionKey = await rt.resolveSessionKeyBySessionIdAsync({
       agentId: sessionAgentId,
       sessionId: requestedSessionId,
       storePath,
@@ -263,6 +294,9 @@ export function createEmbeddedCallGateway(): EmbeddedCallGateway {
         return (await handleSessionsList(params)) as T;
       case "sessions.resolve":
         return (await handleSessionsResolve(params)) as T;
+      case "sessions.describe":
+        // SAFETY: the caller selects T for this method's session-description response.
+        return (await handleSessionsDescribe(params)) as T;
       case "sessions.search":
         return (await handleSessionsSearch(params)) as T;
       case "chat.history":

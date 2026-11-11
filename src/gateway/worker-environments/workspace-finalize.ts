@@ -1,15 +1,8 @@
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   WorkerWorkspaceQuiescence,
   WorkerWorkspaceReconcileResult,
 } from "./tunnel-contract.js";
-import {
-  createWorkspaceReconcileMetrics,
-  type WorkspaceReconcileMetrics,
-} from "./workspace-hash-memo.js";
 import type { WorkerWorkspaceApplyResult } from "./workspace-reconcile.js";
-
-const workspaceReconcileLog = createSubsystemLogger("gateway/worker-workspace");
 
 export class WorkerWorkspaceFinalFenceError extends Error {
   readonly reclaimDisposition: "retry" | "preserve-result";
@@ -21,42 +14,11 @@ export class WorkerWorkspaceFinalFenceError extends Error {
   }
 }
 
-type WorkspaceReconcileOutcome = "failed" | "succeeded";
-
-const workspaceReconcileReporters = new WeakMap<
-  WorkerWorkspaceReconcileResult,
-  (outcome: WorkspaceReconcileOutcome) => void
->();
-
-/** Runs one reconciliation with shared metrics and logs them once the final fence settles. */
-export async function runInstrumentedWorkspaceReconcile(
-  run: (metrics: WorkspaceReconcileMetrics) => Promise<WorkerWorkspaceReconcileResult>,
-): Promise<WorkerWorkspaceReconcileResult> {
-  const metrics = createWorkspaceReconcileMetrics();
-  const startedAt = performance.now();
-  const report = (outcome: WorkspaceReconcileOutcome) => {
-    workspaceReconcileLog.debug("worker workspace reconcile completed", {
-      outcome,
-      durationMs: performance.now() - startedAt,
-      ...metrics,
-    });
-  };
-  try {
-    const reconciliation = await run(metrics);
-    workspaceReconcileReporters.set(reconciliation, report);
-    return reconciliation;
-  } catch (error) {
-    report("failed");
-    throw error;
-  }
-}
-
 /** Rechecks both owners after renewing the remote quiescence lease. */
 export async function verifyReconciledWorkspaceFinal(
   reconciliation: WorkerWorkspaceReconcileResult,
   quiescence: WorkerWorkspaceQuiescence,
 ): Promise<WorkerWorkspaceApplyResult | undefined> {
-  let succeeded = false;
   const acceptUnchanged = reconciliation.acceptUnchangedStagedResult;
   let disposition: WorkerWorkspaceFinalFenceError["reclaimDisposition"] = "retry";
   const fence = async (operation: () => Promise<void>) => {
@@ -83,14 +45,9 @@ export async function verifyReconciledWorkspaceFinal(
     }
     await reconciliation.publishStagedResult();
     const applied = reconciliation.getAppliedWorkspaceResult?.();
-    succeeded = true;
     return applied;
   } catch (error) {
     await reconciliation.discardPreparedStagedResult().catch(() => undefined);
     throw error;
-  } finally {
-    const reporter = workspaceReconcileReporters.get(reconciliation);
-    workspaceReconcileReporters.delete(reconciliation);
-    reporter?.(succeeded ? "succeeded" : "failed");
   }
 }

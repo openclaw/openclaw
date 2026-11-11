@@ -6,18 +6,20 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { parseAgentSessionKey, isIncognitoSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
-import type { GatewayMethodSessionAccess } from "./methods/descriptor.js";
+import type { GatewayMethodOwner, GatewayMethodSessionAccess } from "./methods/descriptor.js";
 import {
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { readPluginSessionWorkAuthority } from "./plugin-session-work-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { resolveSessionResourceToolPolicy } from "./session-resource-tool-policy.js";
@@ -57,7 +59,7 @@ function denied(message = "Session access changed; reopen the session before con
   );
 }
 
-class SessionAccessPreparationPendingError extends SessionMutationAuthorizationChangedError {
+export class SessionAccessPreparationPendingError extends SessionMutationAuthorizationChangedError {
   constructor() {
     super(
       errorShape(
@@ -75,6 +77,8 @@ class SessionAccessPreparationPendingError extends SessionMutationAuthorizationC
 /** Prepare session/profile facts through resident owners; retain the original source authority. */
 export async function prepareGatewaySessionAccessAuthority(request: {
   policy: GatewayMethodSessionAccess;
+  methodOwner?: GatewayMethodOwner;
+  pluginRegistry?: PluginRegistry;
   requestParams: unknown;
   client: GatewayClient | null;
   context: GatewayRequestContext;
@@ -90,6 +94,19 @@ export async function prepareGatewaySessionAccessAuthority(request: {
   const assertInvocationCurrent = params.assertInvocationCurrent;
   const assertPreparationSourceCurrent = params.assertPreparationCurrent ?? assertInvocationCurrent;
   assertPreparationSourceCurrent?.();
+  const pluginId = params.methodOwner?.kind === "plugin" ? params.methodOwner.pluginId : undefined;
+  const requiredToolName = params.policy.requiredTool?.trim();
+  // Only the selected method's registered owner can supply plugin policy aliases.
+  const toolMeta =
+    pluginId &&
+    requiredToolName &&
+    params.pluginRegistry?.tools.some(
+      (entry) =>
+        entry.pluginId === pluginId &&
+        (entry.declaredNames?.has(requiredToolName) ?? entry.names.includes(requiredToolName)),
+    )
+      ? { pluginId }
+      : undefined;
   const input = params.requestParams;
   const sessionKey =
     isRecord(input) && typeof input.sessionKey === "string" ? input.sessionKey : "";
@@ -100,9 +117,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
     isIncognitoSessionKey(sessionKey) ||
     (isRecord(input) && input.agentId !== undefined && input.agentId !== parsed.agentId)
   ) {
-    denied(
-      "This operation requires a canonical, non-incognito sessionKey and its matching agentId.",
-    );
+    denied("This operation requires a full, non-incognito sessionKey and its matching agentId.");
   }
   // Capture ingress facts before preparation yields. A newly selected profile or renewed grant
   // cannot authorize an invocation admitted under a different source.
@@ -118,7 +133,12 @@ export async function prepareGatewaySessionAccessAuthority(request: {
   const runtime = client?.internal?.agentRuntimeIdentity;
   const ambient = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
   const assertAmbient = ambient ? captureGatewayToolCallerAssertion() : undefined;
-  const owner = tool ?? runtime ?? (assertAmbient ? ambient : undefined);
+  const service = readPluginSessionWorkAuthority();
+  const serviceOwner =
+    service && client?.internal?.pluginRuntimeOwnerId === service.pluginId
+      ? service.target
+      : undefined;
+  const owner = tool ?? runtime ?? (assertAmbient ? ambient : undefined) ?? serviceOwner;
   const inherited = runtime?.sessionSpawnContext?.inheritedToolPolicy;
   const inheritedPolicy = inherited
     ? { allow: [...inherited.allow], deny: [...inherited.deny] }
@@ -130,6 +150,12 @@ export async function prepareGatewaySessionAccessAuthority(request: {
     denied("An agent can only access resources in its own conversation.");
   }
   const assertRun = () => {
+    if (serviceOwner) {
+      service!.assertCurrent();
+      if (service!.context !== params.context) {
+        denied();
+      }
+    }
     tool?.assertCurrent?.();
     if (ambient) {
       if (
@@ -159,6 +185,8 @@ export async function prepareGatewaySessionAccessAuthority(request: {
           denied();
         }
         ambient.assertToolAllowed(requiredTool);
+      } else if (serviceOwner) {
+        service!.assertToolAllowed(requiredTool);
       } else if (!inheritedPolicy) {
         denied();
       }
@@ -225,6 +253,13 @@ export async function prepareGatewaySessionAccessAuthority(request: {
         ? { lifecycleRevision: original.entry.lifecycleRevision }
         : {}),
     });
+    if (
+      serviceOwner &&
+      (target.sessionId !== serviceOwner.sessionId ||
+        target.lifecycleRevision !== serviceOwner.lifecycleRevision)
+    ) {
+      denied();
+    }
     const policyClient: GatewayClient = {
       ...client,
       connect: { ...client.connect, scopes: originalScopes },
@@ -242,6 +277,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
             current,
             readPreparedSessionEntry: (sourceQuery) => projection.sharingTarget(sourceQuery)?.entry,
             toolName: params.policy.requiredTool,
+            toolMeta,
           })
         : undefined;
     const toolPolicy = resolveToolPolicy(original);

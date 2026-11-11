@@ -1,0 +1,2 @@
+# Keep cron filter locale-formatting assertions independent of translation-memory refreshes.
+17

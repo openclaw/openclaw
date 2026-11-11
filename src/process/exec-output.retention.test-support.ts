@@ -8,8 +8,15 @@ assert.ok(gc, "The retention child requires --expose-gc");
 const emittedBytes = 128 * 1024;
 const cap = 16;
 const observed = [];
-for (const mode of ["head", "combined-head", "tail"] as const) {
+const churn = "x".repeat(Buffer.poolSize / 2 - 8);
+const advancePool = () => {
+  for (let index = 0; index < 3; index++) {
+    Buffer.from(churn);
+  }
+};
+for (const mode of ["head", "combined-head", "tail", "combined-tail"] as const) {
   let clipped: WeakRef<ArrayBufferLike> | undefined;
+  let pool: WeakRef<ArrayBufferLike> | undefined;
   let bytes = 0;
   const output = createDeferred();
   const control = new WeakRef(new ArrayBuffer(1024));
@@ -24,11 +31,16 @@ for (const mode of ["head", "combined-head", "tail"] as const) {
       baseEnv: {},
       timeoutMs: 10_000,
       signal: abort.signal,
-      outputCapture: mode === "tail" ? "tail" : "head",
-      maxOutputBytes: mode === "combined-head" ? emittedBytes : cap,
-      ...(mode === "combined-head" ? { maxCombinedOutputBytes: cap } : {}),
+      outputCapture: mode.endsWith("tail") ? "tail" : "head",
+      maxOutputBytes: mode.startsWith("combined") ? emittedBytes : cap,
+      ...(mode.startsWith("combined") ? { maxCombinedOutputBytes: cap } : {}),
       onOutputChunk(chunk, stream) {
         assert.equal(stream, "stdout");
+        if (bytes < cap || mode.endsWith("tail")) {
+          // The retained boundary copy must not keep unrelated pool bytes alive.
+          advancePool();
+          pool = new WeakRef(Buffer.from("unrelated-pool-marker").buffer);
+        }
         if (bytes < cap && bytes + chunk.byteLength > cap) {
           clipped = new WeakRef(chunk.buffer);
         }
@@ -47,13 +59,19 @@ for (const mode of ["head", "combined-head", "tail"] as const) {
       }),
     ]);
     assert.ok(clipped, "The child must emit a buffer crossing the capture boundary");
+    assert.ok(pool);
+    advancePool();
     // Dereferencing during collection would keep the target alive for that job.
     for (let pass = 0; pass < 8; pass += 1) {
       await setImmediate();
       gc();
     }
     assert.equal(control.deref(), undefined, "The uncached GC control must be collected");
-    observed.push({ mode, retained: clipped.deref() !== undefined });
+    observed.push({
+      mode,
+      retained: clipped.deref() !== undefined,
+      poolRetained: pool.deref() !== undefined,
+    });
   } finally {
     abort.abort();
     const result = await command;

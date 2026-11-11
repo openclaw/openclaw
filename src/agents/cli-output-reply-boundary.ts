@@ -74,6 +74,50 @@ export function createClaudeReplyBoundary() {
       currentMessageHadToolUse = true;
     },
     /**
+     * A Gemini tool call ends the message before it, like a tool_use block. The
+     * dialect carries no Claude message boundaries, so it never changes which
+     * message used a tool.
+     */
+    markToolUseWithoutMessage(): void {
+      sawToolUseSinceText = true;
+    },
+    /** Whether a message or tool boundary is still waiting for the next text. */
+    boundaryPending(): boolean {
+      return pendingMessageSeparator || sawToolUseSinceText;
+    },
+    /** Where the final message's text starts, for diagnostics-only selection. */
+    get finalMessageStart(): number {
+      return currentMessageStart;
+    },
+    /**
+     * Clears a pending boundary without applying it. Commentary-buffered text
+     * skips `settleText` entirely — it is appended whole, with no separator and
+     * no new candidate offset — so only the flags are consumed here.
+     */
+    clearBoundary(): void {
+      pendingMessageSeparator = false;
+      sawToolUseSinceText = false;
+    },
+    /**
+     * A custom-backend tool start begins the next final-message segment, so
+     * pre-tool narration is never the final message. Custom events carry no
+     * message boundaries, hence no separator and no candidate change.
+     */
+    startFinalMessageSegment(offset: number): void {
+      currentMessageStart = offset;
+    },
+    /**
+     * The same, for Gemini plain text that follows an unsettled tool use: the
+     * tool output ends the message before it.
+     */
+    startFinalMessageSegmentAfterToolUse(offset: number): void {
+      if (!sawToolUseSinceText) {
+        return;
+      }
+      currentMessageStart = offset;
+      sawToolUseSinceText = false;
+    },
+    /**
      * An interim result commits its segment. Rebase boundary state so later
      * text is judged on its own, while delta snapshots stay cumulative.
      */

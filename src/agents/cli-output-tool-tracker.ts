@@ -2,12 +2,20 @@
 // Split out of `cli-output-events.ts` so both stay within the 700-line
 // `max-lines` budget; nothing here changed behavior in the move.
 import type { CliToolResultDelta, CliToolUseStartDelta } from "./cli-output-contracts.js";
+import type { LiveEditDiffProgressState } from "./embedded-agent-live-edit-diff.js";
 
 type PendingToolUse = {
   toolCallId: string;
   name: string;
   kind: CliToolUseStartDelta["kind"];
   inputJsonParts: string[];
+  /**
+   * Cumulative length of the fragments this block streamed, which the live-edit
+   * diff progress helper reads to rate-limit and bound its own parsing. It is
+   * not reduced when the fragments below are dropped: the retained text only
+   * shrinks, so a stale larger length keeps the helper's own cap engaged.
+   */
+  inputJsonLength: number;
   /** Set once buffering stopped, so the partial join is never parsed. */
   inputJsonDropped?: boolean;
   /**
@@ -27,6 +35,7 @@ type PendingToolUse = {
 
 export type ToolUseTracker = {
   pendingByIndex: Map<number, PendingToolUse>;
+  inputProgressById: Map<string, LiveEditDiffProgressState>;
   nameById: Map<string, string>;
   startedIds: Set<string>;
   resultDeliveredIds: Set<string>;
@@ -102,6 +111,7 @@ export function beginPendingToolUse(
     name: init.name,
     kind: init.kind,
     inputJsonParts: [],
+    inputJsonLength: 0,
     chargedChars: 0,
   };
   tracker.pendingByIndex.set(index, pending);
@@ -153,6 +163,7 @@ export function appendPendingToolInput(
     return;
   }
   pending.inputJsonParts.push(partial);
+  pending.inputJsonLength += partial.length;
   pending.chargedChars += partial.length;
   tracker.pendingInputChars += partial.length;
 }
@@ -160,6 +171,7 @@ export function appendPendingToolInput(
 export function createToolUseTracker(): ToolUseTracker {
   return {
     pendingByIndex: new Map(),
+    inputProgressById: new Map(),
     nameById: new Map(),
     startedIds: new Set(),
     resultDeliveredIds: new Set(),
@@ -175,6 +187,7 @@ export function emitToolStartOnce(
   args: Record<string, unknown>,
   onToolUseStart?: (delta: CliToolUseStartDelta) => void,
 ): void {
+  tracker.inputProgressById.delete(toolCallId);
   // Streaming and final assistant records may both describe the same tool call.
   if (tracker.startedIds.has(toolCallId)) {
     return;

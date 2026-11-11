@@ -5,6 +5,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -78,7 +79,7 @@ describe("plugin-state-store.import", () => {
       seedPluginStateEntriesForTests([
         { pluginId, namespace: options.namespace, key: "expiring", value: true, expiresAt: 10_001 },
       ]);
-      const db = openOpenClawStateDatabase().db;
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
       db.function("advance_import_clock", () => {
         clock = 10_001;
         return 0;

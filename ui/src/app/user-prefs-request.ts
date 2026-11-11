@@ -24,9 +24,7 @@ export function loadUserPreferences(
   const pending = client.request<UsersPrefsGetResult>("users.prefs.get", params);
   cache.set(key, pending);
   const retire = () => {
-    if (cache.get(key) === pending) {
-      cache.delete(key);
-    }
+    cache.delete(key);
   };
   void pending.then((result) => {
     if (result.status !== "ok") {

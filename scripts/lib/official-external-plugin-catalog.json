@@ -62,6 +62,32 @@
       }
     },
     {
+      "name": "@openclaw/cloudflare",
+      "description": "Cloudflare R2 storage for named OpenClaw storage locations.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "build": {
+          "bundledDist": true
+        },
+        "plugin": {
+          "id": "cloudflare",
+          "label": "Cloudflare"
+        },
+        "contracts": {
+          "storageProviders": [
+            "r2"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/cloudflare",
+          "npmSpec": "@openclaw/cloudflare",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.7"
+        }
+      }
+    },
+    {
       "name": "@openclaw/codex",
       "description": "OpenClaw Codex app-server harness and native session catalog",
       "source": "official",
@@ -113,6 +139,24 @@
           "npmSpec": "@openclaw/copilot",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.28"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/muse",
+      "description": "OpenClaw Muse Code agent runtime plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "muse",
+          "label": "Muse Code"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/muse",
+          "npmSpec": "@openclaw/muse",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.3"
         }
       }
     },
@@ -466,6 +510,24 @@
       }
     },
     {
+      "name": "@openclaw/levanto",
+      "description": "OpenClaw Levanto Sage native decision provider",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "levanto",
+          "label": "Levanto Sage"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/levanto",
+          "npmSpec": "@openclaw/levanto",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/lobster",
       "description": "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
       "source": "official",
@@ -753,6 +815,24 @@
           "npmSpec": "@openclaw/slack-huddles",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.9.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/subq",
+      "description": "OpenClaw SubQ Snap decision provider",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "subq",
+          "label": "SubQ"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/subq",
+          "npmSpec": "@openclaw/subq",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.3"
         }
       }
     },

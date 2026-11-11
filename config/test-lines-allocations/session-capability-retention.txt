@@ -1,0 +1,2 @@
+# Released capability lookups must collect caller/error/observer graphs while nested live scopes remain usable.
+34

@@ -12,8 +12,6 @@ type ThreadBindingsTestState = {
   persistenceAvailable: boolean;
   lastPersistedAtMs: number;
   mutationTail: Promise<void>;
-  revision: number;
-  activePersistence?: unknown;
 };
 
 const THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.discordThreadBindingsState");
@@ -41,6 +39,4 @@ export async function resetThreadBindingsForTests() {
   state.persistenceAvailable = true;
   state.lastPersistedAtMs = 0;
   state.mutationTail = Promise.resolve();
-  state.revision += 1;
-  delete state.activePersistence;
 }

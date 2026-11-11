@@ -1,8 +1,44 @@
+import { runInNewContext } from "node:vm";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { createControlUiSessionFixtures } from "./control-ui-session-fixtures.ts";
+import {
+  createControlUiSessionFixtures,
+  createControlUiSessionRow,
+} from "./control-ui-session-fixtures.ts";
 
 afterEach(() => vi.useRealTimers());
+
+it("keeps published rows authoritative for later list, describe and patch replies", () => {
+  const row = createControlUiSessionRow("agent:main:live", "Live", 10, {
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: ["run-1"],
+    unread: true,
+  });
+  const sibling = createControlUiSessionRow("agent:main:other", "Other", 1);
+  const sessions = createControlUiSessionFixtures(
+    { rows: [row, sibling], mainKey: row.key },
+    isRecord,
+  );
+  sessions.replaceCanonicalRow({
+    ...row,
+    status: "done",
+    hasActiveRun: false,
+    activeRunIds: [],
+    updatedAt: 20,
+  });
+  const final = { status: "done", hasActiveRun: false, activeRunIds: [] };
+  expect(sessions.list([row, sibling])).toEqual([
+    expect.objectContaining(final),
+    expect.objectContaining({ key: sibling.key, label: "Other" }),
+  ]);
+  expect(sessions.sessionInfo(row.key)).toMatchObject(final);
+  expect(sessions.patch(row.key, { unread: false })).toMatchObject({
+    ok: true,
+    entry: { ...final, unread: false },
+  });
+  expect(sessions.read(row.key)).toMatchObject({ ...final, unread: false });
+});
 
 it("samples fresh wire rows without changing stored facts or previous replies", () => {
   vi.useFakeTimers();
@@ -40,4 +76,37 @@ it("samples fresh wire rows without changing stored facts or previous replies", 
       { renames: [], archiveFiltering: false },
     ),
   ).toMatchObject({ sessions: [{ label: "Renamed", snapshotAt: 50 }] });
+});
+
+it("keeps explicit metadata overrides and archive normalization when serialized", () => {
+  const options = {
+    displayName: undefined,
+    label: undefined,
+    status: undefined,
+    derivedTitle: "Generated title",
+    archived: true,
+    pinned: true,
+    syntheticField: "preserved",
+  };
+  const row = createControlUiSessionRow("agent:main:archived", "Default label", 42, options);
+  expect(row).toMatchObject({
+    key: "agent:main:archived",
+    displayName: undefined,
+    label: undefined,
+    status: undefined,
+    derivedTitle: "Generated title",
+    archived: true,
+    archivedAt: 42,
+    pinned: false,
+    pinnedAt: undefined,
+    syntheticField: "preserved",
+  });
+  expect(
+    runInNewContext(
+      "(" +
+        createControlUiSessionRow.toString() +
+        ")('agent:main:archived', 'Default label', 42, options)",
+      { options },
+    ),
+  ).toEqual(row);
 });

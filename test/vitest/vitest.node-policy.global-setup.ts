@@ -1,5 +1,5 @@
 import type { TestProject } from "vitest/node";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
 
 /** Vitest filters parent argv; fork processes need the shared policy explicitly. */
 export default function setupVitestNodeArgs(root: TestProject): void {

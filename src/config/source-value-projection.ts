@@ -22,11 +22,11 @@ export function projectRuntimeChangesOntoSource(
       return unchanged;
     }
     if (!isRecord(candidate)) {
-      return structuredClone(candidate);
+      return candidate;
     }
     const sourceRecord = isRecord(source) ? source : {};
     const runtimeRecord = isRecord(runtime) ? runtime : {};
-    const projected = structuredClone(sourceRecord);
+    const projected = { ...sourceRecord };
     // Explicit empty objects and authored scalars own their replacement shape.
     const pruneChildren =
       prune && (source === undefined || isRecord(source)) && Object.keys(candidate).length > 0;
@@ -64,5 +64,5 @@ export function projectRuntimeChangesOntoSource(
     "",
     options.pruneUnauthoredDeletions === true,
   );
-  return projected === unchanged ? structuredClone(sourceConfig) : projected;
+  return structuredClone(projected === unchanged ? sourceConfig : projected);
 }

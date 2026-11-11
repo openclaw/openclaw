@@ -24,6 +24,7 @@ import {
   getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   listRuntimeAuthProfileStoreSnapshotsForSharedOwner,
   noteRuntimeAuthProfileStorePersistedMutation,
+  recordRuntimeAuthProfilePersistedStore,
 } from "./runtime-snapshots.js";
 import {
   loadPersistedAuthProfileStoreFromRows,
@@ -63,6 +64,8 @@ export async function publishInlineAuthFailure(
     agentDir,
     receipt.publication,
     owner,
+    undefined,
+    committed?.isCurrent() ? { store: committed.store, env: owner.env } : undefined,
   );
   if (entries.length === 0) {
     return;
@@ -118,6 +121,7 @@ export async function publishInlineAuthFailure(
     const store = markRuntimePersistedProfiles(
       loadPersistedAuthProfileStoreFromRows(rows, databasePath) ?? createEmptyAuthProfileStore(),
     );
+    recordRuntimeAuthProfilePersistedStore(databasePath, store);
     observeCanonicalAuthProfileCredentials(databasePath, store.profiles);
     return {
       store,

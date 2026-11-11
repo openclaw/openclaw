@@ -1,16 +1,5 @@
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeOptionalString,
-  readStringValue,
-} from "@openclaw/normalization-core/string-coerce";
-import {
-  hashCliImageTurnEntryId,
-  readCliImageTurnContext,
-} from "../agents/cli-image-turn-correlation.js";
-import { stripCliSessionDriftNote } from "../agents/cli-session.js";
-import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
-import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   enableNodeSqliteKyselyStatementCache,
   executeSqliteQuerySync,
@@ -21,138 +10,45 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import {
+  orderCliHistoryRows,
+  createCliHistoryRow,
+  DEDUPE_TIMESTAMP_WINDOW_MS,
+  mergeCliHistoryRow,
+  type CliHistoryMergeStore,
+  type HistoryMatch,
+  type HistoryRow,
+  type HistoryTextMatch,
+} from "./cli-session-history-index-policy.js";
+import {
+  decodeIndexedHistoryText,
+  readCliHistoryCoverageUsers,
+  readCoveredCliAggregateIds,
+} from "./cli-session-history-index.coverage.js";
+import {
+  cliAssistantAggregateOwnsCanonicalAttachments,
+  createCliAssistantCoverage,
+  isCliAssistantAggregateMessage,
+  isNativeToolResultMessage,
+} from "./cli-session-history.merge-aggregates.js";
 
 const INDEX_INSERT_BATCH_ROWS = 65;
 const INDEX_ORDINAL_BATCH_ROWS = 256;
 const INDEX_INSERT_BATCH_BYTES = 1024 * 1024;
 
-const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
-
-// Claude records CLI-injected @cache-path suffixes as user text. Keep the
-// stored content intact; this normalized view is only for proving a redundant
-// imported row against the local turn that owns the durable media facts.
-function stripTrailingCliImageMentions(text: string): {
-  text: string;
-  stripped: boolean;
-} {
-  const lines = text.split("\n");
-  let end = lines.length;
-  while (end > 0) {
-    const line = lines[end - 1]?.trim() ?? "";
-    if (!line.startsWith("@") || !isOpenClawCliImageCachePath(line.slice(1))) {
-      break;
-    }
-    end -= 1;
+function isClaudeCliAssistantImport(role: string | null, metadata: string | null): boolean {
+  if (role !== "assistant" || !metadata) {
+    return false;
   }
-  return end === lines.length
-    ? { text, stripped: false }
-    : { text: lines.slice(0, end).join("\n").trimEnd(), stripped: true };
+  const meta = asOptionalRecord(JSON.parse(metadata));
+  return normalizeOptionalString(meta?.importedFrom) === "claude-cli";
 }
-
-function extractComparableText(
-  record: Record<string, unknown>,
-  role: string | undefined,
-): {
-  hasCliImageMentions: boolean;
-  cliImageTurnKey?: string;
-  text?: string;
-  driftNoteText?: string;
-} {
-  const parts: string[] = [];
-  const text = readStringValue(record.text);
-  if (text !== undefined) {
-    parts.push(text);
-  }
-  const rawContent = record.content;
-  const content = readStringValue(rawContent);
-  if (content !== undefined) {
-    parts.push(content);
-  } else if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      if (block && typeof block === "object" && "text" in block) {
-        const blockText = readStringValue(block.text);
-        if (blockText !== undefined) {
-          parts.push(blockText);
-        }
-      }
-    }
-  }
-  if (parts.length === 0) {
-    return { hasCliImageMentions: false };
-  }
-  const rawText = parts.join("\n");
-  const joined = rawText.trim();
-  if (!joined) {
-    return { hasCliImageMentions: false };
-  }
-  const meta = asOptionalRecord(record["__openclaw"]);
-  const isClaudeImport =
-    role === "user" && normalizeOptionalString(meta?.importedFrom) === "claude-cli";
-  const stripResult = isClaudeImport
-    ? stripTrailingCliImageMentions(joined)
-    : { text: joined, stripped: false };
-  const normalizeText = (value: string) => {
-    const visible = stripInlineDirectiveTagsForDisplay(
-      role === "user" ? stripInboundMetadata(value) : value,
-    ).text;
-    return visible.replace(/\s+/g, " ").trim();
-  };
-  const normalized = normalizeText(stripResult.text);
-  const withoutDriftNote = isClaudeImport ? stripCliSessionDriftNote(rawText) : rawText;
-  const driftNoteText =
-    withoutDriftNote !== rawText
-      ? normalizeText(stripTrailingCliImageMentions(withoutDriftNote.trim()).text)
-      : undefined;
-  const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
-  return {
-    hasCliImageMentions: stripResult.stripped,
-    ...(stripResult.stripped && isClaudeImport
-      ? { cliImageTurnKey: storedImageTurnKey ?? readCliImageTurnContext(joined) }
-      : {}),
-    ...(normalized ? { text: normalized } : {}),
-    ...(driftNoteText ? { driftNoteText } : {}),
-  };
-}
-
-// External identity survives text edits, so it is the strongest match signal
-// for imported messages from Claude CLI or similar external histories.
-function resolveImportedExternalIdentityKey(
-  meta: Record<string, unknown> | undefined,
-): string | undefined {
-  const externalId = normalizeOptionalString(meta?.externalId);
-  return externalId
-    ? JSON.stringify([
-        externalId,
-        normalizeOptionalString(meta?.importedFrom),
-        normalizeOptionalString(meta?.cliSessionId),
-      ])
-    : undefined;
-}
-
-type HistoryRow = {
-  id: number;
-  local_seq: number | null;
-  import_ref: number | null;
-  message_id: string | null;
-  payload: string | null;
-  bytes: number;
-  role: string | null;
-  text: string | null;
-  drift_text: string | null;
-  timestamp: number | null;
-  external_key: string | null;
-  image_key: string | null;
-  image_mentions: number;
-  metadata: string | null;
-  consumed: number;
-  ordinal: number | null;
-};
 type HistoryDatabase = {
   messages: HistoryRow;
   imports: HistoryRow;
   floors: { role: string; text: string; minimum_order: number };
+  coverage_aggregates: { message_id: number };
+  coverage_segments: { import_id: number; turn: number };
 };
 
 /** Reconstructible display index; canonical transcript bytes are never changed. */
@@ -162,6 +58,8 @@ export class CliSessionHistoryIndex {
   private readonly insertMessage;
   private readonly insertImport;
   private readonly assignOrdinal;
+  private readonly insertCoverageAggregate;
+  private readonly insertCoverageSegment;
   private readonly readOrderFloor;
   private readonly advanceOrderFloor;
   private readonly pendingImports: HistoryRow[] = [];
@@ -169,10 +67,13 @@ export class CliSessionHistoryIndex {
   private nextLocal = 0;
   private nextImport = 0;
   private expanded = false;
+  private hasAggregates = false;
+  private readonly coverage = createCliAssistantCoverage();
+  private readonly nativeToolResultImports: boolean[] = [];
   count = 0;
 
-  constructor(memoryOnly = false) {
-    this.database = openNodeSqliteDatabase(memoryOnly ? ":memory:" : "");
+  constructor() {
+    this.database = openNodeSqliteDatabase("");
     this.db = getNodeSqliteKysely<HistoryDatabase>(this.database);
     // Only imported bodies live here; local rows retain their canonical sequence.
     const columns = `id INTEGER PRIMARY KEY, local_seq INTEGER, import_ref INTEGER, message_id TEXT, payload TEXT, bytes INTEGER NOT NULL, role TEXT,
@@ -191,10 +92,31 @@ export class CliSessionHistoryIndex {
       CREATE INDEX match_image ON messages(image_key, consumed, id);
       CREATE INDEX message_identity ON messages(message_id);
       CREATE INDEX local_sequence ON messages(local_seq);
-      CREATE UNIQUE INDEX history_ordinal ON messages(ordinal);`);
+      CREATE UNIQUE INDEX history_ordinal ON messages(ordinal);
+      CREATE TABLE coverage_aggregates (message_id INTEGER PRIMARY KEY);
+      CREATE TABLE coverage_segments (import_id INTEGER PRIMARY KEY, turn INTEGER NOT NULL);
+      CREATE INDEX coverage_segment_turn ON coverage_segments(turn, import_id);`);
     enableNodeSqliteKyselyStatementCache(this.database);
     this.insertMessage = this.createInserter("messages");
     this.insertImport = this.createInserter("imports");
+    this.insertCoverageAggregate = prepareSqliteQuerySync<{ messageId: number }>(
+      this.database,
+      (parameter) =>
+        this.db
+          .insertInto("coverage_aggregates")
+          .values({
+            message_id: parameter((row) => row.messageId),
+          })
+          .onConflict((conflict) => conflict.column("message_id").doNothing()),
+    );
+    this.insertCoverageSegment = prepareSqliteQuerySync<{ importId: number; turn: number }>(
+      this.database,
+      (parameter) =>
+        this.db.insertInto("coverage_segments").values({
+          import_id: parameter((row) => row.importId),
+          turn: parameter((row) => row.turn),
+        }),
+    );
     this.readOrderFloor = prepareSqliteQueryTakeFirstSync<
       { role: string; text: string },
       { minimum_order: number }
@@ -227,10 +149,11 @@ export class CliSessionHistoryIndex {
         })
         .onConflict((conflict) =>
           conflict.columns(["role", "text"]).doUpdateSet((eb) => ({
-            minimum_order: eb.fn<number>("max", [
-              eb.ref("floors.minimum_order"),
-              eb.ref("excluded.minimum_order"),
-            ]),
+            minimum_order:
+              /* pg-sqlite-only: This display index owns a private native SQLite database. */ eb.fn<number>(
+                "max",
+                [eb.ref("floors.minimum_order"), eb.ref("excluded.minimum_order")],
+              ),
           })),
         ),
     );
@@ -275,65 +198,47 @@ export class CliSessionHistoryIndex {
   }
 
   close(): void {
+    this.coverage.release();
     this.pendingImports.length = 0;
+    this.nativeToolResultImports.length = 0;
     this.database.close();
-  }
-
-  private row(message: unknown, id: number, localSeq?: number): HistoryRow {
-    const record = asOptionalRecord(message);
-    const meta = asOptionalRecord(record?.["__openclaw"]);
-    const role = record?.role === "user" || record?.role === "assistant" ? record.role : undefined;
-    const comparable: ReturnType<typeof extractComparableText> =
-      record && role ? extractComparableText(record, role) : { hasCliImageMentions: false };
-    const localImage =
-      record?.role === "user" && (readPersistedMediaFacts(record) ?? []).some(isImageMediaFact);
-    const entryId = normalizeOptionalString(meta?.id);
-    const serialized = JSON.stringify(message);
-    return {
-      id,
-      local_seq: localSeq ?? null,
-      import_ref: null,
-      message_id: entryId === undefined ? null : JSON.stringify(entryId),
-      payload: localSeq === undefined ? serialized : null,
-      bytes: Buffer.byteLength(serialized, "utf8"),
-      role: role ?? null,
-      text: comparable.text === undefined ? null : JSON.stringify(comparable.text),
-      drift_text:
-        comparable.driftNoteText === undefined ? null : JSON.stringify(comparable.driftNoteText),
-      timestamp: asFiniteNumber(record?.timestamp) ?? null,
-      external_key: resolveImportedExternalIdentityKey(meta) ?? null,
-      image_key:
-        localSeq === undefined
-          ? (comparable.cliImageTurnKey ?? null)
-          : localImage
-            ? ((entryId ? hashCliImageTurnEntryId(entryId) : comparable.cliImageTurnKey) ?? null)
-            : null,
-      image_mentions: comparable.hasCliImageMentions ? 1 : 0,
-      metadata: meta ? JSON.stringify(meta) : null,
-      consumed: 0,
-      ordinal: null,
-    };
   }
 
   appendLocal(messages: readonly { message: unknown; seq: number }[]): void {
     for (let offset = 0; offset < messages.length; offset += INDEX_INSERT_BATCH_ROWS) {
+      let aggregateIds: number[] | undefined;
       const rows = messages
         .slice(offset, offset + INDEX_INSERT_BATCH_ROWS)
         .map(({ message, seq }) => {
           const id = seq - 1;
           this.nextLocal = Math.max(this.nextLocal, id + 1);
-          return this.row(message, id, seq);
+          const row = createCliHistoryRow(message, id, seq);
+          // Native text cannot replace an attachment-owning canonical row.
+          if (
+            isCliAssistantAggregateMessage(message, row.role ?? undefined) &&
+            !cliAssistantAggregateOwnsCanonicalAttachments(message)
+          ) {
+            (aggregateIds ??= []).push(id);
+          }
+          return row;
         });
       runSqliteImmediateTransactionSync(this.database, () => {
         for (const row of rows) {
           this.insertMessage(row);
+        }
+        if (aggregateIds) {
+          for (const id of aggregateIds) {
+            this.insertCoverageAggregate({ messageId: id });
+          }
+          this.hasAggregates = true;
         }
       });
     }
   }
 
   appendImported(message: unknown): void {
-    const row = this.row(message, this.nextImport++);
+    const row = createCliHistoryRow(message, this.nextImport++);
+    this.nativeToolResultImports[row.id] = isNativeToolResultMessage(message);
     if (this.pendingImportBytes + row.bytes > INDEX_INSERT_BATCH_BYTES) {
       this.flushImports();
     }
@@ -341,6 +246,29 @@ export class CliSessionHistoryIndex {
     this.pendingImportBytes += row.bytes;
     if (this.pendingImports.length >= INDEX_INSERT_BATCH_ROWS) {
       this.flushImports();
+    }
+  }
+
+  private noteImportedCoverage(
+    imported: Pick<HistoryRow, "id" | "role" | "text" | "timestamp" | "metadata" | "external_key">,
+    match?: HistoryMatch,
+    byIdentity = false,
+  ): void {
+    const matchedUser = match?.role === "user" ? match : undefined;
+    const noted = this.coverage.noteImported({
+      role: imported.role,
+      timestamp: imported.timestamp,
+      duplicate: Boolean(match),
+      claudeAssistant: isClaudeCliAssistantImport(imported.role, imported.metadata),
+      matchedLocalTurn: matchedUser?.id,
+      matchedLocalText: matchedUser ? decodeIndexedHistoryText(matchedUser.text) : undefined,
+      matchedByIdentity: byIdentity && matchedUser !== undefined,
+      excludeExternalIdentity: imported.external_key !== null,
+      toolResult: this.nativeToolResultImports[imported.id] === true,
+      hasText: imported.text !== null,
+    });
+    if (noted.segmentTurn !== undefined) {
+      this.insertCoverageSegment({ importId: imported.id, turn: noted.segmentTurn });
     }
   }
 
@@ -382,9 +310,12 @@ export class CliSessionHistoryIndex {
             .groupBy("external_key"),
         ),
     );
-    type Match = Pick<HistoryRow, "id" | "text" | "metadata">;
-    const candidates = () => this.db.selectFrom("messages").select(["id", "text", "metadata"]);
-    const matchExternal = prepareSqliteQueryTakeFirstSync<string, Match>(
+    if (this.hasAggregates) {
+      this.coverage.setLocalUsers(readCliHistoryCoverageUsers(this.database));
+    }
+    const candidates = () =>
+      this.db.selectFrom("messages").select(["id", "text", "metadata", "role"]);
+    const matchExternal = prepareSqliteQueryTakeFirstSync<string, HistoryMatch>(
       this.database,
       (parameter) =>
         candidates()
@@ -396,65 +327,68 @@ export class CliSessionHistoryIndex {
           .orderBy("id", "desc")
           .limit(1),
     );
-    const matchImage = prepareSqliteQueryTakeFirstSync<string, Match>(this.database, (parameter) =>
-      candidates()
-        .where(
-          "image_key",
-          "=",
-          parameter((key) => key),
-        )
-        .where("local_seq", "is not", null)
-        .where("consumed", "=", 0)
-        .orderBy("id")
-        .limit(1),
+    const matchImage = prepareSqliteQueryTakeFirstSync<string, HistoryMatch>(
+      this.database,
+      (parameter) =>
+        candidates()
+          .where(
+            "image_key",
+            "=",
+            parameter((key) => key),
+          )
+          .where("local_seq", "is not", null)
+          .where("consumed", "=", 0)
+          .orderBy("id")
+          .limit(1),
     );
-    type TextMatch = { role: string; text: string; floor: number; timestamp: number | null };
     const textMatchers = (external: boolean) => {
       const create = (time: "any" | "window" | "missing") =>
-        prepareSqliteQueryTakeFirstSync<TextMatch, Match>(this.database, (parameter) => {
-          let query = candidates()
-            .where(
-              "role",
-              "=",
-              parameter((row) => row.role),
-            )
-            .where(
-              "text",
-              "=",
-              parameter((row) => row.text),
-            )
-            .where("consumed", "=", 0)
-            .where(
-              "id",
-              ">=",
-              parameter((row) => row.floor),
-            )
-            .orderBy("id")
-            .limit(1);
-          if (external) {
-            query = query.where("external_key", "is", null);
-          }
-          if (time === "window") {
-            query = query
+        prepareSqliteQueryTakeFirstSync<HistoryTextMatch, HistoryMatch>(
+          this.database,
+          (parameter) => {
+            let query = candidates()
               .where(
-                "timestamp",
-                ">=",
-                parameter((row) => (row.timestamp ?? 0) - DEDUPE_TIMESTAMP_WINDOW_MS),
+                "role",
+                "=",
+                parameter((row) => row.role),
               )
               .where(
-                "timestamp",
-                "<=",
-                parameter((row) => (row.timestamp ?? 0) + DEDUPE_TIMESTAMP_WINDOW_MS),
-              );
-          } else if (time === "missing") {
-            query = query.where("timestamp", "is", null);
-          }
-          return query;
-        });
+                "text",
+                "=",
+                parameter((row) => row.text),
+              )
+              .where("consumed", "=", 0)
+              .where(
+                "id",
+                ">=",
+                parameter((row) => row.floor),
+              )
+              .orderBy("id")
+              .limit(1);
+            if (external) {
+              query = query.where("external_key", "is", null);
+            }
+            if (time === "window") {
+              query = query
+                .where(
+                  "timestamp",
+                  ">=",
+                  parameter((row) => (row.timestamp ?? 0) - DEDUPE_TIMESTAMP_WINDOW_MS),
+                )
+                .where(
+                  "timestamp",
+                  "<=",
+                  parameter((row) => (row.timestamp ?? 0) + DEDUPE_TIMESTAMP_WINDOW_MS),
+                );
+            } else if (time === "missing") {
+              query = query.where("timestamp", "is", null);
+            }
+            return query;
+          },
+        );
       return { any: create("any"), window: create("window"), missing: create("missing") };
     };
-    const withIdentity = textMatchers(true);
-    const withoutIdentity = textMatchers(false);
+    const matchers = { withIdentity: textMatchers(true), withoutIdentity: textMatchers(false) };
     const consume = prepareSqliteQuerySync<Pick<HistoryRow, "id" | "metadata" | "external_key">>(
       this.database,
       (parameter) =>
@@ -471,20 +405,20 @@ export class CliSessionHistoryIndex {
             parameter((row) => row.id),
           ),
     );
-    const minimumOrder = (role: string | null, text: string) =>
-      this.readOrderFloor({ role: role ?? "", text })?.minimum_order ?? 0;
-    const advance = (
-      imported: Pick<HistoryRow, "role" | "text" | "drift_text">,
-      matched: Pick<HistoryRow, "id" | "text">,
-    ) => {
-      for (const text of new Set([
-        imported.text,
-        matched.text === imported.text ? imported.text : imported.drift_text,
-      ])) {
-        if (text) {
-          this.advanceOrderFloor({ role: imported.role ?? "", text, minimumOrder: matched.id + 1 });
-        }
-      }
+    const store: CliHistoryMergeStore = {
+      matchExternal,
+      matchImage,
+      matchers,
+      consume,
+      onMatch: this.hasAggregates
+        ? (imported, matched, byIdentity) =>
+            this.noteImportedCoverage(imported, matched, byIdentity)
+        : undefined,
+      minimumOrder: (role, text) =>
+        this.readOrderFloor({ role: role ?? "", text })?.minimum_order ?? 0,
+      advanceOrderFloor: (floor) => {
+        this.advanceOrderFloor(floor);
+      },
     };
     for (let offset = 0; offset < this.nextImport; offset += INDEX_INSERT_BATCH_ROWS) {
       const batch = executeSqliteQuerySync(
@@ -514,57 +448,10 @@ export class CliSessionHistoryIndex {
       ).rows;
       runSqliteImmediateTransactionSync(this.database, () => {
         for (const imported of batch) {
-          let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
-          if (duplicate) {
-            advance(imported, duplicate);
-            continue;
-          }
-          if (imported.image_mentions && imported.image_key) {
-            duplicate = matchImage(imported.image_key);
-          }
-          if (!duplicate && !imported.image_mentions) {
-            const importedFloor = imported.text ? minimumOrder(imported.role, imported.text) : 0;
-            for (const text of [imported.text, imported.drift_text]) {
-              if (!text || !imported.role) {
-                continue;
-              }
-              const floor =
-                text === imported.text
-                  ? importedFloor
-                  : Math.max(minimumOrder(imported.role, text), importedFloor);
-              const match = imported.external_key ? withIdentity : withoutIdentity;
-              const params = { role: imported.role, text, floor, timestamp: imported.timestamp };
-              duplicate =
-                imported.timestamp === null
-                  ? match.any(params)
-                  : (match.window(params) ?? match.missing(params));
-              if (duplicate) {
-                break;
-              }
+          if (!mergeCliHistoryRow(imported, store)) {
+            if (this.hasAggregates) {
+              this.noteImportedCoverage(imported);
             }
-          }
-          if (duplicate) {
-            const meta: Record<string, unknown> = duplicate.metadata
-              ? JSON.parse(duplicate.metadata)
-              : {};
-            const importedMeta: Record<string, unknown> = imported.metadata
-              ? JSON.parse(imported.metadata)
-              : {};
-            let metadataChanged = false;
-            for (const field of ["importedFrom", "externalId", "cliSessionId"]) {
-              const value = normalizeOptionalString(importedMeta[field]);
-              if (value && meta[field] === undefined) {
-                meta[field] = value;
-                metadataChanged = true;
-              }
-            }
-            consume({
-              id: duplicate.id,
-              metadata: metadataChanged ? JSON.stringify(meta) : duplicate.metadata,
-              external_key: resolveImportedExternalIdentityKey(meta) ?? null,
-            });
-            advance(imported, duplicate);
-          } else {
             this.insertMessage({
               ...imported,
               id: this.nextLocal++,
@@ -577,18 +464,19 @@ export class CliSessionHistoryIndex {
         }
       });
     }
-    // Preserve the existing stable comparator even for mixed/missing timestamps.
-    const order = executeSqliteQuerySync(
+    this.coverage.release();
+    // Local rows keep transcript order. Unmatched imports splice in by timestamp.
+    let selected = executeSqliteQuerySync(
       this.database,
-      this.db.selectFrom("messages").select(["id", "timestamp"]).orderBy("id"),
+      this.db.selectFrom("messages").select(["id", "local_seq", "timestamp"]).orderBy("id"),
     ).rows;
-    if (this.expanded) {
-      order.sort((a, b) =>
-        a.timestamp !== null && b.timestamp !== null && a.timestamp !== b.timestamp
-          ? a.timestamp - b.timestamp
-          : a.id - b.id,
-      );
+    if (this.hasAggregates) {
+      const droppedAggregates = readCoveredCliAggregateIds(this.database);
+      if (droppedAggregates.size > 0) {
+        selected = selected.filter((row) => !droppedAggregates.has(row.id));
+      }
     }
+    const order = this.expanded ? orderCliHistoryRows(selected) : selected;
     for (let offset = 0; offset < order.length; offset += INDEX_ORDINAL_BATCH_ROWS) {
       const end = Math.min(order.length, offset + INDEX_ORDINAL_BATCH_ROWS);
       runSqliteImmediateTransactionSync(this.database, () => {

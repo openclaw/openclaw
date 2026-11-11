@@ -77,11 +77,7 @@ export function resolveChannelEntryMatchWithFallback<T>(params: {
   wildcardKey?: string;
   normalizeKey?: (value: string) => string;
 }): ChannelEntryMatch<T> {
-  const direct = resolveChannelEntryMatch({
-    entries: params.entries,
-    keys: params.keys,
-    wildcardKey: params.wildcardKey,
-  });
+  const direct = resolveChannelEntryMatch(params);
 
   for (const source of ["direct", "parent"] as const) {
     const keys = source === "direct" ? params.keys : (params.parentKeys ?? []);

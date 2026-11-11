@@ -21,7 +21,6 @@ import type {
 } from "../plugins/cli-backend.types.js";
 import type {
   CliCompactionDelta,
-  CliStreamJsonOutputLimits,
   CliToolResultDelta,
   CliToolUseStartDelta,
 } from "./cli-output-contracts.js";
@@ -46,7 +45,15 @@ function streamJsonOutputTruncationText(kind: "raw" | "lines", limit: number): s
   return `CLI JSONL output exceeded ${measure}; stopped assembling output and kept watching for the terminal result.`;
 }
 
-export function createCliStreamJsonTurnBudget(limits: CliStreamJsonOutputLimits) {
+// The two cumulative odometers this module owns. `CLI_STREAM_JSON_OUTPUT_LIMITS`
+// satisfies it structurally; the per-line bound it also carries is enforced by
+// the framer and stays fatal, so it is deliberately not part of this shape.
+type CliStreamJsonTurnLimits = {
+  maxTurnRawChars: number;
+  maxTurnLines: number;
+};
+
+export function createCliStreamJsonTurnBudget(limits: CliStreamJsonTurnLimits) {
   let spent: { kind: "raw" | "lines"; limit: number } | null = null;
   let chargedChars = 0;
   let chargedLines = 0;

@@ -1,15 +1,15 @@
 import {
+  createRemoteEmbeddingProvider,
   embeddingProviderOwnsDestination,
-  isMissingEmbeddingApiKeyError,
+  normalizeEmbeddingModelWithPrefixes,
+  resolveRemoteEmbeddingClient,
   sanitizeEmbeddingCacheHeaders,
   type MemoryEmbeddingProviderAdapter,
+  type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  createMistralEmbeddingProvider,
-  DEFAULT_MISTRAL_EMBEDDING_MODEL,
-} from "./embedding-provider.js";
 import { MISTRAL_BASE_URL } from "./model-definitions.js";
 
+const DEFAULT_MISTRAL_EMBEDDING_MODEL = "mistral-embed";
 const EXCLUDED_EMBEDDING_HEADERS = ["authorization", "content-type", "x-api-key", "api-key"];
 
 export const mistralMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
@@ -18,13 +18,27 @@ export const mistralMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapt
   transport: "remote",
   authProviderId: "mistral",
   autoSelectPriority: 50,
-  allowExplicitWhenConfiguredAuto: true,
-  shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
-    const { provider, client } = await createMistralEmbeddingProvider({
+    const preparedOptions: MemoryEmbeddingProviderCreateOptions = {
       ...options,
       provider: "mistral",
       fallback: "none",
+    };
+    const client = await resolveRemoteEmbeddingClient({
+      provider: "mistral",
+      options: preparedOptions,
+      defaultBaseUrl: MISTRAL_BASE_URL,
+      normalizeModel: (model) =>
+        normalizeEmbeddingModelWithPrefixes({
+          model,
+          defaultModel: DEFAULT_MISTRAL_EMBEDDING_MODEL,
+          prefixes: ["mistral/"],
+        }),
+    });
+    const provider = createRemoteEmbeddingProvider({
+      id: "mistral",
+      client,
+      errorPrefix: "mistral embeddings failed",
     });
     const headers = sanitizeEmbeddingCacheHeaders(client.headers, EXCLUDED_EMBEDDING_HEADERS);
     const usesDefaultIdentity =

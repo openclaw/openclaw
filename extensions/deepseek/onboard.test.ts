@@ -30,7 +30,8 @@ describe("DeepSeek onboarding", () => {
     );
 
     const provider = buildDeepSeekProvider();
-    const authored = provider.models.map((model) =>
+    // Authored config rows cannot carry the catalog-only family.
+    const authored = provider.models.map(({ family: _family, ...model }) =>
       Object.assign({}, model, { id: `operator-${model.id}` }),
     );
     const configured = applyDeepSeekConfig({

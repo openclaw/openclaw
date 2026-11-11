@@ -57,13 +57,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.semantics.onClick as semanticsOnClick
 
-internal data class WearVoiceLayout(
+private data class WearVoiceLayout(
   val horizontalPadding: Dp,
   val orbSize: Dp,
   val contentHeight: Dp,
 )
 
-internal fun wearVoiceLayout(
+private fun wearVoiceLayout(
   maxWidth: Dp,
   fontScale: Float,
 ): WearVoiceLayout {

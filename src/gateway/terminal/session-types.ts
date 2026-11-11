@@ -8,3 +8,6 @@ export type TerminalAttachSummary = Omit<TerminalSessionSummary, "attached" | "c
   buffer: string;
   seq: number;
 };
+
+export const TERMINAL_EVENT_DATA = "terminal.data" as const;
+export const TERMINAL_EVENT_EXIT = "terminal.exit" as const;

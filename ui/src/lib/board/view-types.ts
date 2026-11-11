@@ -3,7 +3,7 @@ import type { BoardOp } from "@openclaw/gateway-protocol";
 export type BoardGrantDecision = "granted" | "rejected";
 export type BoardWidgetAppViewState =
   | { status: "ready"; viewId: string; expiresAtMs: number }
-  | { status: "stale"; error: string };
+  | { status: "stale" };
 
 export type BoardViewCallbacks = {
   appViewGeneration?: number;

@@ -294,6 +294,10 @@ class GatewayBootstrapAuthTest {
         val initialNodeListRead = CompletableDeferred<Job>()
         runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
           when (method) {
+            "agents.list" -> {
+              """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}"""
+            }
+
             "node.list" -> {
               if (runtime.nodeConnected.value) {
                 """{"nodes":[{"nodeId":"$deviceId","paired":true,"connected":true,"approvalState":"approved"}]}"""
@@ -316,7 +320,7 @@ class GatewayBootstrapAuthTest {
             mainSessionKey = null,
             updateAvailable = null,
             authScopes = listOf("operator.read"),
-            methods = setOf("node.list"),
+            methods = setOf("agents.list", "node.list"),
           )
 
         fun connectSession(fieldName: String) {
@@ -530,6 +534,7 @@ class GatewayBootstrapAuthTest {
       neutralizeColdStartAutoConnect(runtime)
       prefs.setManualTls(false)
       val endpoint = gatewayEndpoint()
+      prefs.saveGatewayTlsFingerprint(endpoint.stableId, "ab".repeat(32))
       installControlPageGateway(authMethod = "device-token")
       assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "setup-shared-secret")))
       val page =
@@ -538,6 +543,8 @@ class GatewayBootstrapAuthTest {
             page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
           }
         }!!
+      // Manual local cleartext ignores a saved pin; the page must reflect the admitted transport.
+      assertNull(page.tlsFingerprintSha256)
       val identityStore = DeviceIdentityStore.withPrefs(app, prefs)
       val identity = identityStore.loadOrCreate()
       val tokens = DeviceAuthStore(prefs)
@@ -1696,22 +1703,83 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun connect_showsTlsTimeoutGuidanceWhenFingerprintProbeTimesOut() {
+  fun selectedGatewayThatHasNotConnectedIsNotKeptConnectedInTheBackground() {
+    val (_, prefs, runtime) =
+      gatewayFixture { _, _ -> GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE) }
+    val endpoint = tlsGatewayEndpoint()
+    // Manual setup registers the typed target before the first connection attempt.
+    prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+
+    runBlocking { assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "test-token-placeholder"))) }
+    waitForGatewayTrustPrompt(runtime)
+
+    assertEquals(endpoint.stableId, prefs.gatewayRegistry.activeStableId.value)
+    assertEquals(emptyList<String>(), prefs.gatewayRegistry.connectedStableIds.value)
+  }
+
+  @Test
+  fun tlsHandshakeTimeoutShowsRetryableNetworkRecoveryWithoutCertificatePrompt() {
     val (_, _, runtime) =
       gatewayFixture { _, _ -> GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT) }
-
     runtime.connect(
-      tlsGatewayEndpoint(),
+      GatewayEndpoint.manual(host = "gateway.tail-example.ts.net", port = 443),
       auth(token = "shared-token"),
     )
-
-    val prompt = waitForGatewayTrustPrompt(runtime)
+    runBlocking {
+      withTimeout(5_000) {
+        runtime.gatewayConnectionDisplay.first { it.problem?.code == "NETWORK_UNREACHABLE" }
+      }
+    }
+    val problem = runtime.gatewayConnectionDisplay.value.problem
     assertEquals(
       "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
-      runtime.gatewayConnectionDisplay.value.statusText,
+      problem?.message,
     )
+    assertEquals(GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON, problem?.reason)
+    assertTrue(problem?.retryable == true)
+    assertTrue(problem?.isTailscaleRoute == true)
+    assertNull(runtime.pendingGatewayTrust.value)
+  }
+
+  @Test
+  fun tlsHandshakeTimeoutRecoveryCanEnterAManualPinThatIsEnforced() {
+    val probes = AtomicInteger()
+    val (_, prefs, runtime) =
+      gatewayFixture { _, _ ->
+        probes.incrementAndGet()
+        GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT)
+      }
+    val endpoint = tlsGatewayEndpoint()
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(
+        stableId = endpoint.stableId,
+        kind = GatewayRegistryEntryKind.MANUAL,
+        name = endpoint.name,
+        host = endpoint.host,
+        port = endpoint.port,
+        tls = true,
+      ),
+    )
+    prefs.gatewayRegistry.setActive(endpoint.stableId)
+    prefs.saveGatewayCredentials(endpoint.stableId, token = "test-token-placeholder")
+    runtime.connect(endpoint)
+    runBlocking {
+      withTimeout(5_000) {
+        runtime.gatewayConnectionDisplay.first { it.problem?.reason == GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON }
+      }
+    }
+
+    runtime.refreshGatewayConnection(manualTlsTrust = true)
+    val prompt = waitForGatewayTrustPrompt(runtime)
     assertNull(prompt.fingerprintSha256)
-    assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, prompt.probeFailure)
+    assertEquals(endpoint.stableId, prompt.endpoint.stableId)
+    assertEquals("Manual pin entry must not wait for another stalled probe", 1, probes.get())
+
+    val manualFingerprint = "cd".repeat(32)
+    runtime.acceptGatewayTrustPrompt(prompt, manualFingerprint)
+    val desired = waitForDesiredConnection(runtime, "nodeSession")
+    assertEquals(manualFingerprint, readField<GatewayTlsParams>(desired, "tls").expectedFingerprint)
+    assertEquals(manualFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
   }
 
   @Test
@@ -2812,6 +2880,8 @@ class GatewayBootstrapAuthTest {
                     val methodField = authMethod?.let { "\"method\":\"$it\"," }.orEmpty()
                     val scopes = if (role == "operator") "[\"operator.read\"]" else "[]"
                     """{"auth":{$methodField"deviceToken":"native-$role-token","role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
+                  } else if (frame["method"]?.jsonPrimitive?.content == "agents.list") {
+                    """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}"""
                   } else {
                     "{}"
                   }

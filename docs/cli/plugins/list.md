@@ -11,6 +11,10 @@ diagnostics, and the machine-managed plugin index that backs it.
 
 ## List
 
+The table shows each plugin's recorded trust reason; `--verbose` includes the same
+reason on a `trust:` line. An empty cell or omitted line means no trust record is
+available. Trust describes provenance, not a guarantee that plugin code is safe.
+
 ```bash
 openclaw plugins list
 openclaw plugins list --enabled

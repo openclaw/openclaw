@@ -99,7 +99,10 @@ export function getProgressDraftLineText(line: string | ChannelProgressDraftLine
       : `${prefix}${text}`;
   }
   if (displayStatus) {
-    return label ? `${prefix}${label}: ${displayStatus}` : `${prefix}${displayStatus}`;
+    // A label-less status row already carries its status in its prepared text.
+    return label
+      ? `${prefix}${label}: ${displayStatus}`
+      : line.text.trim() || `${prefix}${displayStatus}`;
   }
   const text = line.text.trim();
   if (!icon && text && text !== label) {

@@ -1,0 +1,2 @@
+# Two actual-router cases prove retired General selects its live destination before a delayed page module resolves.
+37

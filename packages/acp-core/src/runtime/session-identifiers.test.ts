@@ -26,8 +26,8 @@ describe("session identifier helpers", () => {
   it("hides unresolved identifiers from thread intro details while pending", () => {
     expect(
       resolveAcpThreadSessionDetailLines({
-        sessionKey: "agent:codex:acp:pending-1",
-        meta: { ...meta, identity: { ...meta.identity, state: "pending", source: "ensure" } },
+        ...meta,
+        identity: { ...meta.identity, state: "pending", source: "ensure" },
       }),
     ).toStrictEqual([]);
   });
@@ -40,8 +40,9 @@ describe("session identifier helpers", () => {
     (agent, label, agentSessionId, acpxSessionId) => {
       expect(
         resolveAcpThreadSessionDetailLines({
-          sessionKey: `agent:${agent}:acp:resolved-1`,
-          meta: { ...meta, agent, identity: { ...meta.identity, agentSessionId, acpxSessionId } },
+          ...meta,
+          agent,
+          identity: { ...meta.identity, agentSessionId, acpxSessionId },
         }),
       ).toStrictEqual([
         `agent session id: ${agentSessionId}`,

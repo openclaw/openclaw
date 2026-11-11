@@ -1,0 +1,2 @@
+# Require pending poll-vote presence and settle its registration before monitor shutdown on failure.
+6
