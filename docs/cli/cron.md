@@ -33,6 +33,8 @@ result or failure document. The CLI exits with status 130 or 143, respectively.
 An `add` or `edit` mutation already sent to the Gateway still waits for its
 receipt during cleanup and reports any failure; interrupting does not undo it.
 
+File inputs for `--script`, `--trigger-script`, and `scratch --file` must be regular files; symbolic links to regular files are supported. FIFOs and other special files are rejected without waiting for input. To pipe content, use `-` to read from stdin instead.
+
 ## Create jobs quickly
 
 `openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:

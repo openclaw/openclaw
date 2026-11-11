@@ -17,9 +17,6 @@
     padding-inline: var(--chat-mobile-edge-inset);
     overflow: visible;
   }
-  .chat-main__conversation {
-    --chat-composer-top-margin: 6px;
-  }
 }
 
 .chat {
@@ -56,7 +53,7 @@
 .chat-thread-viewport,
 .chat-thread {
   --chat-thread-padding-top: clamp(20px, 3vh, 28px);
-  --chat-thread-padding-bottom: 6px;
+  --chat-thread-padding-bottom: calc(6px + var(--chat-composer-overlap, 0px));
 }
 
 .chat-thread-viewport {
@@ -117,7 +114,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   .chat-thread-viewport,
   .chat-thread {
     --chat-thread-padding-top: 0px;
-    --chat-thread-padding-bottom: 0px;
+    --chat-thread-padding-bottom: var(--chat-composer-overlap, 0px);
   }
 }
 
@@ -148,7 +145,12 @@ div.chat-thread:where(.chat-thread--annotations) {
   /* Existing conversations spend height on the transcript; new chat keeps the
      shared writing-surface floor. Mobile and short-pane floors remain local. */
   --chat-composer-min-height: 88px;
-  --chat-composer-top-margin: 8px;
+  /* The transcript runs under the composer's rounded top corners, so content
+     slides behind the writing surface instead of being cut flat beside them
+     or above an empty band. Its bottom padding keeps the last turn clear. The
+     overlap covers the largest corner, the resting mobile capsule. */
+  --chat-composer-top-margin: 0px;
+  --chat-composer-overlap: calc(28px * var(--openclaw-corner-radius-scale));
   --chat-footer-max-height: calc(100cqh - clamp(60px, 20cqh, 160px));
 
   position: absolute;
@@ -177,6 +179,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   min-width: 0;
   min-height: 0;
   max-height: var(--chat-footer-max-height);
+  margin-top: calc(-1 * var(--chat-composer-overlap, 0px));
 }
 
 .creation-composer {
@@ -232,15 +235,17 @@ div.chat-thread:where(.chat-thread--annotations) {
      their default proportion of that column. */
   --chat-message-column-max: min(var(--chat-message-max-width, 100%), 900px, 68%);
   --chat-run-block-gap: 8px;
-  --chat-group-inset-start: 4px;
-  --chat-group-inset-end: 16px;
+  /* One inset on both sides: the user's reserved avatar column on the
+     trailing side mirrors the assistant's on the leading side, so both sit the
+     same distance inside the composer's edges. */
+  --chat-group-inset: 4px;
   display: flex;
   gap: var(--chat-avatar-gap);
   align-items: flex-start;
   margin-block: 0 var(--chat-turn-gap);
   /* Keep the row bounds fixed while identity adds its existing inner gutter. */
   margin-inline: 0;
-  padding-inline: var(--chat-group-inset-start) var(--chat-group-inset-end);
+  padding-inline: var(--chat-group-inset);
 }
 
 @media (hover: none),
@@ -254,7 +259,7 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 /* Both sides share the content edge inside the trailing avatar gutter. */
 .chat-group:where(:not(.user), .chat-group--peer) {
-  padding-inline-end: calc(var(--chat-group-inset-end) + var(--chat-avatar-gutter));
+  padding-inline-end: calc(var(--chat-group-inset) + var(--chat-avatar-gutter));
 }
 
 .chat-group.user {
@@ -336,15 +341,15 @@ div.chat-thread:where(.chat-thread--annotations) {
 /* Direct (1:1) threads drop avatars entirely: one agent plus one user makes
    the repeated identity icons pure decoration. Group threads (any labeled
    foreign sender) keep avatars as the always-visible identity marker. */
-.chat-thread--direct :is(.chat-avatar, .chat-avatar-slot) {
+.chat-thread--direct .chat-avatar,
+.chat-thread--direct .chat-avatar-slot {
   display: none;
 }
 
 .chat-thread--direct .chat-group {
   --chat-avatar-column: 0px;
   --chat-avatar-gap: 0px;
-  --chat-group-inset-start: 0px;
-  --chat-group-inset-end: 0px;
+  --chat-group-inset: 0px;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -352,8 +357,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     --chat-avatar-column: 0px;
     --chat-avatar-gap: 0px;
     --chat-message-column-max: 82%;
-    --chat-group-inset-start: 0px;
-    --chat-group-inset-end: 0px;
+    --chat-group-inset: 0px;
   }
 
   .chat-group :is(.chat-avatar, .chat-avatar-slot) {
@@ -396,29 +400,6 @@ div.chat-thread:where(.chat-thread--annotations) {
   background: transparent;
 }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-leading,
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-trailing {
-  gap: 4px;
-  flex-wrap: nowrap;
-}
-
-/* Keep the trailing region stable while presence and session actions arrive. */
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-trailing {
-  flex-grow: 1;
-  align-self: stretch;
-  justify-self: stretch;
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {
-  display: flex;
-  flex: 0 0 auto;
-  /* Reserve the native menu's hit area before its session descriptor arrives. */
-  min-width: var(--chat-pane-header-icon-size);
-  min-height: var(--chat-pane-header-icon-size);
-  align-items: center;
-  gap: 0;
-}
-
 .chat-pane__header:not(.chat-pane__header--mobile)
   :is(
     .chat-icon-btn,
@@ -430,11 +411,10 @@ div.chat-thread:where(.chat-thread--annotations) {
   line-height: calc(20px * var(--control-ui-text-scale));
 }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__layout-trigger {
-  min-height: 32px;
-  height: 32px;
+  min-height: 28px;
+  height: 28px;
   gap: 6px;
   padding-inline: 8px;
 }
@@ -444,9 +424,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     :hover,
     :focus-visible,
     [aria-expanded="true"]
-  ),
-.sidebar-region__panels-toggle
-  .chat-pane__panels-toggle:not(:hover, :focus-visible, [aria-expanded="true"]) {
+  ) {
   color: var(--control-secondary-text, var(--muted));
 
   svg {
@@ -462,13 +440,6 @@ div.chat-thread:where(.chat-thread--annotations) {
       [aria-expanded="true"],
       :disabled,
       [aria-disabled="true"]
-    ),
-  .sidebar-region__panels-toggle
-    .chat-pane__panels-toggle:not(
-      :focus-visible,
-      [aria-expanded="true"],
-      :disabled,
-      [aria-disabled="true"]
     ) {
     color: var(--control-secondary-text, var(--muted));
 
@@ -480,7 +451,9 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 /* Desktop composition; mobile keeps its own presenter and touch targets. */
 .chat-pane__header:not(.chat-pane__header--mobile) {
-  --chat-pane-header-icon-size: 32px;
+  /* Every control in the desktop header row is 28px (--rail-header-action-size)
+     with the shared icon-button radius, so the row reads as one toolbar. */
+  --chat-pane-header-icon-size: 28px;
 
   /* Lift the header's stacking context so its floating connection indicator
      paints over the transcript below. */
@@ -491,30 +464,44 @@ div.chat-thread:where(.chat-thread--annotations) {
   padding-inline: 12px 8px;
   gap: 4px;
 
+  & .chat-pane__header-leading,
+  & .chat-pane__header-trailing {
+    gap: 4px;
+    flex-wrap: nowrap;
+  }
+
+  /* Keep the trailing region stable while presence and session actions arrive. */
+  & .chat-pane__header-trailing {
+    flex-grow: 1;
+    align-self: stretch;
+    justify-self: stretch;
+  }
+
+  & .chat-pane__identity-actions {
+    display: flex;
+    flex: 0 0 auto;
+    /* Reserve the native menu's hit area before its session descriptor arrives. */
+    min-width: var(--chat-pane-header-icon-size);
+    min-height: var(--chat-pane-header-icon-size);
+    align-items: center;
+    gap: 0;
+  }
+
   & .chat-pane__actions {
     flex-grow: 1;
     align-self: stretch;
     justify-content: flex-end;
   }
 
-  & .chat-icon-btn {
-    width: var(--chat-pane-header-icon-size);
-    min-width: var(--chat-pane-header-icon-size);
-    padding: 0;
-  }
+  /* Header icon buttons share the bar's 16px glyph and secondary ink with the
+     labelled triggers beside them. */
+  --icon-button-glyph: var(--rail-header-action-glyph-size);
+  --icon-button-stroke: 1.6px;
+  --icon-button-color: var(--icon-interactive, var(--control-secondary-text, var(--muted)));
 
-  & .chat-icon-btn svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  & .chat-pane__panels-toggle svg {
-    stroke-width: 1.6;
-  }
-
-  /* Header composition supplies the approved glyph to the native Details trigger. */
-  & .chat-details-toggle,
-  & .chat-pane__panels-toggle {
+  /* Header composition supplies the approved glyph to the native Details trigger;
+     the base rule's --radius-md keeps it in the same shape as the icon buttons beside it. */
+  & .chat-details-toggle {
     width: var(--rail-header-action-size);
     min-width: var(--rail-header-action-size);
     height: var(--rail-header-action-size);
@@ -522,12 +509,10 @@ div.chat-thread:where(.chat-thread--annotations) {
     padding: 0;
     justify-content: center;
     border-color: transparent;
-    border-radius: calc(8px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
     background: transparent;
   }
 
-  & :is(.chat-details-toggle, .chat-pane__panels-toggle):hover {
+  & .chat-details-toggle:hover {
     background: var(--session-header-control-hover-bg);
   }
 
@@ -538,12 +523,15 @@ div.chat-thread:where(.chat-thread--annotations) {
     height: var(--rail-header-action-glyph-size);
   }
 
-  & :is(.chat-pane__panels-toggle, .chat-details-toggle)[aria-expanded="true"] {
+  /* An open panel reads as the header's selected control. */
+  & .chat-pane__panels-toggle[aria-expanded="true"],
+  & .chat-details-toggle[aria-expanded="true"] {
     background: var(--session-header-control-surface);
     color: var(--session-header-control-active-color, var(--text));
   }
 
-  & :is(.chat-details-toggle, .chat-pane__panels-toggle)[aria-expanded="true"]:hover {
+  & .chat-details-toggle[aria-expanded="true"]:hover,
+  & .chat-pane__panels-toggle[aria-expanded="true"]:hover {
     background: var(--session-header-control-active-hover-bg);
   }
 
@@ -554,7 +542,7 @@ div.chat-thread:where(.chat-thread--annotations) {
       .chat-pane__session-title-input,
       .chat-pane__parent-session
     ) {
-    min-height: 32px;
+    min-height: 28px;
     padding: 0 8px;
     margin-inline: 0;
     font-family: inherit;
@@ -564,8 +552,8 @@ div.chat-thread:where(.chat-thread--annotations) {
     letter-spacing: normal;
   }
 
-  & .chat-pane__session-title {
-    padding-inline-end: 0;
+  & .chat-pane__header-leading {
+    gap: 0;
   }
 
   /* Align visible lettering with the glyph centerline without moving hit areas. */
@@ -800,7 +788,8 @@ div.chat-thread:where(.chat-thread--annotations) {
   flex: 1 1 auto;
 }
 
-.chat-pane__header--mobile :is(.chat-header-session-menu__trigger, .chat-pane__layout-trigger) {
+.chat-pane__header--mobile .chat-header-session-menu__trigger,
+.chat-pane__header--mobile .chat-pane__layout-trigger {
   display: inline-flex;
   flex: 0 0 44px;
   align-items: center;
@@ -1275,34 +1264,18 @@ openclaw-chat-sidebar-region,
   align-items: center;
 }
 
-.sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle {
-  width: var(--rail-header-action-size);
-  min-width: var(--rail-header-action-size);
-  height: var(--rail-header-action-size);
-  min-height: var(--rail-header-action-size);
-  padding: 0;
-  border-color: transparent;
-  border-radius: calc(8px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
-  background: transparent;
+.sidebar-region__panels-toggle {
+  --icon-button-glyph: var(--rail-header-action-glyph-size);
+  --icon-button-stroke: 1.6px;
+  --icon-button-color: var(--icon-interactive, var(--control-secondary-text, var(--muted)));
 }
 
-.sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle:hover {
-  background: var(--session-header-control-hover-bg);
-}
-
-.sidebar-region__panels-toggle .chat-pane__panels-toggle svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.6;
-}
-
-.sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle[aria-expanded="true"] {
+.sidebar-region__panels-toggle .chat-pane__panels-toggle[aria-expanded="true"] {
   background: var(--session-header-control-surface);
   color: var(--session-header-control-active-color, var(--text));
 }
 
-.sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle[aria-expanded="true"]:hover {
+.sidebar-region__panels-toggle .chat-pane__panels-toggle[aria-expanded="true"]:hover {
   background: var(--session-header-control-active-hover-bg);
 }
 
@@ -1420,8 +1393,8 @@ openclaw-chat-sidebar-region,
   min-height: var(--desktop-header-height);
 }
 
-.sidebar-region--desktop:not(.sidebar-region--open)
-  :is([data-region="side"], [data-region-header="side"]),
+.sidebar-region--desktop:not(.sidebar-region--open) [data-region="side"],
+.sidebar-region--desktop:not(.sidebar-region--open) [data-region-header="side"],
 .sidebar-region--desktop [data-region="side"][hidden] {
   opacity: 0;
   pointer-events: none;
@@ -1451,15 +1424,16 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region--desktop[data-sidebar-resizing],
-.sidebar-region--desktop[data-sidebar-resizing]
-  :is([data-region="side"], [data-region-header="side"]) {
+.sidebar-region--desktop[data-sidebar-resizing] [data-region="side"],
+.sidebar-region--desktop[data-sidebar-resizing] [data-region-header="side"] {
   transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar-region--desktop,
   .sidebar-region--desktop .chat-main__conversation-frame,
-  .sidebar-region--desktop :is([data-region="side"], [data-region-header="side"]) {
+  .sidebar-region--desktop [data-region="side"],
+  .sidebar-region--desktop [data-region-header="side"] {
     transition: none;
   }
 }

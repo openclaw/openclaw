@@ -200,7 +200,7 @@ type GatewayKernelContext = {
   getRuntimeConfig: () => OpenClawConfig;
   /** Instance-owned startup observation; never lends preparation or write authority. */
   agentDatabaseStartup?: import("../../state/agent-database-preparation-context.js").AgentDatabasePreparation;
-  restartResumeWindow?: import("../../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindow;
+  restartResumeWindows?: import("../../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindows;
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
   /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
   getCommittedRuntimeConfig?: () => OpenClawConfig;
@@ -408,6 +408,8 @@ type GatewayResidentBridgeContext = {
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
   /** Gateway-host desktop acquisition and observation; present only after enabled startup. */
   hostDesktopService?: import("../desktop/host-source.js").HostDesktopService;
+  /** Experimental OpenClaw ID remote access owner; inert while its Labs switch is off. */
+  openclawIdService?: import("../openclaw-id/service.js").OpenClawIdService;
   /** Local computer provider shared with the node host, owned by this Gateway lifetime. */
   gatewayComputerService?: import("../desktop/computer-service.js").GatewayComputerService;
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
@@ -586,6 +588,8 @@ export type GatewayRequestHandlerOptions = Omit<
   "methodRegistry" | "expectedProfileBinding" | "prepareDispatchCurrent"
 > & {
   params: Record<string, unknown>;
+  /** Plugin registrations receive a live owner fence; recheck after awaits and before effects. */
+  assertHandlerCurrent?: () => void;
   sessionMutationAuthorization?: SessionMutationAuthorization;
   /** Source-authorized plugin adoption; bound to this request's caller and lifetime. */
   copySessionCatalogToGateway?: (source: {

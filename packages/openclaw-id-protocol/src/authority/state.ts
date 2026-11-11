@@ -6,6 +6,8 @@ import type { Ed25519PublicKey, IrohEndpointKey, KeyFingerprint } from "../keys.
 import type {
   OwnerCapability,
   InviteCapBody,
+  NodeInviteCapBody,
+  NodeRedemptionBody,
   MemberRole,
   MembershipSnapshotBody,
   OwnerDeviceCertBody,
@@ -13,6 +15,7 @@ import type {
   UnixSeconds,
 } from "../statements/types.js";
 import type { OwnerDeviceLookup, TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
+import { SUPPORTED_DESCRIPTOR_VERSIONS, SUPPORTED_STATEMENT_VERSIONS } from "../version.js";
 
 /**
  * How a write reached the Gateway.
@@ -78,10 +81,30 @@ export type InviteRecord = {
   created_by?: OwnerApprover;
 };
 
+/** An admitted node; it has no account, role, owner capabilities or approval descendants. */
+export type NodeRecord = {
+  description: NodeRedemptionBody["description"];
+  label: string;
+  listed_seq: number;
+  added_by: OwnerApprover;
+  /** Last authenticated tunnel activity/admission (or initial approval). */
+  last_seen: UnixSeconds;
+  invite_id: string;
+};
+
+/** Separate invite class; member proofs can never redeem it. */
+export type NodeInviteRecord = {
+  cap: NodeInviteCapBody;
+  proof_key: string;
+  status: "open" | "pending" | "consumed";
+  pending: Pick<NodeRedemptionBody, "peer_key" | "requested_at" | "description"> | null;
+  created_by: OwnerApprover;
+};
+
 /** The Gateway's membership state for one claw. */
 export type AuthorityState = {
   claw_id: string;
-  /** The root R pinned at linking. It never changes for a claw (owner reset is OCF-319). */
+  /** The root R pinned at linking. Only an owner reset on the machine replaces it (enrollment.md). */
   anchor: TrustAnchor;
   /** Monotonic membership seq; a MembershipChange must carry seq + 1. */
   seq: number;
@@ -89,12 +112,15 @@ export type AuthorityState = {
   owner_devices: Record<KeyFingerprint, OwnerDeviceRecord>;
   members: Record<string, MemberRecord>;
   invites: Record<string, InviteRecord>;
+  nodes: Record<IrohEndpointKey, NodeRecord>;
+  node_invites: Record<string, NodeInviteRecord>;
 };
 
 /** Side effects the Gateway must perform after a write. */
 export type AuthorityEvent =
   | { type: "disconnect"; peer_keys: IrohEndpointKey[] }
   | { type: "invalidate_tokens"; peer_keys: IrohEndpointKey[] }
+  | { type: "remove_node_pairings"; peer_keys: IrohEndpointKey[] }
   | { type: "cancel_runs"; account_id: string }
   | {
       type: "notify_owners";
@@ -181,6 +207,8 @@ export function linkClaw(
       owner_devices: {},
       members: {},
       invites: {},
+      nodes: {},
+      node_invites: {},
     },
   };
 }
@@ -232,12 +260,20 @@ export function isAdmitted(
   peerKey: IrohEndpointKey,
   now: UnixSeconds,
 ): boolean {
+  if (isNode(state, peerKey)) {
+    return true;
+  }
   if (Object.values(state.members).some((member) => member.peer_keys.includes(peerKey))) {
     return true;
   }
   return activeOwnerDevices(state, now).some((record) =>
     record.cert.body.peer_keys.includes(peerKey),
   );
+}
+
+/** Whether an admitted W has only node authority (Gateway builds a node principal). */
+export function isNode(state: AuthorityState, peerKey: IrohEndpointKey): boolean {
+  return state.nodes[peerKey] !== undefined;
 }
 
 /** The snapshot body the Gateway signs with K_gw and publishes to Discovery: current state only. */
@@ -260,6 +296,8 @@ export function snapshotBody(
     owner_peer_keys: [
       ...new Set(active.flatMap((record) => record.cert.body.peer_keys)),
     ].toSorted(),
+    // SAFETY: nodes is keyed by IrohEndpointKey; Object.keys widens keys to string.
+    node_peer_keys: Object.keys(state.nodes).toSorted() as IrohEndpointKey[],
     members: Object.entries(state.members)
       .map(([account_id, member]) => ({
         account_id,
@@ -267,6 +305,10 @@ export function snapshotBody(
         peer_keys: member.peer_keys,
       }))
       .toSorted((a, b) => a.account_id.localeCompare(b.account_id)),
+    protocols: {
+      statement: [...SUPPORTED_STATEMENT_VERSIONS],
+      descriptor: [...SUPPORTED_DESCRIPTOR_VERSIONS],
+    },
     issued_at: now,
   };
 }

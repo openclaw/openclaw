@@ -46,6 +46,7 @@ import type {
   ReplyBackendMessageInjectionV2,
   ReplyBackendHandle,
   ReplyTurnParticipantInput,
+  ReplySteerNowResult,
 } from "./session-controller.backend-contracts.js";
 import type { LifecycleDiagnosticOperation } from "./session-controller.lifecycle-diagnostics.js";
 import type { SessionTarget } from "./session-controller.target.js";
@@ -550,6 +551,13 @@ export type SessionControllerInput = {
     settled: Promise<boolean>;
     settle(accepted: boolean): void;
     admitted?: boolean;
+  };
+  /** The accepted steer's captured run survives withdrawal into followup custody. */
+  steerNow?: {
+    target: ReplyMessageInjectionTarget;
+    queueIdentity: string;
+    result?: ReplySteerNowResult | Promise<ReplySteerNowResult>;
+    retry?: (assertCurrent: () => void) => Promise<ReplyMessageInjectionAttempt | undefined>;
   };
   claim?: SessionControllerMailboxClaim;
   ready?: (claim: SessionControllerMailboxClaim) => void;

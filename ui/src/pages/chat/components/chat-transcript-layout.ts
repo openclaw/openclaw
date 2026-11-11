@@ -12,7 +12,7 @@ export type TranscriptContent = GuardedTranscriptItem | JSX.Element;
 export type TranscriptRow<T = unknown> = {
   estimatedSize?: number;
   retainDom?: boolean;
-  /** Native message content supports data-only Markdown preparation. */
+  /** Prepare Markdown data while idle; visited DOM can still be retained. */
   prewarm?: boolean;
   streaming?: boolean;
 } & (
@@ -27,13 +27,13 @@ export type TranscriptLayoutProps = {
   getContent: (index: number) => TranscriptContent;
   activeRowKeys: ReadonlySet<string>;
   preparingRowKey?: string;
+  forecastRowKeys?: ReadonlySet<string>;
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
   overlay: JSX.Element;
   header: JSX.Element;
   scrollElementRef: (element?: Element) => void;
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;
-  measureRows: boolean;
   initialPositionPending: () => boolean;
   layout: TranscriptLayoutOwner;
   headerHeight: number;

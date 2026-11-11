@@ -113,8 +113,11 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
-  /** Host-owned, read-only diagnostics before startup recovery can dispatch loaded jobs. */
-  describeJobLoadWarning?: (job: CronStoredJob) => string | undefined;
+  /** Best-effort host diagnostics after inventory publication, outside cron readiness and operations. */
+  describeJobLoadWarning?: (
+    job: CronStoredJob,
+    signal: AbortSignal,
+  ) => string | undefined | Promise<string | undefined>;
   /** Disallow automation jobs that run commands or scripts on the host. */
   hostExecutionDisabled?: boolean;
   resolveUserTimezone?: () => string | undefined;
@@ -277,7 +280,7 @@ export type CronServiceDeps = {
     /** Consumed by the occurrence; command runs are not agent runs and mint no context. */
     occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
-    job: CronJob;
+    job: CronStoredJob;
     abortSignal?: AbortSignal;
   }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
   runScriptJob?: (params: {
@@ -365,7 +368,11 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "env" | "nowMs"> & {
 
 /** Dependencies consumed by job policy before its mutation is committed. */
 export type CronJobPolicyContext = {
-  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log" | "failureRepairTimeoutMs">;
+  deps: Pick<
+    CronServiceDepsInternal,
+    "cronConfig" | "nowMs" | "log" | "failureRepairTimeoutMs" | "defaultAgentId"
+  > &
+    Partial<Pick<CronServiceDepsInternal, "resolveDefaultAgentId">>;
   /** Resolved by the host for this exact job while its recovery transaction holds the row. */
   preparedFailureAlert?: { jobId: string; value: ResolvedFailureAlert | null };
 };
@@ -661,6 +668,7 @@ export type CronUpdateOptions = Pick<
   | "execPolicy"
   | "streamExecApproval"
   | "streamSandbox"
+  | "streamOperatorSource"
   | "sessionEntryCurrent"
 > & {
   /** Parent incarnation recorded by `automations bind`; only fills an absent link. */

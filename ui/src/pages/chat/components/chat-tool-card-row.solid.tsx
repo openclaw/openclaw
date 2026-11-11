@@ -350,7 +350,7 @@ export function ToolMessageSummary(props: {
         ? resolveCollapsedToolDetail(singleToolCard, singleToolDisplay.detail)
         : undefined;
     const toolSummaryLabelRaw = singleToolDisplayDetail
-      ? !markdown && !hasImages
+      ? !markdown || hasImages
         ? singleToolDisplayDetail
         : singleToolCard?.outputText?.trim()
           ? "output"
@@ -361,7 +361,7 @@ export function ToolMessageSummary(props: {
     const toolPreview =
       isStandaloneToolMessage && markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
     const toolMessageLabelRaw =
-      singleToolDisplay && !markdown && !hasImages
+      singleToolDisplay && (!markdown || hasImages)
         ? singleToolDisplay.label
         : t("chat.toolCards.toolOutput");
     const toolMessageLabel =

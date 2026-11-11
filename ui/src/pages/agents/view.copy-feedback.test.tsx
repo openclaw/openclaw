@@ -15,6 +15,8 @@ function menuProps() {
     defaultLabel: "Set default",
     defaultDisabled: false,
     pinLabel: "Pin",
+    deleteDisabled: false,
+    onDelete: vi.fn(),
     showPhoneActions: false,
     createLabel: "New agent",
     createDisabled: false,
@@ -52,6 +54,39 @@ it("copies the agent ID from the page menu and confirms with a toast", async () 
     vi.unstubAllGlobals();
   }
 });
+
+it.each([false, true, "denied"] as const)(
+  "handles selected agent deletion from the page menu (%s)",
+  async (mode) => {
+    const props = {
+      ...menuProps(),
+      showPhoneActions: mode === true,
+      deleteDisabled: mode === "denied",
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const view = mountSolid(AgentsPageMenu, props, container);
+    try {
+      await vi.waitFor(() =>
+        expect(
+          openItems(container).some((item) => item.textContent?.trim() === t("common.delete")),
+        ).toBe(true),
+      );
+      const deletion = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+        (item) => item.textContent?.trim() === t("common.delete"),
+      );
+      expect(deletion).toBeDefined();
+      deletion!.click();
+      if (mode === "denied") {
+        expect(props.onDelete).not.toHaveBeenCalled();
+      } else {
+        await vi.waitFor(() => expect(props.onDelete).toHaveBeenCalledWith("alpha"));
+      }
+    } finally {
+      view.dispose();
+      container.remove();
+    }
+  },
+);
 
 it("leads with New agent and adds Refresh on the phone", async () => {
   const onCreate = vi.fn();

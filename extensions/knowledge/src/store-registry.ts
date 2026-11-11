@@ -22,6 +22,7 @@ import {
   type SynchronousSqliteCallback,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
+import { syncKnowledgeDirectory } from "./directory-sync.js";
 import { registerIdentity, SqliteIdentityStore } from "./identity-store.js";
 import { registrySchema, type RegistryTables } from "./registry-schema.js";
 import { ensureKnowledgeSchema, UnrecognizedSchema } from "./storage-schema.js";
@@ -113,7 +114,7 @@ export class StoreRegistry {
     // A missing sentinel is written and an empty one (interrupted creation) is
     // completed; one naming another registry is refused.
     if (writeOnce(sentinel, id + "\n")) {
-      fsyncDir(stateRoot);
+      syncKnowledgeDirectory(stateRoot);
     }
     if (readFileSync(sentinel, "utf8").trim() !== id) {
       this.db.close();
@@ -306,8 +307,8 @@ export class StoreRegistry {
     };
     mkdirSync(path.join(reserved.root, "private"), { recursive: true, mode: 0o700 });
     writeOnce(path.join(reserved.root, "vault.json"), JSON.stringify(manifest, null, 2) + "\n");
-    fsyncDir(reserved.root);
-    fsyncDir(path.dirname(reserved.root));
+    syncKnowledgeDirectory(reserved.root);
+    syncKnowledgeDirectory(path.dirname(reserved.root));
     const store = new SqliteIdentityStore(reserved.statePath);
     store.withDatabase((db) =>
       registerIdentity(db, checkpointKey(reserved.vaultId), JSON.stringify(manifest)),
@@ -555,12 +556,4 @@ function writeOnce(file: string, text: string): boolean {
     closeSync(fd);
   }
   return true;
-}
-function fsyncDir(dir: string) {
-  const fd = openSync(dir, constants.O_RDONLY);
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
 }

@@ -41,7 +41,8 @@ export function nodeWorkspaceManifestCapture(argv: readonly string[], workspaceD
   const baseCommit = argv[4] || null;
   if (
     baseCommit
-      ? !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(baseCommit) || argv[5] !== "eligible"
+      ? !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(baseCommit) ||
+        (argv[5] !== "eligible" && argv[5] !== "all")
       : argv[5] !== "all"
   ) {
     return undefined;
@@ -147,6 +148,7 @@ export async function runWorkspaceCommand(params: {
 }
 
 export async function captureManifest(params: {
+  mode: "eligible" | "all";
   workspaceDir: string;
   manifestHome: string;
   baseCommit: string | null;
@@ -170,7 +172,7 @@ export async function captureManifest(params: {
       argv: [
         params.workspaceDir,
         params.baseCommit ?? "",
-        params.baseCommit ? "eligible" : "all",
+        params.mode,
         ...priorManifestDigests,
         ...(input === undefined ? [] : ["memo-v1"]),
       ],

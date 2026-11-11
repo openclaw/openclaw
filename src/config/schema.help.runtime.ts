@@ -479,7 +479,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.alsoAllow":
     "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
   "tools.byProvider":
-    "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
+    'Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy. exec.mode sets a restrict-only host exec ceiling for turns on that provider or provider/model (it never drops mandatory approvals or loosens a stricter mode), so mode "auto" puts only that model\'s exec misses behind the exec reviewer.',
   "agents.entries.*.tools.profile":
     "Per-agent override for tool profile selection when one agent needs a different capability baseline. Use this sparingly so policy differences across agents stay intentional and reviewable.",
   "agents.entries.*.tools.alsoAllow":

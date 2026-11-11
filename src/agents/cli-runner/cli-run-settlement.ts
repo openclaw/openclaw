@@ -42,7 +42,11 @@ import { resolveCliSessionId } from "./cli-run-recovery.js";
 import { projectCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { hashCliReseedPrompt } from "./reseed-envelope.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./run-diagnostics.js";
-import { resolveCliSourceReplyMirror, type prepareCliRunTerminalReply } from "./terminal-reply.js";
+import {
+  resolveCliSourceReplyMirror,
+  shouldSuppressCliAutomaticFinal,
+  type prepareCliRunTerminalReply,
+} from "./terminal-reply.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -519,11 +523,10 @@ export function buildCliRunResult(params: {
   const { sourceReplyMirror } = preparedReply;
   const text = preparedReply.text;
   const finalAssistantVisibleText = preparedReply.finalMessageText ?? text;
-  // Automatic finals still need route-scoped dedupe: an earlier send may be only progress.
   const payloads =
     sourceReplyMirror.payloads.length > 0
       ? sourceReplyMirror.payloads
-      : sourceReplyMirror.delivered && runParams.sourceReplyDeliveryMode === "message_tool_only"
+      : shouldSuppressCliAutomaticFinal(output, runParams, sourceReplyMirror.delivered)
         ? undefined
         : text
           ? (output.textParts && text === output.text ? output.textParts : [text]).map(

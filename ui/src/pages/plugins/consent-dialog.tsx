@@ -5,8 +5,10 @@ import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   RetryAction,
   SettingsRow,
@@ -516,14 +518,14 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
             </div>
             {meta() ? <p class="plugins-consent__description">{meta()}</p> : undefined}
           </div>
-          <button
-            type="button"
+          <IconButton
+            size={28}
             class="oc-dialog__close"
-            aria-label={t("common.close")}
+            icon="x"
+            label={t("common.close")}
+            tooltip={false}
             onClick={() => props.onCancel()}
-          >
-            <Icon name="x" />
-          </button>
+          />
         </header>
         <div class="oc-dialog__body">
           <Loading
@@ -536,7 +538,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
           >
             <Errored
               fallback={(error, reset) => (
-                <div class="callout danger plugins-consent__error" role="alert">
+                <InlineAlert tone="danger" class="plugins-consent__error" role="alert">
                   <span>{formatUiError(error())}</span>
                   <RetryAction
                     type="button"
@@ -547,7 +549,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
                       reset();
                     }}
                   />
-                </div>
+                </InlineAlert>
               )}
             >
               <InspectionBody />

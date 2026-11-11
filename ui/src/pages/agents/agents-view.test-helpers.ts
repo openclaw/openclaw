@@ -61,6 +61,7 @@ export function createAgentViewTestProps(
       channelsLastSuccess: null,
     }),
     access: {
+      canDeleteAgent: true,
       canCreateAgent: true,
       canPatchConfig: true,
       canUpdateConfig: true,
@@ -146,6 +147,7 @@ export function createAgentViewTestProps(
     onSelectPanel: () => undefined,
     onConfigRetry: () => undefined,
     onSetDefault: async () => undefined,
+    onDeleteAgent: () => undefined,
     onTogglePinnedAgent: () => undefined,
     onOpenMemoryImport: () => undefined,
     onOpenMemorySettings: () => undefined,

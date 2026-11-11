@@ -63,6 +63,8 @@ const allowedAttrs = [
   "data-file-path",
   "data-file-document-relative",
   "data-link-favicon-host",
+  "data-template-package",
+  "aria-haspopup",
   "data-session-key",
   "data-session-href",
   "data-table-interactions",

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 
 const linuxRunnerTest = it.skipIf(process.platform === "win32");
@@ -36,7 +37,16 @@ if (args[0] === "actions" && args[1] === "register") {
 }
 if (args[0] === "actions" && args[1] === "unregister" && process.env.FIXTURE_MODE === "unregister-failed") process.exit(1);
 if (args.includes("info")) console.log(JSON.stringify({sandbox: {id: "bx_owned", createdAt: process.env.FIXTURE_MODE === "changed-vm" ? "2000-01-01T00:00:00Z" : state.createdAt}}));
-if (args.includes("delete")) console.log(JSON.stringify({operation: {id: "bdop_" + "a".repeat(32), kind: "sandbox", targetId: "bx_owned", status: "completed", completedAt: new Date().toISOString()}}));
+const operation = {id: "bdop_" + "a".repeat(32), kind: "sandbox", targetId: "bx_owned", status: "completed", completedAt: new Date().toISOString()};
+if (args.includes("delete")) {
+  if (process.env.FIXTURE_MODE.startsWith("delete-")) operation.status = "pending";
+  console.log(JSON.stringify({operation}));
+}
+if (args.includes("deletion")) {
+  if (process.env.FIXTURE_MODE === "delete-failed") operation.status = "failed";
+  if (process.env.FIXTURE_MODE === "delete-mismatch") operation.id = "bdop_" + "b".repeat(32);
+  console.log(JSON.stringify({operation}));
+}
 `;
   for (const name of ["crabbox", "boat"]) {
     writeFileSync(join(root, name), binary, { mode: 0o755 });
@@ -62,32 +72,50 @@ if (args.includes("delete")) console.log(JSON.stringify({operation: {id: "bdop_"
       env: { ...env, ...extra },
       encoding: "utf8",
     });
-  const values = () =>
-    Object.fromEntries(
-      readFileSync(output, "utf8")
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+  const value = (name: "vm" | "runner" | "label") =>
+    expectDefined(
+      Object.fromEntries(
+        readFileSync(output, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+      )[name],
+      `Missing ${name} workflow output`,
     );
   const calls = () =>
     readFileSync(join(root, "calls"), "utf8")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as string[]);
-  return { run, values, calls };
+  return { run, value, calls };
 }
 
 linuxRunnerTest("publishes only public identities and cleans up both resources", () => {
   const f = fixture();
   expect(f.run("provision").status).toBe(0);
-  const vm = f.values().vm;
+  const vm = f.value("vm");
   expect(Object.keys(JSON.parse(vm)).toSorted()).toEqual(["createdAt", "id", "leaseID"]);
   expect(vm).not.toMatch(/fixture-secret|fixture-private-key/);
   expect(f.run("register", { BOAT_VM_RECEIPT: vm }).status).toBe(0);
-  expect(f.values().label).toBe(JSON.parse(f.values().runner).name);
+  expect(f.value("label")).toBe(JSON.parse(f.value("runner")).name);
+  for (const call of f
+    .calls()
+    .filter(
+      (args) => args[0] === "warmup" || (args[1] === "register" && !args.includes("--help")),
+    )) {
+    expect(call).toEqual(
+      expect.arrayContaining(["--ascii-box-no-env", "--ascii-box-no-snapshots"]),
+    );
+    expect(
+      call.slice(
+        call.indexOf("--ascii-box-visibility"),
+        call.indexOf("--ascii-box-visibility") + 2,
+      ),
+    ).toEqual(["--ascii-box-visibility", "private"]);
+  }
   expect(
-    f.run("cleanup", { BOAT_VM_RECEIPT: vm, BOAT_RUNNER_RECEIPT: f.values().runner }).status,
+    f.run("cleanup", { BOAT_VM_RECEIPT: vm, BOAT_RUNNER_RECEIPT: f.value("runner") }).status,
   ).toBe(0);
   expect(f.calls().filter((args) => args.includes("delete"))).toHaveLength(1);
   expect(f.calls().filter((args) => args[1] === "unregister")).toHaveLength(1);
@@ -98,7 +126,7 @@ linuxRunnerTest.each(["short-ttl", "warmup-failed"])(
   (mode) => {
     const f = fixture(mode);
     expect(f.run("provision").status).not.toBe(0);
-    expect(JSON.parse(f.values().vm).id).toBe("bx_owned");
+    expect(JSON.parse(f.value("vm")).id).toBe("bx_owned");
     expect(f.calls().some((args) => args[1] === "register" && !args.includes("--help"))).toBe(
       false,
     );
@@ -108,12 +136,12 @@ linuxRunnerTest.each(["short-ttl", "warmup-failed"])(
 linuxRunnerTest("deletes the VM even when deregistration fails", () => {
   const f = fixture();
   expect(f.run("provision").status).toBe(0);
-  const vm = f.values().vm;
+  const vm = f.value("vm");
   expect(f.run("register", { BOAT_VM_RECEIPT: vm }).status).toBe(0);
   expect(
     f.run("cleanup", {
       BOAT_VM_RECEIPT: vm,
-      BOAT_RUNNER_RECEIPT: f.values().runner,
+      BOAT_RUNNER_RECEIPT: f.value("runner"),
       FIXTURE_MODE: "unregister-failed",
     }).status,
   ).not.toBe(0);
@@ -124,7 +152,21 @@ linuxRunnerTest("refuses to delete a VM whose creation identity changed", () => 
   const f = fixture();
   expect(f.run("provision").status).toBe(0);
   expect(
-    f.run("cleanup", { BOAT_VM_RECEIPT: f.values().vm, FIXTURE_MODE: "changed-vm" }).status,
+    f.run("cleanup", { BOAT_VM_RECEIPT: f.value("vm"), FIXTURE_MODE: "changed-vm" }).status,
   ).not.toBe(0);
   expect(f.calls().some((args) => args.includes("delete"))).toBe(false);
+});
+
+linuxRunnerTest.each([
+  { mode: "delete-pending", status: 0 },
+  { mode: "delete-failed", status: 1 },
+  { mode: "delete-mismatch", status: 1 },
+])("settles asynchronous deletion: $mode", ({ mode, status }) => {
+  const f = fixture(mode);
+  expect(f.run("provision").status).toBe(0);
+  expect(f.run("cleanup", { BOAT_VM_RECEIPT: f.value("vm") }).status).toBe(status);
+  expect(f.calls().filter((args) => args.includes("delete"))).toHaveLength(1);
+  expect(f.calls().filter((args) => args.includes("deletion"))).toEqual([
+    ["--no-update", "--json", "deletion", "status", "bdop_" + "a".repeat(32)],
+  ]);
 });

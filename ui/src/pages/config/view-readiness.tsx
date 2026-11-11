@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, Loading, Show } from "solid-js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RetryAction } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -17,9 +18,9 @@ export function ConfigReadLoading(props: { message: string }) {
 export function ConfigReadError(props: { message: string; onRetry: () => void }) {
   return (
     <div class="config-content-callout">
-      <div class="callout danger" role="alert">
+      <InlineAlert tone="danger" role="alert">
         {props.message} <RetryAction type="button" onRetry={() => props.onRetry()} />
-      </div>
+      </InlineAlert>
     </div>
   );
 }

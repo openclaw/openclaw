@@ -72,8 +72,8 @@ export type GatewayServerOptions = {
   exitAfterStartupFailure?: (error: unknown) => boolean;
   /** Exact lifecycle generation projected to connected clients. */
   bootId?: string;
-  /** Recorded predecessor lifetime eligible for crash recovery; absent after a clean stop. */
-  restartResumeWindow?: import("../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindow;
+  /** Pending crash lifetimes by physical agent owner, retained until recovery runs. */
+  restartResumeWindows?: import("../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindows;
   /**
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1

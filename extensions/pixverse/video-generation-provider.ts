@@ -380,7 +380,7 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         metadata: {
           endpoint,
           videoId,
-          status: readPixVerseStatus(completed),
+          status: 1,
           seed: readPixVerseSeed(completed.seed),
           size: asFiniteNumber(completed.size),
         },

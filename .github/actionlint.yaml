@@ -9,6 +9,7 @@ self-hosted-runner:
     # Boat build qualification
     - boat-xlarge
     # Blacksmith CI runners
+    - blacksmith-2vcpu-ubuntu-2404
     - blacksmith-4vcpu-ubuntu-2404
     - blacksmith-8vcpu-ubuntu-2404
     - blacksmith-8vcpu-windows-2025
@@ -29,6 +30,9 @@ paths:
       # actionlint's built-in runner label allowlist lags Blacksmith additions.
       - 'label "blacksmith-16vcpu-[^"]+" is unknown\.'
   # GitHub Actions supports concurrency.queue, but actionlint does not yet model it.
+  .github/workflows/postgres-conformance-weekly.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/ios-store-release.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'

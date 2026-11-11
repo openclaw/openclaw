@@ -37,6 +37,7 @@ import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projectio
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
+import { createPreparedWorkerRefresh } from "./prepared-worker-refresh.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerEnvironmentAbandonment } from "./provider-lifecycle.types.js";
 import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
@@ -192,13 +193,17 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const environmentAccess = createWorkerEnvironmentAccess({
     ...options,
     store,
-    getCleanupError: (record) => sessionAttachments.getCleanupError(record),
     readStartStatus: providerLifecycle.readStartStatus,
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
     isStopping: () => stopping,
     providerFor: providerLifecycle.providerFor,
+    withLock,
+  });
+  const refreshPreparedEnvironment = createPreparedWorkerRefresh({
+    ...options,
+    signal: scope.signal,
     withLock,
   });
 
@@ -611,6 +616,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     listMachineOptions: providerLifecycle.listMachineOptions,
     listOperatingSystems: providerLifecycle.listOperatingSystems,
     bindPreparedWorkspace: environmentAccess.bindPreparedWorkspace,
+    refreshPreparedEnvironment: async (
+      request: Parameters<ReturnType<typeof createPreparedWorkerRefresh>>[0],
+    ) => environmentAccess.project(await refreshPreparedEnvironment(request)),
     runProjectLifecycleCommand: async (
       environmentId: string,
       ownerEpoch: number,

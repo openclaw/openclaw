@@ -690,9 +690,18 @@ describe("Vercel Container Registry publishing", () => {
     const promoteIndex = reusablePublish.steps?.findIndex(
       (step) => step.name === "Promote and verify channel aliases",
     );
+    const readbackIndex = reusablePublish.steps?.findIndex(
+      (step) => step.name === "Verify complete cross-registry readback",
+    );
     expect(copyIndex).toBeGreaterThan(-1);
     expect(smokeIndex).toBeGreaterThan(copyIndex ?? -1);
     expect(promoteIndex).toBeGreaterThan(smokeIndex ?? -1);
+    expect(readbackIndex).toBeGreaterThan(promoteIndex ?? -1);
+    const readbackStep = reusablePublish.steps?.[readbackIndex ?? -1];
+    expect(readbackStep?.run).toContain("scripts/container-registry-readback.mjs");
+    expect(readbackStep?.run).toContain('--docker-image "ghcr.io/${GITHUB_REPOSITORY}"');
+    expect(readbackStep?.run).toContain('--docker-image "docker.io/openclaw/openclaw"');
+    expect(readbackStep?.run).toContain('--vercel-image "${TARGET_IMAGE}"');
     const smokeStep = reusablePublish.steps?.[smokeIndex ?? -1];
     expect(smokeStep?.env?.SANDBOX_CLI).toBe("${{ steps.vercel_cli.outputs.sandbox_cli }}");
     const smokeRun = smokeStep?.run ?? "";

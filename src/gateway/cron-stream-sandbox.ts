@@ -24,7 +24,11 @@ export function createCronStreamSandboxExecutor(params: {
     if (!job.streamSandbox || !sourceIdentity) {
       throw new Error("Sandbox stream is missing its saved target or source identity.");
     }
-    const scheduleKey = cronStreamScheduleKey(job.schedule, job.streamSandbox);
+    const scheduleKey = cronStreamScheduleKey(
+      job.schedule,
+      job.streamSandbox,
+      job.streamOperatorSource,
+    );
     const assertCurrent = () => {
       params.assertCurrent();
       input.assertCurrent();
@@ -34,7 +38,11 @@ export function createCronStreamSandboxExecutor(params: {
         current.schedule.kind !== "stream" ||
         current.state.streamRestartExhausted ||
         current.state.streamSourceIdentity !== sourceIdentity ||
-        cronStreamScheduleKey(current.schedule, current.streamSandbox) !== scheduleKey
+        cronStreamScheduleKey(
+          current.schedule,
+          current.streamSandbox,
+          current.streamOperatorSource,
+        ) !== scheduleKey
       ) {
         throw new Error("Sandbox stream source changed before execution.");
       }

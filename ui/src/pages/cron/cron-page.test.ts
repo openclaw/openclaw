@@ -269,6 +269,8 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
   updateCronRunsFilter(page.cron, previousFilters);
   page.routeSearch = "?job=linked-job";
   await page.settle();
+  dom.click(page, dom.testId("cron-detail-tab-history"));
+  await page.settle();
   expect(dom.callsFor(request, "cron.runs").at(-1)).toEqual([
     "cron.runs",
     expect.objectContaining({
@@ -549,7 +551,7 @@ it.each([
     // Run actions stop propagation; the overview still permits selecting another row.
     dom.click(page, '[data-test-id="cron-row-beta"] .cron-table__name');
     await waitFor(() => {
-      expect(betaReads).toBe(1);
+      expect(betaReads).toBe(0);
       expect(page.querySelector(dom.testId("cron-detail-tab-history"))).not.toBeNull();
     });
     (page.querySelector(dom.testId("cron-detail-tab-history")) as HTMLElement).dispatchEvent(

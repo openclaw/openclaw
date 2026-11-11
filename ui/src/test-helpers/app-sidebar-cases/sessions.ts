@@ -197,6 +197,19 @@ async function createReconnectFixture(initial: ReturnType<typeof createSessionSt
 }
 
 describe("AppSidebar session source lifecycle", () => {
+  it("keeps the context-menu row highlighted until its menu closes", async () => {
+    const { sidebar, menu } = await mountRow("agent:main:target", {});
+    const row = required(sidebar.querySelector('[data-session-key="agent:main:target"]'));
+    expect(row.classList.contains("sidebar-recent-session--menu-open")).toBe(true);
+
+    required(menu.querySelector<HTMLElement>('[data-shortcut="p"]')).dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }),
+    );
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector("openclaw-session-menu")).toBeNull();
+    expect(row.classList.contains("sidebar-recent-session--menu-open")).toBe(false);
+  });
+
   it("disables Fork session for model-selection-locked rows", async () => {
     const { menu } = await mountRow("agent:main:locked", { modelSelectionLocked: true });
     expect(menu.forkDisabled).toBe(true);

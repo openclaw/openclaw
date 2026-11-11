@@ -12,36 +12,56 @@ export type DetailsSubagents = NonNullable<ChatDetailsSnapshot["subagents"]>;
 export type DetailsSubagent = DetailsSubagents["rows"][number];
 export type DetailsAutomation = NonNullable<ChatDetailsSnapshot["automations"]>["rows"][number];
 export type DetailsSnapshotPatch = Partial<Omit<ChatDetailsSnapshot, "locale">>;
+export const DETAILS_SUBAGENT_ACTIVITY_PREVIEW_ROWS = 3;
 
 export function isDetailsSubagentWorking(row: Pick<DetailsSubagent, "status">) {
   return row.status === "running" || row.status === "waiting";
 }
 
-export function projectDetailsSubagents(rows: readonly DetailsSubagent[], mobile = false) {
+/** Older display receipts also contain subsessions; retain only the subagent collection. */
+export function detailsSubagentCollection(value: DetailsSubagents): DetailsSubagents {
   return {
-    total: rows.length,
+    total:
+      value.total -
+      value.counts.reduce((sum, entry) => sum + (entry.listed === false ? entry.count : 0), 0),
+    rows: value.rows.filter((row) => row.listed !== false),
+    counts: value.counts.filter((entry) => entry.listed !== false),
+  };
+}
+
+export function projectDetailsSubagents(rows: readonly DetailsSubagent[], mobile = false) {
+  const collection = rows.filter((row) => row.listed !== false);
+  const counts: DetailsSubagents["counts"] = [];
+  for (const row of collection) {
+    const status = isDetailsSubagentWorking(row)
+      ? "running"
+      : row.status !== "queued"
+        ? "done"
+        : row.status;
+    const count = counts.find((entry) => entry.status === status);
+    if (count) {
+      count.count += 1;
+    } else {
+      counts.push({ status, count: 1 });
+    }
+  }
+  return {
+    total: collection.length,
     rows: [
-      ...rows.filter(isDetailsSubagentWorking),
-      ...rows.filter((row) => !isDetailsSubagentWorking(row)),
+      ...collection.filter(isDetailsSubagentWorking),
+      ...collection.filter((row) => !isDetailsSubagentWorking(row)),
     ]
-      .slice(0, rows.length > (mobile ? 3 : 5) ? 4 : 5)
-      .map(({ key, label, status }) => ({ key, label, status })),
-    // At most two statuses: Working beside the avatars, then Queued or Done. Waiting parents
-    // count as working; failed and stopped runs count as done because agents retry around them.
-    counts: (["running", "queued", "done"] as const)
-      .map((status) => ({
+      .slice(0, collection.length > (mobile ? 3 : 5) ? 4 : 5)
+      .map(({ key, label, status, session }): DetailsSubagent => ({
+        key,
+        label,
         status,
-        count: rows.filter(
-          (row) =>
-            (isDetailsSubagentWorking(row)
-              ? "running"
-              : row.status === "queued"
-                ? "queued"
-                : "done") === status,
-        ).length,
-      }))
-      .filter((entry) => entry.count > 0)
-      .slice(0, 2),
+        session: session && { startedAt: session.startedAt, endedAt: session.endedAt },
+      })),
+    counts: counts.toSorted((a, b) => {
+      const order = ["running", "queued", "done", "failed", "stopped"];
+      return order.indexOf(a.status) - order.indexOf(b.status);
+    }),
   };
 }
 

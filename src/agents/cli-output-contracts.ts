@@ -73,6 +73,8 @@ export type CliOutput = {
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   sourceReplyDelivered?: true;
+  /** A completed source reply was the last tool action; later model text is redundant. */
+  terminalSourceReplyDelivered?: true;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];

@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   DocsLink,
@@ -609,7 +610,7 @@ export function CloudWorkersPage() {
           machines={() => (
             <>
               <Show when={!hasManageAccess()}>
-                <div class="callout warning" role="note">
+                <InlineAlert tone="warning" role="note">
                   {t(
                     !gateway.connected
                       ? "cloudWorkersPage.reconnectRequired"
@@ -624,21 +625,21 @@ export function CloudWorkersPage() {
                         ? "cloudWorkersPage.unavailableAccess"
                         : "cloudWorkersPage.adminRequired",
                   )}
-                </div>
+                </InlineAlert>
               </Show>
               <Errored
                 fallback={(error) => (
-                  <div class="callout warning" role="status">
+                  <InlineAlert tone="warning" role="status">
                     {t("cloudWorkersPage.catalogFailed", { error: formatUiError(error()) })}
-                  </div>
+                  </InlineAlert>
                 )}
               >
                 <Loading on={catalogLoad()}>{catalogCompletion()}</Loading>
               </Errored>
               <Show when={saveState().error && !view.editor}>
-                <div class="callout warning" role="alert">
+                <InlineAlert tone="warning" role="alert">
                   {saveState().error}
-                </div>
+                </InlineAlert>
               </Show>
               <Show when={saveState().notice}>
                 <div class="callout" role="status">

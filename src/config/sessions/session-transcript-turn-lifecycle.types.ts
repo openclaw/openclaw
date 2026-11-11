@@ -15,6 +15,7 @@ export type SessionTranscriptTurnExpectedState = {
 
 /** Lifecycle fields committed with an accepted transcript turn. */
 export type SessionTranscriptTurnLifecyclePatch = {
+  activeWriterRunId?: SessionEntry["activeWriterRunId"];
   abortedLastRun?: boolean;
   endedAt?: number;
   lifecycleRunId?: SessionEntry["lifecycleRunId"];

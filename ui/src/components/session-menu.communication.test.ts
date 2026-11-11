@@ -220,7 +220,7 @@ describe("session communication menu", () => {
     appearance.dispatchEvent(keydown());
     expect(document.activeElement).toBe(choice(menu, "send", "always"));
     choice(menu, "send", "always").dispatchEvent(keydown(true));
-    expect(document.activeElement).toBe(menuItem(menu, "Open in"));
+    expect(document.activeElement).toBe(menuItem(menu, "Copy details"));
     choice(menu, "receive", "never").click();
     expect(onAction).toHaveBeenCalledWith({
       kind: "set-communication",
