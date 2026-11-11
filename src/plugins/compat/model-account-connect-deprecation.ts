@@ -8,6 +8,6 @@ export function warnModelAccountConnectDeprecation(
   warnSessionPersistenceDeprecation(
     `modelAccountConnectService.${method}`,
     `modelAccountConnectService.${method}Async`,
-    pluginId === undefined ? undefined : { pluginId },
+    { pluginId, family: "model-account-connect" },
   );
 }

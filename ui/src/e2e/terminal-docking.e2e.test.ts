@@ -1,10 +1,6 @@
-import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -16,197 +12,179 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Control UI terminal docking" });
 
+const terminalCanvas = (panel: Locator) => panel.locator(".tp-host canvas:visible");
+const liveTabs = (panel: Locator) => panel.locator(".tabstrip-tab.is-live");
+const rightTabs = (pane: Locator) =>
+  pane.locator(".sidebar-region__right-runtime .tabstrip-tab.is-live");
+const dock = (panel: Locator, side: "bottom" | "right") =>
+  panel.getByRole("button", { name: "Dock to " + side, exact: true }).click();
+const inputSession = (request: { params?: unknown }) =>
+  (request.params as { sessionId: string }).sessionId;
+const lastInputSession = async (gateway: Awaited<ReturnType<typeof installMockGateway>>) =>
+  inputSession((await gateway.getRequests("terminal.input")).at(-1)!);
+// Short native input markers prove routing; longer labels only repeat input and echo work.
+async function typeInTerminal(page: Page, panel: Locator, text: string) {
+  await terminalCanvas(panel).click();
+  await page.keyboard.type(text);
+}
+function hasFocus(element: Element, descendants = false) {
+  const root = element.getRootNode();
+  const active =
+    root instanceof ShadowRoot ? root.activeElement : element.ownerDocument.activeElement;
+  return descendants ? element.contains(active) : element === active;
+}
+async function openDockingChat(page: Page, labels: string[], content?: string) {
+  const keys = [
+    "agent:main:dashboard:11111111-1111-4111-8111-111111111111",
+    "agent:main:dashboard:22222222-2222-4222-8222-222222222222",
+  ];
+  const gateway = await installMockGateway(page, {
+    sessionKey: keys[0],
+    sessions: labels.map((label, index) =>
+      createControlUiSessionRow(keys[index]!, label, 1_790_000_000_000 + index),
+    ),
+    featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
+    terminalEnabled: true,
+    ...(content
+      ? { historyMessages: [{ role: "assistant", content: [{ type: "text", text: content }] }] }
+      : {}),
+  });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, keys[0]!));
+  await waitForControlUiGatewayReady(page);
+  const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+  return {
+    gateway,
+    pane,
+    embedded: pane.locator(".sidebar-region__right-runtime openclaw-terminal-panel"),
+    bottom: page.locator("openclaw-terminal-panel:not([embedded])"),
+  };
+}
+
 suite.define(() => {
-  it.each([false, true])(
-    "preserves exited diagnostic output across docks (mixed: %s)",
-    async (mixed) => {
-      await suite.withPage(
-        { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
-        async ({ page }) => {
-          const key = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
-          const gateway = await installMockGateway(page, {
-            sessionKey: key,
-            sessions: [createControlUiSessionRow(key, "Diagnostic output", 1_790_000_000_000)],
-            featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
-            terminalEnabled: true,
-          });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
-          await waitForControlUiGatewayReady(page);
-          const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-          await openChatSidePanelType(pane, "Terminal");
-          const embedded = pane.locator(".sidebar-region__right-runtime openclaw-terminal-panel");
-          const bottom = page.locator("openclaw-terminal-panel:not([embedded])");
-          await embedded.locator(".tp-host canvas:visible").click();
-          await page.keyboard.type("diagnostic-command\r");
-          const sessionId = (
-            (await gateway.waitForRequest("terminal.input")).params as { sessionId: string }
-          ).sessionId;
-          await pane.getByRole("button", { name: "Dock to bottom", exact: true }).click();
-          await bottom.locator(".tp-host canvas:visible").waitFor();
-          if (mixed) {
-            await bottom.getByRole("button", { name: "New terminal session", exact: true }).click();
-            await expect.poll(() => bottom.locator(".tabstrip-tab.is-live").count()).toBe(2);
-            await bottom.locator(".tabstrip-tab").first().click();
-          }
-          const output =
-            "\u001b[2J\u001b[H\u001b[?25lDIAGNOSTIC_OUTPUT_RETAINED\r\ncommand failed: exit 17\r\n";
-          const echoed = (await gateway.getRequests("terminal.input")).reduce((size, request) => {
-            const input = request.params as { sessionId: string; data: string };
-            return size + (input.sessionId === sessionId ? input.data.length : 0);
-          }, 0);
-          const banner =
-            "OpenClaw mock terminal\r\nType anything and the mock Gateway will echo it.\r\n$ ";
-          await gateway.emitGatewayEvent("terminal.data", {
-            sessionId,
-            seq: banner.length + echoed + output.length,
-            data: output,
-          });
-          await gateway.emitGatewayEvent("terminal.exit", {
-            sessionId,
-            reason: "process_exit",
-            exitCode: 17,
-            signal: null,
-            error: "Command failed; inspect retained output.",
-          });
-          await bottom.getByText("exited (17)", { exact: true }).waitFor();
-          const canvas = bottom.locator(".tp-host canvas:visible");
-          const original = await canvas.elementHandle();
-          const digest = async () =>
-            createHash("sha256")
-              .update(await canvas.screenshot({ animations: "disabled" }))
-              .digest("hex");
-          const before = await digest();
-          await bottom.getByRole("button", { name: "Dock to right", exact: true }).click();
-          if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR && mixed) {
-            const dir = createControlUiE2eArtifactDir("terminal-exited-docking");
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              pane.locator(".chat-pane__header"),
-              [],
-              { animations: "disabled" },
-            );
-            await writeFile(path.join(dir, "exited-dock-to-right.png"), frame.png);
-          }
-          await pane.getByText("exited (17)", { exact: true }).waitFor();
+  it.each([false, true])("preserves exited diagnostic output across docks (mixed: %s)", (mixed) =>
+    suite.withPage(
+      { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const { gateway, pane, embedded, bottom } = await openDockingChat(page, [
+          "Diagnostic output",
+        ]);
+        await openChatSidePanelType(pane, "Terminal");
+        // Embedded desktop opens on Sessions; choose the already-owned session.
+        await embedded.locator(".tp-session.is-current").click();
+        await typeInTerminal(page, embedded, "d\r");
+        const sessionId = inputSession(await gateway.waitForRequest("terminal.input"));
+        await dock(pane, "bottom");
+        await terminalCanvas(bottom).waitFor();
+        if (mixed) {
+          await bottom.getByRole("button", { name: "New terminal session", exact: true }).click();
+          await expect.poll(() => liveTabs(bottom).count()).toBe(2);
+          await bottom.locator(".tabstrip-tab").first().click();
+        }
+        const output =
+          "\u001b[2J\u001b[H\u001b[?25lDIAGNOSTIC_OUTPUT_RETAINED\r\ncommand failed: exit 17\r\n";
+        const echoed = (await gateway.getRequests("terminal.input")).reduce((size, request) => {
+          const input = request.params as { sessionId: string; data: string };
+          return size + (input.sessionId === sessionId ? input.data.length : 0);
+        }, 0);
+        const banner =
+          "OpenClaw mock terminal\r\nType anything and the mock Gateway will echo it.\r\n$ ";
+        await gateway.emitGatewayEvent("terminal.data", {
+          sessionId,
+          seq: banner.length + echoed + output.length,
+          data: output,
+        });
+        await gateway.emitGatewayEvent("terminal.exit", {
+          sessionId,
+          reason: "process_exit",
+          exitCode: 17,
+          signal: null,
+          error: "Command failed; inspect retained output.",
+        });
+        await bottom.getByText("exited (17)", { exact: true }).waitFor();
+        const canvas = terminalCanvas(bottom);
+        const original = await canvas.elementHandle();
+        const expectOriginalCanvas = async (panel: Locator) =>
           expect(
-            await embedded
-              .locator(".tp-host canvas:visible")
-              .evaluate((element, prior) => element === prior, original),
+            await terminalCanvas(panel).evaluate((element, prior) => element === prior, original),
           ).toBe(true);
-          await embedded
-            .getByText("Command failed; inspect retained output.", { exact: true })
-            .waitFor();
-          for (let cycle = 0; cycle < 2; cycle += 1) {
-            await pane.getByRole("button", { name: "Dock to bottom", exact: true }).click();
-            await bottom.getByText("exited (17)", { exact: true }).waitFor();
-            expect(await digest()).toBe(before);
-            expect(await bottom.locator(".tabstrip-tab").count()).toBe(mixed ? 2 : 1);
-            await bottom.getByRole("button", { name: "Dock to right", exact: true }).click();
-            await pane.getByText("exited (17)", { exact: true }).waitFor();
-            expect(
-              await embedded
-                .locator(".tp-host canvas:visible")
-                .evaluate((element, prior) => element === prior, original),
-            ).toBe(true);
-          }
-          if (mixed) {
-            await pane.locator(".sidebar-region__right-runtime .tabstrip-tab.is-live").click();
-            await embedded.locator(".tp-host canvas:visible").click();
-            await page.keyboard.type("LIVE_WITH_DIAGNOSTICS\r");
-            const liveId = (
-              (await gateway.getRequests("terminal.input")).at(-1)!.params as { sessionId: string }
-            ).sessionId;
-            expect(liveId).not.toBe(sessionId);
-            await pane.getByRole("button", { name: "Dock to bottom", exact: true }).click();
-            await bottom.locator('.tabstrip-tab.is-live[aria-selected="true"]').waitFor();
-            await bottom.locator(".tp-host canvas:visible").click();
-            await page.keyboard.type("LIVE_STILL_SELECTED\r");
-            expect(
-              (
-                (await gateway.getRequests("terminal.input")).at(-1)!.params as {
-                  sessionId: string;
-                }
-              ).sessionId,
-            ).toBe(liveId);
-            await bottom.locator(".tabstrip-tab.is-exited").click();
-            expect(await canvas.evaluate((element, prior) => element === prior, original)).toBe(
-              true,
-            );
-            expect(await digest()).toBe(before);
-          }
-          const attaches = await gateway.getRequests("terminal.attach");
-          expect(
-            attaches.filter(
-              (request) => (request.params as { sessionId: string }).sessionId === sessionId,
-            ),
-          ).toHaveLength(1);
-          expect(await gateway.getRequests("terminal.open")).toHaveLength(mixed ? 2 : 1);
-          expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
-        },
-      );
-    },
+        const pixels = () => canvas.screenshot({ animations: "disabled" });
+        const before = await pixels();
+        await dock(bottom, "right");
+        await pane.getByText("exited (17)", { exact: true }).waitFor();
+        await expectOriginalCanvas(embedded);
+        await embedded
+          .getByText("Command failed; inspect retained output.", { exact: true })
+          .waitFor();
+        for (let cycle = 0; cycle < 2; cycle += 1) {
+          await dock(pane, "bottom");
+          await bottom.getByText("exited (17)", { exact: true }).waitFor();
+          expect(await pixels()).toEqual(before);
+          expect(await bottom.locator(".tabstrip-tab").count()).toBe(mixed ? 2 : 1);
+          await dock(bottom, "right");
+          await pane.getByText("exited (17)", { exact: true }).waitFor();
+          await expectOriginalCanvas(embedded);
+        }
+        if (mixed) {
+          await pane.locator(".sidebar-region__right-runtime .tabstrip-tab.is-live").click();
+          await typeInTerminal(page, embedded, "l\r");
+          const liveId = await lastInputSession(gateway);
+          expect(liveId).not.toBe(sessionId);
+          await dock(pane, "bottom");
+          await bottom.locator('.tabstrip-tab.is-live[aria-selected="true"]').waitFor();
+          await typeInTerminal(page, bottom, "s\r");
+          expect(await lastInputSession(gateway)).toBe(liveId);
+          await bottom.locator(".tabstrip-tab.is-exited").click();
+          await expectOriginalCanvas(bottom);
+          expect(await pixels()).toEqual(before);
+        }
+        const attaches = await gateway.getRequests("terminal.attach");
+        expect(attaches.filter((request) => inputSession(request) === sessionId)).toHaveLength(1);
+        expect(await gateway.getRequests("terminal.open")).toHaveLength(mixed ? 2 : 1);
+        expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
+      },
+    ),
   );
 
   it.each([
-    { destination: "Docking check", populated: false },
-    { destination: "Other conversation", populated: false },
-    { destination: "Other conversation", populated: true },
+    { destination: "Docking check", populated: false, picker: "pointer" },
+    { destination: "Other conversation", populated: false, picker: "pointer" },
+    { destination: "Other conversation", populated: true, picker: "pointer" },
+    { destination: "Other conversation", populated: true, picker: "keyboard" },
   ])(
-    "returns the bottom terminal to $destination (populated terminal: $populated)",
-    async ({ destination, populated }) => {
-      await suite.withPage(
+    "returns the bottom terminal to $destination (populated terminal: $populated; picker: $picker)",
+    ({ destination, populated, picker }) =>
+      suite.withPage(
         { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
         async ({ page }) => {
-          const keyA = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
-          const keyB = "agent:main:dashboard:22222222-2222-4222-8222-222222222222";
-          const gateway = await installMockGateway(page, {
-            sessionKey: keyA,
-            sessions: [
-              createControlUiSessionRow(keyA, "Docking check", 1_790_000_000_000),
-              createControlUiSessionRow(keyB, "Other conversation", 1_790_000_000_001),
-            ],
-            featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
-            terminalEnabled: true,
-            historyMessages: [
-              {
-                role: "assistant",
-                content: [
-                  { type: "text", text: "Keep this terminal beside the current conversation." },
-                ],
-              },
-            ],
-          });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, keyA));
-          await waitForControlUiGatewayReady(page);
-          const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+          const {
+            gateway,
+            pane: activePane,
+            embedded,
+            bottom,
+          } = await openDockingChat(
+            page,
+            ["Docking check", "Other conversation"],
+            "Keep this terminal beside the current conversation.",
+          );
+          const sidebar = page.locator("openclaw-app-sidebar");
+          const header = activePane.locator(".chat-pane__header");
           const selectChat = async (label: string) => {
-            await page
-              .locator("openclaw-app-sidebar")
-              .getByRole("link", { name: label, exact: true })
-              .click();
-            await activePane
-              .locator(".chat-pane__header")
-              .getByText(label, { exact: true })
-              .waitFor();
+            await sidebar.getByRole("link", { name: label, exact: true }).click();
+            await header.getByText(label, { exact: true }).waitFor();
           };
           // Keep an independent Files panel in B while moving A’s terminal.
           await selectChat("Other conversation");
           await openChatSidePanelType(activePane, "Files");
           await selectChat("Docking check");
           await openChatSidePanelType(activePane, "Terminal");
-          const embedded = activePane.locator(
-            ".sidebar-region__right-runtime openclaw-terminal-panel",
-          );
-          const bottom = page.locator("openclaw-terminal-panel:not([embedded])");
-          await embedded.locator(".tp-host canvas:visible").waitFor();
-          await embedded.locator(".tp-host canvas:visible").click();
-          await page.keyboard.type("echo DOCKING_CONTINUITY\r");
-          const input = await gateway.waitForRequest("terminal.input");
-          const sessionId = (input.params as { sessionId: string }).sessionId;
+          // Embedded desktop opens on Sessions; choose the already-owned session.
+          await embedded.locator(".tp-session.is-current").click();
+          await typeInTerminal(page, embedded, "i\r");
+          const sessionId = inputSession(await gateway.waitForRequest("terminal.input"));
           await selectChat("Other conversation");
           await expect.poll(() => embedded.isVisible()).toBe(false);
           await selectChat("Docking check");
-          await embedded.locator(".tp-host canvas:visible").waitFor();
+          await terminalCanvas(embedded).waitFor();
           await page.getByRole("button", { name: "Dock to bottom", exact: true }).click();
           await bottom.locator(".tp--bottom canvas").waitFor();
           await selectChat("Other conversation");
@@ -217,64 +195,108 @@ suite.define(() => {
             await bottom.getByRole("button", { name: "New terminal session", exact: true }).click();
             await gateway.waitForRequest("terminal.open", { after });
             try {
-              expect(
-                await bottom
-                  .getByRole("button", { name: "Dock to right", exact: true })
-                  .isDisabled(),
-              ).toBe(true);
+              const dockRight = bottom.getByRole("button", { name: "Dock to right", exact: true });
+              expect(await dockRight.isDisabled()).toBe(true);
             } finally {
               await gateway.resolveDeferred("terminal.open");
             }
-            await expect.poll(() => bottom.locator(".tabstrip-tab.is-live").count()).toBe(2);
+            await expect.poll(() => liveTabs(bottom).count()).toBe(2);
             await bottom.locator(".tabstrip-tab").first().click();
+            // A visible first canvas does not mean the remaining restored sessions have booted.
+            const restoreAfter = await gateway.deferNext("terminal.attach");
             await openChatSidePanelType(activePane, "Terminal");
-            await embedded.locator(".tp-host canvas:visible").waitFor();
-            await openChatSidePanelType(activePane, "Terminal");
+            await gateway.waitForRequest("terminal.attach", { after: restoreAfter });
+            const positionTrigger = activePane.getByRole("button", {
+              name: "Panel position",
+              exact: true,
+            });
+            const menu = positionTrigger.locator("..").locator('[role="menu"]');
+            const rightPosition = menu.getByRole("menuitemradio", { name: "Right", exact: true });
+            const expectMenu = async (open: boolean) => {
+              expect(await positionTrigger.getAttribute("aria-expanded")).toBe(String(open));
+              expect(await menu.evaluate((element) => element.matches(":popover-open"))).toBe(open);
+              expect((await menu.getAttribute("inert")) === null).toBe(open);
+            };
+            const openPicker = async () => {
+              if (picker === "keyboard") {
+                await positionTrigger.focus();
+                await page.keyboard.press("ArrowDown");
+              } else {
+                await positionTrigger.click();
+              }
+              await expect.poll(() => menu.getAttribute("data-phase")).toBe("open");
+            };
+            let restoreReleased = false;
+            try {
+              await embedded.locator(".tp-host canvas").waitFor({ state: "attached" });
+              await openPicker();
+              await gateway.resolveDeferred("terminal.attach");
+              restoreReleased = true;
+              await gateway.waitForRequest("terminal.attach", { after: restoreAfter + 1 });
+              await expect.poll(() => rightTabs(activePane).count()).toBe(2);
+              await expectMenu(true);
+              expect(await menu.evaluate(hasFocus, true)).toBe(true);
+
+              await page.keyboard.press("Escape");
+              await expect.poll(() => menu.getAttribute("data-phase")).toBe("hidden");
+              await expectMenu(false);
+              await openPicker();
+              await activePane.locator(".agent-chat__composer-combobox textarea").click();
+              await expect.poll(() => menu.getAttribute("data-phase")).toBe("hidden");
+              expect(await menu.evaluate((element) => element.matches(":popover-open"))).toBe(
+                false,
+              );
+              await openPicker();
+              if (picker === "keyboard") {
+                // Chat chrome delegates unadvertised printable keys to the composer.
+                const labels = await menu
+                  .getByRole("menuitemradio")
+                  .evaluateAll((elements) =>
+                    elements.map((element) => element.getAttribute("aria-label")),
+                  );
+                const positionIndex = labels.indexOf("Right");
+                expect(positionIndex).toBeGreaterThanOrEqual(0);
+                await page.keyboard.press("Home");
+                for (let index = 0; index < positionIndex; index += 1) {
+                  await page.keyboard.press("ArrowDown");
+                }
+                await expect.poll(() => rightPosition.evaluate(hasFocus)).toBe(true);
+                await page.keyboard.press("Enter");
+              } else {
+                await rightPosition.click();
+              }
+              await expect.poll(() => menu.getAttribute("data-phase")).toBe("hidden");
+              expect(await positionTrigger.getAttribute("aria-expanded")).toBe("false");
+            } finally {
+              if (!restoreReleased) {
+                await gateway.resolveDeferred("terminal.attach");
+              }
+            }
+            await activePane.getByRole("button", { name: "New tab", exact: true }).click();
+            await activePane
+              .locator(".side-panel-launcher")
+              .getByRole("button", { name: /^Terminal\b/ })
+              .click();
             await expect
               .poll(async () => (await gateway.getRequests("terminal.open")).length)
               .toBe(3);
-            await embedded.locator(".tp-host canvas:visible").waitFor();
+            await terminalCanvas(embedded).waitFor();
           }
-          await bottom.getByRole("button", { name: "Dock to right", exact: true }).click();
-          // Capture the same settled post-click state on both the broken and repaired source.
-          if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR && destination === "Docking check") {
-            const dir = createControlUiE2eArtifactDir("terminal-docking");
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              activePane.locator(".chat-pane__header"),
-              [
-                activePane.getByText("Keep this terminal beside the current conversation.", {
-                  exact: true,
-                }),
-              ],
-              { animations: "disabled" },
-            );
-            await writeFile(path.join(dir, "dock-to-right.png"), frame.png);
-          }
-          await embedded.locator(".tp-host canvas:visible").waitFor();
+          await dock(bottom, "right");
           await expect.poll(() => bottom.locator(".tp").count()).toBe(0);
           if (populated) {
-            await expect
-              .poll(() =>
-                activePane.locator(".sidebar-region__right-runtime .tabstrip-tab.is-live").count(),
-              )
-              .toBe(3);
+            await expect.poll(() => rightTabs(activePane).count()).toBe(3);
           }
-          await embedded.locator(".tp-host canvas:visible").click();
-          await page.keyboard.type("ROUND_TRIP_OK\r");
+          await typeInTerminal(page, embedded, "ok\r");
           await expect
             .poll(async () =>
               (await gateway.getRequests("terminal.input"))
                 .map((request) => (request.params as { data: string }).data)
                 .join(""),
             )
-            .toContain("ROUND_TRIP_OK");
+            .toContain("ok\r");
           const inputs = await gateway.getRequests("terminal.input");
-          expect(
-            inputs.every(
-              (request) => (request.params as { sessionId: string }).sessionId === sessionId,
-            ),
-          ).toBe(true);
+          expect(inputs.every((request) => inputSession(request) === sessionId)).toBe(true);
           expect(await gateway.getRequests("terminal.open")).toHaveLength(populated ? 3 : 1);
           expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
           if (destination === "Other conversation") {
@@ -284,61 +306,27 @@ suite.define(() => {
             // B stays mounted while A hands its restored tabs to the bottom host.
             await selectChat("Docking check");
             await openChatSidePanelType(activePane, "Terminal");
-            await embedded.locator(".tp-host canvas:visible").waitFor();
-            await activePane.getByRole("button", { name: "Dock to bottom", exact: true }).click();
-            await expect.poll(() => bottom.locator(".tabstrip-tab.is-live").count()).toBe(3);
+            await embedded.locator(".tp-session-menu--inline").waitFor();
+            await dock(activePane, "bottom");
+            await expect.poll(() => liveTabs(bottom).count()).toBe(3);
             await selectChat("Other conversation");
-            await bottom.locator(".tp-host canvas:visible").click();
-            await page.keyboard.type("RETAINED_SOURCE\r");
-            const retainedId = (
-              (await gateway.getRequests("terminal.input")).at(-1)!.params as { sessionId: string }
-            ).sessionId;
-            await bottom.getByRole("button", { name: "Dock to right", exact: true }).click();
-            await embedded.locator(".tp-host canvas:visible").click();
-            await page.keyboard.type("RETAINED_DESTINATION\r");
-            expect(
-              (
-                (await gateway.getRequests("terminal.input")).at(-1)!.params as {
-                  sessionId: string;
-                }
-              ).sessionId,
-            ).toBe(retainedId);
-            await activePane
-              .locator(".sidebar-region__right-runtime .tabstrip-tab.is-live")
-              .last()
-              .click();
-            await embedded.locator(".tp-host canvas:visible").click();
-            await page.keyboard.type("DESTINATION_TAB\r");
-            const destinationInputs = await gateway.getRequests("terminal.input");
-            const destinationId = (destinationInputs.at(-1)!.params as { sessionId: string })
-              .sessionId;
+            await typeInTerminal(page, bottom, "a\r");
+            const retainedId = await lastInputSession(gateway);
+            await dock(bottom, "right");
+            await typeInTerminal(page, embedded, "b\r");
+            expect(await lastInputSession(gateway)).toBe(retainedId);
+            await rightTabs(activePane).last().click();
+            await typeInTerminal(page, embedded, "c\r");
+            const destinationId = await lastInputSession(gateway);
             expect(destinationId).not.toBe(sessionId);
-            await activePane.getByRole("button", { name: "Dock to bottom", exact: true }).click();
-            await expect.poll(() => bottom.locator(".tabstrip-tab.is-live").count()).toBe(3);
-            await bottom.locator(".tp-host canvas:visible").click();
-            await page.keyboard.type("BOTTOM_RETURN\r");
-            expect(
-              (
-                (await gateway.getRequests("terminal.input")).at(-1)!.params as {
-                  sessionId: string;
-                }
-              ).sessionId,
-            ).toBe(destinationId);
-            await bottom.getByRole("button", { name: "Dock to right", exact: true }).click();
-            await expect
-              .poll(() =>
-                activePane.locator(".sidebar-region__right-runtime .tabstrip-tab.is-live").count(),
-              )
-              .toBe(3);
-            await embedded.locator(".tp-host canvas:visible").click();
-            await page.keyboard.type("RIGHT_RETURN\r");
-            expect(
-              (
-                (await gateway.getRequests("terminal.input")).at(-1)!.params as {
-                  sessionId: string;
-                }
-              ).sessionId,
-            ).toBe(destinationId);
+            await dock(activePane, "bottom");
+            await expect.poll(() => liveTabs(bottom).count()).toBe(3);
+            await typeInTerminal(page, bottom, "d\r");
+            expect(await lastInputSession(gateway)).toBe(destinationId);
+            await dock(bottom, "right");
+            await expect.poll(() => rightTabs(activePane).count()).toBe(3);
+            await typeInTerminal(page, embedded, "e\r");
+            expect(await lastInputSession(gateway)).toBe(destinationId);
             expect(await gateway.getRequests("terminal.open")).toHaveLength(3);
             expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
           }
@@ -347,12 +335,11 @@ suite.define(() => {
           );
           await expect.poll(() => embedded.isVisible()).toBe(false);
           await selectChat(destination);
-          await embedded.locator(".tp-host canvas:visible").waitFor();
-          await page.locator(".sidebar-brand__new-thread").click();
+          await terminalCanvas(embedded).waitFor();
+          await page.locator(".sidebar-rail .sidebar-new-session").click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
           await expect.poll(() => bottom.locator(".tp").count()).toBe(0);
         },
-      );
-    },
+      ),
   );
 });

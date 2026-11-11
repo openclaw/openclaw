@@ -38,6 +38,8 @@ type GitUpdateTarget = {
   sha?: string;
   version?: string;
   schemaVersions?: OpenClawSchemaVersions;
+  databaseEngines?: unknown;
+  postgresFamilies?: unknown;
   metadataUnreadable?: string;
 };
 
@@ -53,9 +55,10 @@ export type UpdateRunnerOptions = {
   inspectGitTarget: (target: GitUpdateTarget) => Promise<void>;
   /** Admit required preparation after no-op detection, before allocating the candidate worktree. */
   beforeGitStaging?: () => Promise<{ step: UpdateStepResult; failureReason: string }>;
-  validateCandidate: (root: string) => Promise<void>;
+  /** Accepted candidate checks join the update's step results. */
+  validateCandidate: (root: string) => Promise<readonly UpdateStepResult[] | void>;
   beforeGitMutation: (target: GitUpdateTarget) => Promise<void>;
-  /** Operator-selected work deadline; omission leaves work unbounded, not probes or cleanup. */
+  /** Required work uses the caller's deadline; probes, cleanup, and optional replay keep finite defaults. */
   timeoutMs?: number;
   progress?: UpdateStepProgress;
   /** Retain source/runtime before Doctor; the finalizer owns state-safe rollback. */
@@ -92,6 +95,7 @@ export type RunStepOptions = {
   argv: string[];
   cwd: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   input?: string;
   progress?: UpdateStepProgress;

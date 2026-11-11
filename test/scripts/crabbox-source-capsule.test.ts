@@ -24,7 +24,7 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
-  return { ...fs, lstatSync: vi.fn(fs.lstatSync) };
+  return { ...fs, lstatSync: vi.fn(fs.lstatSync), mkdirSync: vi.fn(fs.mkdirSync) };
 });
 
 vi.mock("../../scripts/crabbox-staging.mts", async (importOriginal) => {
@@ -138,6 +138,141 @@ function fileIdentity(path: string) {
 }
 
 describe.skipIf(process.platform === "win32")("persistent Crabbox source capsules", () => {
+  it.each([false, true])("observes cold source only while copying (mirror=%s)", (mirror) => {
+    const f = fixture({ ".gitignore": "*.secret\n*.ignored\n.crabboxignore\n" });
+    writeFileSync(join(f.repository, "new.txt"), "new source\n");
+    writeFileSync(join(f.repository, ".crabboxignore"), "private.secret\n");
+    writeFileSync(join(f.repository, "private.secret"), "synthetic private source\n");
+    vi.mocked(lstatSync).mockClear();
+    const capsule = f.prepare(mirror);
+    try {
+      for (const path of [
+        "stable.txt",
+        "new.txt",
+        ".crabboxignore",
+        ".crabbox.yaml",
+        "crabbox.yaml",
+      ]) {
+        expect(
+          vi.mocked(lstatSync).mock.calls.filter(([file]) => file === join(f.repository, path)),
+          path,
+        ).toHaveLength(1);
+      }
+      expect(
+        vi
+          .mocked(lstatSync)
+          .mock.calls.filter(([file]) => file === join(f.repository, "private.secret")),
+      ).toHaveLength(0);
+      expect(readFileSync(join(capsule.directory, "new.txt"), "utf8")).toBe("new source\n");
+      expect(f.paths(capsule)).not.toContain(".crabboxignore");
+      expect(f.paths(capsule)).not.toContain("private.secret");
+    } finally {
+      capsule.cleanup();
+    }
+  });
+
+  it("records fresh copied source after retention and skips newly ineligible paths", async () => {
+    const f = fixture();
+    writeFileSync(join(f.repository, "future.txt"), "initially eligible source\n");
+    const first = f.prepare();
+    first.cleanup();
+    writeFileSync(join(f.repository, ".gitignore"), "*.secret\n*.ignored\nfuture.txt\n");
+    writeFileSync(join(f.repository, "change.txt"), "retention observation\n");
+    writeFileSync(join(f.repository, "new.txt"), "arriving source\n");
+    const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let replaced = false;
+    vi.mocked(lstatSync).mockClear();
+    vi.mocked(lstatSync).mockImplementation(((...args: Parameters<typeof lstatSync>) => {
+      const result = fs.lstatSync(...args);
+      if (args[0] === join(f.repository, "change.txt") && !replaced) {
+        replaced = true;
+        writeFileSync(join(f.repository, "change.txt"), "copy-consumed source\n");
+      }
+      return result;
+    }) as typeof lstatSync);
+    try {
+      const warm = f.prepare();
+      try {
+        expect(replaced).toBe(true);
+        for (const [path, calls] of [
+          ["stable.txt", 1],
+          ["change.txt", 2],
+          ["new.txt", 1],
+          ["future.txt", 0],
+        ] as const) {
+          expect(
+            vi.mocked(lstatSync).mock.calls.filter(([file]) => file === join(f.repository, path)),
+            path,
+          ).toHaveLength(calls);
+        }
+        expect(readFileSync(join(warm.directory, "change.txt"), "utf8")).toBe(
+          "copy-consumed source\n",
+        );
+        expect(f.paths(warm)).not.toContain("future.txt");
+        f.expectColdEquivalent(warm);
+      } finally {
+        warm.cleanup();
+      }
+      const copied = fileIdentity(join(warm.directory, "change.txt"));
+      vi.mocked(lstatSync).mockClear();
+      const retained = f.prepare();
+      try {
+        expect(
+          vi
+            .mocked(lstatSync)
+            .mock.calls.filter(([file]) => file === join(f.repository, "change.txt")),
+        ).toHaveLength(1);
+        expect(fileIdentity(join(retained.directory, "change.txt"))).toEqual(copied);
+      } finally {
+        retained.cleanup();
+      }
+    } finally {
+      vi.mocked(lstatSync).mockReset();
+    }
+  });
+
+  it("creates each freeze parent once for regular, sparse, and symlink copies", () => {
+    const f = fixture({
+      "nested/a.txt": "a\n",
+      "nested/b.txt": "b\n",
+      "nested/sparse.txt": "sparse\n",
+    });
+    symlinkSync("a.txt", join(f.repository, "nested/link"));
+    f.git(f.repository, "add", "nested/link");
+    f.git(f.repository, "update-index", "--skip-worktree", "nested/sparse.txt");
+    rmSync(join(f.repository, "nested/sparse.txt"));
+    vi.mocked(mkdirSync).mockClear();
+    const first = f.prepare();
+    try {
+      expect(
+        vi
+          .mocked(mkdirSync)
+          .mock.calls.filter(([directory]) => directory === join(first.directory, "nested")),
+      ).toHaveLength(1);
+      expect(readlinkSync(join(first.directory, "nested/link"))).toBe("a.txt");
+      expect(readFileSync(join(first.directory, "nested/sparse.txt"), "utf8")).toBe("sparse\n");
+      f.expectColdEquivalent(first);
+    } finally {
+      first.cleanup();
+    }
+    writeFileSync(join(f.repository, "nested/a.txt"), "changed a\n");
+    writeFileSync(join(f.repository, "nested/b.txt"), "changed b\n");
+    vi.mocked(mkdirSync).mockClear();
+    const warm = f.prepare();
+    try {
+      // The existing parent makes recursive mkdir return undefined; it still
+      // admits the later sibling without another filesystem operation.
+      expect(
+        vi
+          .mocked(mkdirSync)
+          .mock.calls.filter(([directory]) => directory === join(warm.directory, "nested")),
+      ).toHaveLength(1);
+      f.expectColdEquivalent(warm);
+    } finally {
+      warm.cleanup();
+    }
+  });
+
   it.each(["initial allocation", "cold rebuild"])(
     "rejects an unrecorded mirror before freezing during %s",
     async (allocation) => {
@@ -494,57 +629,21 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
     }
   });
 
-  it.each(["stable.txt", "new.txt", "frozen mirror", "commit"])(
-    "rejects source or frozen bytes changed during warm freezing: %s",
-    (path) => {
-      const f = fixture();
-      const first = f.prepare();
-      first.cleanup();
-      if (path === "commit") {
-        const commit = [
-          "-C",
-          f.repository,
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "-c",
-          "commit.gpgsign=false",
-          "commit",
-          "--quiet",
-          "--allow-empty",
-          "-m",
-          "changed during freeze",
-        ];
-        expect(() =>
-          f.prepare(
-            true,
-            `require("node:child_process").execFileSync("git", ${JSON.stringify(commit)}, {stdio:"ignore"});`,
-          ),
-        ).toThrow("source revision, index, or eligibility changed while freezing");
-        return;
-      }
-      const source = path === "frozen mirror" ? "stable.txt" : join(f.repository, path);
-      expect(() =>
-        f.prepare(
-          true,
-          `require("node:fs").writeFileSync(${JSON.stringify(source)},"raced edit\\n");`,
-        ),
-      ).toThrow(/changed while freezing/u);
-      const next = f.prepare();
-      try {
-        expect(
-          readFileSync(
-            join(next.directory, path === "frozen mirror" ? "stable.txt" : path),
-            "utf8",
-          ),
-        ).toBe(path === "frozen mirror" ? "untouched bytes\n" : "raced edit\n");
-        f.expectColdEquivalent(next);
-      } finally {
-        next.cleanup();
-      }
-    },
-  );
+  it("rejects frozen mirror bytes changed outside their owner", () => {
+    const f = fixture();
+    const first = f.prepare();
+    first.cleanup();
+    expect(() =>
+      f.prepare(true, 'require("node:fs").writeFileSync("stable.txt","raced edit\\n");'),
+    ).toThrow(/changed while freezing/u);
+    const next = f.prepare();
+    try {
+      expect(readFileSync(join(next.directory, "stable.txt"), "utf8")).toBe("untouched bytes\n");
+      f.expectColdEquivalent(next);
+    } finally {
+      next.cleanup();
+    }
+  });
 
   it.skipIf(process.platform === "win32")(
     "suppresses configured Git callbacks while preserving a reusable mirror",

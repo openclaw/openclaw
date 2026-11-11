@@ -1,16 +1,10 @@
-// Runtime fetch tests cover header normalization and FormData conversion before
-// calls reach undici's dispatcher-aware fetch.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 class RuntimeFormData {
-  readonly records: Array<{
-    name: string;
-    value: unknown;
-    filename?: string;
-  }> = [];
+  readonly records: Array<{ name: string; value: unknown; filename?: string }> = [];
 
   append(name: string, value: unknown, filename?: string): void {
     this.records.push({
@@ -19,40 +13,26 @@ class RuntimeFormData {
       ...(typeof filename === "string" ? { filename } : {}),
     });
   }
+}
 
-  *entries(): IterableIterator<[string, unknown]> {
-    for (const record of this.records) {
-      yield [record.name, record.value];
+function installRuntimeFetch() {
+  const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("ok"));
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: vi.fn(),
+    EnvHttpProxyAgent: vi.fn(),
+    FormData: RuntimeFormData,
+    ProxyAgent: vi.fn(),
+    fetch,
+  };
+  return async (init: RequestInit) => {
+    expect((await fetchWithRuntimeDispatcher("https://example.com", init)).status).toBe(200);
+    expect(fetch).toHaveBeenCalledOnce();
+    const sent = fetch.mock.calls[0]?.[1];
+    if (!sent) {
+      throw new Error("expected runtime fetch init");
     }
-  }
-
-  get [Symbol.toStringTag](): string {
-    return "FormData";
-  }
-}
-
-class MockAgent {
-  readonly __testStub = true;
-}
-
-class MockEnvHttpProxyAgent {
-  readonly __testStub = true;
-}
-
-class MockProxyAgent {
-  readonly __testStub = true;
-}
-
-function requireFetchInit(mock: ReturnType<typeof vi.fn>): RequestInit {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected runtime fetch call");
-  }
-  const init = call[1];
-  if (typeof init !== "object" || init === null || Array.isArray(init)) {
-    throw new Error("expected runtime fetch init");
-  }
-  return init as RequestInit;
+    return sent;
+  };
 }
 
 afterEach(() => {
@@ -61,65 +41,32 @@ afterEach(() => {
 
 describe("fetchWithRuntimeDispatcher", () => {
   it("drops symbol metadata from plain header dictionaries before runtime fetch", async () => {
-    const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
-      return new Response("ok", { status: 200 });
-    });
-
-    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: MockAgent,
-      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
-      FormData: RuntimeFormData,
-      ProxyAgent: MockProxyAgent,
-      fetch: runtimeFetch,
-    };
-
-    const headers = { "Content-Type": "application/json" } as Record<string, string> & {
-      [key: symbol]: unknown;
-    };
+    const fetch = installRuntimeFetch();
+    const headers = { "Content-Type": "application/json" };
     Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
       value: new Set(["content-type"]),
       enumerable: false,
     });
 
-    const response = await fetchWithRuntimeDispatcher("https://example.com/json", {
+    const { headers: sentHeaders } = await fetch({
       method: "POST",
       headers,
       body: "{}",
     });
 
-    expect(response.status).toBe(200);
-    const sentHeaders = requireFetchInit(runtimeFetch).headers;
+    expect(new Headers(sentHeaders).get("content-type")).toBe("application/json");
     expect(sentHeaders).not.toBe(headers);
     expect(Object.getOwnPropertySymbols(sentHeaders as object)).toStrictEqual([]);
     expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
   });
 
   it("normalizes global FormData bodies into the runtime FormData implementation", async () => {
-    const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      // BodyInit and RuntimeFormData live in separate type namespaces.
-      const body = init?.body as unknown as RuntimeFormData;
-      expect(body).toBeInstanceOf(RuntimeFormData);
-      const modelRecord = body.records.find((record) => record.name === "model");
-      expect(modelRecord?.value).toBe("gpt-4o-transcribe");
-      const fileRecord = body.records.find((record) => record.name === "file");
-      expect(fileRecord?.filename).toBe("clip.ogg");
-      return new Response("ok", { status: 200 });
-    });
-
-    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: MockAgent,
-      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
-      FormData: RuntimeFormData,
-      ProxyAgent: MockProxyAgent,
-      fetch: runtimeFetch,
-    };
-
+    const fetch = installRuntimeFetch();
     const form = new FormData();
     form.append("file", new Blob([new Uint8Array([1, 2, 3])], { type: "audio/ogg" }), "clip.ogg");
     form.append("model", "gpt-4o-transcribe");
 
-    const response = await fetchWithRuntimeDispatcher("https://example.com/upload", {
+    const sentInit = await fetch({
       method: "POST",
       headers: {
         "content-length": "999",
@@ -128,9 +75,11 @@ describe("fetchWithRuntimeDispatcher", () => {
       body: form,
     });
 
-    expect(response.status).toBe(200);
-    expect(runtimeFetch).toHaveBeenCalledTimes(1);
-    const sentInit = requireFetchInit(runtimeFetch);
+    // BodyInit and RuntimeFormData live in separate type namespaces.
+    const body = sentInit.body as unknown as RuntimeFormData;
+    expect(body).toBeInstanceOf(RuntimeFormData);
+    expect(body.records.find((record) => record.name === "model")?.value).toBe("gpt-4o-transcribe");
+    expect(body.records.find((record) => record.name === "file")?.filename).toBe("clip.ogg");
     const sentHeaders = new Headers(sentInit.headers);
     expect(sentHeaders.has("content-length")).toBe(false);
     expect(sentHeaders.has("content-type")).toBe(false);

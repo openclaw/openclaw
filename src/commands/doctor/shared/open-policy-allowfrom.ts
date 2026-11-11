@@ -39,23 +39,18 @@ export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
     if (capabilities.openDmRequiresAllowFromWildcard === false) {
       continue;
     }
-    const repair = (entry: Record<string, unknown>, pathPrefix: string) =>
-      ensureOpenDmPolicyAllowFromWildcard({
-        entry,
-        mode: capabilities.dmAllowFromMode,
-        pathPrefix,
-        changes,
-      });
     for (const { account, prefix } of iterateDoctorChannelAccounts(
       channelConfig,
       `channels.${channelName}`,
     )) {
-      repair(account, prefix);
+      ensureOpenDmPolicyAllowFromWildcard({
+        entry: account,
+        mode: capabilities.dmAllowFromMode,
+        pathPrefix: prefix,
+        changes,
+      });
     }
   }
 
-  if (changes.length === 0) {
-    return { config: cfg, changes: [] };
-  }
-  return { config: next, changes };
+  return { config: changes.length > 0 ? next : cfg, changes };
 }

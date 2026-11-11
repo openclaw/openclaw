@@ -13,21 +13,23 @@ import {
 } from "../../../../extensions/qa-lab/test-api.js";
 import { normalizeTlsFingerprint } from "../../../../packages/gateway-client/src/client-address-utils.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
+import { resolveGatewayClientBootstrap } from "../../../../src/gateway/client-bootstrap.js";
 import { createConfiguredGatewayLocalProbe } from "../../../../src/gateway/local-http-probe.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import { startClaimedGateway } from "../../../../src/gateway/test-helpers.listener.js";
-import { resolveGatewayConnectionTlsFingerprint } from "../../../../src/gateway/tls-fingerprint.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { loadGatewayTlsServerRuntime } from "../../../../src/infra/tls/gateway.js";
 import { flushLogger, resetLogger } from "../../../../src/logging/logger.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../../src/state/openclaw-state-db.paths.js";
+import { captureEnv } from "../../../../src/test-utils/env.js";
 import { acquireTestPortBlock } from "../../../../src/test-utils/port-claims.js";
 import { getFreePort } from "../../../../src/test-utils/ports.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaProducerOptions } from "./script-options.js";
 
 const SCENARIO_ID = "gateway-tls-pinning";
 const SOURCE_PATH = "qa/scenarios/runtime/gateway-tls-pinning.yaml";
@@ -77,36 +79,6 @@ export type GatewayTlsPinningProof = {
   coldProbeRejectedUnknownPin: boolean;
   missedRenewalRejectedUnknownPin: boolean;
 };
-
-function parseOptions(argv: readonly string[]): ProducerOptions {
-  const readValue = (name: string) => {
-    const index = argv.indexOf(name);
-    return index >= 0 ? argv[index + 1] : undefined;
-  };
-  const artifactBase = readValue("--artifact-base");
-  if (!artifactBase) {
-    throw new Error("--artifact-base is required");
-  }
-  return {
-    artifactBase: path.resolve(artifactBase),
-    repoRoot: path.resolve(readValue("--repo-root") ?? process.cwd()),
-  };
-}
-
-function captureEnvironment() {
-  const snapshot = new Map<string, string | undefined>(
-    ENV_KEYS.map((key) => [key, process.env[key]]),
-  );
-  return () => {
-    for (const [key, value] of snapshot) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  };
-}
 
 async function writeDiscoveryProbePlugin(
   pluginDir: string,
@@ -327,7 +299,7 @@ async function proveCleartextMismatch(port: number, tlsFingerprint: string): Pro
 export async function runGatewayTlsPinningProof(
   signal?: AbortSignal,
 ): Promise<GatewayTlsPinningProof> {
-  const restoreEnvironment = captureEnvironment();
+  const environment = captureEnv([...ENV_KEYS]);
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tls-pinning-"));
   const stateDir = path.join(runtimeRoot, "state");
   const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
@@ -664,15 +636,15 @@ export async function runGatewayTlsPinningProof(
       };
     });
     const wrongPinResult = await connectWithWrongPin(url, advertisedFingerprint);
-    const configuredPin = await resolveGatewayConnectionTlsFingerprint({
+    const { tlsFingerprint: configuredPin } = await resolveGatewayClientBootstrap({
       config: {
         gateway: {
           mode: "remote",
           remote: { url, tlsFingerprint: renewal.renewedFingerprint },
         },
       },
-      url,
-      urlSource: "config gateway.remote.url",
+      ignoreEnvUrlOverride: true,
+      skipImplicitAuth: true,
     });
     if (!configuredPin) {
       throw new Error("Updated remote TLS pin was not selected from client configuration");
@@ -711,7 +683,7 @@ export async function runGatewayTlsPinningProof(
       process.off(advertisementReadyEvent, advertisementReady.resolve);
       clearConfigCache();
       clearRuntimeConfigSnapshot();
-      restoreEnvironment();
+      environment.restore();
     },
   );
 }
@@ -762,7 +734,7 @@ export async function runGatewayTlsPinningProducer(
 }
 
 async function main(argv: readonly string[]) {
-  const evidence = await runGatewayTlsPinningProducer(parseOptions(argv));
+  const evidence = await runGatewayTlsPinningProducer(parseQaProducerOptions(argv));
   const status = evidence.entries[0]?.result.status;
   console.log(`Gateway TLS pinning evidence: ${QA_EVIDENCE_FILENAME}`);
   console.log(`Gateway TLS pinning status: ${status}`);

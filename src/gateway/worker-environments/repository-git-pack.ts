@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { gitEnvironment } from "../../agents/worktrees/git.js";
 import { executeGitCommand, gitNullConfigPath } from "../../infra/git-exec.js";
+import { appendGitConfig } from "../../infra/git-maintenance-env.js";
 import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
@@ -12,16 +13,20 @@ const FETCH_TIMEOUT_MS = 10 * 60_000;
 export async function prepareRepositoryWorkerGitPack(params: {
   url: string;
   baseCommit: string;
+  retainedCommit?: string;
   token: string;
   temporaryRoot: string;
   signal: AbortSignal;
   assertCurrent: () => void;
 }): Promise<string> {
   if (parseConfiguredProjectGitUrl(params.url)?.url !== params.url) {
-    throw new Error("Repository preparation requires a canonical GitHub URL");
+    throw new Error("Repository preparation requires a normalized GitHub HTTPS repository URL");
   }
   if (!/^[a-f0-9]{40}$/u.test(params.baseCommit)) {
     throw new Error("Repository preparation requires an exact GitHub commit");
+  }
+  if (params.retainedCommit !== undefined && !/^[a-f0-9]{40}$/u.test(params.retainedCommit)) {
+    throw new Error("Repository preparation requires an exact retained GitHub commit");
   }
   if (!params.token.trim()) {
     throw new Error("Private repository preparation requires a current GitHub credential");
@@ -51,15 +56,14 @@ export async function prepareRepositoryWorkerGitPack(params: {
       ["-c", "http.followRedirects=false", ...args],
       {
         baseEnv,
-        ...(authenticated
-          ? {
-              env: {
-                GIT_CONFIG_COUNT: "3",
-                GIT_CONFIG_KEY_2: `http.${params.url}.extraHeader`,
-                GIT_CONFIG_VALUE_2: `Authorization: Basic ${Buffer.from(`x-access-token:${params.token}`).toString("base64")}`,
-              },
-            }
-          : {}),
+        env: authenticated
+          ? appendGitConfig(baseEnv, [
+              [
+                `http.${params.url}.extraHeader`,
+                `Authorization: Basic ${Buffer.from(`x-access-token:${params.token}`).toString("base64")}`,
+              ],
+            ])
+          : undefined,
         input: "",
         timeoutMs: FETCH_TIMEOUT_MS,
         signal: params.signal,
@@ -89,20 +93,31 @@ export async function prepareRepositoryWorkerGitPack(params: {
   await command(["init", "--bare", "--quiet", "--template=", "--object-format=sha1"]);
   // Depth bounds history, not incoming disk bytes. The existing pack owner caps
   // the emitted snapshot; the temporary fetch also has a finite command deadline.
-  await command(
-    [
-      "fetch",
-      "--depth=1",
-      "--no-tags",
-      "--no-recurse-submodules",
-      "--no-auto-maintenance",
-      "--no-write-fetch-head",
-      "--",
-      params.url,
-      params.baseCommit,
-    ],
-    true,
-  );
+  const fetch = (commits: string[]) =>
+    command(
+      [
+        "fetch",
+        "--depth=1",
+        "--no-tags",
+        "--no-recurse-submodules",
+        "--no-auto-maintenance",
+        "--no-write-fetch-head",
+        "--",
+        params.url,
+        ...commits,
+      ],
+      true,
+    );
+  try {
+    await fetch([params.baseCommit, ...(params.retainedCommit ? [params.retainedCommit] : [])]);
+  } catch (error) {
+    assertCurrent();
+    if (!params.retainedCommit) {
+      throw error;
+    }
+    // Rewritten remote history can retire the donor; keep the full snapshot fallback.
+    await fetch([params.baseCommit]);
+  }
   if ((await command(["cat-file", "-t", params.baseCommit])) !== "commit") {
     throw new Error("The pinned repository object is not a commit");
   }
@@ -110,6 +125,7 @@ export async function prepareRepositoryWorkerGitPack(params: {
   const pack = await prepareWorkerWorkspaceGitPack({
     root: repository,
     baseCommit: params.baseCommit,
+    retainedCommit: params.retainedCommit,
     temporaryRoot: params.temporaryRoot,
     signal: params.signal,
     baseEnv,

@@ -1,14 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  controlUiBundledSettingsStorageKey,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
-import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installWorkboardPage } from "./workboard-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Compiled Workboard page loading",
@@ -46,23 +39,10 @@ suite.define(() => {
               metadata: { automation: { boardId: "ops" } },
             },
           ];
-          await installMockGateway(page, {
-            ...workboardUi,
-            methodResponses: {
-              "workboard.boards.list": { boards },
-              "workboard.cards.list": { boards, cards, statuses: ["ready", "done"] },
-            },
+          await installWorkboardPage(page, suite.server.baseUrl, "ops", {
+            "workboard.boards.list": { boards },
+            "workboard.cards.list": { boards, cards, statuses: ["ready", "done"] },
           });
-          await page.addInitScript(
-            (key) =>
-              localStorage.setItem(
-                key,
-                JSON.stringify({
-                  sidebarEntries: ["route:agents-home", "plugin:workboard/board-ops"],
-                }),
-              ),
-            controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-          );
           const requested = new Set<string>();
           page.on("request", (request) => {
             if (request.url().includes("/__openclaw__/plugins/control-ui/workboard/")) {
@@ -101,8 +81,7 @@ suite.define(() => {
               await page.unroute(chunks);
               await page.reload();
             }
-            const title = page.locator(".workboard-page-title", { hasText: "Operations" });
-            await title.waitFor();
+            await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
             await page.getByRole("button", { name: "New board", exact: true }).waitFor();
             const board = page.locator(".workboard-board--page");
             await board.waitFor();
@@ -112,15 +91,6 @@ suite.define(() => {
             expect(
               await page.getByRole("status").filter({ hasText: "Loading Workboard…" }).count(),
             ).toBe(0);
-            if (outcome === "success" && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-              const frame = await takeControlUiScreenshotFrame(page, board, [title], {
-                animations: "disabled",
-              });
-              await writeFile(
-                path.join(suite.artifactDir, "compiled-workboard-page.png"),
-                frame.png,
-              );
-            }
           } finally {
             gate.resolve();
             await page.unroute(chunks);

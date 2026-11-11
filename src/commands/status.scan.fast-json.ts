@@ -73,19 +73,7 @@ export async function scanStatusJsonFast(
     : [];
   return await executeStatusScanFromOverview({
     overview,
-    resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) => {
-      if (!opts.all) {
-        return null;
-      }
-      const { resolveDefaultMemoryDatabasePath, resolveStatusMemoryStatusSnapshot } =
-        await import("./status.scan-memory.js");
-      return await resolveStatusMemoryStatusSnapshot({
-        cfg,
-        agentStatus,
-        memoryPlugin,
-        requireDefaultDatabasePath: resolveDefaultMemoryDatabasePath,
-      });
-    },
+    includeMemory: opts.all,
     pluginCompatibility,
   });
 }

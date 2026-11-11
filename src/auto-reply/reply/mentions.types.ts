@@ -1,4 +1,3 @@
-/** Runtime type contracts for mention-pattern matching helpers. */
 import type { ResolveMentionPatternPolicyParams } from "../../channels/mention-pattern-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 

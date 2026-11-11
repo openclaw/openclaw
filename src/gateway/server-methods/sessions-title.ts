@@ -54,7 +54,7 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      if (request.incognito || !request.message.trim() || request.message.trim().startsWith("/")) {
+      if (request.incognito || !request.message.trim()) {
         respond(true, { title: null });
         return;
       }

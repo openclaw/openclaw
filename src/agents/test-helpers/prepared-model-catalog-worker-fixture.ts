@@ -1,6 +1,7 @@
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { threadId, type Worker } from "node:worker_threads";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { FixtureReceiptChannel } from "../../../test/helpers/fixture-receipts.js";
@@ -9,12 +10,14 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { captureTemplateInstallSchemaVersionFacts } from "../../templates/provenance-runtime-read.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import { closeAuthProfileReadPool } from "../auth-profiles/sqlite-read-pool.js";
@@ -24,7 +27,13 @@ import {
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "../plugin-model-catalog.js";
+import { prepareModelCatalogWorkerContext } from "../prepared-model-catalog-fingerprints.js";
 import * as catalogWorker from "../prepared-model-catalog-worker.js";
+import type {
+  PreparedModelCatalogWorkerInput,
+  PreparedModelCatalogWorkerTask,
+  PreparedModelWorkerResult,
+} from "../prepared-model-catalog-worker.types.js";
 import { isPreparedModelCatalogFull } from "../prepared-model-runtime.full-catalog.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import type {
@@ -32,13 +41,40 @@ import type {
   PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.types.js";
 
+export function writeCodexAuth(codexHome: string, marker: string): void {
+  const authPath = path.join(codexHome, "auth.json");
+  const payload = Buffer.from(
+    JSON.stringify({
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      ...(marker ? { marker } : {}),
+    }),
+  ).toString("base64url");
+  fs.writeFileSync(
+    authPath,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: `header.${payload}.signature`,
+        refresh_token: `refresh-${marker}-not-real`,
+      },
+    }),
+    "utf8",
+  );
+  const future = new Date(Date.now() + 2_000);
+  fs.utimesSync(authPath, future, future);
+}
+
 const waitTimeoutMs = 30_000;
+const catalogStartCount = (marker: string) =>
+  fs.existsSync(marker) ? fs.readFileSync(marker, "utf8").split("start\n").length - 1 : 0;
 
 export function usePreparedCatalogWorkerFixtures(
   fixtureOptions: { observeCatalogWork?: boolean } = {},
 ) {
   const retirements = new Set<() => void | Promise<void>>();
   const workers = new Set<Worker>();
+  const catalogWorkerUrls = new Set<string>();
+  const workerObservers = new Set<(worker: Worker) => void>();
   const catalogSettlements = new Map<string, (operation: PromiseLike<unknown>) => void>();
   let restoreCatalogWorkerFactory: (() => void) | undefined;
   let restoreWorkerFactory: (() => void) | undefined;
@@ -58,11 +94,15 @@ export function usePreparedCatalogWorkerFixtures(
     const catalogWorkerUrl = resolveRuntimeWorkerUrl(
       runtimeProcessEntrypoints.preparedModelCatalog,
     ).href;
+    catalogWorkerUrls.add(catalogWorkerUrl);
     const tracking = vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
       const worker = createWorker(...args);
       // Compiler services also use Worker threads; this fixture owns only catalog computation.
-      if (String(args[0]) === catalogWorkerUrl) {
+      if (catalogWorkerUrls.has(String(args[0]))) {
         workers.add(worker);
+        for (const observe of workerObservers) {
+          observe(worker);
+        }
       }
       return worker;
     });
@@ -104,6 +144,8 @@ export function usePreparedCatalogWorkerFixtures(
         restoreWorkerFactory?.();
         restoreWorkerFactory = undefined;
         workers.clear();
+        catalogWorkerUrls.clear();
+        workerObservers.clear();
         restoreCatalogWorkerFactory?.();
         restoreCatalogWorkerFactory = undefined;
         catalogSettlements.clear();
@@ -118,15 +160,58 @@ export function usePreparedCatalogWorkerFixtures(
     });
   });
   return {
+    createCatalogPool: (env: NodeJS.ProcessEnv, preload?: URL) => {
+      let workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog);
+      if (preload) {
+        const entry = path.join(tempDirs.make("openclaw-catalog-preload-"), "worker.mts");
+        fs.writeFileSync(
+          entry,
+          `await import(${JSON.stringify(preload.href)});
+await import(${JSON.stringify(workerUrl.href)});`,
+        );
+        workerUrl = pathToFileURL(entry);
+      }
+      catalogWorkerUrls.add(workerUrl.href);
+      return new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
+        workerUrl,
+        maxWorkers: 1,
+        idleTimeoutMs: 0,
+        restartOnError: false,
+        workerOptions: {
+          resourceLimits: { maxOldGenerationSizeMb: 512 },
+          workerData: { sourceCaptureDirectory: tempDirs.make("openclaw-catalog-heap-captures-") },
+          env,
+        },
+      });
+    },
     readCatalogWorkers: (): readonly Worker[] => [...workers],
+    observeWorkers: (onWorker?: (worker: Worker) => void) => {
+      const spawned: Worker[] = [];
+      let peakWorkers = 0;
+      const recordWorker = (worker: Worker) => {
+        spawned.push(worker);
+        onWorker?.(worker);
+        peakWorkers = Math.max(
+          peakWorkers,
+          spawned.filter((entry) => entry.threadId !== -1).length,
+        );
+      };
+      return {
+        spawned,
+        get peakWorkers() {
+          return peakWorkers;
+        },
+        subscribe: () => workerObservers.add(recordWorker),
+        close: () => workerObservers.delete(recordWorker),
+      };
+    },
     makeTempDir: (prefix: string) => tempDirs.make(prefix),
     observeCatalogEntry: (
       receipts: FixtureReceiptChannel,
       fixture: { marker: string; agentDir: string },
     ) => {
       const { marker, agentDir } = fixture;
-      const before = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "";
-      const count = before.split("start\n").length;
+      const count = catalogStartCount(marker) + 1;
       const completed = createDeferredCore<unknown>();
       catalogSettlements.set(agentDir, completed.resolve);
       return (operation: PromiseLike<unknown>, signal: AbortSignal) =>
@@ -154,8 +239,7 @@ async function catalogFixtureEventBeforeSettlement(
   operation: PromiseLike<unknown>,
   count = 1,
 ): Promise<void> {
-  const recorded = () =>
-    fs.existsSync(marker) && fs.readFileSync(marker, "utf8").split("start\n").length - 1 >= count;
+  const recorded = () => catalogStartCount(marker) >= count;
   const settled = Promise.resolve(operation).then(
     () => {
       expect(recorded(), `Catalog task settled before start reached ${marker}`).toBe(true);
@@ -170,20 +254,17 @@ async function catalogFixtureEventBeforeSettlement(
 }
 
 export function observeSyntheticAuth(root: string) {
-  const entered = createDeferredCore();
-  const aborted = createDeferredCore();
+  const pending = { entered: createDeferredCore(), aborted: createDeferredCore() };
   const events = channel(`openclaw.fixture.synthetic-auth:${root}`);
   const observe = (event: unknown) => {
-    if (event === "entered") {
-      entered.resolve();
-    } else if (event === "aborted") {
-      aborted.resolve();
+    if (event === "entered" || event === "aborted") {
+      pending[event].resolve();
     }
   };
   events.subscribe(observe);
   return {
-    entered: entered.promise,
-    aborted: aborted.promise,
+    entered: pending.entered.promise,
+    aborted: pending.aborted.promise,
     close: () => events.unsubscribe(observe),
   };
 }
@@ -332,18 +413,14 @@ export async function loadCompletedFullCatalog(
   await expect
     .poll(
       () => {
-        const catalog = snapshot.readFullModelCatalog!();
-        if (
-          catalog &&
-          isPreparedModelCatalogFull(catalog) &&
-          !catalog.pendingProviders?.length &&
-          !catalog.refreshFailed &&
-          (!options?.refresh || catalog !== previous)
-        ) {
-          completed = catalog;
-          return true;
-        }
-        return false;
+        completed = snapshot.readFullModelCatalog!();
+        return Boolean(
+          completed &&
+          isPreparedModelCatalogFull(completed) &&
+          !completed.pendingProviders?.length &&
+          !completed.refreshFailed &&
+          (!options?.refresh || completed !== previous),
+        );
       },
       { timeout: waitTimeoutMs },
     )
@@ -397,4 +474,20 @@ export function writeCatalogFailureControl(
           if (catalogControl === "alias") return { providers: { [${JSON.stringify(aliasId)}]: {
             baseUrl: "https://worker-catalog.invalid/v1", api: "openai-completions", models: legacyModels,
           } } };`;
+}
+
+export function catalogTask(
+  value: PreparedModelCatalogWorkerInput,
+): PreparedModelCatalogWorkerTask {
+  return {
+    context: prepareModelCatalogWorkerContext(value),
+    value,
+    request: {
+      kind: "catalog",
+      syntheticAuth: [],
+      templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({
+        env: value.input.env,
+      }),
+    },
+  };
 }

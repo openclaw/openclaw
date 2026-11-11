@@ -1,11 +1,16 @@
 // Vitest project shard helper builds configs for full-suite shards.
 import { defineConfig } from "vitest/config";
 import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
+import { fullSuiteVitestShards } from "./vitest.test-shards.mjs";
 
 export function createProjectShardVitestConfig(
-  projects: readonly string[],
+  projects: readonly string[] | string,
   options: { maxWorkers?: number } = {},
 ) {
+  const selectedProjects =
+    typeof projects === "string"
+      ? (fullSuiteVitestShards.find((shard) => shard.config === projects)?.projects ?? [])
+      : projects;
   const maxWorkers = options.maxWorkers ?? sharedVitestConfig.test.maxWorkers;
   if (options.maxWorkers !== undefined) {
     process.env.OPENCLAW_VITEST_MAX_WORKERS = String(options.maxWorkers);
@@ -17,7 +22,7 @@ export function createProjectShardVitestConfig(
     test: {
       ...sharedVitestConfig.test,
       runner: nonIsolatedRunnerPath,
-      projects: [...projects],
+      projects: [...selectedProjects],
       ...(options.maxWorkers === undefined
         ? {}
         : { fileParallelism: options.maxWorkers > 1, maxWorkers: options.maxWorkers }),

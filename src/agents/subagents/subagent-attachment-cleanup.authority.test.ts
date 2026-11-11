@@ -18,6 +18,13 @@ beforeEach(() => {
   mocks.root.mockReset();
 });
 
+it("retains raw attachments when the original child owner is unknown", async () => {
+  await expect(
+    cleanupMaterializedSubagentAttachments({ childSessionKey: "global", attachmentId }),
+  ).rejects.toThrow("owner is unresolved");
+  expect(mocks.root).not.toHaveBeenCalled();
+});
+
 it("does not admit attachment removal after its original owner loses cleanup authority", async () => {
   const remove = vi.fn(async () => {});
   mocks.root.mockResolvedValue({ remove });

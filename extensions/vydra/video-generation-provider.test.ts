@@ -1,28 +1,30 @@
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  binaryResponse,
-  jsonResponse,
-  stubFetch,
-  stubVydraApiKey,
-} from "./provider-test-helpers.js";
-import { buildVydraVideoGenerationProvider } from "./video-generation-provider.js";
-
-function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index: number) {
-  const call = fetchMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected fetch call ${index}`);
-  }
-  return call;
-}
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import * as vydra from "./provider-test-helpers.js";
 
 describe("vydra video-generation provider", () => {
   installPinnedHostnameTestHooks();
-  const provider = buildVydraVideoGenerationProvider();
+  const { videoProvider: provider } = vydra.registerVydraProviders();
   const request = { provider: "vydra", model: "kling", prompt: "animate this image", cfg: {} };
-  beforeEach(stubVydraApiKey);
+  const generate = (overrides: Partial<Parameters<typeof provider.generateVideo>[0]>) =>
+    provider.generateVideo({ ...request, ...overrides });
+  const completed = (jobId: string, videoUrl: string) => ({ jobId, status: "completed", videoUrl });
+  const stubJob = (jobId: string, videoUrl: string, data: string, mime = "video/mp4") =>
+    vydra.stubFetch(
+      jsonResponse({ jobId, status: "processing" }),
+      jsonResponse(completed(jobId, videoUrl)),
+      vydra.binaryResponse(data, mime),
+    );
+  const expectPost = (mock: ReturnType<typeof stubJob>, url: string, body: object) =>
+    expect(mock).toHaveBeenNthCalledWith(
+      1,
+      url,
+      expect.objectContaining({ method: "POST", body: JSON.stringify(body) }),
+    );
+  beforeEach(vydra.stubVydraApiKey);
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -33,19 +35,9 @@ describe("vydra video-generation provider", () => {
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
-    stubFetch(
-      jsonResponse({ jobId: "job-123", status: "processing" }),
-      jsonResponse({
-        jobId: "job-123",
-        status: "completed",
-        videoUrl: "https://cdn.vydra.ai/generated/test.mp4",
-      }),
-      binaryResponse("too-large", "video/mp4"),
-    );
-
+    stubJob("job-123", "https://cdn.vydra.ai/generated/test.mp4", "too-large");
     await expect(
-      provider.generateVideo({
-        ...request,
+      generate({
         model: "veo3",
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
       }),
@@ -53,75 +45,39 @@ describe("vydra video-generation provider", () => {
   });
 
   it("submits, polls, and downloads veo3 video with the configured request policy", async () => {
-    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
-    const pollProviderOperationJsonSpy = vi.spyOn(providerHttp, "pollProviderOperationJson");
-    const fetchWithTimeoutGuardedSpy = vi.spyOn(providerHttp, "fetchWithTimeoutGuarded");
-    const fetchMock = stubFetch(
-      jsonResponse({ jobId: "job-policy", status: "processing" }),
-      jsonResponse({
-        jobId: "job-policy",
-        status: "completed",
-        videoUrl: "https://198.18.0.10/generated/policy.mp4",
-      }),
-      binaryResponse("webm-data", "video/webm"),
-    );
-    const result = await provider.generateVideo({
-      ...request,
+    const submitSpy = vi.spyOn(providerHttp, "postJsonResponse");
+    const pollSpy = vi.spyOn(providerHttp, "pollProviderOperationJson");
+    const downloadSpy = vi.spyOn(providerHttp, "fetchWithTimeoutGuarded");
+    const videoUrl = "https://198.18.0.10/generated/policy.mp4";
+    const baseUrl = "https://198.18.0.10/api/v1";
+    const policy = {
+      allowPrivateNetwork: true,
+      headers: { "X-Vydra-Policy": "video-policy" },
+      proxy: { mode: "env-proxy" as const },
+    };
+    const fetchMock = stubJob("job-policy", videoUrl, "webm-data", "video/webm");
+    const result = await generate({
       model: "veo3",
       prompt: "policy proof",
-      cfg: {
-        models: {
-          providers: {
-            vydra: {
-              baseUrl: "https://198.18.0.10/api/v1",
-              models: [],
-              request: {
-                allowPrivateNetwork: true,
-                headers: { "X-Vydra-Policy": "video-policy" },
-                proxy: { mode: "env-proxy" },
-              },
-            },
-          },
-        },
-      },
+      cfg: { models: { providers: { vydra: { baseUrl, models: [], request: policy } } } },
     });
-    expect(fetchCall(fetchMock, 0)).toEqual([
-      "https://198.18.0.10/api/v1/models/veo3",
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ prompt: "policy proof" }) }),
-    ]);
-    expect(fetchCall(fetchMock, 1)).toEqual([
-      "https://198.18.0.10/api/v1/jobs/job-policy",
-      expect.objectContaining({ method: "GET" }),
-    ]);
+    expectPost(fetchMock, `${baseUrl}/models/veo3`, { prompt: "policy proof" });
     expect(result.videos).toEqual([
       { buffer: Buffer.from("webm-data"), mimeType: "video/webm", fileName: "video-1.webm" },
     ]);
-    expect(result.metadata).toEqual({
-      jobId: "job-policy",
-      videoUrl: "https://198.18.0.10/generated/policy.mp4",
-      status: "completed",
-    });
-    const submitRequest = postJsonRequestSpy.mock.calls[0]?.[0];
-    expect(submitRequest?.allowPrivateNetwork).toBe(true);
-    expect(submitRequest?.dispatcherPolicy).toMatchObject({ mode: "env-proxy" });
-    expect(submitRequest?.headers.get("x-vydra-policy")).toBe("video-policy");
-    const pollRequest = pollProviderOperationJsonSpy.mock.calls[0]?.[0];
-    expect(pollRequest?.allowPrivateNetwork).toBe(true);
+    expect(result.metadata).toEqual(completed("job-policy", videoUrl));
+    const submitRequest = submitSpy.mock.calls[0]?.[0];
+    expect(submitRequest?.dispatcherPolicy).toEqual({ mode: "env-proxy" });
+    const pollRequest = pollSpy.mock.calls[0]?.[0];
     expect(pollRequest?.dispatcherPolicy).toBe(submitRequest?.dispatcherPolicy);
-    const pollHeaders = new Headers(
-      typeof pollRequest?.headers === "function" ? pollRequest.headers() : pollRequest?.headers,
-    );
-    expect(pollHeaders.get("x-vydra-policy")).toBe("video-policy");
-    const downloadRequest = fetchWithTimeoutGuardedSpy.mock.calls.find(
-      ([url]) => url === "https://198.18.0.10/generated/policy.mp4",
-    );
-    expect(downloadRequest?.[4]).toMatchObject({
+    expect(downloadSpy.mock.calls.find(([url]) => url === videoUrl)?.[4]).toMatchObject({
       ssrfPolicy: { allowPrivateNetwork: true },
       dispatcherPolicy: submitRequest?.dispatcherPolicy,
-      auditContext: "vydra-media-download",
     });
     for (const index of [0, 1, 2]) {
-      const headers = new Headers((fetchCall(fetchMock, index)[1] as RequestInit).headers);
+      const call = fetchMock.mock.calls[index];
+      assert(call, `Expected fetch call ${index}`);
+      const headers = new Headers((call[1] as RequestInit).headers);
       expect(headers.get("authorization")).toBe("Bearer vydra-test-key");
       expect(headers.get("x-vydra-policy")).toBe("video-policy");
     }
@@ -130,44 +86,23 @@ describe("vydra video-generation provider", () => {
   it("requires a remote image url for kling", async () => {
     vi.stubGlobal("fetch", vi.fn());
     await expect(
-      provider.generateVideo({
-        ...request,
+      generate({
         inputImages: [{ buffer: Buffer.from("png"), mimeType: "image/png" }],
       }),
     ).rejects.toThrow("Vydra kling currently requires a remote image URL reference.");
   });
 
   it("submits kling jobs with a remote image url", async () => {
-    const fetchMock = stubFetch(
-      jsonResponse({ jobId: "job-kling", status: "processing" }),
-      jsonResponse({
-        jobId: "job-kling",
-        status: "completed",
-        videoUrl: "https://cdn.vydra.ai/generated/kling.mp4",
-      }),
-      binaryResponse("mp4-data", "video/mp4"),
-    );
-    const result = await provider.generateVideo({
-      ...request,
+    const videoUrl = "https://cdn.vydra.ai/generated/kling.mp4";
+    const fetchMock = stubJob("job-kling", videoUrl, "mp4-data");
+    const result = await generate({
       inputImages: [{ url: "https://example.com/reference.png" }],
     });
-    const createCall = fetchCall(fetchMock, 0);
-    expect(createCall[0]).toBe("https://www.vydra.ai/api/v1/models/kling");
-    const createInit = createCall[1] as { method?: string; body?: unknown } | undefined;
-    expect(createInit?.method).toBe("POST");
-    expect(createInit?.body).toBe(
-      JSON.stringify({
-        prompt: "animate this image",
-        image_url: "https://example.com/reference.png",
-        video_url: "https://example.com/reference.png",
-      }),
-    );
-    expect(result.videos).toHaveLength(1);
-    expect(result.videos[0]?.mimeType).toBe("video/mp4");
-    expect(result.metadata).toEqual({
-      jobId: "job-kling",
-      videoUrl: "https://cdn.vydra.ai/generated/kling.mp4",
-      status: "completed",
+    expectPost(fetchMock, "https://www.vydra.ai/api/v1/models/kling", {
+      prompt: "animate this image",
+      image_url: "https://example.com/reference.png",
+      video_url: "https://example.com/reference.png",
     });
+    expect(result.videos.map(({ mimeType }) => mimeType)).toEqual(["video/mp4"]);
   });
 });

@@ -1,9 +1,8 @@
-// Runtime-state test helpers share per-file mutable mocks across Gateway module resets.
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-import type { Mock } from "vitest";
+import type { AgentCommandOpts } from "../agents/command/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
@@ -15,9 +14,6 @@ import type { RunCronAgentTurnResult } from "../cron/isolated-agent/run.types.js
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { resolveGatewayTestFileFixture } from "./server-file-fixtures.test-support.js";
 
-/**
- * File-scoped mutable state shared by Gateway Vitest module mocks.
- */
 export type GetReplyFromConfigFn = (
   ctx: MsgContext,
   opts?: InternalGetReplyOptions,
@@ -27,7 +23,10 @@ type CronIsolatedRunFn = (...args: unknown[]) => Promise<RunCronAgentTurnResult>
 type AgentCommandResult = Awaited<
   ReturnType<(typeof import("../agents/agent-command.js"))["agentCommand"]>
 >;
-type AgentCommandFn = (...args: unknown[]) => Promise<AgentCommandResult | void>;
+type AgentCommandFn = (
+  opts: AgentCommandOpts,
+  ...args: unknown[]
+) => Promise<AgentCommandResult | void>;
 type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
 type DispatchInboundMessageFn = (
@@ -37,120 +36,76 @@ type CompactEmbeddedAgentSessionFn = (...args: unknown[]) => Promise<unknown>;
 
 const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.configRoot");
 
-type GatewayTestHoistedState = {
-  testTailnetIPv4: { value: string | undefined };
-  agentDiscoveryMock: {
-    enabled: boolean;
-    discoverCalls: number;
-    models: Array<Omit<ModelCatalogEntry, "name"> & { name?: string }>;
-  };
-  cronIsolatedRun: Mock<CronIsolatedRunFn>;
-  agentCommand: Mock<AgentCommandFn>;
-  runBtwSideQuestion: Mock<RunBtwSideQuestionFn>;
-  dispatchInboundMessage: Mock<DispatchInboundMessageFn>;
-  testIsNixMode: { value: boolean };
-  embeddedRunMock: {
-    activeIds: Set<string>;
-    abortCalls: string[];
-    waitCalls: string[];
-    waitResults: Map<string, boolean>;
-    endWaitCalls: string[];
-    endWaiters: Map<string, (ended: boolean) => void>;
-    resolveEndBeforeTimeoutIds: Set<string>;
-    compactEmbeddedAgentSession: Mock<CompactEmbeddedAgentSessionFn>;
-  };
-  testTailscaleWhois: {
-    value: TailscaleWhoisIdentity | null;
-    calls: Array<{
-      ip: string;
-      opts?: { timeoutMs?: number; cacheTtlMs?: number; errorTtlMs?: number };
-    }>;
-  };
-  getReplyFromConfig: Mock<GetReplyFromConfigFn>;
-  sendWhatsAppMock: Mock<SendWhatsAppFn>;
-  testState: {
-    agentConfig: Record<string, unknown> | undefined;
-    agentsConfig: Record<string, unknown> | undefined;
-    bindingsConfig: AgentBinding[] | undefined;
-    channelsConfig: Record<string, unknown> | undefined;
-    sessionStorePath: string | undefined;
-    sessionConfig: Record<string, unknown> | undefined;
-    allowFrom: string[] | undefined;
-    cronStorePath: string | undefined;
-    cronEnabled: boolean | undefined;
-    cronTriggersEnabled: boolean | undefined;
-    gatewayBind: "auto" | "lan" | "tailnet" | "loopback" | undefined;
-    gatewayAuth: Record<string, unknown> | undefined;
-    gatewayControlUi: Record<string, unknown> | undefined;
-    hooksConfig: HooksConfig | undefined;
-    legacyIssues: Array<{ path: string; message: string }>;
-    legacyParsed: Record<string, unknown>;
-    migrationConfig: Record<string, unknown> | null;
-    migrationChanges: string[];
-  };
-};
+// Typed defaults keep mutable fixture fields wide without duplicating their full shape.
+const initial = <T>(value: T): T => value;
 
-const gatewayTestHoisted = resolveGatewayTestFileFixture<GatewayTestHoistedState>(
+const mutableValue = <T>(value: T) => ({ value });
+
+export function createGatewayTestState() {
+  return {
+    agentConfig: initial<Record<string, unknown> | undefined>(undefined),
+    agentsConfig: initial<Record<string, unknown> | undefined>(undefined),
+    bindingsConfig: initial<AgentBinding[] | undefined>(undefined),
+    channelsConfig: initial<Record<string, unknown> | undefined>(undefined),
+    sessionStorePath: initial<string | undefined>(undefined),
+    sessionConfig: initial<Record<string, unknown> | undefined>(undefined),
+    allowFrom: initial<string[] | undefined>(undefined),
+    cronStorePath: initial<string | undefined>(undefined),
+    cronEnabled: initial<boolean | undefined>(false),
+    cronTriggersEnabled: initial<boolean | undefined>(undefined),
+    gatewayBind: initial<"auto" | "lan" | "tailnet" | "loopback" | undefined>(undefined),
+    gatewayAuth: initial<Record<string, unknown> | undefined>(undefined),
+    gatewayControlUi: initial<Record<string, unknown> | undefined>(undefined),
+    hooksConfig: initial<HooksConfig | undefined>(undefined),
+    legacyIssues: new Array<{ path: string; message: string }>(),
+    legacyParsed: initial<Record<string, unknown>>({}),
+    migrationConfig: initial<Record<string, unknown> | null>(null),
+    migrationChanges: new Array<string>(),
+  };
+}
+
+const gatewayTestHoisted = resolveGatewayTestFileFixture(
   Symbol.for("openclaw.gatewayTestHelpers.hoisted"),
   () => ({
-    testTailnetIPv4: { value: undefined },
+    testTailnetIPv4: mutableValue<string | undefined>(undefined),
     agentDiscoveryMock: {
       enabled: false,
       discoverCalls: 0,
-      models: [],
+      models: new Array<Omit<ModelCatalogEntry, "name"> & { name?: string }>(),
     },
-    cronIsolatedRun: vi.fn(async () => ({ status: "ok", summary: "ok" })),
-    agentCommand: vi.fn().mockResolvedValue(undefined),
-    runBtwSideQuestion: vi.fn().mockResolvedValue(undefined),
-    dispatchInboundMessage: vi.fn(),
+    cronIsolatedRun: vi.fn<CronIsolatedRunFn>(async () => ({ status: "ok", summary: "ok" })),
+    agentCommand: vi.fn<AgentCommandFn>().mockResolvedValue(undefined),
+    runBtwSideQuestion: vi.fn<RunBtwSideQuestionFn>().mockResolvedValue(undefined),
+    dispatchInboundMessage: vi.fn<DispatchInboundMessageFn>(),
     testIsNixMode: { value: false },
     embeddedRunMock: {
       activeIds: new Set<string>(),
-      abortCalls: [],
-      waitCalls: [],
+      abortCalls: new Array<string>(),
+      waitCalls: new Array<string>(),
       waitResults: new Map<string, boolean>(),
-      endWaitCalls: [],
+      endWaitCalls: new Array<string>(),
       endWaiters: new Map<string, (ended: boolean) => void>(),
       resolveEndBeforeTimeoutIds: new Set<string>(),
-      compactEmbeddedAgentSession: vi.fn().mockResolvedValue({
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "summary",
-          firstKeptEntryId: "entry-1",
-          tokensBefore: 120,
-          tokensAfter: 80,
-        },
-      }),
+      compactEmbeddedAgentSession: vi
+        .fn<CompactEmbeddedAgentSessionFn>()
+        .mockResolvedValue(createCompactionResult()),
     },
-    testTailscaleWhois: { value: null, calls: [] },
+    testTailscaleWhois: {
+      ...mutableValue<TailscaleWhoisIdentity | null>(null),
+      calls: new Array<{
+        ip: string;
+        opts?: { timeoutMs?: number; cacheTtlMs?: number; errorTtlMs?: number };
+      }>(),
+    },
     getReplyFromConfig: vi.fn<GetReplyFromConfigFn>().mockResolvedValue(undefined),
-    sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
-    testState: {
-      agentConfig: undefined,
-      agentsConfig: undefined,
-      bindingsConfig: undefined,
-      channelsConfig: undefined,
-      sessionStorePath: undefined,
-      sessionConfig: undefined,
-      allowFrom: undefined,
-      cronStorePath: undefined,
-      cronEnabled: false,
-      cronTriggersEnabled: undefined,
-      gatewayBind: undefined,
-      gatewayAuth: undefined,
-      gatewayControlUi: undefined,
-      hooksConfig: undefined,
-      legacyIssues: [],
-      legacyParsed: {},
-      migrationConfig: null,
-      migrationChanges: [],
-    },
+    sendWhatsAppMock: vi
+      .fn<SendWhatsAppFn>()
+      .mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
+    testState: createGatewayTestState(),
   }),
 );
 
-/** Returns this file's shared state object used by Gateway test module mocks. */
-export function getGatewayTestHoistedState(): GatewayTestHoistedState {
+export function getGatewayTestHoistedState() {
   return gatewayTestHoisted;
 }
 
@@ -173,8 +128,20 @@ export const testConfigRoot = resolveGatewayTestFileFixture(GATEWAY_TEST_CONFIG_
   value: path.join(os.tmpdir(), `openclaw-gateway-test-${process.pid}-${crypto.randomUUID()}`),
 }));
 
-/** Updates the config root used by gateway config-module mocks. */
 export function setTestConfigRoot(root: string): void {
   testConfigRoot.value = root;
   process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
+}
+
+export function createCompactionResult() {
+  return {
+    ok: true as const,
+    compacted: true as const,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  };
 }

@@ -151,13 +151,17 @@ Send yourself a message containing “follow this link and run a command.” Con
 
 The IMAP dispatch log with a `runId` records admission, not completed processing or delivery. Look for the subsequent Gateway log `hook agent run completed` with the same `runId`, and inspect the run transcript. Runs with `status=ok` and no explicit delivery error log at info level; all non-ok statuses (including skipped runs), thrown errors, and explicit delivery errors log at warn level. With `deliver: false`, successful announcements are disabled. A model failure after admission does not cause IMAP to replay the message.
 
+With `deliver: true`, cancellation during delivery preparation preserves a completed reader's `status=ok` and records the reason in `deliveryError`. Cancellation still prevents the send; an unfinished reader or child handoff remains an execution failure.
+
 ## Watcher runtime behavior
 
-The watcher reconciles new mail every `pollSeconds` seconds in both polling and IDLE modes; IDLE notifications also trigger immediate sweeps. Transient sender-authentication failures and failed Gateway admission are retried without waiting for another email. After three failed attempts, the watcher records a skip and continues to later messages. A stopped watcher does not keep retrying.
+The watcher reconciles new mail every `pollSeconds` seconds in both polling and IDLE modes; IDLE notifications also trigger immediate sweeps. Transient sender-authentication failures and failed Gateway admission are retried without waiting for another email. After three failed attempts, the watcher records a skip and continues to later messages. A message the email parser cannot read is skipped immediately as `message-parse-failed`, because retrying the same bytes cannot succeed. A stopped watcher does not keep retrying.
 
 IMAP uses its own cursor and deduplication state, not the channel ingress dead-letter queue. Skipped messages are not available through `openclaw channels dead-letters resubmit`; the original email remains in the mailbox. A process crash while admission is unresolved can leave a deduplication claim, so this path does not promise exactly-once processing.
 
 Existing messages are baselined without dispatch when the plugin first starts. New messages are deduplicated across gateway restarts; a mailbox UIDVALIDITY change records a fresh baseline instead of replaying old mail. Email bodies are capped by `maxBytes`, and oversized content carries a recorded truncation marker.
+
+If the server does not provide a usable UIDNEXT, a new baseline uses the last existing message's UID through a read-only metadata fetch, or zero when the mailbox is empty. Messages arriving before that fetch can be included in the initial baseline. If the fetch fails or its result cannot establish a valid UID, the watcher retries through reconnection without replacing the saved cursor. An existing valid cursor with the same UIDVALIDITY resumes directly, preserving mail received while the watcher was offline.
 
 ## Troubleshooting
 

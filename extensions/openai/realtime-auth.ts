@@ -3,6 +3,10 @@ import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-oau
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import type { OpenAIQuicksilverAuth } from "./realtime-quicksilver-wire.js";
 
+// ChatGPT subscription credentials are either refreshable OAuth logins or pasted
+// static access tokens. Readiness counts both; resolution prefers OAuth.
+export const OPENAI_CHATGPT_SUBSCRIPTION_PROFILE_TYPES = ["oauth", "token"] as const;
+
 export async function resolveOpenAIChatGptSubscriptionAuth(
   params: {
     cfg?: OpenClawConfig;
@@ -10,20 +14,32 @@ export async function resolveOpenAIChatGptSubscriptionAuth(
   },
   { resolveProviderAuthProfileApiKey }: OpenAIRealtimeHost,
 ): Promise<Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined> {
-  const token = await resolveProviderAuthProfileApiKey({
+  const lookup = {
     provider: "openai",
     capability: "realtime-voice",
     cfg: params.cfg,
     agentDir: params.agentDir,
-    profileTypes: ["oauth"],
     includeExternalCliAuth: false,
+  };
+  const oauthToken = await resolveProviderAuthProfileApiKey({
+    ...lookup,
+    profileTypes: ["oauth"],
   });
-  if (!token) {
-    return undefined;
+  if (oauthToken) {
+    const accountId = resolveOpenAICodexAuthIdentity({ access: oauthToken }).accountId;
+    if (!accountId) {
+      throw new Error("The selected ChatGPT OAuth profile is missing its account id");
+    }
+    return { type: "oauth", token: oauthToken, accountId };
   }
-  const accountId = resolveOpenAICodexAuthIdentity({ access: token }).accountId;
-  if (!accountId) {
-    throw new Error("The selected ChatGPT OAuth profile is missing its account id");
-  }
-  return { type: "oauth", token, accountId };
+  // Token profiles may hold any pasted bearer; only a ChatGPT access token carries
+  // the account claim. Others fall through to Platform auth instead of failing.
+  const pastedToken = await resolveProviderAuthProfileApiKey({
+    ...lookup,
+    profileTypes: ["token"],
+  });
+  const accountId = pastedToken
+    ? resolveOpenAICodexAuthIdentity({ access: pastedToken }).accountId
+    : undefined;
+  return pastedToken && accountId ? { type: "oauth", token: pastedToken, accountId } : undefined;
 }

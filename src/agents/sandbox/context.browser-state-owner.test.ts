@@ -2,14 +2,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { registerSandboxBackend } from "./backend.js";
 import { SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH } from "./constants.js";
-import { resolveSandboxContext } from "./context.js";
-import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import * as custody from "./context-custody.test-support.js";
 
 const docker = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -35,15 +31,7 @@ const roots = useAutoCleanupTempDirTracker(afterEach);
 it("rejects hosted custody released during ordinary browser inspection before creation", async () => {
   const root = roots.make("sandbox-browser-owner-");
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-    const owner = acquireGatewayStateOwner({
-      databasePath: resolveOpenClawStateSqlitePath(),
-      payload: {
-        pid: process.pid,
-        createdAt: new Date().toISOString(),
-        configPath: path.join(root, "openclaw.json"),
-        role: "gateway",
-      },
-    });
+    const owner = custody.acquireOwner(root);
     const entered = createDeferred();
     const resume = createDeferred();
     docker.dockerContainerState.mockImplementationOnce(async () => {
@@ -67,32 +55,16 @@ it("rejects hosted custody released during ordinary browser inspection before cr
       buildExecSpec: vi.fn(),
       runShellCommand: vi.fn(),
     }));
-    const config: OpenClawConfig = {
-      gateway: { auth: { mode: "token", token: "synthetic-browser-token" } },
-      agents: {
-        defaults: {
-          workspace: path.join(root, "workspace"),
-          sandbox: {
-            mode: "all",
-            workspaceAccess: "rw",
-            prune: { idleHours: 0, maxAgeDays: 0 },
-            browser: { enabled: true, network: "bridge" },
-          },
-        },
+    const config = custody.createConfig(
+      { browser: { enabled: true, network: "bridge" } },
+      {
+        gateway: { auth: { mode: "token", token: "synthetic-browser-token" } },
+        agents: { defaults: { workspace: path.join(root, "workspace") } },
+        tools: { sandbox: { tools: { allow: ["browser"] } } },
       },
-      tools: { sandbox: { tools: { allow: ["browser"] } } },
-    };
+    );
     const sessionKey = "agent:main:subagent:browser-owner";
-    const preparation = resolveSandboxContext({
-      config,
-      sessionKey,
-      workspaceDir: path.join(root, "workspace"),
-      preparedRuntimeStatus: resolveSandboxRuntimeStatus({
-        cfg: config,
-        sessionKey,
-        preparedSessionEntry: null,
-      }),
-    });
+    const preparation = custody.prepareContext(config, sessionKey, path.join(root, "workspace"));
     try {
       await awaitGateBeforeSettlement(
         entered.promise,

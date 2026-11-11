@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
+import { isConfigValidationFailedError } from "../../config/io.write-errors.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,9 +28,20 @@ type TargetDatabaseSchemaContext = {
 
 export type TargetDatabaseSchemaContextOptions = {
   legacyConfigPlan?: LegacyConfigUpdatePlan;
-  /** Candidate admission owns schema validation; the installed process still pins source bytes. */
-  configValidation?: "candidate";
-};
+} & (
+  | {
+      /** Read-only candidate validation; the result must never become a config write plan. */
+      validateConfigForAdmission: (
+        snapshot: ConfigFileSnapshot,
+      ) => Promise<OpenClawConfig | undefined>;
+      configValidation?: never;
+    }
+  | {
+      validateConfigForAdmission?: never;
+      /** Candidate admission owns schema validation; the installed process still pins source bytes. */
+      configValidation?: "candidate";
+    }
+);
 
 export function assertReadableGitMetadata(
   metadataUnreadable: string | undefined,
@@ -118,17 +130,36 @@ export async function captureTargetDatabaseSchemaContext(
     )
       ? planned
       : undefined;
-  if (before?.path === snapshot.path && !legacyConfigPlan) {
+  if (before?.path === snapshot.path && !legacyConfigPlan && !snapshot.valid) {
     // This is read-only admission. A concurrent save needs a fresh projection,
     // never reuse of the old source's plan or refusal merely because it changed.
-    if (!snapshot.valid) {
-      const { planLegacyConfigForUpdateChannel } =
-        await import("../../commands/doctor/legacy-config-repair.js");
-      legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
+    const { planLegacyConfigForUpdateChannel } =
+      await import("../../commands/doctor/legacy-config-repair.js");
+    legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
+  }
+  const validateConfigForAdmission = options?.validateConfigForAdmission;
+  if (validateConfigForAdmission && !isArtifactPreservingStateRead()) {
+    throw new Error("Candidate config projection requires artifact-preserving admission.");
+  }
+  // Validate the freshly read source, never a projection captured before an awaited read.
+  let admissionConfig: OpenClawConfig | undefined;
+  try {
+    admissionConfig =
+      validateConfigForAdmission && !legacyConfigPlan
+        ? await validateConfigForAdmission(snapshot)
+        : undefined;
+  } catch (error) {
+    if (!isConfigValidationFailedError(error)) {
+      throw error;
     }
+    // The source can contain repairable fields that hide the projected candidate's real error.
+    throw createUpdateConfigFailure({ ...snapshot, issues: error.issues });
   }
   if (
-    (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||
+    ((!snapshot.valid || validateConfigForAdmission) &&
+      !legacyConfigPlan &&
+      !admissionConfig &&
+      configValidation !== "candidate") ||
     snapshot.readError
   ) {
     throw createUpdateConfigFailure(snapshot);
@@ -138,10 +169,13 @@ export async function captureTargetDatabaseSchemaContext(
     config:
       configValidation === "candidate"
         ? snapshot.sourceConfig
-        : (legacyConfigPlan?.config ?? snapshot.sourceConfig ?? snapshot.config),
+        : (legacyConfigPlan?.config ?? admissionConfig ?? snapshot.sourceConfig ?? snapshot.config),
     configSnapshot: snapshot,
     readEnv,
     ...(legacyConfigPlan ? { legacyConfigPlan } : {}),
+    ...(admissionConfig && !isDeepStrictEqual(admissionConfig, snapshot.sourceConfig)
+      ? { configProjectedForAdmission: true }
+      : {}),
     ...(configValidation ? { configValidation } : {}),
   };
 }
@@ -154,22 +188,29 @@ export async function checkTargetDatabaseSchemasForContexts(
   if (!supportedVersions) {
     return { incompatible: [], indeterminate: [] };
   }
-  const inspectionContexts = contexts.map((context) => {
-    try {
-      return {
-        env: context.env,
-        configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
-          context.config,
-          { env: context.env },
-        ),
-      };
-    } catch (error) {
-      throw new UpdatePreMutationError(
-        "database-schema-preflight",
-        `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
-      );
-    }
-  });
+  const { resolveDatabaseEngineSelection } = await import("../../infra/database-engine/config.js");
+  const inspectionContexts = await Promise.all(
+    contexts.map(async (context) => {
+      try {
+        return {
+          env: context.env,
+          databaseEngineSelection: await resolveDatabaseEngineSelection(
+            context.config,
+            context.env,
+          ),
+          configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
+            context.config,
+            { env: context.env },
+          ),
+        };
+      } catch (error) {
+        throw new UpdatePreMutationError(
+          "database-schema-preflight",
+          `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
+        );
+      }
+    }),
+  );
   return preflightOpenClawDatabaseSchemaContexts({
     contexts: inspectionContexts,
     supportedVersions,

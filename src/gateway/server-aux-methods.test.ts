@@ -1,35 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { listCoreGatewayMethodNames } from "./methods/core-method-policy.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
+import { createGatewayAuxHandlerTestParams } from "./server-aux-handlers.test-support.js";
 import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
-import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
-import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 
 describe("core and auxiliary method handler parity", () => {
   it("wires a dispatchable core or auxiliary handler for every core descriptor", async () => {
     const fixture = await createOpenClawTestState({ label: "gateway-aux-methods" });
-    const aux = createGatewayAuxHandlers({
-      scheduler: createTestGatewayScheduler(),
-      log: {},
-      getNativeApprovalRouteCoordinator: () => undefined,
-      activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
-      sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
-        current: undefined,
-        required: null,
-      }),
-      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-      clients: [],
-      channelManager: {
-        startChannel: async () => new Map(),
-        stopChannel: async () => {},
-        isManuallyStopped: () => false,
-        resolveRuntimeAccountId: (_channel: string, accountId: string) => accountId,
-      },
-      logChannels: { info: vi.fn() },
-    });
+    const aux = createGatewayAuxHandlers(
+      createGatewayAuxHandlerTestParams({ logChannels: { info: vi.fn() } }),
+    );
     try {
       // Check the real construction maps, not an auxiliary exemption list.
       // Assistant media is served by the separate Control UI handler.

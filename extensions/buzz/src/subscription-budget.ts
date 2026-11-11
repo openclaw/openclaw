@@ -13,9 +13,6 @@ export const BUZZ_MAX_CONFIGURED_ROOMS =
 export function resolveBuzzSubscriptionBudget(roomCount: number): {
   profileLimit: number;
 } {
-  if (!Number.isSafeInteger(roomCount) || roomCount < 0) {
-    throw new Error("Buzz configured room count must be a non-negative integer");
-  }
   const availableProfileSubscriptions =
     BUZZ_RELAY_MAX_SUBSCRIPTIONS - BUZZ_RELAY_NON_ROOM_PROFILE_SUBSCRIPTION_RESERVE - roomCount;
   if (availableProfileSubscriptions < 0) {

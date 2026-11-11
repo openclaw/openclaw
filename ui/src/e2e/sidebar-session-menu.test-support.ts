@@ -1,8 +1,27 @@
 import type { Locator, Page } from "playwright";
+import { controlUiBundledGatewayUrl } from "../test-helpers/control-ui-e2e.ts";
+
+/** Save an owner-filter choice before the app mounts, as a returning browser would. */
+export async function seedSidebarOwnerFilter(
+  page: Page,
+  baseUrl: string,
+  profileId: string,
+  value: string,
+) {
+  const key = `openclaw.control.sidebarSessionOwnerFilter.v1:${controlUiBundledGatewayUrl(baseUrl)}:${encodeURIComponent(profileId)}`;
+  await page.addInitScript(
+    (entry) => {
+      if (localStorage.getItem(entry.key) === null) {
+        localStorage.setItem(entry.key, entry.value);
+      }
+    },
+    { key, value },
+  );
+}
 
 export async function openSidebarMenu(page: Page) {
   const menu = page.locator(".sidebar-session-sort-menu");
-  const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
+  const trigger = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
   if ((await trigger.getAttribute("aria-expanded")) !== "true") {
     await trigger.click();
   }
@@ -27,17 +46,23 @@ export async function chooseSidebarMenuOption(
   label: "Group by" | "Sort by" | "Status" | "Owners" | "Hide empty groups",
   option: string,
 ) {
+  if (label === "Owners") {
+    await page.locator("#sidebar-session-owner-title").click();
+    await page
+      .locator(".sidebar-session-owner-filter")
+      .getByRole("option", { name: option, exact: true })
+      .click();
+    return;
+  }
   const menu = await openSidebarMenu(page);
   if (label !== "Status") {
     await menu
       .locator(
-        label === "Owners"
-          ? "#sidebar-sessions-owner"
-          : label === "Group by"
-            ? "#sidebar-sessions-group"
-            : label === "Sort by"
-              ? "#sidebar-sessions-sort"
-              : "#sidebar-sessions-empty",
+        label === "Group by"
+          ? "#sidebar-sessions-group"
+          : label === "Sort by"
+            ? "#sidebar-sessions-sort"
+            : "#sidebar-sessions-empty",
       )
       .click();
     await menu.getByRole("option", { name: option, exact: true }).click();
@@ -62,7 +87,8 @@ export async function closeSidebarMenu(page: Page) {
 }
 
 export async function chooseSidebarOwner(page: Page, value: string) {
-  const menu = await openSidebarMenu(page);
-  await menu.locator("#sidebar-sessions-owner").click();
-  await menu.locator(`[role="option"][data-value="${value}"]`).click();
+  await page.locator("#sidebar-session-owner-title").click();
+  await page
+    .locator(`.sidebar-session-owner-filter [role="option"][data-value="${value}"]`)
+    .click();
 }

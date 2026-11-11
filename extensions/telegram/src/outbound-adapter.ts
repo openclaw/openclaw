@@ -42,8 +42,11 @@ type ResolveTelegramSendFn = (deps?: OutboundSendDeps) => Promise<TelegramSendFn
 type LoadTelegramSendModuleFn = () => Promise<TelegramSendModule>;
 
 type TelegramPayloadData = {
+  /** Copied recaps disable native link detection and previews. */
+  linkPreview?: boolean;
   buttons?: TelegramInlineButtons;
   quoteText?: string;
+  messageEffectId?: string;
   reaction?: { emoji?: unknown; replyToId?: unknown; replyToCurrent?: unknown };
 };
 
@@ -54,7 +57,7 @@ function toTelegramOutboundResult<T extends { chatId?: string }>(result: T) {
     : { ...delivery, target: { kind: "chat" as const, id: chatId } };
 }
 
-async function resolveDefaultTelegramSend(deps?: OutboundSendDeps): Promise<TelegramSendFn> {
+export async function resolveTelegramSend(deps?: OutboundSendDeps): Promise<TelegramSendFn> {
   return (
     resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
     (await loadTelegramSendModule()).sendMessageTelegram
@@ -97,13 +100,10 @@ function normalizeTelegramMetadataOnlyPayload(payload: ReplyPayload): ReplyPaylo
   const hasReaction =
     typeof telegramData?.reaction?.emoji === "string" &&
     Boolean(telegramData.reaction.emoji.trim());
-  if (hasReaction && !buttons?.length && !hasQuoteText) {
-    return payload;
+  if (!buttons?.length && !hasQuoteText) {
+    return hasReaction ? payload : null;
   }
   const fallbackText = payload.fallbackText?.text.trim();
-  if (!buttons?.length && !hasQuoteText) {
-    return null;
-  }
   return fallbackText ? { ...payload, text: fallbackText } : null;
 }
 
@@ -199,6 +199,8 @@ export async function sendTelegramPayloadMessages(params: {
   const telegramData = payload.channelData?.telegram as TelegramPayloadData | undefined;
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
+  const messageEffectId =
+    typeof telegramData?.messageEffectId === "string" ? telegramData.messageEffectId : undefined;
   const reactionEmoji =
     typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
   const text = resolveTelegramInteractiveTextFallback(payload) ?? "";
@@ -220,7 +222,9 @@ export async function sendTelegramPayloadMessages(params: {
     : {};
   const payloadOpts = {
     ...params.baseOpts,
+    ...(telegramData?.linkPreview === false ? { linkPreview: false } : {}),
     quoteText,
+    ...(messageEffectId ? { messageEffectId } : {}),
     ...(payload.audioAsVoice === true ? { asVoice: true } : {}),
     ...(payload.videoAsNote === true ? { asVideoNote: true } : {}),
   };
@@ -249,6 +253,7 @@ export async function sendTelegramPayloadMessages(params: {
       ...projectionOptions,
       buttons,
       quoteText,
+      ...(messageEffectId ? { messageEffectId } : {}),
     });
   }
   if (payload.videoAsNote === true && mediaUrls.length !== 1) {
@@ -292,7 +297,7 @@ export async function sendTelegramPayloadMessages(params: {
 export function createTelegramOutboundAdapter(
   options: CreateTelegramOutboundAdapterOptions = {},
 ): ChannelOutboundAdapter {
-  const resolveSend = options.resolveSend ?? resolveDefaultTelegramSend;
+  const resolveSend = options.resolveSend ?? resolveTelegramSend;
   const loadSendModule = options.loadSendModule ?? loadTelegramSendModule;
 
   async function resolveTelegramOutboundSendContext(

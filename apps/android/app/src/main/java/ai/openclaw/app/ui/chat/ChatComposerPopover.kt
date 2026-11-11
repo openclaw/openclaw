@@ -4,13 +4,12 @@ import ai.openclaw.app.ui.AppDialog
 import ai.openclaw.app.ui.FoldAwareSheetState
 import ai.openclaw.app.ui.OverlayWindowGeometry
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.dismissOnOutsideTap
 import ai.openclaw.app.ui.foldAwareSheet
 import ai.openclaw.app.ui.rememberOverlayWindowGeometry
 import ai.openclaw.app.ui.sampleOverlayWindowGeometry
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,9 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
@@ -117,32 +113,8 @@ internal fun ChatComposerPopover(
       BackHandler { if (admitAction()) currentDismiss() }
 
       Box(
-        Modifier.fillMaxSize().pointerInput(geometry) {
-          awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-            val initialBounds = cardBounds
-            if (!initialBounds.contains(down.position)) {
-              down.consume()
-              var tap = !initialBounds.isEmpty
-              do {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                if (event.changes.size != 1 || cardBounds != initialBounds) tap = false
-                for (change in event.changes) {
-                  if (change.isConsumed || initialBounds.contains(change.position) ||
-                    (change.position - down.position).getDistance() > viewConfiguration.touchSlop
-                  ) {
-                    tap = false
-                  }
-                  change.consume()
-                }
-                if (event.changes.all { !it.pressed } && tap &&
-                  event.changes.single().changedToUpIgnoreConsumed() && admitAction()
-                ) {
-                  currentDismiss()
-                }
-              } while (event.changes.any { it.pressed })
-            }
-          }
+        Modifier.fillMaxSize().dismissOnOutsideTap(geometry, { cardBounds }) {
+          if (admitAction()) currentDismiss()
         },
       ) {
         Layout(

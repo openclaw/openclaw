@@ -29,6 +29,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "workboard-28-kv-to-sqlite",
     label: "Workboard .28 plugin-state KV",
+    // This retired-state check leaves every legacy row unchanged.
+    collectBackupResources: () => [],
     detectLegacyState: detectRetiredState,
     async migrateLegacyState(params) {
       return { changes: [], warnings: (await detectRetiredState(params))?.preview ?? [] };
