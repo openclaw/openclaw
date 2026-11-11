@@ -68,6 +68,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
   const {
     normalizeToolCallIds,
+    normalizeForkToolCallIds,
     onModelRequest,
     onModelUsage,
     getPromptCacheObservation,
@@ -163,7 +164,7 @@ export async function runEmbeddedAttemptExecutionPhase(
         sessionRuntime.toolResultPromptProjectionState,
       );
       // Foreground requests normalize tool-call IDs last; a fork with raw IDs loses their cache.
-      return normalizeToolCallIds?.(projected, attempt.model) ?? projected;
+      return normalizeForkToolCallIds?.(projected, attempt.model) ?? projected;
     },
     readSessionForkBoundary: () => ({
       timezone: sessionRuntime.boundary.boundaryTimezone,

@@ -333,8 +333,9 @@ it.each([
         expect(JSON.stringify(replayMessages.at(-2))).toContain("Review answer");
         expect(JSON.stringify(replayMessages.at(-1))).toContain("Review only");
         expect(JSON.stringify(replay.tools)).toBe(JSON.stringify(original.tools));
+        // Anthropic keeps the parent's choice for client tools: changing it drops cached messages.
         expect(replay.tool_choice).toEqual(
-          api === "anthropic-messages" ? { type: "none" } : "none",
+          api === "anthropic-messages" ? original.tool_choice : "none",
         );
         if (api === "openai-responses") {
           expect(original.tools).toEqual(expect.arrayContaining([{ type: "web_search" }]));
@@ -361,21 +362,24 @@ it.each([
         await expect(fork()).rejects.toThrow("after three attempts");
         expect(payloads.length - beforeDenied).toBe(3);
         expect(await readTranscript()).toEqual(parentTranscript);
+        const assertImagesBlocked = () => {
+          const body = JSON.stringify(payloads.at(-1));
+          expect(body).toContain("Image reading is disabled.");
+          expect(body).toContain("PRIVATE_TOOL_IMAGE");
+          expect(body).not.toContain(image.data);
+          expect(body).not.toContain('"input_image"');
+          expect(body).not.toContain('"image_url"');
+        };
         if (api === "openai-responses") {
           imageResultMode = true;
           toolsRemaining = 1;
           await runParent("Inspect private images", "fork-parent-images", true);
           imageResultMode = false;
-          const assertImagesBlocked = () => {
-            const body = JSON.stringify(payloads.at(-1));
-            expect(body).toContain("Image reading is disabled.");
-            expect(body).toContain("PRIVATE_TOOL_IMAGE");
-            expect(body).not.toContain(image.data);
-            expect(body).not.toContain('"input_image"');
-            expect(body).not.toContain('"image_url"');
-          };
           await expect(fork()).resolves.toEqual({ text: "Review answer" });
           assertImagesBlocked();
+        }
+        // Anthropic normalizes and pairs replayed tool IDs; a live fork must still mark it running.
+        if (api !== "openai-completions") {
           holdParentTool = true;
           toolsRemaining = 1;
           const activeParent = runParent("Run the lookup", "fork-parent-active");
@@ -392,8 +396,11 @@ it.each([
             expect(JSON.stringify(payloads.at(-1))).toContain("This tool call is still running");
             expect(JSON.stringify(payloads.at(-1))).not.toContain("LIVE_TOOL_RESULT_1672");
             expect(await readTranscript()).toEqual(whileRunning);
-            expect(executeTool).toHaveBeenCalledTimes(2);
-            assertImagesBlocked();
+            expect(JSON.stringify(payloads.at(-1))).not.toContain("interrupted");
+            expect(executeTool).toHaveBeenCalledTimes(api === "openai-responses" ? 2 : 1);
+            if (api === "openai-responses") {
+              assertImagesBlocked();
+            }
           } finally {
             releaseTool.resolve();
             await activeParent;
