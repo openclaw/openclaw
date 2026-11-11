@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -346,6 +348,35 @@ describe("scheduled session prompts", () => {
 });
 
 describe("scheduled session execution custody", () => {
+  it("defers a shared-session job bound to a workspace awaiting repair", async () => {
+    await withOpenClawTestState({ label: "cron-session-workspace-repair" }, async (state) => {
+      const own = state.statePath("own-workspace");
+      const other = state.statePath("other-workspace");
+      await fs.mkdir(own);
+      await fs.mkdir(other);
+      await fs.writeFile(path.join(other, "openclaw-workspace-state.json"), "retained");
+      fixture.capture.mockResolvedValue({
+        ...target,
+        generation: "target-generation",
+        workspaceOverride: other,
+      });
+      fixture.enqueue.mockReturnValue(
+        receipt(Promise.resolve({ status: "completed", executionStarted: true, delivered: false })),
+      );
+      const params = input();
+      params.cfg = {
+        agents: { entries: { main: { workspace: own }, other: { workspace: other } } },
+      };
+      await expect(runCronSessionTurn(params)).resolves.toMatchObject({
+        status: "skipped",
+        admissionDeferred: true,
+        admissionDeferredReason: "workspace-maintenance",
+        executionStarted: false,
+      });
+      expect(fixture.enqueue).not.toHaveBeenCalled();
+    });
+  });
+
   it("times out adopted preparation without spending the setup budget in the queue", async () => {
     vi.useFakeTimers();
     const { terminal, enqueued } = captureSession(undefined, (options) => {

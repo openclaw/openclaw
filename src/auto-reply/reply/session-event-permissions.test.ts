@@ -55,6 +55,23 @@ import {
   runEventFixture,
   startEmbeddedTurn,
 } from "./session-event.test-support.js";
+
+it("captures the persisted workspace binding for scheduled admission", async ({
+  onTestFinished,
+}) => {
+  await runEventFixture("session-event-workspace-binding", onTestFinished, async (state) => {
+    await configureEventState(state);
+    const scope = { agentId: "main", sessionKey: "agent:main:bound-workspace" };
+    const child = path.join(state.workspaceDir, "child");
+    await replaceSessionEntry(scope, {
+      sessionId: "bound-workspace",
+      updatedAt: Date.now(),
+      spawnedCwd: child,
+    });
+    const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey);
+    expect(target.workspaceOverride).toBe(child);
+  });
+});
 // mock-isolation: Use synthetic model execution with real admission and native filesystem guards.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: vi.fn(),

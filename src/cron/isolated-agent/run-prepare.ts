@@ -34,6 +34,7 @@ import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronWorkspaceLease } from "../run-workspace.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import { deferForWorkspaceMaintenance } from "../service/admission-deferred.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import {
   resolveCronModelSelection,
@@ -292,7 +293,16 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         sessionPreparationEffect,
         isFastTestEnv: params.isFastTestEnv,
         childParent: input.occurrence.childParent,
+      }).catch((error: unknown) => {
+        const deferred = deferForWorkspaceMaintenance(error);
+        if (deferred) {
+          return { deferred } as const;
+        }
+        throw error;
       });
+      if ("deferred" in selectedWorkspace) {
+        return { ok: false as const, result: selectedWorkspace.deferred };
+      }
       workspaceLease = selectedWorkspace.lease;
       const workspaceDir = selectedWorkspace.workspaceDir;
       const persistCronSessionRow = createCronSessionRowWriter({

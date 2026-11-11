@@ -133,6 +133,33 @@ describe("AcpSessionManager turn results", () => {
     });
   });
 
+  it("refuses a persisted ACP turn in an owned sandbox copy needing repair", async () => {
+    await withStateDirEnv("openclaw-acp-sandbox-copy-", async ({ tempRoot }) => {
+      const root = path.join(tempRoot, "sandboxes");
+      const copy = path.join(root, "agent-copy");
+      await fs.mkdir(copy, { recursive: true });
+      await fs.writeFile(path.join(copy, "openclaw-workspace-state.json"), "retained");
+      const cfg = {
+        ...baseCfg,
+        agents: {
+          ownership: "explicit" as const,
+          entries: {
+            codex: {
+              sandbox: { mode: "all" as const, scope: "agent" as const, workspaceRoot: root },
+            },
+          },
+        },
+      };
+      const state = setupRuntime(readySessionMeta({ cwd: copy }), undefined, cfg);
+      const startTurn = state.start();
+      await expect(state.run()).rejects.toMatchObject({
+        cause: { kind: "legacy-workspace" },
+      });
+      expect(state.ensureSession).not.toHaveBeenCalled();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+  });
+
   it("notifies submission after readiness and finishes work despite an observer failure", async () => {
     const state = setupRuntime();
     const transitions: string[] = [];

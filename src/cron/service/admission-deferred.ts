@@ -1,6 +1,20 @@
-import type { CronJob, CronJobExecutionResult } from "../types.js";
+import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
+import type { CronJob, CronJobExecutionResult, CronRunOutcome } from "../types.js";
 
 export const CRON_ADMISSION_DEFERRED_RECEIPT_ERROR = "cron: admission deferred";
+
+export function deferForWorkspaceMaintenance(error: unknown): CronRunOutcome | undefined {
+  return findStartupMaintenanceRequiredError(error)?.kind === "legacy-workspace"
+    ? {
+        status: "skipped",
+        executionStarted: false,
+        admissionDeferred: true,
+        admissionDeferredReason: "workspace-maintenance",
+        summary:
+          "Automation deferred while its workspace needs migration. Run `openclaw doctor --fix`.",
+      }
+    : undefined;
+}
 
 /** Effects or trigger evaluation consume an occurrence even if a later admission defers. */
 export function hasUnstartedCronAdmission(result: CronJobExecutionResult): boolean {
@@ -24,6 +38,8 @@ export function isDeferredCronAdmission(
     (job.schedule.kind === "at" ||
       job.schedule.kind === "every" ||
       job.schedule.kind === "cron" ||
-      (job.schedule.kind === "stream" && result.admissionDeferredReason === "busy"))
+      (job.schedule.kind === "stream" &&
+        (result.admissionDeferredReason === "busy" ||
+          result.admissionDeferredReason === "workspace-maintenance")))
   );
 }

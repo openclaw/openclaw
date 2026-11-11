@@ -218,7 +218,7 @@ export type CronRunOutcome = {
   executionStarted?: boolean;
   /** Admission deferral preserves the unstarted occurrence's scheduled slot. */
   admissionDeferred?: boolean;
-  admissionDeferredReason?: "busy" | "active-hours";
+  admissionDeferredReason?: "busy" | "active-hours" | "workspace-maintenance";
   /** Lifecycle-owned restart fact; transient input to cron settlement, not a public event. */
   interruptedByRestart?: boolean;
   /** Optional classifier for execution errors to guide fallback behavior. */

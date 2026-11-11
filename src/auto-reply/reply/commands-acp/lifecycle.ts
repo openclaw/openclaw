@@ -151,6 +151,7 @@ export async function handleAcpSpawnAction(
   let runtimeCwd: string | undefined;
   try {
     runtimeCwd = await resolveRuntimeCwdForAcpSpawn({
+      cfg: params.cfg,
       resolvedCwd,
       explicitCwd: spawn.cwd,
       managedWorkspaceDir: resolveAgentWorkspaceDir(params.cfg, ownerAgentId),

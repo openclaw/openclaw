@@ -5,6 +5,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../infra/home-dir.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import {
@@ -15,7 +16,45 @@ import {
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./sandbox/shared.js";
 import { listAgentWorkspaceDirs } from "./workspace-dirs.js";
-import { assertWorkspaceStateMigrationReady } from "./workspace-legacy-state.js";
+import {
+  assertNoUnmigratedWorkspaceState,
+  assertWorkspaceStateMigrationReady,
+} from "./workspace-legacy-state.js";
+import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
+
+/** Check configured workspaces and owned sandbox copies while leaving external cwd owners alone. */
+export function assertManagedWorkspaceStateReadyForCwd(
+  cfg: OpenClawConfig,
+  cwd: string,
+  additionalWorkspaceDirs: readonly string[] = [],
+): void {
+  const current = resolveCanonicalWorkspacePath(cwd);
+  const managedDirs = [...additionalWorkspaceDirs, ...listAgentWorkspaceDirs(cfg)];
+  for (const agentId of listAgentIds(cfg)) {
+    const sandbox = resolveSandboxConfigForAgent(cfg, agentId);
+    if (sandbox.mode === "off" || sandbox.workspaceAccess === "rw") {
+      continue;
+    }
+    const root = resolveCanonicalWorkspacePath(sandbox.workspaceRoot);
+    if (!isPathInside(root, current)) {
+      continue;
+    }
+    const relative = path.relative(root, current);
+    const copy =
+      sandbox.scope === "shared" ? root : path.join(root, relative.split(path.sep)[0] ?? "");
+    managedDirs.push(copy);
+  }
+  for (const workspaceDir of new Set(managedDirs)) {
+    const managed = resolveCanonicalWorkspacePath(workspaceDir);
+    if (!isPathInside(managed, current)) {
+      continue;
+    }
+    assertNoUnmigratedWorkspaceState({ workspaceDir });
+    if (current !== managed) {
+      assertNoUnmigratedWorkspaceState({ workspaceDir: cwd });
+    }
+  }
+}
 
 /** Select configured workspaces and active sandbox copies for migration and readiness. */
 export async function listWorkspaceStateDirs(params: {

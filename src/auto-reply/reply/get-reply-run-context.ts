@@ -13,6 +13,7 @@ import {
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "../../agents/workspace-state-dirs.js";
 import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { resolveCronSessionWorkspaceOwnershipError } from "../../cron/run-authority.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -63,6 +64,7 @@ import {
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
+import { replyForUnavailableWorkspace } from "./reply-workspace.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   resolveBareResetBootstrapFileAccess,
@@ -372,6 +374,18 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     }
   }
   const workspaceDir = sessionWorkspaceOverride ?? configuredWorkspaceDir;
+  if (sessionWorkspaceOverride) {
+    try {
+      assertManagedWorkspaceStateReadyForCwd(cfg, sessionWorkspaceOverride);
+    } catch (error) {
+      const reply = replyForUnavailableWorkspace(error);
+      if (!reply) {
+        throw error;
+      }
+      setReplyCompletion("blocked");
+      return finishReplyPreparation(typing, () => reply);
+    }
+  }
   const bareResetPromptState =
     isBareSessionReset && workspaceDir
       ? await resolveBareSessionResetPromptState({

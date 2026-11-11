@@ -1,6 +1,8 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { classifyAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "../agents/workspace-state-dirs.js";
 import {
   captureSessionEventTargetForHost as captureSessionEventTarget,
   enqueueSessionEventForHost as enqueueSessionEvent,
@@ -26,6 +28,7 @@ import { CronOperatorSourceError } from "./operator-source-error.js";
 import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.js";
 import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
+import { deferForWorkspaceMaintenance } from "./service/admission-deferred.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { resolveCronDeliverySessionKey } from "./session-target.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "./store.js";
@@ -77,6 +80,17 @@ export async function runCronSessionTurn(
       assertCurrent,
     });
     assertCurrent();
+    const configuredWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const workspaceDir = expectedTarget?.workspaceOverride ?? configuredWorkspaceDir;
+    try {
+      assertManagedWorkspaceStateReadyForCwd(params.cfg, workspaceDir, [configuredWorkspaceDir]);
+    } catch (error) {
+      const deferred = deferForWorkspaceMaintenance(error);
+      if (!deferred) {
+        throw error;
+      }
+      return deferred;
+    }
     if (job.operatorSource) {
       const { restoreCronOperatorSource } = await import("../gateway/cron-operator-source.js");
       let operator: Awaited<ReturnType<typeof restoreCronOperatorSource>>;

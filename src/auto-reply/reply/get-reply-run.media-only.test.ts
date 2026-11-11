@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   executeQueuedFollowupTurnForTest,
   getFollowupTurnTestState,
@@ -829,6 +832,31 @@ describe("runPreparedReply media-only handling", () => {
       envMockState.fastTestRuntime = true;
     }
     expect(requireRunReplyAgentCall().followupRun.run.workspaceDir).toBe("/tmp/session-worktree");
+  });
+
+  it("refuses a session override into another configured workspace awaiting repair", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "reply-workspace-override-"));
+    try {
+      const own = path.join(root, "own");
+      const other = path.join(root, "other");
+      await fs.mkdir(own);
+      await fs.mkdir(other);
+      await fs.writeFile(path.join(other, "openclaw-workspace-state.json"), "retained");
+      const result = await runPreparedReply(
+        baseParams({
+          cfg: {
+            agents: { entries: { default: { workspace: own }, other: { workspace: other } } },
+          },
+          sessionKey: "agent:default:dashboard:override",
+          workspaceDir: own,
+          sessionEntry: { sessionId: "override", updatedAt: 1, spawnedCwd: other },
+        }),
+      );
+      expect(result).toMatchObject({ text: expect.stringContaining("openclaw doctor --fix") });
+      expect(JSON.stringify(result)).not.toContain(other);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   beforeEach(async () => {

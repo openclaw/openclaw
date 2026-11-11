@@ -4,12 +4,9 @@ import {
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
-import { assertNoUnmigratedWorkspaceState } from "../../agents/workspace-legacy-state.js";
-import { resolveCanonicalWorkspacePath } from "../../agents/workspace-state-identity.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "../../agents/workspace-state-dirs.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isPathInside } from "../../infra/path-guards.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
@@ -54,18 +51,8 @@ export function assertAcpWorkspaceMigrationReady(
 ): void {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const cwd = handle?.cwd ?? meta.runtimeOptions?.cwd ?? meta.cwd;
-  const current = resolveCanonicalWorkspacePath(cwd || workspaceDir);
   try {
-    for (const managedWorkspaceDir of [workspaceDir, ...listAgentWorkspaceDirs(cfg)]) {
-      const managed = resolveCanonicalWorkspacePath(managedWorkspaceDir);
-      if (!isPathInside(managed, current)) {
-        continue;
-      }
-      assertNoUnmigratedWorkspaceState({ workspaceDir: managedWorkspaceDir });
-      if (cwd && current !== managed) {
-        assertNoUnmigratedWorkspaceState({ workspaceDir: cwd });
-      }
-    }
+    assertManagedWorkspaceStateReadyForCwd(cfg, cwd || workspaceDir, [workspaceDir]);
   } catch (error) {
     if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
       throw error;

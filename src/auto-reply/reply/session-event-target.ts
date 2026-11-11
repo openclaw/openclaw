@@ -10,6 +10,7 @@ import {
   resolveRequesterPrincipalKey,
   requesterCreatorProfileId,
 } from "../../agents/requester-origin.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
@@ -240,6 +241,11 @@ export async function captureSessionEventTargetForHost(
       settings: producerSettings
         ? narrowSessionEventSettings(producerSettings, destinationSettings)
         : structuredClone(destinationSettings),
+      workspaceOverride: resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: entry?.spawnedBy,
+        workspaceDir: entry?.spawnedWorkspaceDir,
+        cwd: entry?.spawnedCwd,
+      }),
     };
     targetScopes.set(target, {
       env,

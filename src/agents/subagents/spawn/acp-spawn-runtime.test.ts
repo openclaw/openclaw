@@ -19,6 +19,7 @@ it("leaves an external cwd to its owner while checking configured workspaces", a
 
     await expect(
       resolveRuntimeCwdForAcpSpawn({
+        cfg: {},
         resolvedCwd: cwd,
         explicitCwd: cwd,
         managedWorkspaceDir: managed,
@@ -27,6 +28,7 @@ it("leaves an external cwd to its owner while checking configured workspaces", a
     ).resolves.toBe(cwd);
     await expect(
       resolveRuntimeCwdForAcpSpawn({
+        cfg: {},
         resolvedCwd: managed,
         explicitCwd: managed,
         managedWorkspaceDir: managed,
@@ -34,6 +36,7 @@ it("leaves an external cwd to its owner while checking configured workspaces", a
       }),
     ).rejects.toMatchObject({ kind: "legacy-workspace" });
     const failure = await resolveRuntimeCwdForAcpSpawn({
+      cfg: {},
       resolvedCwd: managedChild,
       explicitCwd: managedChild,
       managedWorkspaceDir: managed,
@@ -43,6 +46,7 @@ it("leaves an external cwd to its owner while checking configured workspaces", a
     expect(formatAcpSpawnCwdError(failure, false)).toContain("Gateway log");
     await expect(
       resolveRuntimeCwdForAcpSpawn({
+        cfg: {},
         resolvedCwd: restrictedChild,
         managedWorkspaceDir: managed,
         configuredWorkspaceDirs: [managed],
@@ -53,6 +57,7 @@ it("leaves an external cwd to its owner while checking configured workspaces", a
     await fs.writeFile(path.join(managedChild, "openclaw-workspace-state.json"), "not-json");
     await expect(
       resolveRuntimeCwdForAcpSpawn({
+        cfg: {},
         resolvedCwd: managedChild,
         explicitCwd: managedChild,
         managedWorkspaceDir: managed,
@@ -61,6 +66,7 @@ it("leaves an external cwd to its owner while checking configured workspaces", a
     ).rejects.toMatchObject({ kind: "legacy-workspace" });
     await expect(
       resolveRuntimeCwdForAcpSpawn({
+        cfg: {},
         resolvedCwd: managedChild,
         explicitCwd: managedChild,
         managedWorkspaceDir: cwd,
@@ -68,6 +74,28 @@ it("leaves an external cwd to its owner while checking configured workspaces", a
       }),
     ).rejects.toMatchObject({ kind: "legacy-workspace" });
     expect(await fs.readFile(source, "utf8")).toBe("not-json");
+  });
+});
+
+it("refuses an explicit cwd in an owned sandbox copy awaiting repair", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    const root = state.path("sandboxes");
+    const copy = path.join(root, "agent-copy");
+    await fs.mkdir(copy, { recursive: true });
+    await fs.writeFile(path.join(copy, "openclaw-workspace-state.json"), "retained");
+    await expect(
+      resolveRuntimeCwdForAcpSpawn({
+        cfg: {
+          agents: {
+            defaults: { sandbox: { mode: "all", scope: "agent", workspaceRoot: root } },
+          },
+        },
+        resolvedCwd: copy,
+        explicitCwd: copy,
+        managedWorkspaceDir: state.path("agent-workspace"),
+        configuredWorkspaceDirs: [state.path("agent-workspace")],
+      }),
+    ).rejects.toMatchObject({ kind: "legacy-workspace" });
   });
 });
 
@@ -79,6 +107,7 @@ it("refuses an inherited missing cwd with a retained sibling marker", async () =
     await fs.writeFile(`${missing}.attested`, "openclaw-workspace-attestation:v1\n");
     await expect(
       resolveRuntimeCwdForAcpSpawn({
+        cfg: {},
         resolvedCwd: missing,
         managedWorkspaceDir: managed,
         configuredWorkspaceDirs: [managed],
@@ -87,6 +116,7 @@ it("refuses an inherited missing cwd with a retained sibling marker", async () =
     await fs.rm(`${missing}.attested`);
     await expect(
       resolveRuntimeCwdForAcpSpawn({
+        cfg: {},
         resolvedCwd: missing,
         managedWorkspaceDir: managed,
         configuredWorkspaceDirs: [managed],

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import { StartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import {
   interruptSessionControllerEffects,
   runSessionMutation,
@@ -101,6 +102,19 @@ it.each(["provisioning failure", "revoked lease"])("releases the lease on %s", a
     expect(await pending).toMatchObject({ status: "error" });
   }
   expect(worktrees.release).toHaveBeenCalledOnce();
+  expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
+});
+
+it("defers an unstarted run while workspace repair is pending", async () => {
+  harness.ensureAgentWorkspaceMock.mockRejectedValueOnce(
+    new StartupMaintenanceRequiredError("legacy-workspace", "repair required"),
+  );
+  await expect(run()).resolves.toMatchObject({
+    status: "skipped",
+    admissionDeferred: true,
+    admissionDeferredReason: "workspace-maintenance",
+    executionStarted: false,
+  });
   expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
 });
 

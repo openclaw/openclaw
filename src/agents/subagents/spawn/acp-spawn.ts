@@ -370,6 +370,7 @@ export async function spawnAcpDirect(
   let runtimeCwd: string | undefined;
   try {
     runtimeCwd = await resolveRuntimeCwdForAcpSpawn({
+      cfg,
       resolvedCwd,
       explicitCwd: params.cwd,
       managedWorkspaceDir: resolveAgentWorkspaceDir(cfg, ownerAgentId),

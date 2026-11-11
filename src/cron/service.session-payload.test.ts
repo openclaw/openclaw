@@ -83,6 +83,49 @@ const schedule = (kind: "at" | "every" | "cron", at: number): CronJobCreate["sch
       : { kind, expr: "* * * * *", tz: "UTC", staggerMs: 0 };
 
 describe("ordinary session agent turns", () => {
+  it.each(["at", "every"] as const)(
+    "retries a %s job after workspace repair without losing its occurrence",
+    async (scheduleKind) => {
+      let repairing = true;
+      const run = vi.fn(async (): Promise<CronJobExecutionResult> =>
+        repairing
+          ? {
+              status: "skipped",
+              admissionDeferred: true,
+              admissionDeferredReason: "workspace-maintenance",
+              executionStarted: false,
+            }
+          : { status: "ok", executionStarted: true },
+      );
+      const { cron, storePath, scheduler, tick } = await service({ runSessionEvent: run });
+      const job = await cron.add(
+        jobInput({
+          schedule: schedule(scheduleKind, scheduler.now() + 1_000),
+          deleteAfterRun: false,
+        }),
+      );
+      await cron.start();
+      const dueAt = cron.getJob(job.id)!.state.nextRunAtMs!;
+      await tick(dueAt);
+      const retained = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)!;
+      expect(retained).toMatchObject({
+        enabled: true,
+        state: {
+          nextRunAtMs: dueAt,
+          admissionDeferred: { reason: "workspace-maintenance", retryAtMs: dueAt + 30_000 },
+        },
+      });
+      expect(retained.state.consecutiveErrors).toBeUndefined();
+      expect(readCronRunRecordsForTests(job.id)).toEqual([]);
+      repairing = false;
+      await tick(dueAt + 30_000);
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(readCronRunRecordsForTests(job.id)).toHaveLength(1);
+      expect(cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+      expect(cron.getJob(job.id)?.enabled).toBe(scheduleKind === "every");
+    },
+  );
+
   it.each(["isolated", "main", "session:agent:main:project:inbox"] as const)(
     "requires fresh authority after a human transfer on %s, including a transfer back",
     async (sessionTarget) => {

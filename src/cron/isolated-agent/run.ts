@@ -139,7 +139,9 @@ async function runCronIsolatedAgentTurnInTrace(
     throw err;
   }
   if (!preparation.ok) {
-    return { ...preparation.result, admissionDisposition: "rejected" };
+    return preparation.result.admissionDeferred
+      ? preparation.result
+      : { ...preparation.result, admissionDisposition: "rejected" };
   }
   if (preparation.completed) {
     return preparation.completed;

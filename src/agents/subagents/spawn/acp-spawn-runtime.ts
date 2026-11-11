@@ -15,7 +15,6 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
-import { isPathInside } from "../../../infra/path-guards.js";
 import { findStartupMaintenanceRequiredError } from "../../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveAgentConfig } from "../../agent-scope.js";
@@ -27,7 +26,7 @@ import {
 import { buildThinkingCatalog } from "../../model-thinking-default-core.js";
 import type { PreparedSpawnThreadBinding } from "../../spawn-plan.js";
 import { assertNoUnmigratedWorkspaceState } from "../../workspace-legacy-state.js";
-import { resolveCanonicalWorkspacePath } from "../../workspace-state-identity.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "../../workspace-state-dirs.js";
 import { buildSpawnThreadBinding } from "./spawn-thread-binding.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
@@ -36,6 +35,7 @@ const ACP_RUNTIME_TIMEOUT_MAX_SECONDS = 24 * 60 * 60;
 const log = createSubsystemLogger("agents/acp-spawn");
 
 export async function resolveRuntimeCwdForAcpSpawn(params: {
+  cfg: OpenClawConfig;
   resolvedCwd?: string;
   explicitCwd?: string;
   managedWorkspaceDir: string;
@@ -60,17 +60,10 @@ export async function resolveRuntimeCwdForAcpSpawn(params: {
       throw error;
     }
   }
-  const current = resolveCanonicalWorkspacePath(params.resolvedCwd);
-  for (const workspaceDir of [params.managedWorkspaceDir, ...params.configuredWorkspaceDirs]) {
-    const managed = resolveCanonicalWorkspacePath(workspaceDir);
-    if (!isPathInside(managed, current)) {
-      continue;
-    }
-    assertNoUnmigratedWorkspaceState({ workspaceDir });
-    if (explicitCwd && !params.requireExistingCwd && current !== managed) {
-      assertNoUnmigratedWorkspaceState({ workspaceDir: params.resolvedCwd });
-    }
-  }
+  assertManagedWorkspaceStateReadyForCwd(params.cfg, params.resolvedCwd, [
+    params.managedWorkspaceDir,
+    ...params.configuredWorkspaceDirs,
+  ]);
   return params.resolvedCwd;
 }
 

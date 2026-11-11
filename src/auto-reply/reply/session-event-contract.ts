@@ -75,6 +75,7 @@ export type SessionEventTarget = {
   deliveryContext?: DeliveryContext;
   chatType?: SessionEntry["chatType"];
   settings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">> | undefined;
+  workspaceOverride?: string;
   toolsAllow?: string[];
   agentId?: string;
   sessionKey?: string;
