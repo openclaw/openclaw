@@ -556,20 +556,6 @@ div.chat-thread:where(.chat-thread--annotations) {
     gap: 0;
   }
 
-  /* Align visible lettering with the glyph centerline without moving hit areas. */
-  &
-    :is(
-      .chat-pane__workspace-chip > .oc-menu-item__label > span,
-      .chat-pane__session-title-text,
-      .chat-pane__parent-session-text
-    ) {
-    transform: translateY(calc(-1px * var(--control-ui-text-scale)));
-  }
-
-  & .chat-pane__session-title-input {
-    padding-block-end: calc(2px * var(--control-ui-text-scale));
-  }
-
   & .chat-pane__crumbs {
     transform: none;
     gap: 4px;
@@ -710,7 +696,14 @@ div.chat-thread:where(.chat-thread--annotations) {
   grid-column: 1 / -1;
 }
 
-/* One settings target, with the name chip beneath the avatar. */
+/* Desktop identity fits the same header row as the adjacent panel controls. */
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__agent-avatar {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+}
+
+/* One settings target, with the name chip beneath the avatar on mobile. */
 .chat-pane__agent-identity {
   display: inline-flex;
   flex-direction: column;
@@ -1600,4 +1593,54 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop)
   > :not(openclaw-chat-details):not(.chat-details-toggle) * {
     visibility: hidden;
   }
+}
+
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed)
+  .chat-split-view__column
+  > .chat-split-view__cell:first-child
+  .sidebar-region {
+  > .sidebar-region__header,
+  &:not(.sidebar-region--bottom, .sidebar-region--narrow) [data-region-header="side"] {
+    background: var(--sidebar-rail-surface);
+  }
+}
+
+/* The divider keeps its hit target; only its titlebar segment joins the chrome. */
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed)
+  .chat-split-view__column
+  > .chat-split-view__cell:first-child
+  .sidebar-region--desktop.sidebar-region--open:not(
+    .sidebar-region--bottom,
+    .sidebar-region--narrow,
+    .sidebar-region--expanded-side
+  )
+  .sidebar-column__divider {
+  background-image: linear-gradient(
+    var(--sidebar-rail-surface) var(--desktop-header-height),
+    transparent var(--desktop-header-height)
+  );
+}
+
+/* The separator belongs to the visible panel header, not the hidden resize gutter. */
+.sidebar-region--desktop.sidebar-region--open:not(
+    .sidebar-region--bottom,
+    .sidebar-region--narrow,
+    .sidebar-region--expanded-side
+  )
+  [data-region-header="side"]::before {
+  content: "";
+  position: absolute;
+  top: calc((var(--desktop-header-height) - 18px) / 2);
+  inset-inline-start: 0;
+  width: 1px;
+  height: 18px;
+  background: var(--rail-divider-color);
+  pointer-events: none;
+}
+
+.sidebar-region--desktop.sidebar-region--left [data-region-header="side"]::before {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
 }

@@ -144,10 +144,12 @@ export function createAgentEffectiveTools(
 ) {
   let target: EffectiveRequest | null = null;
   let accepted: EffectiveRequest | null = null;
+  let presentationScope: EffectiveRequest | null = null;
   let cached: ToolsEffectiveResult | null = null;
   let refreshPending = false;
   const [request, setRequest] = createSignal<{
     result: Promise<ToolsEffectiveResult | null>;
+    scope: EffectiveRequest;
   } | null>(null);
   const isCurrent = (current: EffectiveRequest) =>
     target === current &&
@@ -173,6 +175,9 @@ export function createAgentEffectiveTools(
         return null;
       }
       target = null;
+      accepted = null;
+      cached = null;
+      options.changed();
       throw error;
     }
   }
@@ -218,15 +223,19 @@ export function createAgentEffectiveTools(
     const previous = target ?? accepted;
     if (previous?.client !== client || previous.generation !== generation || previous.key !== key) {
       cached = null;
+      presentationScope = null;
     }
     target = { client, generation, agentId: resolvedAgentId, sessionKey: resolvedSessionKey, key };
     const result = load(target);
     void result.catch(() => undefined);
-    setRequest({ result });
+    // Same-query refreshes retain informational rows, not verified permission facts.
+    presentationScope ??= target;
+    setRequest({ result, scope: presentationScope });
   }
   function reset() {
     target = null;
     accepted = null;
+    presentationScope = null;
     cached = null;
     refreshPending = false;
     setRequest(null);
