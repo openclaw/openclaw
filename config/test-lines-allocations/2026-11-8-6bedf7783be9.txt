@@ -1,0 +1,3 @@
+13
+# Source 6bedf7783be9ee0eb771eb6af7174453d6ac2773; commands-export-session.ts parent normalization: use inferred canonical tree parent links for legacy parentless entries without requiring explicit leaf control. Preserve export navigation and explicit tree semantics.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.

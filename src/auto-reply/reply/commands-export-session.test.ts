@@ -206,6 +206,19 @@ describe("buildExportSessionReply", () => {
     },
   );
 
+  it("links parentless legacy rows while keeping explicit roots", async () => {
+    hoisted.sessionTranscriptEvents = [
+      messageEntry("question", { role: "user", content: "question" }),
+      messageEntry("answer", { role: "assistant", content: "answer" }, 1),
+      { ...messageEntry("root", { role: "user", content: "root" }, 2), parentId: null },
+    ];
+    expect(sessionDataFromHtml(await exportHtml()).entries).toMatchObject([
+      { id: "question", parentId: null },
+      { id: "answer", parentId: "question" },
+      { id: "root", parentId: null },
+    ]);
+  });
+
   it("preserves an explicitly empty branch selected by a terminal leaf control", async () => {
     const entries = [
       {
