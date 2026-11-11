@@ -120,7 +120,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         dispatcher.sendBlockReply({ text: second, textMode: "delta" });
         const receipt = await dispatcher.waitForIdle();
 
-        expect(texts()).toEqual([]);
+        expect(http.texts()).toEqual([]);
         expect(receipt).toMatchObject({
           anyVisibleDelivered: false,
           counts: {
@@ -134,7 +134,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       { mode: "progress" },
     );
 
-    expect(texts()).toEqual([finalText]);
+    expect(http.texts()).toEqual([finalText]);
     expect(sends()).toHaveLength(1);
   });
 
