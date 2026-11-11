@@ -108,6 +108,22 @@ metadata: |
                     )
                     self.assertEqual(valid, expected, message)
 
+    def test_rejects_unknown_keys_of_different_yaml_types(self):
+        for fields in (
+            "extra: value",
+            "1: value",
+            "true: value",
+            "null: value",
+            "2026-11-11: value",
+            "1: value\nextra: value",
+        ):
+            with self.subTest(fields=fields):
+                valid, message = self.validate_content(
+                    f"---\nname: example-skill\ndescription: Example skill\n{fields}\n---\n"
+                )
+                self.assertFalse(valid)
+                self.assertTrue(message.startswith("Unexpected key(s) in SKILL.md frontmatter:"))
+
     def test_accepts_openclaw_invocation_frontmatter(self):
         content = """---
 name: invocable-skill
