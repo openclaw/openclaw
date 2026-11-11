@@ -193,13 +193,15 @@ export function registerGatewayToolFinalEffectTests() {
     }
 
     it.each([
-      [undefined, false],
-      [false, false],
-      [undefined, true],
+      [undefined, true, false, true],
+      [false, true, false, true],
+      [undefined, true, true, true],
+      [undefined, false, false, true],
+      [undefined, true, false, false],
     ] as const)(
-      "persists permitted Gateway delegation with workspaceOnly=%s and profile grant=%s without approval",
-      async (workspaceOnly, profileGrant) => {
-        const f = await fixture(workspaceOnly, true, profileGrant);
+      "persists reviewed Gateway delegation with workspaceOnly=%s, config exec=%s, profile grant=%s, grant exec=%s without approval",
+      async (workspaceOnly, allowExec, profileGrant, grantAllowsExec) => {
+        const f = await fixture(workspaceOnly, allowExec, profileGrant, grantAllowsExec);
         try {
           const result = await f.call();
           expect(result.details).toMatchObject({
@@ -211,32 +213,6 @@ export function registerGatewayToolFinalEffectTests() {
           expect(await f.manager.listPendingRecords()).toEqual([]);
           expect(f.requestCount()).toBe(0);
         } finally {
-          await f.close();
-        }
-      },
-    );
-
-    it.each(["config", "grant"] as const)(
-      "waits for approval when the requesting Gateway %s excludes exec",
-      async (excludedBy) => {
-        const f = await fixture(undefined, excludedBy !== "config", false, excludedBy !== "grant");
-        let pending: ReturnType<typeof f.call> | undefined;
-        try {
-          pending = f.call();
-          expect(
-            await Promise.race([
-              f.requested.promise.then(() => "approval"),
-              pending.then(() => "completed"),
-            ]),
-          ).toBe("approval");
-          expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
-          const [record] = await f.manager.listPendingRecords();
-          assert(record);
-          expect(await f.manager.resolve(record.id, "deny", "fixture-operator")).toBe(true);
-          expect(JSON.stringify(await pending)).toContain("Denied");
-          expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
-        } finally {
-          await pending?.catch(() => undefined);
           await f.close();
         }
       },

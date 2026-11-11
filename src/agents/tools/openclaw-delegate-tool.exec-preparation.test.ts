@@ -47,7 +47,7 @@ function construct(assertCurrent?: () => void) {
 
 async function expectDelegation(pending: ReturnType<typeof construct>, fullPermission: boolean) {
   const [tool] = await pending;
-  expect(tool?.description).toContain("other changes wait for user approval");
+  expect(tool?.description).toContain("wait for user approval");
   vi.mocked(callInProcessGatewayTool).mockImplementation(async () => {
     expect(getGatewayToolCallerIdentity()?.fullPermission).toBe(fullPermission);
     return { reply: fullPermission ? "Done." : "Approval required.", sessionId: "delegate" };

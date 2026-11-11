@@ -260,6 +260,8 @@ describe("Full Access delegated chat", () => {
     'config set mcp["servers"].demo.command node',
     'config set mcp {"servers":{"demo":{"command":"node"}}}',
     'config set channels.telegram.allowFrom ["other-user"]',
+    "config set attachments.ttlHours 1",
+    "config set logging.maxFileBytes 1",
     'config set messages {"ackReaction":"eyes","groupChat":{"unmentionedInbound":"user_request"}}',
     'config set logging.level {"$include":"/tmp/level.json"}',
     "config set messages.responsePrefix ${SECRET}",

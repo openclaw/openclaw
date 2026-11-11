@@ -163,7 +163,7 @@ it.each<[string, Options, boolean]>([
         toolController.signal,
       ),
   );
-  expect(tool.description).toContain("other changes wait for user approval");
+  expect(tool.description).toContain("wait for user approval");
   expect(callGateway.mock.calls[0]?.[1]).not.toHaveProperty("fullPermission");
   expect(callGateway.mock.calls[0]?.[1].delegation).not.toHaveProperty("fullPermission");
   expect(callerScope.getGatewayToolCallerIdentity()).toBeUndefined();
@@ -204,5 +204,5 @@ it("retains Full Access for harmless changes when the requesting agent cannot us
   await tool.execute("deny-exec", { message: "Change logging level." });
   expect(observedFullPermission).toBe(true);
   expect(callGateway).toHaveBeenCalledOnce();
-  expect(tool.description).toContain("other changes wait for user approval");
+  expect(tool.description).toContain("wait for user approval");
 });

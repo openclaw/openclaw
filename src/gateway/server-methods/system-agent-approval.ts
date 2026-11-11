@@ -39,7 +39,6 @@ const AUTO_APPLY_CONFIG_PATHS = new Set(
     "logging.level",
     "logging.consoleLevel",
     "logging.consoleStyle",
-    "logging.maxFileBytes",
     "ui.seamColor",
     "ui.prefs.theme",
     "ui.prefs.themeMode",
@@ -65,7 +64,6 @@ const AUTO_APPLY_CONFIG_PATHS = new Set(
     "messages.ackReactionScope",
     "messages.statusReactions.enabled",
     "messages.groupChat.visibleReplies",
-    "attachments.ttlHours",
   ].map((path) => JSON.stringify(path.split("."))),
 );
 
