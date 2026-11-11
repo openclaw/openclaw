@@ -215,6 +215,8 @@ interrupted input follows the existing recovery rules.
 Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.
+This also covers messages waiting for a turn during reply initialization, including
+command-bearing messages. Slow-send diagnostics attribute these admission waits to `queued`.
 
 The `runId` returned by `chat.send` remains that input's public identity when
 steering falls back to a followup. Queue admission does not complete it. Its

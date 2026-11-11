@@ -335,10 +335,10 @@ function sanitizeStrippedBinaryOutput(text: string): string {
   const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, (character) =>
     character === "\u200c" || character === "\u200d" ? character : "",
   );
-  return scrubbed.replace(/\p{Cc}/gu, (control) =>
-    control === "\t" || control === "\n" || control === "\r"
-      ? control
-      : `\\x${control.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  return scrubbed.replace(
+    // eslint-disable-next-line no-control-regex -- Escape C0/C1 controls except tab, LF and CR.
+    /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g,
+    (control) => `\\x${control.charCodeAt(0).toString(16).padStart(2, "0")}`,
   );
 }
 

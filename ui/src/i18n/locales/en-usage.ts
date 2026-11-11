@@ -60,6 +60,16 @@ const enUsage = {
         tool: "Search tools",
       },
       noMatches: "No matches for “{query}”",
+      is: "is",
+      isAnyOf: "is any of",
+      hasErrors: "Has errors",
+    },
+    display: {
+      title: "Display",
+      metric: "Metric",
+      breakdown: "Breakdown",
+      sessions: "Sessions",
+      pin: "Pin filters to top",
     },
     query: {
       placeholder:
@@ -67,6 +77,8 @@ const enUsage = {
       apply: "Filter",
       matching: "{shown} of {total} sessions match",
       inRange: "{total} sessions in range",
+      ofTotal: "{shown} of {total}",
+      short: "Filter sessions…",
       tip: "Tip: use filters or click bars to refine days.",
     },
     export: {

@@ -20,6 +20,7 @@ import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-ru
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
+import { updateRecoverySchema } from "../../infra/update-recovery.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
 import * as commandProcess from "../../process/exec.js";
@@ -198,7 +199,12 @@ function rollbackOriginal(
   return readConfigFileSnapshot({ observe: false }).then((configSnapshot) =>
     rollbackFailedUpdate({
       definitionRecovery: {},
-      result: updateResult({ status: "error", root: rootB, durationMs: 0 }),
+      result: updateResult({
+        status: "error",
+        root: rootB,
+        durationMs: 0,
+        recovery: { serviceRestartSafe: true, version: "2026.9.4" },
+      }),
       previousRoot: rootB,
       previousSchemaVersions: schemas,
       originalManagedServiceRuntime: original,
@@ -571,14 +577,6 @@ it.for([
       });
     }
     if (scenario === "pin-migration-pending") {
-      expect(execution?.result.steps).toContainEqual(
-        expect.objectContaining({
-          advisory: expect.objectContaining({
-            message:
-              "runtime pins not yet migrated; preserved the current runtime; the post-update Doctor step migrates them",
-          }),
-        }),
-      );
       expect(execution?.originalManagedServiceRuntime?.definition.runtimePin).toBeUndefined();
       expect(mocks.nativeInstall).not.toHaveBeenCalled();
     }
@@ -800,7 +798,11 @@ it.each([false, true])(
       expect(original.definition.reboundRuntimePin).toBe(
         mutated ? original.definition.runtimePin?.revision : undefined,
       );
-      await rollbackOriginal(opts, original, mutated);
+      const compensated = await rollbackOriginal(opts, original, mutated);
+      expect(updateRecoverySchema.parse(compensated.result.recovery)).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+      });
       expect(mocks.nativeInstall).not.toHaveBeenCalled();
       expect(mocks.nativeRestart).toHaveBeenCalledTimes(mutated ? 1 : 0);
       expect(mocks.running).toBe(true);

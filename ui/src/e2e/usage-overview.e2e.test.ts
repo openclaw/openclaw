@@ -6,7 +6,11 @@ import {
 } from "../pages/usage/view.test-support.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  applyUsageQuery,
+  openUsageFilter,
+  installUsageOverviewGateway,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Usage server overview",
@@ -69,7 +73,7 @@ suite.define(() => {
         await page.locator(".model-providers__search input").waitFor();
         await page.evaluate(() => window.openclawControlUi!.navigate("usage"));
         await waitForControlUiRoute(page, { routeId: "usage" });
-        const query = page.locator(".usage-query-input");
+        const query = page.locator(".usage-filter-menu__query input");
         const rows = page.locator(".sessions-card .session-bar-title");
         await expect
           .poll(() => rows.allTextContents())
@@ -86,16 +90,14 @@ suite.define(() => {
         await gateway.resolveDeferred("sessions.usage");
         await expect.poll(() => rows.count()).toBe(3);
         expect(pageErrors).toEqual([]);
-        await query.fill('"label:Team Planning"');
-        await query.press("Enter");
+        await applyUsageQuery(page, '"label:Team Planning"');
         await expect.poll(() => rows.allTextContents()).toEqual(["Team Planning"]);
         const previous = (await gateway.getRequests("sessions.usage")).length;
-        const trigger = page.locator('[id="usage-filter-provider:trigger"]');
-        await trigger.click();
+        await openUsageFilter(page, "Provider");
         await page.getByRole("menuitemcheckbox", { name: "openai", exact: true }).click();
         await gateway.waitForRequest("sessions.usage", { after: previous });
         await expect.poll(() => rows.allTextContents()).toEqual(["Team Planning"]);
-        await trigger.click();
+        await page.locator(".usage-filter-menu__trigger").click();
         expect(await query.inputValue()).toBe('"label:Team Planning" provider:openai ');
         expect(await page.locator(".usage-metric-badge").allTextContents()).toEqual([
           "100 Tokens",
@@ -173,8 +175,7 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".usage-metric-badge").allTextContents())
           .toEqual(["125.0K Tokens", "$125.00 Cost", "1,250 Sessions"]);
-        await page.locator(".usage-query-input").fill("label:Needle");
-        await page.locator(".usage-query-input").press("Enter");
+        await applyUsageQuery(page, "label:Needle");
         await expect
           .poll(() => rows.allTextContents())
           .toEqual(["Needle outside the first thousand"]);
@@ -226,17 +227,44 @@ suite.define(() => {
         const rows = page.locator(".sessions-card .session-bar-title");
         await expect.poll(() => rows.count()).toBe(2);
 
-        const trigger = page.locator('[id="usage-filter-model:trigger"]');
-        await trigger.click();
+        await openUsageFilter(page, "Model");
         const option = page.getByRole("menuitemcheckbox", { name: "Local Model", exact: true });
         await option.click();
         await expect.poll(() => option.getAttribute("aria-checked")).toBe("true");
-        await trigger.click();
-        const query = page.locator(".usage-query-input");
+        await page.locator(".usage-filter-menu__trigger").click();
+        await option.waitFor({ state: "hidden" });
+        const query = page.locator(".usage-filter-menu__query input");
+        await openUsageFilter(page);
+        await page.mouse.move(0, 0);
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() =>
+            page
+              .getByRole("menuitem", { name: "Started by", exact: true })
+              .evaluate((element) => element === document.activeElement),
+          )
+          .toBe(true);
+        await page.keyboard.press("Shift+Tab");
+        await expect
+          .poll(() => query.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        // Keyboard focus opens the query hint; Escape dismisses that overlay before the menu.
+        const queryHint = page.getByRole("tooltip").filter({ hasText: "Filter sessions (e.g." });
+        await queryHint.waitFor({ state: "visible" });
+        await page.keyboard.press("Escape");
+        await queryHint.waitFor({ state: "hidden" });
+        expect(
+          await page.locator(".usage-filter-menu__trigger").getAttribute("aria-expanded"),
+        ).toBe("true");
+        expect(await query.inputValue()).toBe('model:"Local Model" ');
+        await page.keyboard.press("Escape");
+        await expect
+          .poll(() => page.locator(".usage-filter-menu__trigger").getAttribute("aria-expanded"))
+          .toBe("false");
         expect(await query.inputValue()).toBe('model:"Local Model" ');
 
         const previous = (await gateway.getRequests("sessions.usage")).length;
-        await query.press("Enter");
+        await applyUsageQuery(page, await query.inputValue());
         await gateway.waitForRequest("sessions.usage", { after: previous });
         await expect.poll(() => rows.allTextContents()).toEqual(["Synthetic usage example"]);
         await expect

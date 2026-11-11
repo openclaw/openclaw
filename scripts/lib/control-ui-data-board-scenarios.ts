@@ -980,7 +980,9 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     rowSelector: "[data-dashboard-session]",
     prepare: prepareGallery,
     run: async (page) => {
-      await page.locator(`${galleryHost} select`).last().selectOption("title");
+      await page.locator(galleryHost).getByRole("button", { name: "Display", exact: true }).click();
+      await page.locator("#dashboards-display").getByLabel("Ordering").selectOption("title");
+      await page.keyboard.press("Escape");
       await page.waitForFunction(
         () =>
           document
