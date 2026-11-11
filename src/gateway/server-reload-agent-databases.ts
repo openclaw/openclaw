@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { hasAgentRosterProperty, listAgentIds } from "../agents/agent-roster.js";
 import { getRuntimeConfigSnapshot } from "../config/io.js";
@@ -7,9 +8,13 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 
 let reconciliation: Promise<void> = Promise.resolve();
-const departedWorkAdmissions = new Map<string, () => void>();
+const pendingDepartedReleases = new Map<string, { cancelled: boolean; done: Promise<void> }>();
 
-/** One roster publication at a time, so a later commit cannot lose to an older close. */
+/** Resolves when a deferred database release finishes. Idle removal has already closed. */
+export function waitForDepartedAgentDatabaseRelease(agentId: string): Promise<void> {
+  return pendingDepartedReleases.get(normalizeAgentId(agentId))?.done ?? Promise.resolve();
+}
+
 function enqueueAgentDatabaseReconciliation(task: () => Promise<void>): Promise<void> {
   const run = reconciliation.then(task, task);
   reconciliation = run.then(
@@ -28,11 +33,6 @@ function liveAgentIds(): Set<string> | undefined {
   return live ? new Set(listAgentIds(live)) : undefined;
 }
 
-/**
- * Follow a snapshot published after this commit captured its predecessor.
- * An unchanged snapshot still belongs to that predecessor, so this commit's
- * roster is authoritative until a later publication replaces it.
- */
 function admittedAgentIds(previousConfig: OpenClawConfig, nextConfig: OpenClawConfig): Set<string> {
   const live = getRuntimeConfigSnapshot();
   if (live && live !== previousConfig) {
@@ -41,7 +41,10 @@ function admittedAgentIds(previousConfig: OpenClawConfig, nextConfig: OpenClawCo
   return new Set(listAgentIds(nextConfig));
 }
 
-/** A roster that admits an agent again may adopt databases its deletion left behind. */
+function agentReadmitted(agentId: string): boolean {
+  return liveAgentIds()?.has(agentId) === true;
+}
+
 export async function reviveAgentDatabasesAfterConfigCommit(
   agentIds: readonly string[],
   warn: (message: string) => void,
@@ -49,14 +52,6 @@ export async function reviveAgentDatabasesAfterConfigCommit(
   await enqueueAgentDatabaseReconciliation(() => reviveAgentDatabases(agentIds, warn));
 }
 
-/**
- * Closing a removed agent's holders keeps its files. A later roster admission
- * clears the fence; agents.delete remains the path that purges stored history.
- *
- * Reader revival follows PR #159013: deletion fences readers across isolates,
- * and only an owner the committed roster admits again is revived. Surviving
- * agents are not revived, and an active deletion journal keeps its own cleanup.
- */
 export async function reconcileAgentDatabasesAfterConfigCommit(params: {
   previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
@@ -64,27 +59,25 @@ export async function reconcileAgentDatabasesAfterConfigCommit(params: {
 }): Promise<void> {
   const { previousConfig, nextConfig, warn } = params;
   await enqueueAgentDatabaseReconciliation(async () => {
-    try {
-      for (const agentId of explicitAgentIds(previousConfig)) {
-        if (admittedAgentIds(previousConfig, nextConfig).has(agentId)) {
-          continue;
-        }
-        if (await agentDeletionOwnsCleanup(agentId)) {
-          continue;
-        }
-        if (!(await agentHasOpenDatabaseHolder(agentId))) {
-          continue;
-        }
-        try {
-          await releaseDepartedAgentDatabase(agentId, previousConfig, nextConfig);
-        } catch (error) {
-          warn(
-            `agent ${agentId} left the roster; database release failed: ${formatErrorMessage(error)}. Restart the Gateway before deleting that agent's files.`,
-          );
-        }
+    const admitted = admittedAgentIds(previousConfig, nextConfig);
+    for (const agentId of admitted) {
+      cancelPendingDepartedRelease(agentId);
+    }
+    for (const agentId of explicitAgentIds(previousConfig)) {
+      if (
+        admitted.has(agentId) ||
+        (await agentDeletionOwnsCleanup(agentId)) ||
+        !(await agentHasOpenDatabaseHolder(agentId))
+      ) {
+        continue;
       }
-    } finally {
-      releaseAdmittedWorkClosures(admittedAgentIds(previousConfig, nextConfig));
+      try {
+        await releaseDepartedAgentDatabase(agentId, previousConfig, warn);
+      } catch (error) {
+        warn(
+          `agent ${agentId} left the roster; database release failed: ${formatErrorMessage(error)}. Restart the Gateway before deleting that agent's files.`,
+        );
+      }
     }
     await reviveAgentDatabases(
       listAgentIds(nextConfig).filter((agentId) =>
@@ -95,7 +88,6 @@ export async function reconcileAgentDatabasesAfterConfigCommit(params: {
   });
 }
 
-/** Revive fenced readers only. Admission closures are released separately. */
 async function reviveAgentDatabases(
   agentIds: readonly string[],
   warn: (message: string) => void,
@@ -115,7 +107,6 @@ async function reviveAgentDatabases(
   }
 }
 
-/** agents.delete still owns purge after it commits the roster change. */
 async function agentDeletionOwnsCleanup(agentId: string): Promise<boolean> {
   const { readAgentDeletionJournalAsync } = await import("../state/agent-deletion-journal.js");
   const journal = await readAgentDeletionJournalAsync(agentId);
@@ -140,72 +131,119 @@ async function agentHasOpenDatabaseHolder(agentId: string): Promise<boolean> {
 async function releaseDepartedAgentDatabase(
   agentId: string,
   previousConfig: OpenClawConfig,
-  nextConfig: OpenClawConfig,
+  warn: (message: string) => void,
 ): Promise<void> {
   const normalized = normalizeAgentId(agentId);
-  // The interrupted turn persists before new writes are refused. Closing
-  // admission first rejects that terminal write with our own fence.
-  await drainDepartedAgentWork(normalized);
-  await blockDepartedAgentWork(normalized);
+  const running = await captureDepartedAgentWork(normalized);
+  if (running) {
+    deferDepartedAgentRelease(normalized, running.settled, previousConfig, warn);
+    return;
+  }
+  await closeDepartedAgentResources(normalized, previousConfig);
+}
+
+function agentDatabasePaths(
+  agentId: string,
+  canonical: string,
+  paths: {
+    resolveOpenClawAgentSqlitePath: (options: { agentId: string }) => string;
+    resolveIncognitoOpenClawAgentSqlitePath: (options: { agentId: string }) => string;
+  },
+): string[] {
+  return [
+    canonical,
+    paths.resolveOpenClawAgentSqlitePath({ agentId }),
+    paths.resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
+  ];
+}
+
+async function awaitDepartedDurableWrites(databasePaths: readonly string[]): Promise<void> {
+  const { drainOpenClawAgentWriteQueues } =
+    await import("../state/openclaw-agent-write-admission.js");
+  const physical = new Set(databasePaths.map((pathname) => path.resolve(pathname)));
+  for (const pathname of databasePaths) {
+    try {
+      physical.add(fs.realpathSync(pathname));
+    } catch {
+      // Missing files still name their writer queue by the lexical path.
+    }
+  }
+  await drainOpenClawAgentWriteQueues((storePath) => {
+    const resolved = path.resolve(storePath);
+    if (physical.has(resolved)) {
+      return true;
+    }
+    try {
+      return physical.has(fs.realpathSync(resolved));
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function closeDepartedAgentResources(
+  agentId: string,
+  previousConfig: OpenClawConfig,
+): Promise<void> {
+  const normalized = normalizeAgentId(agentId);
+  if (agentReadmitted(normalized)) {
+    return;
+  }
   const [
-    { prepareAgentDeleteDatabases, isPathOwnedBySurvivingAgent },
     { resolveEffectiveAgentDir },
     { retirePreparedModelRuntimeAgent },
     { closeActiveMemorySearchManagerCore },
-    { retireSessionHistoryWorkerDatabases },
-    paths,
-    { closeOpenClawAgentDatabaseByPathAsync },
+    { releaseSessionHistoryWorkerDatabases },
+    sqlitePaths,
+    { agentDatabaseLifecycle, closeOpenClawAgentDatabaseByPathAsync },
     { closeDeletedAgentDatabases },
   ] = await Promise.all([
-    import("../agents/agent-delete-databases.js"),
     import("../agents/agent-scope-config.js"),
     import("../agents/prepared-model-runtime.js"),
     import("../plugins/memory-runtime.js"),
-    import("../config/sessions/session-transcript-worker-resources.js"),
+    import("../config/sessions/session-history-worker-idle.js"),
     import("../state/openclaw-agent-db.paths.js"),
     import("../state/openclaw-agent-db-lifecycle.js"),
     import("../state/openclaw-agent-db-readers.js"),
   ]);
   const agentDir = resolveEffectiveAgentDir(previousConfig, normalized);
-  const canonical = paths.resolveOpenClawAgentSqlitePath({
+  const canonical = sqlitePaths.resolveOpenClawAgentSqlitePath({
     agentId: normalized,
     path: path.join(agentDir, "openclaw-agent.sqlite"),
   });
-  await retireSessionHistoryWorkerDatabases({
-    agentId: normalized,
-    paths: [
-      canonical,
-      paths.resolveOpenClawAgentSqlitePath({ agentId: normalized }),
-      paths.resolveIncognitoOpenClawAgentSqlitePath({ agentId: normalized }),
-    ],
-  });
-  await closeActiveMemorySearchManagerCore({ cfg: previousConfig, agentId: normalized });
-
-  let readerPaths = [canonical];
-  let agentDirs = [agentDir];
-  let planningError: Error | undefined;
-  try {
-    const plan = await prepareAgentDeleteDatabases(nextConfig, normalized, agentDir);
-    if (plan.readerPaths.length > 0) {
-      readerPaths = plan.readerPaths;
-    }
-    agentDirs = plan.agentDirs;
-  } catch (error) {
-    planningError = error instanceof Error ? error : new Error(formatErrorMessage(error));
-    if (!isPathOwnedBySurvivingAgent(nextConfig, normalized, canonical)) {
-      await closeOpenClawAgentDatabaseByPathAsync(canonical, normalized);
-    }
+  const knownPaths = agentDatabasePaths(normalized, canonical, sqlitePaths);
+  await awaitDepartedDurableWrites(knownPaths);
+  if (agentReadmitted(normalized)) {
+    return;
   }
-  await retirePreparedModelRuntimeAgent({ agentId: normalized, agentDirs });
-  if (liveAgentIds()?.has(normalized)) {
-    if (planningError) {
-      throw planningError;
-    }
+  if (!(await releaseSessionHistoryWorkerDatabases({ agentId: normalized, paths: knownPaths }))) {
+    return;
+  }
+  await closeActiveMemorySearchManagerCore({ cfg: previousConfig, agentId: normalized });
+  const readerPaths = [
+    ...new Set([
+      ...knownPaths,
+      ...[...agentDatabaseLifecycle.databases.values()]
+        .filter((database) => database.agentId === normalized && database.db.isOpen)
+        .map((database) => database.path),
+    ]),
+  ];
+  await retirePreparedModelRuntimeAgent({ agentId: normalized, agentDirs: [agentDir] });
+  if (agentReadmitted(normalized)) {
+    return;
+  }
+  for (const pathname of readerPaths) {
+    agentDatabaseLifecycle.databases.get(path.resolve(pathname))?.walMaintenance.checkpoint();
+  }
+  for (const pathname of readerPaths) {
+    await closeOpenClawAgentDatabaseByPathAsync(pathname, normalized);
+  }
+  if (agentReadmitted(normalized)) {
     return;
   }
   await closeDeletedAgentDatabases(normalized, readerPaths, {
     assertCurrentFinal() {
-      if (liveAgentIds()?.has(normalized)) {
+      if (agentReadmitted(normalized)) {
         throw new Error(`Agent ${normalized} returned to the roster during database release.`);
       }
     },
@@ -213,116 +251,87 @@ async function releaseDepartedAgentDatabase(
       this.assertCurrentFinal();
     },
   });
-  if (planningError) {
-    throw planningError;
-  }
 }
 
-/** New session writes stop after the interrupted turn has persisted. */
-async function blockDepartedAgentWork(agentId: string): Promise<void> {
-  if (departedWorkAdmissions.has(agentId)) {
+function cancelPendingDepartedRelease(agentId: string): void {
+  const pending = pendingDepartedReleases.get(normalizeAgentId(agentId));
+  if (!pending) {
     return;
   }
-  const [{ closeAgentWorkAdmissions }, { AgentDeletionPendingError }] = await Promise.all([
-    import("../sessions/session-controller.lifecycle.js"),
-    import("../sessions/session-agent-work-admission.js"),
-  ]);
-  try {
-    departedWorkAdmissions.set(
-      agentId,
-      closeAgentWorkAdmissions({
-        agentId,
-        reason: new AgentDeletionPendingError(
-          `Agent ${agentId} left the roster and its database is closing.`,
-        ),
-      }),
-    );
-  } catch (error) {
-    // Reload can observe the departed agent's own turn. The database fence still
-    // refuses a later open; this call only cannot be issued from inside that turn.
-    if (error instanceof Error && error.message.includes("from its own active turn")) {
-      return;
-    }
-    throw error;
-  }
+  pending.cancelled = true;
+  pendingDepartedReleases.delete(normalizeAgentId(agentId));
 }
 
-function releaseDepartedWorkAdmission(agentId: string): void {
-  const release = departedWorkAdmissions.get(normalizeAgentId(agentId));
-  if (!release) {
-    return;
-  }
-  departedWorkAdmissions.delete(normalizeAgentId(agentId));
-  release();
-}
-
-/** Re-admission must not depend on a reader fence that cleanup never installed. */
-function releaseAdmittedWorkClosures(admitted: ReadonlySet<string>): void {
-  const agentIds: string[] = [];
-  for (const agentId of departedWorkAdmissions.keys()) {
-    if (admitted.has(agentId)) {
-      agentIds.push(agentId);
-    }
-  }
-  for (const agentId of agentIds) {
-    releaseDepartedWorkAdmission(agentId);
-  }
-}
-
-/**
- * agents.delete interrupts running turns, lets their terminal session writes
- * land, and only then closes admission. Effect release can precede that write:
- * abort clears the model wait while the call and its persistence are still in
- * flight, so this also joins embedded runs and source-tracked persistence.
- */
-async function drainDepartedAgentWork(agentId: string): Promise<void> {
+async function captureDepartedAgentWork(
+  agentId: string,
+): Promise<{ settled: Promise<void> } | undefined> {
   const [
-    { startAgentWorkAdmissionInterruption },
-    { createAgentRunDirectAbortError },
+    { captureAgentWorkAdmissionSettlement },
     { nativeAttemptAttachments },
     { captureEmbeddedRunDrainTarget },
   ] = await Promise.all([
     import("../sessions/session-controller.lifecycle.js"),
-    import("../agents/run-termination.js"),
     import("../agents/embedded-agent-runner/run-state.js"),
     import("../agents/embedded-agent-runner/runs.js"),
   ]);
-  const runs: Array<NonNullable<ReturnType<typeof captureEmbeddedRunDrainTarget>>> = [];
+  const runs = [];
   for (const attachment of nativeAttemptAttachments()) {
     const run = captureEmbeddedRunDrainTarget(attachment, { agentId });
-    if (run) {
+    if (run?.isActive()) {
       runs.push(run);
     }
   }
-  const interruption = startAgentWorkAdmissionInterruption({
-    agentId,
-    reason: createAgentRunDirectAbortError(),
-    assertCurrent: () => {
-      if (liveAgentIds()?.has(agentId)) {
-        throw new Error(`Agent ${agentId} returned to the roster during work drain.`);
-      }
-    },
-  });
-  try {
-    for (const run of runs) {
-      run.abort();
-    }
-    await Promise.all([interruption.released, ...runs.map((run) => run.waitForEnd(null))]);
-    await awaitDepartedTerminalPersistence(agentId);
-  } finally {
-    for (const run of runs) {
-      run.release();
-    }
+  const effects = captureAgentWorkAdmissionSettlement({ agentId });
+  if (!runs.length && !effects.pending) {
+    return undefined;
   }
+  return {
+    settled: Promise.all([
+      ...runs.map((run) => run.waitForEnd(null).finally(() => run.release())),
+      ...(effects.pending ? [effects.released] : []),
+    ]).then(() => awaitDepartedTerminalPersistence(agentId)),
+  };
 }
 
-/** Source work and Gateway terminal persistence can settle after effect release. */
+function deferDepartedAgentRelease(
+  agentId: string,
+  settled: Promise<void>,
+  previousConfig: OpenClawConfig,
+  warn: (message: string) => void,
+): void {
+  if (pendingDepartedReleases.has(agentId)) {
+    return;
+  }
+  const pending = { cancelled: false, done: Promise.resolve() };
+  pending.done = settled
+    .then(async () => {
+      if (pending.cancelled || pendingDepartedReleases.get(agentId) !== pending) {
+        return;
+      }
+      if (agentReadmitted(agentId)) {
+        return;
+      }
+      await closeDepartedAgentResources(agentId, previousConfig);
+    })
+    .catch((error: unknown) => {
+      if (!pending.cancelled) {
+        warn(
+          `agent ${agentId} left the roster; database release failed: ${formatErrorMessage(error)}. Restart the Gateway before deleting that agent's files.`,
+        );
+      }
+    })
+    .finally(() => {
+      if (pendingDepartedReleases.get(agentId) === pending) {
+        pendingDepartedReleases.delete(agentId);
+      }
+    });
+  pendingDepartedReleases.set(agentId, pending);
+}
+
 async function awaitDepartedTerminalPersistence(agentId: string): Promise<void> {
   const { getRpcSourceIdentity, listRpcSourceEntries } =
     await import("../sessions/session-controller.rpc-sources.js");
-  const seen = new WeakSet<Promise<unknown>>();
-  let stalled = false;
-  for (;;) {
+  const current = () => {
     const work: Promise<unknown>[] = [];
     let awaitingOwner = false;
     for (const [, source] of listRpcSourceEntries()) {
@@ -341,22 +350,21 @@ async function awaitDepartedTerminalPersistence(agentId: string): Promise<void> 
         work.push(pending);
       }
     }
-    const fresh = work.filter((pending) => !seen.has(pending));
-    for (const pending of fresh) {
-      seen.add(pending);
+    return { work, awaitingOwner };
+  };
+  let { work, awaitingOwner } = current();
+  if (work.length === 0 && awaitingOwner) {
+    await Promise.resolve();
+    ({ work, awaitingOwner } = current());
+    if (work.length === 0 && awaitingOwner) {
+      throw new Error(`Agent ${agentId} terminal session persistence did not start.`);
     }
-    if (!fresh.length && !awaitingOwner) {
-      return;
+  }
+  if (work.length > 0) {
+    await Promise.allSettled(work);
+    const followUp = current().work;
+    if (followUp.length > 0) {
+      await Promise.allSettled(followUp);
     }
-    if (!fresh.length) {
-      if (stalled) {
-        throw new Error(`Agent ${agentId} terminal session persistence did not start.`);
-      }
-      stalled = true;
-      await Promise.resolve();
-      continue;
-    }
-    stalled = false;
-    await Promise.allSettled(fresh);
   }
 }

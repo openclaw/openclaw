@@ -1,2 +1,2 @@
-# Config reload closes a removed agent's open database without deleting its files. Covers re-admission, rejected publish, an active turn, a held model turn's terminal write, journaled agents.delete, and a failed cleanup followed by re-add.
-390
+# Config reload closes a removed agent's open database without deleting its files. Covers re-admission, rejected publish, an in-flight turn that finishes before close, a held embedded stream, journaled agents.delete, and native history lanes whose close latch is false.
+590

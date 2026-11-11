@@ -94,8 +94,6 @@ export function createGatewayReloadHandlers(
     const state = params.getState();
     const nextState = { ...state };
     const candidateEnv = publication?.runtimeEnv ?? process.env;
-    // Entry always has a snapshot: getRuntimeConfig throws when it is missing.
-    // A later clear must not pretend the published candidate was the old roster.
     const rosterAtEntry = getRuntimeConfig();
     const modelRuntime = modelRuntimeReload.prepare(plan, rosterAtEntry, nextConfig);
     const refreshModelRuntimeSnapshots = (

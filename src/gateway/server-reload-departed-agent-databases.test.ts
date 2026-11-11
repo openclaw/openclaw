@@ -1,24 +1,45 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { createResourceLoader } from "../agents/sessions/agent-session-loop-resource-loader.test-support.js";
+import { AuthStorage } from "../agents/sessions/auth-storage.js";
+import { ModelRegistry } from "../agents/sessions/model-registry.js";
+import { createAgentSession } from "../agents/sessions/sdk.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import { SettingsManager } from "../agents/sessions/settings-manager.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { readSessionEntrySnapshotInWorker } from "../config/sessions/session-transcript-read-worker-runtime.js";
+import {
+  historyLane,
+  maintenanceLane,
+  type SessionHistoryWorkerLane,
+} from "../config/sessions/session-transcript-worker-resources.js";
+import {
+  retainSessionHistoryWorkerDatabase,
+  trackSessionHistoryHostEffect,
+  withSessionHistoryWorkerDatabase,
+} from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { retainSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
-import {
-  assertAgentSessionWriteAdmission,
-  sessionWorkAdmissionClosures,
-} from "../sessions/session-agent-work-admission.js";
-import {
-  beginSessionEffect,
-  captureSessionTarget,
-} from "../sessions/session-controller.lifecycle.js";
-import { resetSessionControllerStateForTest } from "../sessions/session-lifecycle-admission.test-support.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { assertAgentSessionWriteAdmission } from "../sessions/session-agent-work-admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { useAgentDatabaseDirectories } from "../state/openclaw-agent-db-lifecycle.test-support.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -26,9 +47,9 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { registerChatAbortController } from "./chat-abort.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { createRecoveryRestartMock } from "./config-reload.test-support.js";
+import { waitForDepartedAgentDatabaseRelease } from "./server-reload-agent-databases.js";
 import {
   createHotReloadHandlerTestParams,
   createTestCronState,
@@ -112,6 +133,44 @@ function holderIds(): string[] {
   return listOpenClawAgentDatabasesForTest().map((database) => database.agentId);
 }
 
+function readHistoryPresence(pathname: string, lane: SessionHistoryWorkerLane = historyLane) {
+  return withSessionHistoryWorkerDatabase(
+    { agentId: "worker", path: pathname, env: process.env },
+    (owner) =>
+      owner.readEntryPresence({
+        agentId: "worker",
+        sessionKey: "agent:worker:main",
+        storePath: pathname,
+        databaseAgentId: "worker",
+        env: process.env,
+      }),
+    lane,
+  );
+}
+
+function readClosedAgentDatabase(pathname: string): {
+  sessionKey: string | undefined;
+  transcript: string;
+} {
+  const db = new DatabaseSync(pathname, { readOnly: true });
+  try {
+    const node = db
+      .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
+      .get("agent:worker:main") as { session_key: string } | undefined;
+    const events = db
+      .prepare(
+        "SELECT event_json FROM transcript_events WHERE session_id = ? AND event_json IS NOT NULL",
+      )
+      .all("worker-held-model") as Array<{ event_json: string }>;
+    return {
+      sessionKey: node?.session_key,
+      transcript: events.map((event) => event.event_json).join("\n"),
+    };
+  } finally {
+    db.close();
+  }
+}
+
 function readOnlyIdentityDescriptors(pathname: string): string[] {
   if (process.platform !== "linux") {
     return [];
@@ -162,9 +221,6 @@ it("closes a removed agent's database holders and leaves the other agent open", 
   retainSqliteDatabaseAdmissionLocation(worker.path);
   expect(readOnlyIdentityDescriptors(worker.path)).toEqual([]);
   expect(() => openOpenClawAgentDatabase({ agentId: "worker", env: process.env })).toThrow(
-    /left the roster/,
-  );
-  expect(() => assertAgentSessionWriteAdmission({ agentId: "worker", env: process.env })).toThrow(
     /left the roster/,
   );
   expect(() =>
@@ -267,14 +323,12 @@ it("leaves a journaled agents.delete cleanup in charge of the open database", as
   expect(() => assertAgentSessionWriteAdmission({ agentId: "worker", env })).not.toThrow();
 });
 
-it("settles an active turn before closing the removed agent's database", async () => {
+it("keeps the database open until an in-flight turn finishes", async () => {
   const { opened } = installState(["main", "worker"]);
   const worker = opened.find((database) => database.agentId === "worker");
   if (!worker) {
     throw new Error("fixture did not open worker");
   }
-  const interrupted = createDeferred();
-  let openWhenInterrupted = false;
   const turn = await beginSessionEffect({
     agentId: "worker",
     env: process.env,
@@ -282,109 +336,262 @@ it("settles an active turn before closing the removed agent's database", async (
     identities: ["agent:worker:live"],
     owner: Symbol("live-turn"),
     assertAllowed: () => {},
-    onInterrupt: () => {
-      openWhenInterrupted = worker.database.db.isOpen;
-      interrupted.resolve();
-      turn.release();
-    },
-  });
-  const removal = commitRoster(createHandlers(), roster(["main"]));
-  const winner = await Promise.race([
-    interrupted.promise.then(() => "interrupted" as const),
-    removal.then(() => "closed" as const),
-  ]);
-  expect(winner).toBe("interrupted");
-  expect(openWhenInterrupted).toBe(true);
-  await removal;
-  expect(holderIds()).not.toContain("worker");
-  expect(isDeletedAgentDatabasePath(worker.path)).toBe(true);
-});
-
-it("persists a held model turn's terminal session write before closing its database", async () => {
-  const { opened } = installState(["main", "worker"]);
-  const worker = opened.find((database) => database.agentId === "worker");
-  if (!worker) {
-    throw new Error("fixture did not open worker");
-  }
-  const terminalWrite = createDeferred<void>();
-  let writeError: unknown;
-  let openDuringWrite = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  registerChatAbortController({
-    target: captureSessionTarget({
-      storeScope: worker.path,
-      sessionKey: "agent:worker:main",
-      incarnation: "worker-session",
-      agentId: "worker",
-    }),
-    runId: "worker-held-model",
-    sessionId: "worker-session",
-    sessionKey: "agent:worker:main",
-    agentId: "worker",
-    timeoutMs: 60_000,
-    // The Gateway tracks this promise on the run source. It outlives effect release.
-    sourceWork: terminalWrite.promise,
-  });
-  onTestFinished(() => {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    terminalWrite.resolve();
-    resetSessionControllerStateForTest();
-  });
-  const turn = await beginSessionEffect({
-    agentId: "worker",
-    env: process.env,
-    scope: worker.path,
-    identities: ["agent:worker:main"],
-    owner: Symbol("held-model"),
-    assertAllowed: () => {},
-    onInterrupt: () => {
-      // Abort releases the session effect before the held model call returns.
-      turn.release();
-      timer = setTimeout(() => {
-        void (async () => {
-          try {
-            assertAgentSessionWriteAdmission({ agentId: "worker", env: process.env });
-            openDuringWrite = worker.database.db.isOpen;
-            worker.database.db.exec("PRAGMA user_version = 7");
-          } catch (error) {
-            writeError = error;
-          } finally {
-            terminalWrite.resolve();
-          }
-        })();
-      }, 0);
-    },
   });
   try {
     await commitRoster(createHandlers(), roster(["main"]));
-    expect(writeError).toBeUndefined();
-    expect(openDuringWrite).toBe(true);
-    expect(holderIds()).not.toContain("worker");
-    expect(isDeletedAgentDatabasePath(worker.path)).toBe(true);
+    expect(turn.isActive()).toBe(true);
+    expect(worker.database.db.isOpen).toBe(true);
+    expect(holderIds()).toContain("worker");
+    const closed = waitForDepartedAgentDatabaseRelease("worker");
+    turn.release();
+    await closed;
+    expect(worker.database.db.isOpen).toBe(false);
+    expect(fs.existsSync(worker.path)).toBe(true);
   } finally {
     turn.release();
   }
 });
 
-it("clears the session-write block when cleanup fails and the agent is re-added", async () => {
-  const { env } = installState(["main", "worker"]);
-  const memory = await import("../plugins/memory-runtime.js");
-  const closeMemory = vi
-    .spyOn(memory, "closeActiveMemorySearchManagerCore")
-    .mockRejectedValueOnce(new Error("memory close failed"));
+it("cancels a pending database release when the agent is re-added", async () => {
+  const { opened } = installState(["main", "worker"]);
+  const worker = opened.find((database) => database.agentId === "worker");
+  if (!worker) {
+    throw new Error("fixture did not open worker");
+  }
+  const turn = await beginSessionEffect({
+    agentId: "worker",
+    env: process.env,
+    scope: worker.path,
+    identities: ["agent:worker:returning"],
+    owner: Symbol("returning-turn"),
+    assertAllowed: () => {},
+  });
+  try {
+    const handlers = createHandlers();
+    await commitRoster(handlers, roster(["main"]));
+    expect(worker.database.db.isOpen).toBe(true);
+    const release = waitForDepartedAgentDatabaseRelease("worker");
+    await commitRoster(handlers, roster(["main", "worker"]));
+    turn.release();
+    await release;
+    expect(holderIds()).toContain("worker");
+    expect(isDeletedAgentDatabasePath(worker.path)).toBe(false);
+    expect(worker.database.db.isOpen).toBe(true);
+  } finally {
+    turn.release();
+  }
+});
+
+it("lets a held embedded turn finish before closing its database", async () => {
+  const { opened } = installState(["main", "worker"]);
+  const worker = opened.find((database) => database.agentId === "worker");
+  if (!worker) {
+    throw new Error("fixture did not open worker");
+  }
+  const target = {
+    agentId: "worker",
+    sessionId: "worker-held-model",
+    sessionKey: "agent:worker:main",
+    storePath: worker.path,
+  };
+  await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+  const held = createDeferred();
+  const releaseHold = createDeferred();
+  const streamAbort = new AbortController();
+  const sessionId = "worker-held-model";
+  const handle = createEmbeddedRunHandle({
+    runId: "held-embedded-turn",
+    abort: () => streamAbort.abort(),
+  });
+  attachActiveEmbeddedRun(sessionId, handle, undefined, undefined, "worker");
+  onTestFinished(() => {
+    detachActiveEmbeddedRun(sessionId, handle);
+  });
+  const model = makeProviderModelFixture({
+    id: "held-model",
+    provider: "held-provider",
+    api: "openai-responses",
+    baseUrl: "https://example.test",
+  });
+  const authStorage = AuthStorage.inMemory();
+  authStorage.setRuntimeApiKey(model.provider, "test-api-key");
+  const modelRegistry = ModelRegistry.inMemory(authStorage);
+  modelRegistry.registerProvider(model.provider, {
+    api: model.api,
+    streamSimple: (_model, _context, options) => {
+      const stream = createAssistantMessageEventStream();
+      held.resolve();
+      let finished = false;
+      const finish = (outcome: "completed" | "aborted") => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        const message = {
+          role: "assistant" as const,
+          content: [{ type: "text" as const, text: outcome === "completed" ? "STUB_OK" : "" }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          stopReason: outcome === "completed" ? ("stop" as const) : ("aborted" as const),
+          timestamp: 1,
+          usage: createZeroUsageFixture(),
+        };
+        if (outcome === "completed") {
+          stream.push({ type: "done", reason: "stop", message });
+        } else {
+          stream.push({ type: "error", reason: "aborted", error: message });
+        }
+        stream.end();
+      };
+      const signal = options?.signal;
+      const abort = () => finish("aborted");
+      if (signal?.aborted || streamAbort.signal.aborted) {
+        abort();
+      } else {
+        signal?.addEventListener("abort", abort, { once: true });
+        streamAbort.signal.addEventListener("abort", abort, { once: true });
+        void releaseHold.promise.then(() => finish("completed"));
+      }
+      return stream;
+    },
+  });
+  const { session } = await createAgentSession({
+    cwd: path.dirname(worker.path),
+    systemPrompt: "Test session prompt",
+    model,
+    thinkingLevel: "off",
+    tools: [],
+    sessionManager: SessionManager.open(target, path.dirname(worker.path)),
+    settingsManager: SettingsManager.inMemory({
+      compaction: { enabled: false },
+      retry: { enabled: false },
+    }),
+    modelRegistry,
+    resourceLoader: await createResourceLoader(),
+  });
+  onTestFinished(() => {
+    void session.abort().catch(() => undefined);
+    session.dispose();
+  });
+  const records: Array<{ text: string; stopReason: string; open: boolean }> = [];
+  let turnAborted = false;
+  session.subscribe((event) => {
+    if (event.type !== "message_end") {
+      return;
+    }
+    const message = event.message;
+    if (message.role === "assistant") {
+      const text = message.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+      records.push({
+        text,
+        stopReason: message.stopReason,
+        open: worker.database.db.isOpen,
+      });
+    }
+    if (message.role === "custom" && message.customType === "openclaw:turn-aborted") {
+      turnAborted = true;
+    }
+  });
+  const prompt = session.prompt("active-held-inspect").finally(() => {
+    detachActiveEmbeddedRun(sessionId, handle);
+  });
+  await held.promise;
+  await commitRoster(createHandlers(), roster(["main"]));
+  expect(worker.database.db.isOpen).toBe(true);
+  expect(holderIds()).toContain("worker");
+  releaseHold.resolve();
+  await prompt;
+  expect(records).toContainEqual({ text: "STUB_OK", stopReason: "stop", open: true });
+  expect(turnAborted).toBe(false);
+  await waitForDepartedAgentDatabaseRelease("worker");
+  expect(worker.database.db.isOpen).toBe(false);
+  expect(fs.existsSync(worker.path)).toBe(true);
+  const persisted = readClosedAgentDatabase(worker.path);
+  expect(persisted.sessionKey).toBe("agent:worker:main");
+  expect(persisted.transcript).toContain("STUB_OK");
+  expect(persisted.transcript).toContain('"stopReason":"stop"');
+});
+
+it("closes idle native history lanes when their close latch is false", async () => {
+  const { opened } = installState(["main", "worker"]);
+  const worker = opened.find((database) => database.agentId === "worker");
+  if (!worker) {
+    throw new Error("fixture did not open worker");
+  }
+  // One latched history lane and one WorkerTaskPool read lane. Starting every
+  // history lane is worker-process startup, which is the multi-second cost on CI.
+  // The product close itself gives up after 1s; this test waits for the promise.
+  await readHistoryPresence(worker.path);
+  await readSessionEntrySnapshotInWorker(
+    worker.path,
+    {
+      agentId: "worker",
+      sessionId: "missing-session",
+      storePath: worker.path,
+      sessionKey: "agent:worker:main",
+    },
+    false,
+  );
+  expect(getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources).toBe(true);
+  const latch = vi.spyOn(historyLane.pool, "canCloseNativeResources").mockReturnValue(false);
   try {
     await commitRoster(createHandlers(), roster(["main"]));
-    const workerWriteBlocked = () =>
-      [...sessionWorkAdmissionClosures].some(
-        (closure) => closure.agent?.agentId === "worker" && closure.identities.length === 0,
-      );
-    expect(workerWriteBlocked()).toBe(true);
-    await commitRoster(createHandlers(), roster(["main", "worker"]));
-    expect(workerWriteBlocked()).toBe(false);
-    expect(() => assertAgentSessionWriteAdmission({ agentId: "worker", env })).not.toThrow();
+    expect(worker.database.db.isOpen).toBe(false);
+    expect(fs.existsSync(worker.path)).toBe(true);
   } finally {
-    closeMemory.mockRestore();
+    latch.mockRestore();
   }
+});
+
+it("waits for a trajectory retention retain that finishes inside the reload budget", async () => {
+  const { opened } = installState(["main", "worker"]);
+  const worker = opened.find((database) => database.agentId === "worker");
+  if (!worker) {
+    throw new Error("fixture did not open worker");
+  }
+  const target = { agentId: "worker", path: worker.path, env: process.env };
+  const retained = retainSessionHistoryWorkerDatabase(target, maintenanceLane);
+  let released = false;
+  const sweep = new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      retained.release();
+      released = true;
+      resolve();
+    }, 150);
+    timer.unref();
+  });
+  trackSessionHistoryHostEffect(target, sweep);
+  onTestFinished(() => {
+    if (!released) {
+      retained.release();
+    }
+  });
+  await commitRoster(createHandlers(), roster(["main"]));
+  expect(released).toBe(true);
+  expect(worker.database.db.isOpen).toBe(false);
+  expect(fs.existsSync(worker.path)).toBe(true);
+});
+
+it("does not block reload when a history read has no completion promise", async () => {
+  const { opened } = installState(["main", "worker"]);
+  const worker = opened.find((database) => database.agentId === "worker");
+  if (!worker) {
+    throw new Error("fixture did not open worker");
+  }
+  const retained = retainSessionHistoryWorkerDatabase({
+    agentId: "worker",
+    path: worker.path,
+    env: process.env,
+  });
+  onTestFinished(() => retained.release());
+  await retained.owner.readEntryPresence({
+    agentId: "worker",
+    sessionKey: "agent:worker:main",
+    storePath: worker.path,
+    databaseAgentId: "worker",
+    env: process.env,
+  });
+  await commitRoster(createHandlers(), roster(["main"]));
+  expect(worker.database.db.isOpen).toBe(true);
 });

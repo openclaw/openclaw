@@ -408,3 +408,24 @@ export async function runOpenClawAgentWriteAdmissions<T>(
     },
   );
 }
+
+function queuedAgentWrites(ownsPath: (storePath: string) => boolean): Promise<void>[] {
+  return [...admission.queues].flatMap(([storePath, queue]) =>
+    ownsPath(storePath) && queue.drainPromise ? [queue.drainPromise] : [],
+  );
+}
+
+/** Joins accepted writes without cancelling queued followers. At most one follow-up generation. */
+export async function drainOpenClawAgentWriteQueues(
+  ownsPath: (storePath: string) => boolean = () => true,
+): Promise<void> {
+  const first = queuedAgentWrites(ownsPath);
+  if (first.length === 0) {
+    return;
+  }
+  await Promise.all(first);
+  const followUp = queuedAgentWrites(ownsPath);
+  if (followUp.length > 0) {
+    await Promise.all(followUp);
+  }
+}
