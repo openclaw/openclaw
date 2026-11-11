@@ -76,7 +76,7 @@ describe("AppSidebar footer identity menu", () => {
     const updates = () => dom.query<HTMLElement>('[data-value="command:updates"]');
     expect(updates()?.textContent).toContain("Available");
     expect(updates()?.getAttribute("aria-label")).toBe("Updates. Update available");
-    expect(updates()?.closest(".sidebar-identity-menu__footer")).not.toBeNull();
+    expect(updates()?.closest(".sidebar-identity-menu__footer")).toBeNull();
     expect(updates()?.querySelector(".sidebar-identity-menu__update-badge")).not.toBeNull();
 
     (context.overlays as unknown as { snapshot: ApplicationOverlays["snapshot"] }).snapshot = {
@@ -132,11 +132,13 @@ describe("AppSidebar footer identity menu", () => {
       "command:pair-mobile",
       "command:apps",
       "command:settings",
+      "command:updates",
       "command:usage",
+      "command:debug-overlay",
     ]);
     expect(
       view.query('[data-value="command:debug-overlay"]')?.closest(".sidebar-identity-menu__footer"),
-    ).not.toBeNull();
+    ).toBeNull();
     const helpRow = view.query<HTMLElement>(".sidebar-identity-menu__help");
     expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
     const links = domProbe(helpRow!.parentElement!).all('[role="menu"] a[href]');

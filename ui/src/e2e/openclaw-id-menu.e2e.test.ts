@@ -174,6 +174,8 @@ suite.define(() => {
               ...createControlUiE2eContextOptions(),
               viewport: { width, height: width === 390 ? 360 : 844 },
               colorScheme,
+              hasTouch: width === 390,
+              permissions: ["clipboard-read", "clipboard-write"],
             },
             async ({ page }) => {
               const scenario = {
@@ -244,14 +246,14 @@ suite.define(() => {
                 .getByText(signedIn ? "Remote access on" : label, { exact: true })
                 .waitFor();
               const target = signedIn
-                ? menu.locator(".sidebar-openclaw-id__status")
+                ? menu.getByRole("menuitem", { name: "Copy claw link", exact: true })
                 : menu.locator('[data-value="openclaw-id:sign-in"]');
               await target.hover();
               await page.evaluate(() => document.fonts.ready);
               const geometry = await menu.evaluate((element) =>
                 [
                   ...element.querySelectorAll(
-                    ".sidebar-customize-menu__item, .sidebar-openclaw-id__status, .sidebar-openclaw-id__address",
+                    ".sidebar-customize-menu__item, .sidebar-openclaw-id__status, .sidebar-openclaw-id__linked",
                   ),
                 ].map((row) => {
                   const rect = row.getBoundingClientRect();
@@ -335,6 +337,30 @@ suite.define(() => {
                   await menu.waitFor({ state: "hidden" });
                 }
               } else {
+                const card = menu.getByRole("menuitem", { name: "Copy claw link", exact: true });
+                const box = await card.boundingBox();
+                expect(box?.height).toBe(56);
+                const opacity = (selector: string) =>
+                  card.locator(selector).evaluate((node) => getComputedStyle(node).opacity);
+                await expect.poll(() => opacity(".sidebar-openclaw-id__copy")).toBe("1");
+                await expect
+                  .poll(() => opacity(".sidebar-openclaw-id__pill"))
+                  .toBe(width === 390 ? "1" : "0");
+                // Activate the radio/label row, not just the address, then use the keyboard.
+                await card.click({ position: { x: 10, y: 10 } });
+                await expect.poll(() => card.getAttribute("data-copied")).toBe("true");
+                expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+                  "https://a-long-demo-claw-e61zr.crabd.xyz",
+                );
+                expect(await card.boundingBox()).toEqual(box);
+                await page.evaluate(() => navigator.clipboard.writeText(""));
+                await card.focus();
+                await page.keyboard.press("Enter");
+                await expect
+                  .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+                  .toBe("https://a-long-demo-claw-e61zr.crabd.xyz");
+                expect(await menu.isVisible()).toBe(true);
+                expect(await card.getAttribute("aria-label")).toBe("Copy claw link");
                 expect
                   .soft(
                     await menu.getByRole("menuitem", { name: "Your devices", exact: true }).count(),

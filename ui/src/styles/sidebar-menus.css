@@ -11,7 +11,7 @@
 .people-menu__status {
   padding: 6px 8px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .people-menu__submenu + .oc-menu {
@@ -100,7 +100,7 @@
 
 .session-menu__snooze-picker p {
   margin: 10px 0;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .session-menu__snooze-picker [role="alert"] {
@@ -183,8 +183,8 @@
   max-width: 100%;
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(16px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -200,7 +200,7 @@
 .session-actions-page h3 {
   margin: 12px 12px 4px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -975,7 +975,7 @@
 }
 
 .sidebar-agent-menu__group-count {
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   font-weight: 650;
   line-height: 1;
 }
@@ -1148,32 +1148,19 @@
 .sidebar-identity-menu__footer {
   display: flex;
   align-items: center;
-  gap: 2px;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
   padding: 2px 8px;
 }
 
-.sidebar-identity-menu__footer .sidebar-footer-build {
-  flex: 1;
+.sidebar-identity-menu__update-badge {
+  color: var(--inbox-attention);
 }
 
 .sidebar-identity-menu .theme-mode-toggle {
   justify-content: center;
   border: 0;
-}
-
-.sidebar-identity-menu__updates {
-  position: relative;
-}
-
-.sidebar-identity-menu__update-badge {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--inbox-attention);
 }
 
 .sidebar-agent-menu__settings {
@@ -1639,15 +1626,11 @@
   line-height: 16px;
 }
 
-.sidebar-openclaw-id__pill,
-.sidebar-openclaw-id__count {
+.sidebar-openclaw-id__pill {
   flex: none;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
-}
-
-.sidebar-openclaw-id__pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1668,11 +1651,112 @@
   box-shadow: none;
 }
 
-.sidebar-openclaw-id__address {
-  min-height: 0;
-  margin-top: -7px;
-  padding: 0 14px 10px 41px;
-  line-height: 16px;
+.sidebar-openclaw-id__linked.oc-menu-item {
+  padding: 9px 14px 10px;
+  font-weight: 500;
+  letter-spacing: inherit;
+  transition: background 140ms ease;
+
+  &:hover {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  &:active {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+
+  & .sidebar-openclaw-id__linked-content {
+    display: grid;
+    grid-template-columns: 15px minmax(0, 1fr) auto;
+    gap: 3px 12px;
+    align-items: center;
+    width: 100%;
+  }
+
+  & .nav-item__icon {
+    width: 15px;
+    height: 18px;
+    color: var(--muted);
+  }
+
+  & .sidebar-openclaw-id__detail {
+    grid-column: 2 / 4;
+    font-weight: 400;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.sidebar-openclaw-id__label {
+  color: var(--text-strong);
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-openclaw-id__trailing {
+  display: grid;
+  justify-items: end;
+  align-items: center;
+
+  & > * {
+    grid-area: 1 / 1;
+    transition: opacity 140ms ease;
+  }
+
+  & .sidebar-openclaw-id__pill {
+    font-weight: 400;
+  }
+}
+
+.sidebar-openclaw-id__copy {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  opacity: 0;
+
+  & svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+@media (hover: hover) {
+  .sidebar-openclaw-id__linked:is(:hover, :focus-visible, [data-copied="true"])
+    .sidebar-openclaw-id__pill {
+    opacity: 0;
+  }
+}
+
+.sidebar-openclaw-id__linked:is(:hover, :focus-visible, [data-copied="true"]) {
+  & .sidebar-openclaw-id__copy {
+    opacity: 1;
+    color: var(--text-strong);
+  }
+}
+
+.sidebar-openclaw-id__linked[data-copied="true"] .sidebar-openclaw-id__copy {
+  color: var(--ok);
+}
+
+@media (hover: none) {
+  .sidebar-openclaw-id__trailing {
+    grid-auto-flow: column;
+    column-gap: 10px;
+
+    & > * {
+      grid-area: auto;
+    }
+  }
+
+  .sidebar-openclaw-id__linked .sidebar-openclaw-id__pill,
+  .sidebar-openclaw-id__linked .sidebar-openclaw-id__copy {
+    opacity: 1;
+  }
 }
 
 .sidebar-openclaw-id__sign-in.oc-menu-item {

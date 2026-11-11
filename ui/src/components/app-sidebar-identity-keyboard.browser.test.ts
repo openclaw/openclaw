@@ -58,9 +58,7 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
         []),
     ];
     expect(footer.map((item) => item.getAttribute("data-value"))).toEqual([
-      "command:updates",
       ...(menu?.querySelector(".sidebar-footer-build") ? ["command:about"] : []),
-      "command:debug-overlay",
       "command:theme",
     ]);
     await expect.poll(() => document.activeElement).toBe(items[0]);

@@ -17,7 +17,6 @@ import {
   renderSidebarHelpMenu,
   selectSidebarHelpLink,
 } from "./sidebar-identity-menu-links.tsx";
-import { iconButtonClass } from "./solid/icon-button.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
 import { MenuHeading } from "./solid/menu-heading.tsx";
@@ -241,10 +240,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
     (params.profileViewer?.email && params.profileViewer.email !== profileName()
       ? params.profileViewer.email
       : null);
-  const updatesLabel = () =>
-    params.updateAvailable
-      ? `${titleForRoute("updates")}. ${t("updates.sidebar.availableTitle")}`
-      : titleForRoute("updates");
   const items = createMemo<MenuEntry[]>(() => {
     const help = renderSidebarHelpMenu();
     const gateways = renderIdentityGateways(params.nativeGatewaySnapshot, params.onClose);
@@ -287,7 +282,31 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
           />
         ),
       }),
+      {
+        ...renderSidebarMenuAction("command:updates", titleForRoute("updates"), "download", {
+          details: params.updateAvailable ? (
+            <span
+              class="agent-select__badge sidebar-identity-menu__update-badge"
+              aria-hidden="true"
+            >
+              {t("updates.sidebar.availableBadge")}
+            </span>
+          ) : undefined,
+        }),
+        label: params.updateAvailable
+          ? `${titleForRoute("updates")}. ${t("updates.sidebar.availableTitle")}`
+          : titleForRoute("updates"),
+      },
       renderSidebarMenuAction("command:usage", titleForRoute("usage"), "coins"),
+      renderSidebarMenuAction("command:debug-overlay", t("debug.overlay.title"), "activity", {
+        details: (
+          <KeyboardShortcut
+            class="session-menu__shortcut"
+            ariaHidden
+            combo={KEYBOARD_SHORTCUT_COMBOS.debugOverlay}
+          />
+        ),
+      }),
       ...(help ? [help] : []),
       ...(params.canRetryConnection
         ? [
@@ -308,26 +327,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
         class: "sidebar-identity-menu__footer",
         items: [
           {
-            id: "command:updates",
-            label: updatesLabel(),
-            render: (attributes) => (
-              <openclaw-tooltip prop:content={updatesLabel()}>
-                <button
-                  {...attributes}
-                  type="button"
-                  class={[iconButtonClass({ size: 28 }), "sidebar-identity-menu__updates"]}
-                >
-                  <Icon name="download" />
-                  {params.updateAvailable ? (
-                    <span class="sidebar-identity-menu__update-badge" aria-hidden="true">
-                      <span class="sr-only">{t("updates.sidebar.availableBadge")}</span>
-                    </span>
-                  ) : undefined}
-                </button>
-              </openclaw-tooltip>
-            ),
-          },
-          {
             id: "command:about",
             label: t("aboutPage.artifactDetails"),
             render: (menuAttributes) => (
@@ -338,29 +337,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
                 menuAttributes={menuAttributes}
                 copyButtonRef={controls.ref()}
               />
-            ),
-          },
-          {
-            id: "command:debug-overlay",
-            label: t("debug.overlay.title"),
-            render: (attributes) => (
-              <openclaw-tooltip>
-                <button
-                  {...attributes}
-                  type="button"
-                  class={[iconButtonClass({ size: 28 }), "sidebar-identity-menu__busyness"]}
-                >
-                  <Icon name="activity" />
-                </button>
-                <span slot="content">
-                  {t("debug.overlay.title")}{" "}
-                  <KeyboardShortcut
-                    class="session-menu__shortcut"
-                    ariaHidden
-                    combo={KEYBOARD_SHORTCUT_COMBOS.debugOverlay}
-                  />
-                </span>
-              </openclaw-tooltip>
             ),
           },
           {
@@ -395,11 +371,11 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
         if (value === "command:theme") {
           return;
         }
-        params.onClose(false);
-        if (selectSidebarHelpLink(value)) {
+        if (params.extension?.onSelect(value)) {
           return;
         }
-        if (params.extension?.onSelect(value)) {
+        params.onClose(false);
+        if (selectSidebarHelpLink(value)) {
           return;
         }
         const capability = nativeGatewaysCapability();
