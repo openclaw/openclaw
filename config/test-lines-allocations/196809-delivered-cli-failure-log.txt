@@ -1,4 +1,4 @@
 # PR for #196809: regression coverage for delivered CLI failures logging the
 # terminal failure once, on the initial attempt and on a retry, while the
 # undelivered path still logs exactly once and runs the terminal hook.
-97
+104
