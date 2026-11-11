@@ -278,22 +278,74 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
 }
 
 .openclaw-id-setup__spinner {
-  animation: openclaw-id-setup-spin 1s linear infinite;
+  animation: openclaw-id-setup-spin 0.9s linear infinite;
 }
 
 @keyframes openclaw-id-setup-spin {
   to {
-    transform: rotate(360deg);
+    rotate: 360deg;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .openclaw-id-setup__spinner {
-    animation: none;
+    animation-duration: 2.4s !important;
+    animation-iteration-count: infinite !important;
   }
 }
 
 .openclaw-id-steps__item[data-state="failed"] .openclaw-id-steps__mark,
 .openclaw-id-steps__item[data-state="failed"] .openclaw-id-steps__message {
   color: var(--danger);
+}
+
+.openclaw-id-setup .oc-dialog__close {
+  transition: opacity 140ms ease;
+}
+
+.openclaw-id-setup[data-noclose] .oc-dialog__close {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.openclaw-id-setup__enter {
+  animation: openclaw-id-setup-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.openclaw-id-setup__status.is-in > *,
+.openclaw-id-steps__message.is-in {
+  animation: openclaw-id-setup-in 200ms ease both;
+}
+
+.openclaw-id-steps__mark.chg {
+  animation: openclaw-id-setup-pop 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes openclaw-id-setup-in {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+}
+
+@keyframes openclaw-id-setup-pop {
+  from {
+    opacity: 0;
+    scale: 0.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .openclaw-id-setup .oc-dialog__close {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0.01ms !important;
+  }
+
+  .openclaw-id-setup__enter,
+  .openclaw-id-setup__status.is-in > *,
+  .openclaw-id-steps__message.is-in,
+  .openclaw-id-steps__mark.chg {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0.01ms !important;
+  }
 }

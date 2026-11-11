@@ -21,6 +21,7 @@ export function RecoveryKitPanel(props: {
   accountEmail?: string | null;
   saved: boolean;
   onSaved: (saved: boolean) => void;
+  statusRef?: (element: HTMLDivElement) => void;
 }) {
   let copyLabel!: HTMLSpanElement;
   const [note, setNote] = createSignal<OpenClawIdUiError | null>(null);
@@ -116,7 +117,7 @@ export function RecoveryKitPanel(props: {
           <span ref={(element) => (copyLabel = element)}>{t("common.copy")}</span>
         </button>
       </div>
-      <div class="openclaw-id-setup__status" role="status">
+      <div class="openclaw-id-setup__status" ref={props.statusRef} role="status">
         <Show when={note()}>{(message) => <OpenClawIdErrorMessage error={message()} />}</Show>
       </div>
       <label class="field checkbox openclaw-id-kit__saved">

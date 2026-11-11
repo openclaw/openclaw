@@ -45,6 +45,7 @@ import { clawNameFromHostname } from "./claw-name.ts";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { RecoveryKitForm } from "./recovery-kit-form.tsx";
 import { RecoveryKitPanel } from "./recovery-kit-panel.tsx";
+import { createSetupMotion } from "./setup-motion.ts";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
 registerEnglishCatalog(registerOpenClawIdEnglish);
@@ -141,6 +142,8 @@ export function showMakeReachableDialog(params: {
   return withPromiseModalHost<boolean>(lifetime, (modal) => {
     modal.render(() => {
       let copyLinkLabel!: HTMLSpanElement;
+      const motion = createSetupMotion();
+      onSettled(motion.observe);
       const [step, setStep] = createSignal<Step>({ kind: "name" });
       const [saved, setSaved] = createSignal(false);
       const [preparing, setPreparing] = createSignal(false);
@@ -351,7 +354,10 @@ export function showMakeReachableDialog(params: {
           description={t("openclawId.dialogDescription")}
           onModal-cancel={cancel}
         >
-          <div class="oc-dialog openclaw-id-setup">
+          <div
+            class="oc-dialog openclaw-id-setup"
+            data-noclose={step().kind === "kit" || step().kind === "linking" ? "" : undefined}
+          >
             <DialogHeader
               title={t("openclawId.dialogTitle")}
               description={
@@ -361,13 +367,20 @@ export function showMakeReachableDialog(params: {
                     })
                   : undefined
               }
-              onClose={
-                step().kind === "kit" || step().kind === "linking"
-                  ? undefined
-                  : () => void requestClose()
-              }
+              onClose={() => void requestClose()}
+              closeDisabled={step().kind === "kit" || step().kind === "linking"}
             />
-            <div class="oc-dialog__body">
+            <div
+              class="oc-dialog__body"
+              ref={motion.body}
+              data-step={
+                progress()
+                  ? "progress"
+                  : step().kind === "name" && !codeFromAccount()
+                    ? "manual"
+                    : step().kind
+              }
+            >
               <Switch>
                 <Match when={step().kind === "name"}>
                   <Show when={!codeFromAccount()}>
@@ -400,6 +413,7 @@ export function showMakeReachableDialog(params: {
                       </div>
                       <div
                         id="openclaw-id-code-status"
+                        ref={motion.slot}
                         class={["openclaw-id-setup__status", { "is-error": Boolean(codeError()) }]}
                         role="status"
                       >
@@ -431,6 +445,7 @@ export function showMakeReachableDialog(params: {
                     />
                     <div
                       id="openclaw-id-name-status"
+                      ref={motion.slot}
                       class={[
                         "openclaw-id-setup__status",
                         { "is-error": Boolean(nameError()) || check()?.available === false },
@@ -505,6 +520,7 @@ export function showMakeReachableDialog(params: {
                           accountEmail={params.signedIn?.email}
                           saved={saved()}
                           onSaved={setSaved}
+                          statusRef={motion.slot}
                         />
                         <Loading on={closeAttempt()}>
                           <Errored
@@ -555,7 +571,11 @@ export function showMakeReachableDialog(params: {
                                 class="openclaw-id-steps__item"
                                 data-state={linkStates()[id].state}
                               >
-                                <span class="openclaw-id-steps__mark" aria-hidden="true">
+                                <span
+                                  class="openclaw-id-steps__mark"
+                                  ref={motion.mark}
+                                  aria-hidden="true"
+                                >
                                   <Icon
                                     name={
                                       linkStates()[id].state === "done"
@@ -582,7 +602,7 @@ export function showMakeReachableDialog(params: {
                                   })}
                                   <Show when={stepError(id)}>
                                     {(error) => (
-                                      <div class="openclaw-id-steps__message">
+                                      <div class="openclaw-id-steps__message" ref={motion.message}>
                                         <OpenClawIdErrorMessage error={error()} />
                                       </div>
                                     )}
