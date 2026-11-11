@@ -4,6 +4,7 @@ import type { ModelsAuthSetApiKeyResult } from "../../packages/gateway-protocol/
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { ModelsAccountsOptions } from "../commands/models/accounts.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
@@ -32,9 +33,18 @@ function addAccountOptions(command: Command): Command {
 
 async function withModelsRuntime(
   action: (runtime: ModelsCliRuntime) => Promise<void>,
+  readOnly = false,
 ): Promise<void> {
   const runtime = await import("./models-cli.runtime.js");
-  return runtime.runModelsCommand(() => action(runtime));
+  return runtime.runModelsCommand(async () => {
+    try {
+      await action(runtime);
+    } catch (error) {
+      if (!readOnly || !getAsyncWorkSignal()?.aborted) {
+        throw error;
+      }
+    }
+  });
 }
 
 // Ownership is selected before loading any mutation-capable auth runtime.
@@ -290,7 +300,7 @@ export function registerModelsCli(program: Command) {
           },
           defaultRuntime,
         );
-      });
+      }, !opts.refresh);
     });
 
   models
@@ -323,7 +333,7 @@ export function registerModelsCli(program: Command) {
         const agent = resolveModelAgentOption(command);
         const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
         await modelsStatusCommand({ ...opts, json: hasJsonOutput(opts), agent }, defaultRuntime);
-      }),
+      }, true),
     );
 
   models
@@ -503,7 +513,7 @@ export function registerModelsCli(program: Command) {
         },
         defaultRuntime,
       );
-    });
+    }, true);
   });
 
   const auth = models

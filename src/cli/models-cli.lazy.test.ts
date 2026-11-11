@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 
 const defaultRuntime = {};
 const runtimeLoaded = vi.fn();
@@ -47,14 +48,28 @@ it("renders help without importing the models runtime", async () => {
   expect(runtimeLoaded).not.toHaveBeenCalled();
 });
 
-it("loads the models runtime for command actions", async () => {
-  const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
+it.each(["success", "interrupted", "error"])("runs %s model actions", async (mode) => {
+  const scope = new AsyncWorkScope();
+  const failure = new Error("catalog read failed");
+  const modelsStatusCommand = vi.fn(async () => {
+    if (mode === "interrupted") {
+      scope.beginClose(failure);
+    }
+    if (mode !== "success") {
+      throw failure;
+    }
+  });
   vi.doMock("../commands/models/list.status-command.js", () => ({
     modelsStatusCommand,
   }));
 
   const program = await createProgram();
-  await program.parseAsync(["models", "status", "--json"], { from: "user" });
+  const run = scope.run(() => program.parseAsync(["models", "status", "--json"], { from: "user" }));
+  if (mode === "error") {
+    await expect(run).rejects.toBe(failure);
+  } else {
+    await run;
+  }
 
   expect(runtimeLoaded).toHaveBeenCalledTimes(1);
   expect(runModelsCommand).toHaveBeenCalledTimes(1);

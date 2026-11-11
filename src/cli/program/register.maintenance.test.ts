@@ -4,6 +4,7 @@ import * as nodeSqlite from "../../../node-sqlite.mjs";
 import { runDoctorLintCli as runDoctorLintCliEntry } from "../../commands/doctor-lint.js";
 import { parseReleasedDoctorLintReport } from "../../infra/test-fixtures/update-doctor-lint.v2026-9-5.js";
 import { ExitError } from "../../runtime.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { UpdateSchemaRefusalError } from "../../state/openclaw-update-schema-refusal.js";
 import { withCliTty } from "../run-main.bare-root.test-support.js";
 import { expectNoCalls } from "./program.test-helpers.js";
@@ -291,11 +292,26 @@ describe("registered maintenance commands", () => {
     expect(runtime.exit).toHaveBeenCalledWith(explicit ? 1 : 0);
   });
 
-  it("keeps interactive lint failures on stderr", async () => {
-    runDoctorLintCli.mockRejectedValueOnce(new Error("lint failed"));
-    await withCliTty(true, () => runCli("doctor --lint"));
-    expectFailure("lint failed", false);
-  });
+  it.each([false, true])(
+    "keeps lint failures on stderr unless interrupted=%s",
+    async (interrupted) => {
+      const scope = new AsyncWorkScope();
+      runDoctorLintCli.mockImplementationOnce(async () => {
+        const error = new Error("lint failed");
+        if (interrupted) {
+          scope.beginClose(error);
+        }
+        throw error;
+      });
+      await scope.run(() => withCliTty(true, () => runCli("doctor --lint")));
+      if (interrupted) {
+        expectNoCalls(runtime.log, runtime.error, runtime.writeJson);
+        expect(runtime.exit).toHaveBeenCalledWith(2);
+      } else {
+        expectFailure("lint failed", false);
+      }
+    },
+  );
 
   it.each([
     [
