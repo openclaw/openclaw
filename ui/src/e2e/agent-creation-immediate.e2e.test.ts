@@ -14,7 +14,6 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI immediate agent creation" });
-const creationStatus = "Creating new agent…";
 const previousMessage = "Synthetic Harbor conversation before agent creation.";
 const pendingSelector = 'openclaw-pending-session-create[aria-hidden="false"]';
 const pageOptions = {
@@ -178,7 +177,6 @@ suite.define(() => {
       const dialog = page.locator(".agent-create-dialog");
       await dialog.waitFor({ state: "visible" });
       await dialog.locator('input[name="name"]').fill("New agent");
-      const submit = dialog.locator('button[type="submit"]');
 
       const [firstPaint] = await Promise.all([
         page.evaluate(
@@ -187,9 +185,7 @@ suite.define(() => {
               const started = performance.now();
               const sample = () => {
                 const host = document.querySelector(pending);
-                const status = host?.querySelector(
-                  '.chat-working-indicator[role="status"] .chat-working-indicator__status > span',
-                );
+                const status = host?.querySelector(".chat-working-indicator__status > span");
                 const title = host?.querySelector(".chat-pane__session-title");
                 const elapsedMs = performance.now() - started;
                 const presented =
@@ -214,11 +210,11 @@ suite.define(() => {
             }),
           {
             pending: pendingSelector,
-            text: creationStatus,
+            text: "Creating new agent…",
             originalPath: new URL(originalUrl).pathname,
           },
         ),
-        submit.click(),
+        dialog.locator('button[type="submit"]').click(),
       ]);
       // This bounds automation-to-painted-preview time; it makes no provider/persistence claim.
       expect(firstPaint.elapsedMs).toBeGreaterThanOrEqual(0);
