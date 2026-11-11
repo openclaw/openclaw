@@ -134,6 +134,15 @@ handler receives a discriminated invocation context: `source` is
 surface. Tool policy, authenticated command handling, and Gateway scope checks
 remain owned by their existing execution paths.
 
+For session actions, thrown handler errors return `ok: false` with code
+`OPERATION_FAILED` and the error's message (or stringified thrown value), limited
+to 2,000 UTF-16 code units without splitting surrogate pairs. Blank messages use
+`Feature operation failed`. Validation failures retain `INVALID_INPUT` or
+`INVALID_OUTPUT`. `createFeatureClient.invoke` rejects with the returned message.
+Use caller-safe error messages: stacks, causes, and other error fields are not
+included. Tools and commands retain their existing error handling; the Gateway
+still masks uncaught errors from directly registered session actions.
+
 Use `createFeatureClient(contract, context.host)` inside a browser view:
 
 ```typescript
