@@ -497,6 +497,7 @@ it.each([
     for (const script of [
       "release-tooling-identity.mjs",
       "lib/record-shared.mjs",
+      "lib/plain-gh.mjs",
       "openclaw-npm-extended-stable-release.mjs",
       "plugin-sdk-api-release-evidence.mjs",
       "lib/release-version.mjs",
