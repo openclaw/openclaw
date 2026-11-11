@@ -162,8 +162,8 @@ it.each(["success", "failure"])(
 // exit finalization and nonempty resource owners after a real package swap.
 const compositionEntrypoint = resolveRuntimeWorkerUrl(cliRetainedCompositionEntrypoint);
 // Temporary diagnostic observation window, not a production deadline or passing latency claim.
-const compositionChildTimeoutMs =
-  process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS === "1" ? 180_000 : CLI_PROCESS_DEADLOCK_GUARD_MS;
+const compositionDiagnostics = process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS === "1";
+const compositionChildTimeoutMs = compositionDiagnostics ? 180_000 : CLI_PROCESS_DEADLOCK_GUARD_MS;
 for (const runtime of ["node", "node-short-path"] as const) {
   describe.skipIf(runtime === "node-short-path" && process.platform !== "win32")(
     runtime + " retained CLI fixture",
@@ -245,11 +245,51 @@ for (const runtime of ["node", "node-short-path"] as const) {
                 OPENCLAW_CONFIG_PATH: path.join(stateDirectory, "openclaw.json"),
                 OPENCLAW_TEST_FAST: "1",
                 OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS: process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS,
+                OPENCLAW_DEBUG: compositionDiagnostics ? "1" : undefined,
                 NODE_DISABLE_COMPILE_CACHE: "1",
                 TMPDIR: directory,
                 TMP: directory,
                 TEMP: directory,
               },
+              // Observe the synthetic child's existing pipes before a timeout can
+              // discard early admission or a passing assertion can hide its stages.
+              interact: compositionDiagnostics
+                ? (child) => {
+                    const remaining = { admission: 4_096, stages: 32_768, errors: 16_384 };
+                    const observe = () => {
+                      let pending = "";
+                      return (chunk: string) => {
+                        const lines = (pending + chunk).split(/\r?\n/u);
+                        pending = lines.pop()!.slice(-8_192);
+                        for (const line of lines) {
+                          const kind = line.startsWith('{"phase":"cli-composition-admitted"')
+                            ? "admission"
+                            : /^(?:\[openclaw\]|CLI cleanup |Plugin CLI resource disposal failed)/u.test(line)
+                              ? "errors"
+                              : /^\{"phase":"(?:cli-composition-child|retained-owner|retained-hash|retained-io)"/u.test(line) ||
+                                  (line.startsWith('{"phase":"retained-tree"') &&
+                                    (line.includes('"timings":') ||
+                                      /"stage":"(?:entry-walk-|final-bindings-|aliases-|modes-)/u.test(line)))
+                                ? "stages"
+                                : undefined;
+                          if (!kind || remaining[kind] === 0) {
+                            continue;
+                          }
+                          const selected = line.slice(0, Math.min(4_096, remaining[kind]));
+                          remaining[kind] -= selected.length + 1;
+                          console.log(selected);
+                          if (remaining[kind] <= 0) {
+                            remaining[kind] = 0;
+                            console.log(JSON.stringify({ phase: "cli-composition-diagnostic-limit", runtime, kind }));
+                          }
+                        }
+                      };
+                    };
+                    child.stdout.on("data", observe());
+                    child.stderr.on("data", observe());
+                    child.stdin.end();
+                  }
+                : undefined,
               timeoutMs: compositionChildTimeoutMs,
             }),
           );
