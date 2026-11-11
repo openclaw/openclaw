@@ -25,6 +25,12 @@ const MATTERMOST_WEBSOCKET_AUTH_TIMEOUT_MS = 30_000;
 const MATTERMOST_WEBSOCKET_HEALTH_CHECK_INTERVAL_MS = 30_000;
 const MATTERMOST_WEBSOCKET_PING_INTERVAL_MS = 30_000;
 const MATTERMOST_WEBSOCKET_PONG_TIMEOUT_MS = 10_000;
+export const MATTERMOST_SYSTEM_EVENTS: ReadonlySet<string> = new Set([
+  "post_edited",
+  "post_deleted",
+  "user_added",
+  "user_removed",
+]);
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
   status: z.string().optional(),
@@ -34,6 +40,9 @@ const MattermostEventPayloadSchema = z.object({
       // Durable ingress validates the post only after claiming the raw envelope.
       post: z.unknown().optional(),
       reaction: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+      // Membership events name the affected user here; `remover_id` is the actor on removal.
+      user_id: z.string().optional(),
+      remover_id: z.string().optional(),
       channel_id: z.string().optional(),
       channel_name: z.string().optional(),
       channel_display_name: z.string().optional(),
@@ -71,6 +80,8 @@ type CreateMattermostConnectOnceOpts = {
   nextSeq: () => number;
   onPosted: (rawEvent: string) => Promise<void>;
   onReaction: (payload: MattermostEventPayload) => Promise<void>;
+  /** Edits, deletions and channel membership changes; omitted when the monitor ignores them. */
+  onSystemEvent?: (payload: MattermostEventPayload) => Promise<void>;
   /**
    * Called periodically to check whether the bot account has been modified
    * (e.g. disabled then re-enabled) since the WebSocket was opened.
@@ -270,6 +281,15 @@ export function createMattermostConnectOnce(
               await opts.onReaction(payload);
             } catch (err) {
               opts.runtime.error?.(`mattermost reaction handler failed: ${String(err)}`);
+            }
+            return;
+          }
+
+          if (opts.onSystemEvent && payload.event && MATTERMOST_SYSTEM_EVENTS.has(payload.event)) {
+            try {
+              await opts.onSystemEvent(payload);
+            } catch (err) {
+              opts.runtime.error?.(`mattermost system event handler failed: ${String(err)}`);
             }
             return;
           }

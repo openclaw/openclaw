@@ -108,6 +108,19 @@ const command = {
   senderId: "trusted-user",
   senderName: "Trusted User",
 };
+const directCommand = {
+  channelId: "dm-1",
+  channelInfo: { id: "dm-1", type: "D", name: "alice", display_name: "Alice" },
+  senderId: "alice",
+  senderName: "Alice",
+};
+const direct = {
+  kind: "direct",
+  chatType: "direct",
+  channelName: "alice",
+  channelDisplay: "Alice",
+  roomLabel: "#alice",
+};
 const inbound = {
   cfg: {},
   senderId: "trusted-user",
@@ -166,6 +179,31 @@ describe("mattermost monitor authz", () => {
       result: { ok: false, denyReason: "unknown-channel", commandAuthorized: false },
     },
     {
+      name: "denies open DM commands without an allowlist",
+      params: { ...directCommand, account: account({ dmPolicy: "open" }) },
+      result: { ...direct, ok: false, denyReason: "unauthorized", commandAuthorized: false },
+    },
+    {
+      name: "authorizes open DM commands through a wildcard allowlist",
+      params: { ...directCommand, account: account({ dmPolicy: "open", allowFrom: ["*"] }) },
+      result: { ...direct, ok: true, commandAuthorized: true },
+    },
+    {
+      name: "denies DM commands when direct messages are disabled",
+      params: { ...directCommand, account: account({ dmPolicy: "disabled" }) },
+      result: { ...direct, ok: false, denyReason: "dm-disabled", commandAuthorized: false },
+    },
+    {
+      name: "denies channel commands without a group allowlist",
+      params: { account: account({ groupPolicy: "allowlist" }), hasControlCommand: false },
+      result: {
+        ok: false,
+        denyReason: "channel-no-allowlist",
+        kind: "channel",
+        roomLabel: "#general",
+      },
+    },
+    {
       name: "authorizes group senders through static access groups",
       params: {
         channelInfo: { ...channelInfo, type: "g" },
@@ -187,28 +225,18 @@ describe("mattermost monitor authz", () => {
     );
   });
 
-  it.each([
-    [
-      "DM commands in open mode",
-      { dmPolicy: "open" },
-      { allowTextCommands: true, hasControlCommand: true },
-      { ingress: { decision: "block" }, commandAccess: { authorized: false } },
-    ],
-    [
-      "direct reactions without pairing admission",
-      { dmPolicy: "pairing" },
-      { senderId: "new-user", senderName: "New User", eventKind: "reaction", mayPair: false },
-      { ingress: { decision: "block", reasonCode: "event_pairing_not_allowed" } },
-    ],
-  ] as const)("denies %s", async (_name, config, overrides, result) => {
+  it("denies direct reactions without pairing admission", async () => {
     expect(
       await resolveMattermostMonitorInboundAccess({
         ...inbound,
         kind: "direct",
-        account: account(config),
+        account: account({ dmPolicy: "pairing" }),
         storeAllowFrom: [],
-        ...overrides,
+        senderId: "new-user",
+        senderName: "New User",
+        eventKind: "reaction",
+        mayPair: false,
       }),
-    ).toMatchObject(result);
+    ).toMatchObject({ ingress: { decision: "block", reasonCode: "event_pairing_not_allowed" } });
   });
 });

@@ -286,7 +286,7 @@ it("does not let ignored post_edited events tombstone a later posted event", asy
 });
 
 it("preserves same-channel arrival order across an append retry backoff", async () => {
-  failEnqueues(1);
+  const failures = failEnqueues(1);
   const dispatched: string[] = [];
   const ingress = startMonitor(queue, async (post, _payload, lifecycle) => {
     dispatched.push(post.id);
@@ -300,6 +300,8 @@ it("preserves same-channel arrival order across an append retry backoff", async 
   await vi.waitFor(() => expect(dispatched).toEqual(["post-A", "post-B"]), {
     timeout: 5_000,
   });
+  failures.remaining = Number.POSITIVE_INFINITY;
+  await expect(ingress.receive(postedEvent("post-lost"))).rejects.toThrow("sqlite busy");
 });
 
 it("never dispatches from a pump racing stop through the async prune", async () => {
@@ -317,18 +319,6 @@ it("never dispatches from a pump racing stop through the async prune", async () 
   await stopping;
 
   expect(defaultDispatch).not.toHaveBeenCalled();
-});
-
-it("retries a transient append failure and escalates a persistent one", async () => {
-  const failures = failEnqueues(2);
-  const ingress = startMonitor(queue, defaultDispatch);
-  await ingress.receive(postedEvent("post-retry"));
-  await ingress.waitForIdle();
-  expect(failures.remaining).toBe(0);
-  expect(defaultDispatch).toHaveBeenCalledOnce();
-
-  failures.remaining = Number.POSITIVE_INFINITY;
-  await expect(ingress.receive(postedEvent("post-lost"))).rejects.toThrow("sqlite busy");
 });
 
 it("accepts a post whose channel id arrives at the envelope level", async () => {

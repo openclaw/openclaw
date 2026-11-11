@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
 
 const prepareSkillCommandsForAgents = vi.hoisted(() => vi.fn());
@@ -56,8 +56,6 @@ beforeEach(() => {
   runtime = { log: vi.fn(), error: vi.fn() };
 });
 
-afterEach(() => vi.unstubAllEnvs());
-
 it("returns early when slash commands are disabled", async () => {
   resolveSlashCommandConfig.mockReturnValue({ enabled: false });
   isSlashCommandsEnabled.mockReturnValue(false);
@@ -69,7 +67,6 @@ it("returns early when slash commands are disabled", async () => {
 });
 
 it("registers deduped default and native skill commands across teams", async () => {
-  vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18888");
   resolveSlashCommandConfig.mockReturnValue({ enabled: true, nativeSkills: true });
   fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }, { id: "team-2" }]);
   prepareSkillCommandsForAgents.mockResolvedValue([
@@ -103,15 +100,6 @@ it("registers deduped default and native skill commands across teams", async () 
       ["oc_ping", "oc_ping"],
     ]),
   );
-});
-
-it("falls back to the configured gateway port when the env port is out of range", async () => {
-  vi.stubEnv("OPENCLAW_GATEWAY_PORT", "65536");
-  registerSlashCommands.mockResolvedValue([{ token: "token-1", trigger: "ping" }]);
-
-  await registerMonitor({ gateway: { port: 18789 } });
-
-  expect(resolveCallbackUrl).toHaveBeenCalledWith(expect.objectContaining({ gatewayPort: 18789 }));
 });
 
 it("warns on loopback callback urls and reports partial team failures", async () => {

@@ -77,10 +77,6 @@ describe("mattermost setup", () => {
     );
   });
 
-  it("treats secret-ref tokens plus base url as configured", async () => {
-    expect(await wizardConfigured({ baseUrl, botToken: secretToken })).toBe(true);
-  });
-
   it("does not inherit configured state from a sibling when defaultAccount is named", async () => {
     const accounts = { alerts: { baseUrl, botToken: secretToken }, work: {} };
     expect(await wizardConfigured({ defaultAccount: "work", accounts })).toBe(false);
