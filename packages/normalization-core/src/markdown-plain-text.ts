@@ -46,11 +46,18 @@ function stripCompletedLongOrTildeFences(text: string): string {
 function holdInlineCodeSpans(text: string, code: string[]): string {
   let out = "";
   let cur = 0;
+  let lineStart = 0;
   for (let i = 0; i < text.length;) {
     const ch = text[i];
+    if (ch === "\n") {
+      lineStart = i + 1;
+      i++;
+      continue;
+    }
     if (ch === "\0") {
       out += text.slice(cur, i) + "\0\0";
-      cur = ++i;
+      cur = i + 1;
+      i++;
       continue;
     }
     if (ch !== "`") {
@@ -61,12 +68,12 @@ function holdInlineCodeSpans(text: string, code: string[]): string {
     while (text[i + n] === "`") n++;
     // Find the next backtick run of exactly this length, which closes the span.
     const m = new RegExp("(?<![`])`{" + n + "}(?!`)").exec(text.slice(i + n));
-    // A backtick run at the start of a line (CommonMark allows up to three
-    // spaces of indentation) opens a fenced block, which fence stripping
-    // removes whole; inline code may span lines, so only line-start runs are
-    // left for the fence pass. Inspect only the current line, not the whole prefix.
-    const lineStart = /^ *$/.test(text.slice(text.lastIndexOf("\n", i - 1) + 1, i));
-    if (!m || (lineStart && n >= 3)) {
+    // A 3+ run at a line start (any leading spaces) opens a fenced block, which
+    // fence stripping removes whole; inline code may span lines, so only
+    // line-start runs are left for the fence pass. Track the line start in the
+    // single forward pass so the check never scans backward.
+    const lineStartHit = n >= 3 && /^ *$/.test(text.slice(lineStart, i));
+    if (!m || lineStartHit) {
       // Consume the whole unmatched run so its tail backticks cannot reopen as a
       // narrower span and steal delimiters from a later valid code span.
       i += n;
