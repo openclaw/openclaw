@@ -41,6 +41,8 @@ const { values } = parseArgs({
     candidate: { type: "string" },
     admission: { type: "string", default: "signed-in" },
     reloads: { type: "string", default: "11" },
+    "prime-reloads": { type: "string" },
+    "visual-proofs": { type: "boolean", default: false },
     sessions: { type: "string", default: "3000" },
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
@@ -50,6 +52,7 @@ const { values } = parseArgs({
     "plugin-activation": { type: "boolean", default: false },
     "details-session-facts": { type: "boolean", default: false },
     "details-subagent-activity": { type: "boolean", default: false },
+    "details-child-count": { type: "string", default: "3" },
     "active-targets": { type: "boolean", default: false },
     "composer-controls": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
@@ -65,11 +68,14 @@ if (values.help) {
   console.info(`Usage: node --import ./scripts/tsx.mjs scripts/perf/warm-reload-proof.ts
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
-  --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
+  --reloads 11 --prime-reloads 1 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
+  --visual-proofs (opt in to geometry, screencast, backtracking and pixel census)
   --transcript-late-paint --plugin-activation --active-targets --reload-after-navigation --cpu-profile
-  --details-subagent-activity (two settled ordinary children on the active chat target)
+  --details-subagent-activity --details-child-count 3..8 (active chat ordinary children; default 3)
   --init-script <browser-script.js> (repeatable)
-Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
+Creates fresh isolated state and Chromium, records cold + warm timings, then stops both.
+Default: one unmeasured warm prime; --prime-reloads 0 measures the first warm return.
+--cpu-profile retains full visual attribution and defaults to no priming.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
   process.exit(0);
@@ -100,9 +106,19 @@ function integer(raw: string, name: string, min: number, max: number) {
   return number;
 }
 const reloads = integer(values.reloads, "--reloads", 0, 100);
+const primeReloads = integer(
+  values["prime-reloads"] ?? (values["cpu-profile"] ? "0" : "1"),
+  "--prime-reloads",
+  0,
+  10,
+);
+const visualProofs = values["visual-proofs"] || values["cpu-profile"];
 const sessions = integer(values.sessions, "--sessions", 2000, 20000);
 const rttMs = integer(values["rtt-ms"], "--rtt-ms", 0, 1000);
 const captureMs = integer(values["capture-ms"], "--capture-ms", 1000, 60000);
+const detailsChildren = values["details-subagent-activity"]
+  ? integer(values["details-child-count"], "--details-child-count", 3, 8)
+  : 0;
 const extraInitScripts = await Promise.all(
   values["init-script"].map((file) => readFile(file, "utf8")),
 );
@@ -162,6 +178,10 @@ async function readProbe(page: Page) {
       "__perf",
     );
     const detailsPlacement: unknown = Reflect.get(window, "__detailsPlacementReads");
+    const paneChrome: ReturnType<typeof installPaneChromeProbe> | undefined = Reflect.get(
+      window,
+      "__paneChrome",
+    );
     return {
       ...data,
       rig: rig
@@ -171,7 +191,10 @@ async function readProbe(page: Page) {
             detailsPlacement,
           }
         : undefined,
-      paneChrome: Reflect.get(window, "__paneChrome").read(data.firstTranscriptDomMs),
+      paneChrome: paneChrome?.read(data.firstTranscriptDomMs),
+      marks: performance
+        .getEntriesByType("mark")
+        .map(({ name, startTime }) => ({ name, startTime })),
       modules: performance
         .getEntriesByType("resource")
         .flatMap((entry) =>
@@ -184,7 +207,12 @@ async function readProbe(page: Page) {
       capturedUntilMs: performance.now(),
     };
   });
-  return { ...probe, detailsGeometry: summarizeDetailsGeometry(probe.paneChrome.detailsFrames) };
+  return {
+    ...probe,
+    detailsGeometry: probe.paneChrome
+      ? summarizeDetailsGeometry(probe.paneChrome.detailsFrames)
+      : undefined,
+  };
 }
 async function regionBoxes(page: Page) {
   return await page.evaluate((selectors) => {
@@ -355,6 +383,102 @@ type ShortVisit = {
   cache: Awaited<ReturnType<typeof inspectWarmCache>>;
   elapsedBeforeCaptureMs: number;
 };
+async function captureTimingReload(
+  page: Page,
+  cdp: CDPSession,
+  url: string,
+  outputDir: string,
+  warm: boolean,
+  route: string,
+  shortVisit?: ShortVisit,
+  warmReloadOrdinal?: number,
+) {
+  await mkdir(outputDir, { recursive: true });
+  const oldPage = warm
+    ? await page.evaluate(() => ({
+        path: location.pathname,
+        transcriptRows: document.querySelectorAll(".chat-virtual-row .chat-text").length,
+      }))
+    : null;
+  if (route === "chat" && oldPage && oldPage.transcriptRows === 0) {
+    throw new Error("Warm timing requires the real old transcript document");
+  }
+  const tree = await cdp.send("Page.getFrameTree");
+  type DocumentRequest = Parameters<Parameters<typeof cdp.on<"Network.requestWillBeSent">>[1]>[0];
+  const documents: Array<{ path: string; epochMs: number; monotonicMs: number; loaderId: string }> =
+    [];
+  const errors: string[] = [];
+  const onDocument = (event: DocumentRequest) => {
+    if (event.type === "Document" && event.frameId === tree.frameTree.frame.id) {
+      documents.push({
+        path: new URL(event.request.url).pathname,
+        epochMs: event.wallTime * 1000,
+        monotonicMs: event.timestamp * 1000,
+        loaderId: event.loaderId,
+      });
+    }
+  };
+  const onError = (error: Error) => errors.push(error.message);
+  cdp.on("Network.requestWillBeSent", onDocument);
+  page.on("pageerror", onError);
+  try {
+    if (warm) {
+      await page.reload({ waitUntil: "domcontentloaded" });
+    } else {
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+    }
+    await page.waitForFunction((duration) => performance.now() >= duration, captureMs, {
+      timeout: captureMs + 60000,
+      polling: 250,
+    });
+    const probe = await readProbe(page);
+    if (
+      !probe.fcpMs ||
+      !probe.helloHandledMs ||
+      (warm && route === "chat" && !probe.firstPaintedRowsMs) ||
+      errors.length ||
+      (values.admission === "signed-in" && documents.length !== 1)
+    ) {
+      throw new Error(
+        `Incomplete timing capture: ${JSON.stringify({
+          fcpMs: probe.fcpMs,
+          helloHandledMs: probe.helloHandledMs,
+          firstPaintedRowsMs: probe.firstPaintedRowsMs,
+          documents: documents.length,
+          errors,
+        })}`,
+      );
+    }
+    const report = {
+      warm,
+      warmReloadOrdinal,
+      ...(shortVisit ? { shortVisit } : {}),
+      oldPage,
+      url: new URL(url).pathname,
+      probe,
+      documents,
+      errors,
+      paintMilestoneMethod:
+        "Navigation-relative Element Timing and Paint Timing; no geometry, backtracking, compositor or pixel proof",
+      outputDir,
+    };
+    await writeFile(path.join(outputDir, "reload.json"), JSON.stringify(report, null, 2));
+    console.info(
+      JSON.stringify({
+        reload: outputDir,
+        warmReloadOrdinal,
+        firstPaintedRowsMs: probe.firstPaintedRowsMs,
+        fcpMs: probe.fcpMs,
+        helloHandledMs: probe.helloHandledMs,
+      }),
+    );
+    return report;
+  } finally {
+    cdp.off("Network.requestWillBeSent", onDocument);
+    page.off("pageerror", onError);
+  }
+}
+
 async function captureReload(
   page: Page,
   cdp: CDPSession,
@@ -363,7 +487,20 @@ async function captureReload(
   warm: boolean,
   route: string,
   shortVisit?: ShortVisit,
+  warmReloadOrdinal?: number,
 ) {
+  if (!visualProofs) {
+    return await captureTimingReload(
+      page,
+      cdp,
+      url,
+      outputDir,
+      warm,
+      route,
+      shortVisit,
+      warmReloadOrdinal,
+    );
+  }
   await mkdir(outputDir, { recursive: true });
   const oldAnimationSample = warm
     ? await page.evaluate(() => {
@@ -652,6 +789,7 @@ async function captureReload(
     const finalRing = probe.contextRingFrames.at(-1)?.ring;
     const report = {
       warm,
+      warmReloadOrdinal,
       ...(shortVisit ? { shortVisit } : {}),
       oldPage: oldPage
         ? {
@@ -772,6 +910,7 @@ const results: Array<{
   warmCache: Awaited<ReturnType<typeof inspectWarmCache>> | null;
   detailsSubagentsWarmState: Awaited<ReturnType<typeof qualifyDetailsSubagentsWarmState>>;
   runs: Array<Awaited<ReturnType<typeof captureReload>>>;
+  priming: Array<Awaited<ReturnType<typeof captureReload>>>;
 }> = [];
 try {
   const arms: Array<{
@@ -814,7 +953,7 @@ try {
     dashboardPaneChrome: values["dashboard-pane-chrome"],
     pluginActivation: values["plugin-activation"],
     detailsSessionFacts: values["details-session-facts"],
-    detailsSubagentActivity: values["details-subagent-activity"],
+    detailsSubagentActivity: detailsChildren,
     activeTargets: values["active-targets"],
     composerControls: values["composer-controls"],
     ...(admission
@@ -980,7 +1119,7 @@ try {
             await page.addInitScript({ content: extraInitScripts.join("\n") });
           }
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"] || values["composer-controls"]});`,
+            content: `globalThis.__name = (fn) => fn; ${visualProofs ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);` : ""} (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"] || values["composer-controls"]}, ${visualProofs});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");
@@ -1108,6 +1247,7 @@ try {
             coldReset,
             warmCache: null as Awaited<ReturnType<typeof inspectWarmCache>> | null,
             detailsSubagentsWarmState: null,
+            priming: [],
             runs: [
               await captureReload(
                 page,
@@ -1229,9 +1369,12 @@ try {
           throw error;
         }
       }
-      for (let index = 1; index <= reloads; index++) {
-        // Alternate pair order so one arm does not always inherit the hotter server.
-        const order = index % 2 === 1 ? prepared : prepared.toReversed();
+      const warmCaptures = reloads > 0 ? primeReloads + reloads : 0;
+      for (let index = 1; index <= warmCaptures; index++) {
+        const priming = index <= primeReloads;
+        const measuredIndex = priming ? index : index - primeReloads;
+        // Priming does not shift the alternating order of measured pairs.
+        const order = measuredIndex % 2 === 1 ? prepared : prepared.toReversed();
         for (const item of order) {
           await activate(item.arm);
           if (values.base) {
@@ -1272,12 +1415,17 @@ try {
             item.page,
             item.cdp,
             `${baseUrl}${routePath}`,
-            path.join(item.arm.directory, route, `warm-${String(index).padStart(2, "0")}`),
+            path.join(
+              item.arm.directory,
+              route,
+              `${priming ? "prime" : "warm"}-${String(measuredIndex).padStart(2, "0")}`,
+            ),
             true,
             route,
             shortVisit,
+            index,
           );
-          item.result.runs.push(run);
+          (priming ? item.result.priming : item.result.runs).push(run);
           if (values.base) {
             await item.cdp.send("Page.setWebLifecycleState", { state: "frozen" });
           }
@@ -1292,6 +1440,16 @@ try {
   const report = {
     revision,
     profiled: values["cpu-profile"],
+    captureMode: visualProofs ? "visual" : "timing",
+    harness: {
+      geometrySampler: visualProofs,
+      screencast: visualProofs,
+      rpcCensus: visualProofs,
+      cpuProfiler: values["cpu-profile"],
+      externalInitScripts: extraInitScripts.length,
+      primingReloads: reloads > 0 ? primeReloads : 0,
+      firstMeasuredWarmOrdinal: reloads > 0 ? primeReloads + 1 : null,
+    },
     buildIdentity,
     dist,
     viewport,
@@ -1326,8 +1484,9 @@ try {
       chromium: browser.version(),
       quietBeforeCapture: quietHost,
     },
-    measurement:
-      "PNG compositor surfaces delivered by Chromium, not display-vsync completeness. Warm display timelines start with the observed old surface carried across navigation. DOM candidates are not paint measurements. Visible census groups only recognized stable-layout/content animation pixels; inspect raw and visible sheets. Compare mode isolates browser caches by arm, alternates AB/BA pairs, and uses the same built Gateway and durable state; The owned custom UI-root copy is swapped between arms outside navigation measurement; the Gateway process and its caches stay warm. CDP shaping is not calibrated per-RPC wire RTT.",
+    measurement: visualProofs
+      ? "PNG compositor surfaces delivered by Chromium, not display-vsync completeness. Warm display timelines start with the observed old surface carried across navigation. DOM candidates are not paint measurements. Visible census groups only recognized stable-layout/content animation pixels; inspect raw and visible sheets. Compare mode isolates browser caches by arm, alternates AB/BA pairs, and uses the same built Gateway and durable state; The owned custom UI-root copy is swapped between arms outside navigation measurement; the Gateway process and its caches stay warm. CDP shaping is not calibrated per-RPC wire RTT."
+      : "Navigation-relative Element Timing, Paint Timing and PerformanceObserver metrics from real old-page reloads. No geometry sampler, screencast, RPC census, backtracking or pixel proof. Explicit init scripts remain additional instrumentation; CDP shaping is not calibrated per-RPC wire RTT.",
     results,
   };
   await writeFile(path.join(directory, "report.json"), JSON.stringify(report, null, 2));

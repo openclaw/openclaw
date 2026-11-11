@@ -281,14 +281,21 @@ async function publishPreparedModelRuntimeCatalogReplacement(
     // A failed discovery publishes the candidate's static rows, never the previous catalog's.
     await racePromiseWithAbortSignal(
       Promise.allSettled(
-        candidates.map(
-          async (owner) =>
-            await owner.snapshot?.loadFullModelCatalog?.({
-              refresh: true,
-              changedOnly: true,
-              wait: true,
-            }),
-        ),
+        candidates.map(async (owner, index) => {
+          // Catalog updates must preserve headless startup's deferred inventory acquisition.
+          if (
+            !claims[index]!.owner.catalogInventory &&
+            !claims[index]!.owner.catalogAttempt &&
+            owner.input.config.gateway?.controlUi?.enabled === false
+          ) {
+            return;
+          }
+          await owner.snapshot?.loadFullModelCatalog?.({
+            refresh: true,
+            changedOnly: true,
+            wait: true,
+          });
+        }),
       ),
       signal,
     );

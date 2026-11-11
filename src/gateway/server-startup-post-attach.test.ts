@@ -288,7 +288,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.updateCheck.stop.mockClear();
     hoisted.logGatewayStartup.mockClear();
     hoisted.activateSubagentRegistry.mockReset().mockResolvedValue(undefined);
-    hoisted.resumeMarkedSessions.mockReset().mockResolvedValue(undefined);
+    hoisted.resetResume();
     hoisted.getAcpRuntimeBackend.mockReset();
     hoisted.getAcpRuntimeBackend.mockReturnValue(null);
     hoisted.reconcilePendingSessionIdentities.mockClear();

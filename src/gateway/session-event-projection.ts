@@ -277,7 +277,7 @@ export function prepareSessionEventProjection(
       if (!delivery) {
         const { row } = audience;
         if (rowDeltas) {
-          prepareSessionRowDeltaFields(row, record.materialized.row);
+          prepareSessionRowDeltaFields(row, record.materialized.publicationIdentity);
         }
         const plan = references.prepareDelivery(
           row,

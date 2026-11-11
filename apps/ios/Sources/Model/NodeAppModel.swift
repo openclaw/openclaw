@@ -52,7 +52,7 @@ extension CancelledApprovalSnapshot: ExecApprovalTerminalSnapshot {}
 
 private enum IOSDeepLinkAgentPolicy {
     static let maxMessageChars = 20000
-    static let maxUnkeyedConfirmChars = 240
+    static let maxConfirmChars = 240
 }
 
 private enum TalkCapturePreparationOwner {
@@ -326,7 +326,10 @@ final class NodeAppModel {
         }
     }
 
-    var nodeStatusText: String = "Offline"
+    var nodeStatusText: String {
+        self.gatewayConnected ? "Connected" : "Offline"
+    }
+
     var operatorStatusText: String = "Offline"
     private(set) var isAppleReviewDemoModeEnabled: Bool = false
     private(set) var isScreenshotFixtureModeEnabled: Bool = false
@@ -478,7 +481,10 @@ final class NodeAppModel {
     @ObservationIgnored private var operatorTalkConnectionGeneration: UInt64 = 0
     @ObservationIgnored private var operatorTalkHydrationGeneration: UInt64?
     @ObservationIgnored private var credentialHandoffFailureGeneration: UInt64?
-    @ObservationIgnored private(set) var gatewayConnectGeneration: UInt64 = 0
+    private(set) var gatewayConnectGeneration: UInt64 = 0
+    /// Socket, foreground and wake reconnects keep their attempt's generation, so they must not
+    /// override an "Auto-connect on launch" choice the user made after the attempt connected.
+    @ObservationIgnored private var autoConnectEnabledGeneration: UInt64?
     private var forceOperatorTalkPermissionUpgradeRequest = false
     @ObservationIgnored private var talkPermissionUpgradeTask: Task<Void, Never>?
     @ObservationIgnored private var talkPermissionUpgradeReconnectTask: Task<Void, Never>?
@@ -494,6 +500,9 @@ final class NodeAppModel {
     let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     let talkMode: TalkModeManager
     private(set) var locationAuthorizationSnapshot = LocationAuthorizationSnapshot.undetermined
+    /// Observed by gateway registration; refreshed on activation because these statuses post no changes.
+    private(set) var mediaAuthorizationSnapshot = MediaAuthorizationSnapshot.current()
+    @ObservationIgnored private let mediaAuthorizationProvider: @MainActor () -> MediaAuthorizationSnapshot
     private let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
     private let photosService: any PhotosServicing
@@ -693,6 +702,8 @@ final class NodeAppModel {
 
     /// Chat and the persistent sidebar consume the same Gateway-scoped request lifecycle.
     let chatPresentation = IOSChatViewModelOwner()
+    var agentAvatarImages: [String: UIImage] = [:]
+    var loadedAgentAvatarRequest: IOSAgentAvatarRequest?
     /// Request admission only; the connection controller owns the later handoff.
     var isGatewayPickerRequestInFlight = false
 
@@ -981,6 +992,10 @@ final class NodeAppModel {
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
     private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
     private static let backgroundAliveLastTriggerKey = "gateway.backgroundAlive.lastTrigger"
+    /// Apple allows a background wake about 30 s; silent pushes have no expiration handler.
+    private static let backgroundWakeBudgetMs = 25000
+    /// Upper bound for holding a wake open for queued chat sends; a slow reconnect leaves less.
+    private static let backgroundWakeChatOutboxDrainTimeoutMs = 8000
     private static let preferredCameraFacingKey = "camera.preferredFacing"
     private static let foregroundResumeHealthTimeoutSeconds = 1
 
@@ -1011,7 +1026,8 @@ final class NodeAppModel {
         talkMode: TalkModeManager = TalkModeManager(),
         voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder(),
         audioAdmissionInitiallyAllowed: Bool = true,
-        restoringSavedGatewayRoute: Bool = false)
+        restoringSavedGatewayRoute: Bool = false,
+        mediaAuthorizationProvider: @escaping @MainActor () -> MediaAuthorizationSnapshot = { .current() })
     {
         if restoringSavedGatewayRoute, let stableID = GatewaySettingsStore.activeGatewayEntry()?.stableID {
             self.connectedGatewayID = stableID
@@ -1024,6 +1040,8 @@ final class NodeAppModel {
         self.screenRecorder = screenRecorder
         self.locationService = locationService
         self.locationAuthorizationSnapshot = locationService.authorizationSnapshot()
+        self.mediaAuthorizationProvider = mediaAuthorizationProvider
+        self.mediaAuthorizationSnapshot = mediaAuthorizationProvider()
         self.notificationCenter = notificationCenter
         self.deviceStatusService = deviceStatusService
         self.photosService = photosService
@@ -1124,6 +1142,13 @@ final class NodeAppModel {
         }
     }
 
+    func refreshMediaAuthorizationSnapshot() {
+        let snapshot = self.mediaAuthorizationProvider()
+        // Publish only real changes; each publication can refresh the gateway registration.
+        guard snapshot != self.mediaAuthorizationSnapshot else { return }
+        self.mediaAuthorizationSnapshot = snapshot
+    }
+
     func setScenePhase(_ phase: ScenePhase) {
         let keepTalkActive = UserDefaults.standard.bool(forKey: "talk.background.enabled")
         if phase != .active {
@@ -1167,6 +1192,8 @@ final class NodeAppModel {
             break
         case .active:
             self.isBackgrounded = false
+            // Permission prompts and Settings changes return through activation.
+            self.refreshMediaAuthorizationSnapshot()
             if self.clientDatabases == nil {
                 // Recovery must run even after forgetting the final gateway;
                 // no chat facade may remain to initialize the container.
@@ -1389,10 +1416,13 @@ final class NodeAppModel {
             Task { [weak self] in
                 guard let self else { return }
                 guard !self.forceOperatorTalkPermissionUpgradeRequest else { return }
-                await self.talkMode.reloadConfig(shouldApply: { [weak self] in
-                    guard let self else { return false }
-                    return self.talkMode.isEnabled && !self.forceOperatorTalkPermissionUpgradeRequest
-                })
+                // Runs beside the start's own refresh; a failure must not drop the config that start keeps.
+                await self.talkMode.reloadConfig(
+                    keepLastGoodOnFailure: self.talkMode.gatewayTalkConfigLoaded,
+                    shouldApply: { [weak self] in
+                        guard let self else { return false }
+                        return self.talkMode.isEnabled && !self.forceOperatorTalkPermissionUpgradeRequest
+                    })
                 self.requestTalkPermissionUpgradeIfNeeded()
             }
         }
@@ -1591,7 +1621,6 @@ final class NodeAppModel {
     }
 
     private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"
-    private static let deepLinkKeyUserDefaultsKey = "deeplink.agent.key"
 
     private func refreshBrandingFromGateway(shouldApply: () -> Bool = { true }) async {
         do {
@@ -1699,6 +1728,11 @@ final class NodeAppModel {
         let currentSelectedAgentId = self.selectedAgentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedAgentChanged = currentSelectedAgentId != nextSelectedAgentId
         let stableID = GatewayStableIdentifier.exact(self.connectedGatewayID)
+        if selectedAgentChanged {
+            // Watch-started Talk may already target the next agent, so its key
+            // comparison cannot retire recognition captured for the old agent.
+            self.voiceWake.discardCaptureForRouteChange()
+        }
         self.selectedAgentId = nextSelectedAgentId
         if let stableID {
             GatewaySettingsStore.saveGatewaySelectedAgentId(
@@ -1736,11 +1770,12 @@ final class NodeAppModel {
             guard shouldContinue() else { return }
 
             guard let operatorRoute = await self.operatorGateway.currentRoute(), shouldContinue() else { return }
-            let stream = await self.operatorGateway.subscribeServerEvents(bufferingNewest: 200)
+            let subscription = await Self.makeOperatorEventSubscription(gateway: self.operatorGateway)
+            defer { subscription.cancel() }
             self.schedulePendingApprovalInboxRefresh(
                 expectedOperatorRoute: operatorRoute,
                 shouldContinue: shouldContinue)
-            for await evt in stream {
+            for await evt in subscription.events {
                 if Task.isCancelled || !shouldContinue() { return }
                 guard evt.payload != nil else { continue }
                 await self.handleOperatorGatewayServerEvent(
@@ -1749,6 +1784,19 @@ final class NodeAppModel {
                     shouldContinue: shouldContinue)
             }
         }
+    }
+
+    static func makeOperatorEventSubscription(gateway: GatewayNodeSession) async -> GatewayServerEventSubscription {
+        // This owner handles settings and approvals, not transcript traffic.
+        // Keep chat/agent bursts off its MainActor loop and out of its buffer.
+        await gateway.makeServerEventSubscription(bufferingNewest: 200, matching: { frame in
+            switch frame.event {
+            case "config.changed", "users.prefs.changed", "voicewake.changed", "talk.mode",
+                 "exec.approval.requested", "plugin.approval.requested", "openclaw.approval.requested",
+                 "exec.approval.resolved", "plugin.approval.resolved", "openclaw.approval.resolved": true
+            default: false
+            }
+        })
     }
 
     func handleOperatorGatewayServerEvent(
@@ -3229,7 +3277,14 @@ extension NodeAppModel {
     }
 
     func focusChatSession(_ sessionKey: String?) {
-        self.focusedChatSessionKey = Self.trimmedOrNil(sessionKey)
+        let previousSessionKey = self.chatSessionKey
+        let nextSessionKey = Self.trimmedOrNil(sessionKey)
+        // Talk can temporarily target a Watch-selected chat. Wake still belongs
+        // to phone focus, even when Talk already has the destination key.
+        if previousSessionKey != (nextSessionKey ?? self.mainSessionKey) {
+            self.voiceWake.discardCaptureForRouteChange()
+        }
+        self.focusedChatSessionKey = nextSessionKey
         if let stableID = self.connectedGatewayID {
             GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
                 stableID: stableID, sessionKey: self.focusedChatSessionKey)
@@ -3243,7 +3298,7 @@ extension NodeAppModel {
         let effectiveSessionKey = sessionKey ?? self.chatSessionKey
         guard !self.talkMode.isUsingMainSessionKey(effectiveSessionKey) else { return }
         self.talkPttCommandEpoch &+= 1
-        self.voiceWake.invalidatePendingCommand()
+        self.voiceWake.discardCaptureForRouteChange()
         self.talkMode.updateMainSessionKey(effectiveSessionKey)
     }
 
@@ -3440,7 +3495,7 @@ extension NodeAppModel {
         let nodeGatewayTask = self.nodeGatewayTask
         let operatorGatewayTask = self.operatorGatewayTask
         self.talkMode.updateGatewayConnected(false)
-        self.voiceWake.invalidatePendingCommand()
+        self.voiceWake.discardCaptureForRouteChange()
         self.gatewayRouteGeneration &+= 1
         self.stopNodeHostStatsPublisher()
         nodeGatewayTask?.cancel()
@@ -4181,6 +4236,34 @@ extension NodeAppModel {
         await self.startVoiceWakeSync(shouldContinue: shouldContinue)
         guard shouldContinue() else { return }
         self.startGatewayHealthMonitor()
+        await self.prepareShareGatewayDeviceAuth(stableID: stableID, shouldContinue: shouldContinue)
+    }
+
+    private func prepareShareGatewayDeviceAuth(
+        stableID: String,
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool) async
+    {
+        guard let config = self.activeGatewayConnectConfig,
+              config.ingressAuthorization == nil
+        else { return }
+        do {
+            try await ShareGatewayRelaySettings.prepareDeviceAuth(
+                operatorGateway: self.operatorGateway,
+                url: config.url,
+                gatewayStableID: config.nodeOptions.deviceAuthGatewayID ?? stableID,
+                sessionBox: ShareGatewayRelaySettings.webSocketSessionBox(
+                    tlsFingerprintSHA256: config.tls?.expectedFingerprint),
+                extraHeadersProvider: {
+                    try await MainActor.run {
+                        guard shouldContinue() else { throw CancellationError() }
+                        return GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: stableID)
+                    }
+                })
+        } catch {
+            guard shouldContinue() else { return }
+            ShareGatewayRelaySettings.saveLastEvent(
+                "Sharing setup incomplete: open OpenClaw to reconnect, then try sharing again.")
+        }
     }
 
     private func admitTalkAfterSessionHydration() {
@@ -4219,7 +4302,10 @@ extension NodeAppModel {
         _ = GatewaySettingsStore.markGatewayConnected(
             stableID: stableID,
             atMs: Int(Date().timeIntervalSince1970 * 1000))
-        UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
+        if self.autoConnectEnabledGeneration != self.gatewayConnectGeneration {
+            self.autoConnectEnabledGeneration = self.gatewayConnectGeneration
+            UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
+        }
         LiveActivityManager.shared.handleReconnect()
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
         let requiresForegroundSignIn = self.activeGatewayConnectConfig?.ingressAuthorization != nil
@@ -4231,7 +4317,11 @@ extension NodeAppModel {
             sessionKey: self.mainSessionKey,
             deliveryChannel: self.shareDeliveryChannel,
             deliveryTo: self.shareDeliveryTo,
-            requiresForegroundSignIn: requiresForegroundSignIn))
+            requiresForegroundSignIn: requiresForegroundSignIn,
+            tlsFingerprintSHA256: requiresForegroundSignIn
+                ? nil : self.activeGatewayConnectConfig?.tls?.expectedFingerprint,
+            customHeaders: requiresForegroundSignIn ? nil : GatewaySettingsStore.loadGatewayCustomHeaders(
+                gatewayStableID: stableID)))
         GatewayDiagnostics.log(
             "gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
 
@@ -4583,7 +4673,7 @@ extension NodeAppModel {
 
     func invalidateNodePushToTalkRoute() {
         self.talkPttCommandEpoch &+= 1
-        self.voiceWake.invalidatePendingCommand()
+        self.voiceWake.discardCaptureForRouteChange()
         _ = self.talkMode.cancelPushToTalk(expectedTranscriptionOnly: false)
     }
 
@@ -4731,6 +4821,11 @@ extension NodeAppModel {
                 // control state owner-specific so resolving operator approval clears it cleanly.
                 self.lastGatewayProblem = nextProblem
                 self.gatewayStatusText = nextProblem.statusText
+                // Approval echoes stop the node loop; other shared pauses (rate limits, rejected
+                // credentials) must stop retries too, or the node keeps hitting a locked Gateway.
+                if nextProblem.pauseReconnect, !nextProblem.needsPairingApproval {
+                    self.gatewayAutoReconnectEnabled = false
+                }
             } else {
                 self.applyGatewayConnectionProblem(nextProblem)
             }
@@ -4991,7 +5086,6 @@ extension NodeAppModel {
         }
 
         self.gatewayStatusText = "Connected"
-        self.nodeStatusText = "Connected"
     }
 
     private func configureLocalGatewayFixtureSession(_ fixture: LocalChatFixture) {
@@ -5103,7 +5197,9 @@ extension NodeAppModel {
             sessionKey: self.mainSessionKey,
             deliveryChannel: self.shareDeliveryChannel,
             deliveryTo: self.shareDeliveryTo,
-            requiresForegroundSignIn: relay.requiresForegroundSignIn))
+            requiresForegroundSignIn: relay.requiresForegroundSignIn,
+            tlsFingerprintSHA256: relay.tlsFingerprintSHA256,
+            customHeaders: relay.customHeaders))
     }
 
     func recordShareEvent(_ text: String) {
@@ -7352,6 +7448,7 @@ extension NodeAppModel {
     }
 
     func handleSilentPushWake(_ userInfo: [AnyHashable: Any]) async -> SilentPushWakeResult {
+        let wakeStartedAt = Date()
         let wakeId = Self.makePushWakeAttemptID()
         guard Self.isSilentPushPayload(userInfo) else {
             self.pushWakeLogger.info("Ignored APNs payload wakeId=\(wakeId, privacy: .public): not silent push")
@@ -7387,18 +7484,27 @@ extension NodeAppModel {
         let result = await performBackgroundAliveBeaconIfNeeded(
             wakeId: wakeId,
             trigger: .silentPush)
+        let chat = await self.drainChatOutboxForBackgroundWake(wakeId: wakeId, startedAt: wakeStartedAt)
+        // A throttled beacon mutates nothing and reports no data (#129026); delivered chat
+        // sends and their history refresh are new data for that same wake.
+        let disposition: SilentPushWakeResult = result.disposition == .noData && chat == .delivered
+            ? .newData
+            : result.disposition
         let outcomeMessage =
             "Silent push outcome wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
                 + "handled=\(result.handled) "
                 + "reason=\(result.reason) "
-                + "durationMs=\(result.durationMs)"
+                + "chat=\(chat?.rawValue ?? "skipped") "
+                + "disposition=\(disposition) "
+                + "durationMs=\(max(0, Int(Date().timeIntervalSince(wakeStartedAt) * 1000)))"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
-        return result.disposition
+        return disposition
     }
 
     func handleBackgroundRefreshWake(trigger: String = "bg_app_refresh") async -> Bool {
         guard !Task.isCancelled else { return false }
+        let wakeStartedAt = Date()
         let wakeId = Self.makePushWakeAttemptID()
         let normalizedTrigger = BackgroundAliveBeacon.normalizeTrigger(trigger)
         let receivedMessage =
@@ -7410,14 +7516,54 @@ extension NodeAppModel {
         let result = await performBackgroundAliveBeaconIfNeeded(
             wakeId: wakeId,
             trigger: normalizedTrigger)
+        let chat = await self.drainChatOutboxForBackgroundWake(wakeId: wakeId, startedAt: wakeStartedAt)
         let outcomeMessage =
             "Background refresh wake outcome wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
                 + "handled=\(result.handled) "
                 + "reason=\(result.reason) "
-                + "durationMs=\(result.durationMs)"
+                + "chat=\(chat?.rawValue ?? "skipped") "
+                + "durationMs=\(max(0, Int(Date().timeIntervalSince(wakeStartedAt) * 1000)))"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
         return !Task.isCancelled && result.handled
+    }
+
+    /// The wake's own work only reconnects; queued chat sends flush from the
+    /// reconnect events, so hold the wake open until they finish or time out.
+    /// Nil when the wake skipped the wait.
+    private func drainChatOutboxForBackgroundWake(
+        wakeId: String,
+        startedAt: Date) async -> OpenClawChatOutboxWakeDrain?
+    {
+        let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        let timeoutMs = min(Self.backgroundWakeChatOutboxDrainTimeoutMs, Self.backgroundWakeBudgetMs - elapsedMs)
+        let skipReason: String? = if !self.isBackgrounded {
+            "not_backgrounded"
+        } else if Task.isCancelled {
+            "cancelled"
+        } else if timeoutMs <= 0 {
+            "wake_budget_spent"
+        } else if !self.chatPresentation.isCurrent(appModel: self) || self.chatPresentation.viewModel == nil {
+            "no_chat_owner"
+        } else {
+            nil
+        }
+        guard skipReason == nil, let viewModel = self.chatPresentation.viewModel else {
+            let reason = skipReason ?? ""
+            self.pushWakeLogger.info(
+                "Wake chat outbox skipped wakeId=\(wakeId, privacy: .public) reason=\(reason, privacy: .public)")
+            return nil
+        }
+        // The beacon only waits for the node session; the operator session can lag it.
+        // Without the node session the wake did not reach the Gateway, so do not wait.
+        let result = await viewModel.drainOutboxForBackgroundWake(timeoutMs: timeoutMs) { [weak self] remainingMs in
+            guard let self, self.gatewayConnected else { return false }
+            if self.operatorConnected { return true }
+            return await self.waitForGatewayConnection(timeoutMs: remainingMs, pollMs: 250, owner: .operator)
+        }
+        self.pushWakeLogger.info(
+            "Wake chat outbox wakeId=\(wakeId, privacy: .public) result=\(result.rawValue, privacy: .public)")
+        return result
     }
 
     func handleSignificantLocationWakeIfNeeded() async {
@@ -9187,46 +9333,39 @@ extension NodeAppModel {
             return
         }
 
-        let allowUnattended = self.isUnattendedDeepLinkAllowed(link.key)
-        if !allowUnattended {
-            if message.count > IOSDeepLinkAgentPolicy.maxUnkeyedConfirmChars {
-                self.recordShareEvent(
-                    "Rejected: deep link over \(IOSDeepLinkAgentPolicy.maxUnkeyedConfirmChars) chars without key.")
-                self.deepLinkLogger.error(
-                    "agent deep link rejected: unkeyed message too long chars=\(message.count, privacy: .public)")
-                return
-            }
-            let urlText = originalURL.absoluteString
-            let prompt = AgentDeepLinkPrompt(
-                id: UUID().uuidString,
-                messagePreview: message,
-                urlPreview: urlText.count > 500 ? "\(urlText.prefix(500))…" : urlText,
-                request: self.effectiveAgentDeepLinkForPrompt(link))
+        if message.count > IOSDeepLinkAgentPolicy.maxConfirmChars {
+            self.recordShareEvent("Rejected: deep link over \(IOSDeepLinkAgentPolicy.maxConfirmChars) chars.")
+            self.deepLinkLogger.error(
+                "agent deep link rejected: message too long chars=\(message.count, privacy: .public)")
+            return
+        }
+        let urlText = originalURL.absoluteString
+        let prompt = AgentDeepLinkPrompt(
+            id: UUID().uuidString,
+            messagePreview: message,
+            urlPreview: urlText.count > 500 ? "\(urlText.prefix(500))…" : urlText,
+            request: self.effectiveAgentDeepLinkForPrompt(link))
 
-            let promptIntervalSeconds = 5.0
-            let elapsed = Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt)
-            if elapsed < promptIntervalSeconds {
-                if self.pendingAgentDeepLinkPrompt != nil {
-                    self.pendingAgentDeepLinkPrompt = prompt
-                    self.recordShareEvent("Updated local confirmation request (\(message.count) chars).")
-                    self.deepLinkLogger.debug("agent deep link prompt coalesced into active confirmation")
-                    return
-                }
-
-                let remaining = max(0, promptIntervalSeconds - elapsed)
-                self.queueAgentDeepLinkPrompt(prompt, initialDelaySeconds: remaining)
-                self.recordShareEvent("Queued local confirmation (\(message.count) chars).")
-                self.deepLinkLogger.debug("agent deep link prompt queued due to rate limit")
+        let promptIntervalSeconds = 5.0
+        let elapsed = Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt)
+        if elapsed < promptIntervalSeconds {
+            if self.pendingAgentDeepLinkPrompt != nil {
+                self.pendingAgentDeepLinkPrompt = prompt
+                self.recordShareEvent("Updated local confirmation request (\(message.count) chars).")
+                self.deepLinkLogger.debug("agent deep link prompt coalesced into active confirmation")
                 return
             }
 
-            self.presentAgentDeepLinkPrompt(prompt)
-            self.recordShareEvent("Awaiting local confirmation (\(message.count) chars).")
-            self.deepLinkLogger.info("agent deep link requires local confirmation")
+            let remaining = max(0, promptIntervalSeconds - elapsed)
+            self.queueAgentDeepLinkPrompt(prompt, initialDelaySeconds: remaining)
+            self.recordShareEvent("Queued local confirmation (\(message.count) chars).")
+            self.deepLinkLogger.debug("agent deep link prompt queued due to rate limit")
             return
         }
 
-        await self.submitAgentDeepLink(link, messageCharCount: message.count)
+        self.presentAgentDeepLinkPrompt(prompt)
+        self.recordShareEvent("Awaiting local confirmation (\(message.count) chars).")
+        self.deepLinkLogger.info("agent deep link requires local confirmation")
     }
 
     private func sendAgentRequest(link: AgentDeepLink) async throws {
@@ -9339,7 +9478,7 @@ extension NodeAppModel {
     }
 
     private func effectiveAgentDeepLinkForPrompt(_ link: AgentDeepLink) -> AgentDeepLink {
-        // Without a trusted key, strip delivery/routing knobs to reduce exfiltration risk.
+        // Links are untrusted until confirmed; strip delivery/routing knobs to reduce exfiltration risk.
         AgentDeepLink(
             message: link.message,
             sessionKey: link.sessionKey,
@@ -9349,33 +9488,6 @@ extension NodeAppModel {
             channel: nil,
             timeoutSeconds: link.timeoutSeconds,
             key: link.key)
-    }
-
-    private func isUnattendedDeepLinkAllowed(_ key: String?) -> Bool {
-        let normalizedKey = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !normalizedKey.isEmpty else { return false }
-        return normalizedKey == Self.expectedDeepLinkKey()
-    }
-
-    static func expectedDeepLinkKey() -> String {
-        let defaults = UserDefaults.standard
-        if let key = defaults.string(forKey: deepLinkKeyUserDefaultsKey), !key.isEmpty {
-            return key
-        }
-        let key = self.generateDeepLinkKey()
-        defaults.set(key, forKey: self.deepLinkKeyUserDefaultsKey)
-        return key
-    }
-
-    private static func generateDeepLinkKey() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        let data = Data(bytes)
-        return data
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
     }
 }
 

@@ -852,11 +852,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await gateway.setMethodResponse("models.list", {
         models: [catalogModel("openai", "reconnected-model", "Reconnected Model")],
       });
-      const authRequestCount = (await gateway.getRequests("models.authStatus")).length;
+      // The rail retains its main-agent scope while Settings follows Writer.
+      const authScope = { agentId: "writer" };
+      const authRequestCount = (await gateway.getRequests("models.authStatus", authScope)).length;
       await gateway.closeLatest(1012, "model provider reconnect proof");
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBeGreaterThan(authRequestCount);
+      await gateway.waitForRequest("models.authStatus", {
+        after: authRequestCount,
+        match: authScope,
+      });
       await expect
         .poll(() =>
           modelPickerValue(
@@ -871,21 +874,17 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Writer");
-      for (const request of (await gateway.getRequests("models.authStatus")).slice(
-        authRequestCount,
-      )) {
-        expect(request.params).toEqual(expect.objectContaining({ agentId: "writer" }));
-      }
       if (recordVisuals) {
         await captureProviderProof("06-reconnected-model.png", primary);
       }
 
-      const accessChangeAuthCount = (await gateway.getRequests("models.authStatus")).length;
+      const accessAuthCount = (await gateway.getRequests("models.authStatus", authScope)).length;
       await gateway.setOperatorScopes(["operator.read"]);
       await gateway.closeLatest(1012, "model provider access-change proof");
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBeGreaterThan(accessChangeAuthCount);
+      await gateway.waitForRequest("models.authStatus", {
+        after: accessAuthCount,
+        match: authScope,
+      });
       await expect.poll(() => page.getByRole("alert").count()).toBe(0);
       await primary.locator(".picker-select__trigger").click();
       const readOnlyModel = primary.locator(

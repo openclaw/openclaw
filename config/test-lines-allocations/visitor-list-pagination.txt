@@ -1,0 +1,2 @@
+# Visitor-list pagination: 112 net regression lines exercise real tool pagination across row/text budgets, later-page verified identities, cursor invalidation, strict inputs, and private-field omission.
+112

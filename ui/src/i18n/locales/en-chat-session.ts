@@ -252,8 +252,9 @@ const enChatSession = {
     },
     pendingInputs: {
       sendNow: "Send now",
-      steerBlocked: "Waiting for {tools}; cannot interrupt safely.",
-      steerUnavailable: "Waiting for the next model turn; this runtime cannot interrupt tools.",
+      steering: "Steering…",
+      steerBlocked: "Steering — sends when the current step finishes.",
+      steerUnavailable: "Steering — sends on the next model turn.",
       agentUpdate: {
         cancelled: "This agent update was cancelled before delivery.",
       },

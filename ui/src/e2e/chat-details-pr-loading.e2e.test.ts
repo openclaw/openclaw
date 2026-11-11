@@ -361,7 +361,10 @@ suite.define(() => {
   it.each([false, true])(
     "reads Outputs after startup settles and releases hidden demand (history error=%s)",
     async (historyError) => {
-      await suite.withPage(options, async ({ page }) => {
+      // Cached wide Details wait for this module before revealing the transcript.
+      // Start closed so the native toggle can exercise demand while the module is held.
+      const outputsOptions = { ...options, viewport: { width: 1280, height: 1000 } };
+      await suite.withPage(outputsOptions, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           ...scenario,
           authMethod: "trusted-proxy",
@@ -406,6 +409,7 @@ suite.define(() => {
         await page.reload();
         await gateway.waitForRequest("connect");
         await transcript.waitFor();
+        await openChatDetails(page);
         await module.request;
         await page.locator(".chat-details[data-desktop] openclaw-panel-loading-skeleton").waitFor();
         await nextPaint(page);
