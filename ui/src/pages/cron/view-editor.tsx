@@ -23,7 +23,6 @@ import {
   inputIdForField,
   CronSelect,
   CronInput,
-  ToggleRow,
 } from "./view-fields.tsx";
 import { ScheduleSection } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
@@ -277,20 +276,10 @@ function PromptSection(
                   invalid: Boolean(modelError()),
                   describedBy: modelError() ? errorIdForField("payloadModel") : undefined,
                 }}
-                onChange={(payloadModel) =>
-                  props.onFormChange({ payloadModel, reviewModelPolicy: true })
-                }
+                onChange={(payloadModel) => props.onFormChange({ payloadModel })}
               />
             }
           />
-          {props.editingJob ? (
-            <ToggleRow
-              {...props}
-              field="reviewModelPolicy"
-              label={t("cron.form.reviewModelPolicy")}
-              help={t("cron.form.reviewModelPolicyHelp")}
-            />
-          ) : undefined}
           <CronInput
             {...props}
             field="payloadThinking"

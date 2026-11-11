@@ -468,7 +468,7 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
   ownerTransferPending?: true;
   /** Captured inference owner; private and independent of scheduled tool authority. */
   inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
-  /** Present only after deliberate policy capture; absent preserves legacy execution. */
+  /** Previously captured account lifetimes; runs also inherit current native model policy. */
   inferenceGrants?: import("./inference-binding.js").CronInferenceGrants;
   /** Creation-bound destination for isolated results when no external route exists. */
   sourceConversation?: {

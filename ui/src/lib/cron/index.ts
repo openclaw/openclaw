@@ -206,9 +206,8 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     const payload = preserveLockedPayload
       ? undefined
       : buildCronPayload(form, sourcePayload, Boolean(editingJob));
-    // The review toggle adopts optional accounts, not an unchanged primary account.
+    // Unrelated saves must not recapture an unchanged account authorization.
     if (
-      form.reviewModelPolicy &&
       editingJob?.payload.kind === "agentTurn" &&
       payload?.kind === "agentTurn" &&
       payload.model === editingJob.payload.model
@@ -390,9 +389,6 @@ async function updateCronJobDefinition(
       id: job.id,
       expectedConfigRevision: requireCronConfigRevision(job.configRevision),
       patch,
-      ...(operation === "save" && form.payloadKind === "agentTurn" && form.reviewModelPolicy
-        ? { reviewModelPolicy: true }
-        : {}),
     });
     if (!isCurrent()) {
       return false;

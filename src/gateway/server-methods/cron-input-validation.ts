@@ -492,18 +492,18 @@ export async function captureCronUpdatedInferenceBinding(
   }
 }
 
-/** Only an actual policy change or deliberate review adopts optional inference accounts. */
+/** Explicit account edits capture authority; native default/fallback inheritance needs no edit. */
 async function captureCronUpdatedInferenceBindingInternal(
   nextJob: CronStoredJob,
   patch: CronJobPatch,
   cfg: OpenClawConfig,
   caller: InferenceCaller,
-  review?: { currentJob: CronStoredJob; explicit: boolean },
+  currentJob: CronStoredJob,
 ) {
   if (nextJob.runtimeAuthority !== undefined || nextJob.payload.kind !== "agentTurn") {
     return undefined;
   }
-  const previousPayload = review?.currentJob.payload;
+  const previousPayload = currentJob.payload;
   const modelChanged =
     previousPayload?.kind === "agentTurn" &&
     !isDeepStrictEqual(previousPayload.model, nextJob.payload.model);
@@ -511,15 +511,11 @@ async function captureCronUpdatedInferenceBindingInternal(
     modelChanged ||
     (previousPayload?.kind === "agentTurn" &&
       !isDeepStrictEqual(previousPayload.fallbacks, nextJob.payload.fallbacks));
-  const reviewPolicy = review?.explicit === true || policyChanged;
-  if (review && !reviewPolicy) {
+  const explicitModelSave = patch.payload !== undefined && "model" in patch.payload;
+  if (!policyChanged && !explicitModelSave) {
     return undefined;
   }
-  const model = reviewPolicy
-    ? nextJob.payload.model
-    : patch.payload && "model" in patch.payload
-      ? patch.payload.model
-      : undefined;
+  const model = nextJob.payload.model;
   const agentId = nextJob.agentId ?? resolveDefaultAgentId(cfg);
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
@@ -535,8 +531,6 @@ async function captureCronUpdatedInferenceBindingInternal(
         authProfileId: selection.profileId,
       })
     : undefined;
-  const explicitModelSave =
-    review?.explicit === true && patch.payload !== undefined && "model" in patch.payload;
   const executionKey = resolveCronSessionTargetSessionKey(nextJob.sessionTarget);
   const executionSessionEntry = executionKey
     ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))?.entry
@@ -559,8 +553,8 @@ async function captureCronUpdatedInferenceBindingInternal(
           parseAgentSessionKey(executionKey ?? "")?.rest ?? executionKey ?? "",
         )) === "gmail",
   };
-  if ((review && !modelChanged && !explicitModelSave) || !model || !selection?.profileId) {
-    return reviewPolicy
+  if (!explicitModelSave || !model || !selection?.profileId) {
+    return policyChanged
       ? await captureCronInferencePolicyForCaller(captureParams, caller, nextJob)
       : undefined;
   }
@@ -591,9 +585,7 @@ async function captureCronUpdatedInferenceBindingInternal(
       `The automation runs on runtime ${recordedRuntime}, which is unavailable for this account; the edit would move it to runtime ${capturedRuntime ?? "unknown"}.`,
     );
   }
-  return reviewPolicy
-    ? await captureCronInferencePolicyForCaller(captureParams, caller, nextJob, inference)
-    : { ...inference, inferenceGrants: undefined, inferenceWarning: undefined };
+  return await captureCronInferencePolicyForCaller(captureParams, caller, nextJob, inference);
 }
 
 /** Waiting cannot finish while the caller owns the execution or result conversation lane. */

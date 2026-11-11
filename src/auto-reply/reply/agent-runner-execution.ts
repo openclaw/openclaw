@@ -19,7 +19,7 @@ import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { createCronRunInferenceCandidates } from "../../cron/run-inference.js";
+import type { createCronRunInferenceCandidates } from "../../cron/run-inference.js";
 import type { CronWorkspaceLease } from "../../cron/run-workspace.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -71,6 +71,7 @@ import type {
 import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js";
 import { buildReplyMediaContextParams } from "./agent-runner-media-context.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
+import { prepareReplyScheduledInference } from "./agent-runner-scheduled-inference.js";
 import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
@@ -601,10 +602,12 @@ async function executeAgentTurnOutcome(
   try {
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
-        const execution = prepareReplyTurnExecution(executionParams, runId);
         let scheduledInferenceCandidates:
           | ReturnType<typeof createCronRunInferenceCandidates>
           | undefined;
+        const execution = prepareReplyTurnExecution(executionParams, runId, () =>
+          scheduledInferenceCandidates?.assertCurrent(),
+        );
         let workspaceLease: CronWorkspaceLease | undefined;
         try {
           execution.preparedRunAdmission.assertSourceCurrent();
@@ -626,16 +629,7 @@ async function executeAgentTurnOutcome(
             run.workspaceDir = workspace.workspaceDir;
             run.cwd = workspace.cwd;
           }
-          const job = run.scheduledAutomation?.job;
-          if (job) {
-            scheduledInferenceCandidates = createCronRunInferenceCandidates({
-              binding: job.inferenceBinding,
-              grants: job.inferenceGrants,
-              primary: { provider: run.provider, model: run.model },
-              cfg: selectLiveRuntimeConfig(executionParams.followupRun.run.config),
-              agentDir: executionParams.followupRun.run.agentDir,
-            });
-          }
+          scheduledInferenceCandidates = await prepareReplyScheduledInference(executionParams);
           execution.preparedRunAdmission.assertSourceCurrent();
           return await executeAgentTurnInternalLoop(
             executionParams,

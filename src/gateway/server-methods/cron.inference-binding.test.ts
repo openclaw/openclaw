@@ -83,53 +83,28 @@ describe("cron handler inference binding persistence", () => {
       expectedSuccess: false,
     });
   });
-  it("adopts newly configured fallbacks only on deliberate policy review and keeps the primary", async ({
+  it("keeps stored account lifetimes and schedules on unrelated edits and honors empty fallbacks", async ({
     fixture,
   }) => {
     await fixture.invoke("cron.add", createParams());
     const created = await fixture.reload();
-    expect(created.inferenceGrants).toEqual({});
     fixture.setDefaultFallbacks(["openai/gpt-4o@" + subscriptionId]);
-    await fixture.invoke("cron.update", {
-      id: created.id,
-      patch: { name: "Unrelated edit", payload: createParams().payload },
-    });
-    const unrelated = await fixture.reload();
-    expect(unrelated.inferenceGrants).toEqual({});
-    const preview = await fixture.invoke("cron.update", {
-      id: created.id,
-      patch: {},
-      reviewModelPolicy: true,
-      dryRun: true,
-    });
-    expect(preview).toMatchObject({ modelPolicyReview: { changed: true, dryRun: true } });
-    expect(await fixture.reload()).toEqual(unrelated);
-    await fixture.invoke("cron.update", { id: created.id, patch: {}, reviewModelPolicy: true });
-    const reviewed = await fixture.reload();
-    expect(reviewed.inferenceBinding).toEqual(created.inferenceBinding);
-    expect(reviewed.inferenceGrants).toMatchObject({
-      "openai/gpt-4o": { profileId: subscriptionId, authRequirement: "subscription" },
-    });
-    expect(reviewed.schedule).toEqual(created.schedule);
-    await fixture.invoke("cron.update", { id: created.id, patch: {}, reviewModelPolicy: true });
-    expect(await fixture.reload()).toEqual(reviewed);
-    await fixture.invoke(
-      "cron.update",
-      { id: created.id, patch: {}, reviewModelPolicy: true, expectedConfigRevision: "stale" },
-      null,
-      { expectedSuccess: false },
-    );
-    expect(await fixture.reload()).toEqual(reviewed);
-    await fixture.invoke("cron.get", { id: created.id });
+    await fixture.invoke("cron.update", { id: created.id, patch: { name: "Renamed" } });
+    const renamed = await fixture.reload();
+    expect(renamed.inferenceBinding).toEqual(created.inferenceBinding);
+    expect(renamed.inferenceGrants).toEqual(created.inferenceGrants);
+    expect(renamed.schedule).toEqual(created.schedule);
     await fixture.invoke("cron.update", {
       id: created.id,
       patch: { payload: { kind: "agentTurn", fallbacks: [] } },
     });
-    expect((await fixture.reload()).inferenceGrants).toEqual({});
+    const disabled = await fixture.reload();
+    expect(disabled.payload).toMatchObject({ fallbacks: [] });
+    expect(disabled.inferenceGrants).toEqual({});
   });
 
   it.for(["user", undefined] as const)(
-    "reviews persistent session provenance %s without shadowing its primary account",
+    "keeps persistent session provenance %s without shadowing its primary account",
     async (modelOverrideSource, { fixture }) => {
       using mocks = new DisposableStack();
       mocks.defer(() => vi.restoreAllMocks());
@@ -155,10 +130,6 @@ describe("cron handler inference binding persistence", () => {
       const original = await fixture.reload();
       expect(original.inferenceBinding?.profileId).toBe(platformId);
       expect(original.inferenceGrants).toEqual({});
-      await fixture.invoke("cron.update", { id: original.id, patch: {}, reviewModelPolicy: true });
-      const reviewed = await fixture.reload();
-      expect(reviewed.inferenceBinding).toEqual(original.inferenceBinding);
-      expect(reviewed.inferenceGrants).toEqual({});
       const cfg = getRuntimeConfigSnapshot()!;
       const alternate = await captureCronInferenceBinding({
         cfg,
@@ -170,12 +141,12 @@ describe("cron handler inference binding persistence", () => {
         throw new Error("Expected alternate account");
       }
       // A formerly optional model can become primary after a later session/default edit.
-      for (const grants of [reviewed.inferenceGrants, { "openai/gpt-4o": alternate }]) {
+      for (const grants of [original.inferenceGrants, { "openai/gpt-4o": alternate }]) {
         const admission = createCronRunInferenceCandidates({
           cfg,
           agentDir: resolveAgentDir(cfg, "main"),
           primary: { provider: "openai", model: "gpt-4o" },
-          binding: reviewed.inferenceBinding,
+          binding: original.inferenceBinding,
           grants,
         });
         try {
@@ -205,9 +176,9 @@ describe("cron handler inference binding persistence", () => {
       ],
     });
     const patch = { payload: { kind: "agentTurn", model } };
-    await fixture.invoke("cron.update", { id: original.id, patch });
+    await fixture.invoke("cron.update", { id: original.id, patch: { name: "Renamed" } });
     expect((await fixture.reload()).inferenceBinding).toEqual(original.inferenceBinding);
-    await fixture.invoke("cron.update", { id: original.id, patch, reviewModelPolicy: true });
+    await fixture.invoke("cron.update", { id: original.id, patch });
     const reviewed = await fixture.reload();
     expect(reviewed.inferenceBinding?.authorizationId).not.toBe(
       original.inferenceBinding?.authorizationId,

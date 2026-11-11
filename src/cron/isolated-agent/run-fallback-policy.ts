@@ -3,6 +3,7 @@ import type { RunEntryModelResolve } from "../../agents/embedded-agent-runner/ru
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
 import type { ModelCandidate } from "../../agents/model-fallback.types.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
+import { resolveConfiguredModelFallbacks } from "../../agents/model-selection-resolve.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -138,13 +139,31 @@ export function resolveCronPreflightCandidates(params: {
 
 /** Selects the reachable candidate and retains only its remaining fallback chain. */
 export async function resolveCronPreflight(
-  params: Parameters<typeof resolveCronPreflightCandidates>[0],
+  params: Parameters<typeof resolveCronPreflightCandidates>[0] & {
+    trigger?: "cron" | "event";
+    primaryProfileId?: string;
+    runtimeSessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
+  },
 ) {
   const preflightCandidates = resolveCronPreflightCandidates(params);
   const job: CronStoredJob = params.job;
+  const { inheritCronInferencePolicy } = await import("../inference-binding.runtime.js");
+  const inferencePolicy =
+    params.trigger === "event"
+      ? { binding: job.inferenceBinding, grants: job.inferenceGrants }
+      : await inheritCronInferencePolicy({
+          ...params,
+          job,
+          primary: { provider: params.provider, model: params.model },
+          candidates: preflightCandidates,
+          fallbacks:
+            resolveCronFallbacksOverride({
+              ...params,
+              selectedModel: { provider: params.provider, model: params.model },
+            }) ?? resolveConfiguredModelFallbacks({ cfg: params.cfg, agentId: params.agentId }),
+        });
   const inference = createCronRunInferenceCandidates({
-    binding: job.inferenceBinding,
-    grants: job.inferenceGrants,
+    ...inferencePolicy,
     primary: { provider: params.provider, model: params.model },
     cfg: params.cfg,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
@@ -187,6 +206,7 @@ export async function resolveCronPreflight(
       model: candidate.model,
       modelFallbacksOverride,
       runtimePluginCandidates: approved.slice(index),
+      inferencePolicy,
     };
   }
   if (firstUnavailableReason !== undefined) {
@@ -198,5 +218,6 @@ export async function resolveCronPreflight(
     model: params.model,
     modelFallbacksOverride: undefined,
     runtimePluginCandidates: approved,
+    inferencePolicy,
   };
 }

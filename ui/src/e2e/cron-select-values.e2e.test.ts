@@ -98,19 +98,13 @@ suite.define(() => {
               }),
             )
             .toBe(true);
+          expect(
+            await page.getByRole("switch", { name: "Review fallback accounts on save" }).count(),
+          ).toBe(0);
           await page.locator("#cron-payload-text").fill(gardenMessage);
           if (keyboardName) {
             await page.keyboard.press("Tab");
             await page.keyboard.press("Tab");
-            if (mode === "edit") {
-              await page.keyboard.press("Tab");
-              const review = page.getByRole("switch", { name: "Review fallback accounts on save" });
-              expect(await review.evaluate((element) => element.matches(":focus"))).toBe(true);
-              await page.keyboard.press("Space");
-              expect(await review.isChecked()).toBe(true);
-              await page.keyboard.press("Space");
-              expect(await review.isChecked()).toBe(false);
-            }
             for (let field = 0; field < 2; field++) {
               await page.keyboard.press("Tab");
             }

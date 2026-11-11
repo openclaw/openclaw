@@ -1,0 +1,3 @@
+# Native cron authority after awaited unbound fallback preparation, both adapters.
+# Shared fixture extraction preserves existing account/CLI coverage; obsolete opt-in tests retired.
+196

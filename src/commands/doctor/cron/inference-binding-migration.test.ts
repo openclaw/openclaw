@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { installPrivateUpdateHandoffStore } from "../../../../test/helpers/private-update-handoff-store.js";
 import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/store-runtime.js";
 import {
   persistAuthProfileBatch,
@@ -47,6 +48,7 @@ const withAccounts = (run: (state: OpenClawTestState) => Promise<void>) =>
       env: { OPENAI_API_KEY: undefined, OPENAI_OAUTH_TOKEN: undefined },
     },
     async (state) => {
+      installPrivateUpdateHandoffStore(state.root);
       vi.spyOn(globalThis, "fetch").mockRejectedValue(
         new Error("No external I/O in offline migration"),
       );
@@ -459,7 +461,7 @@ const provider = (apiKey: string, baseUrl: string): ModelProviderConfig => ({
   models: [configuredModel("model")],
 });
 
-it("warns that an unbound job whose default moved to a stored account is refused until it records one", async () => {
+it("leaves a healthy unbound job silent and unchanged when its default moves to a stored account", async () => {
   await withAccounts(async (state) => {
     // The job last ran on a configured key; the default now resolves to a stored account.
     const cfg = await configure(state);
@@ -469,15 +471,9 @@ it("warns that an unbound job whose default moved to a stored account is refused
     await doctor.withDoctorConfigMaintenance(async () => {
       const runtime = createNonExitingRuntime();
       const findings = await cronInferenceCheck.detect({ cfg, mode: "lint", runtime });
-      expect(findings).toContainEqual(
-        expect.objectContaining({ requirement: "cron-inference-account" }),
-      );
-      contains(
-        findings.map((finding) => finding.message).join("\n"),
-        "Automation hourly (hourly): retain openai:manual for openai/gpt-5.5",
-        "Its runs are refused until it records this account",
-        "openclaw doctor --fix",
-      );
+      expect(findings).toEqual([]);
+      expect(await readJobs(storePath)).toEqual([legacyJob("hourly")]);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
     });
   });
 });
@@ -539,18 +535,7 @@ it.each(["native", "stored", "native-default", "stored-default", "pinned-native"
         const result = await migrate(cfg);
         expect(result.changes).toEqual([]);
         expect(findings.map((finding) => finding.message)).toEqual(result.warnings);
-        if (scenario === "stored" || scenario === "stored-default") {
-          expect(result.warnings).toHaveLength(1);
-          contains(
-            result.warnings[0]!,
-            scenario,
-            "claude-cli",
-            "never borrow a stored account",
-            `openclaw automations edit ${scenario} --model ${model}@${scenario === "stored" ? "anthropic:token" : profile}`,
-          );
-        } else {
-          expect(result.warnings).toEqual([]);
-        }
+        expect(result.warnings).toEqual([]);
         expect(await readJobs(storePath)).toEqual([job]);
         expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(originalSession);
         expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -670,13 +655,13 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
         mode: "lint",
         runtime: createNonExitingRuntime(),
       });
-      const preview = findings.map((finding) => finding.message).join("\n");
-      contains(
-        preview,
-        "Automation ambiguous (ambiguous): retain openai:a for openai/gpt-5.5",
-        "Also eligible: openai:b",
-        "openclaw doctor --fix",
-      );
+      expect(findings.map((finding) => finding.message).toSorted()).toEqual([
+        expect.stringContaining("Automation deleted-agent (deleted-agent):"),
+        expect.stringContaining("Automation malformed (malformed):"),
+        expect.stringContaining("Automation missing (missing):"),
+        expect.stringContaining("Automation native-locked (native-locked):"),
+        expect.stringContaining("Automation unavailable-model (unavailable-model):"),
+      ]);
       expect(await readJobs(storePath)).toEqual(original);
       const result = await migrate(cfg);
       const warnings = result.warnings.join("\n");

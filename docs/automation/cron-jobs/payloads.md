@@ -247,18 +247,15 @@ scheduled model falls back without retaining that model's account.
 
 To change an account deliberately, update the job with a model/profile selection,
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
-For legacy jobs without a recorded inference owner, `openclaw doctor --fix` records
-the account the job's next unbound run would use: an explicit selection, or else the
-first account in the run's normal account order, ignoring temporary rate-limit
-cooldowns. With `auth.order` set, that is the account every earlier run used; without
-it, runs rotated between accounts of the same type by last use, and Doctor records one
-of them. When several accounts are eligible, Doctor names the others and the command
-to change the choice.
-Doctor can also adopt host-managed accounts on an explicitly selected Codex runtime; it records that runtime with the account. Native-owned or model-locked sessions remain unchanged.
-Doctor uses normal automation model selection, preserves inherited defaults and
-fallback lists, leaves existing bindings unchanged, and backs up cron state before
-committing. Missing accounts, and personal accounts needing their owner's
-authorization, are left unchanged with job-specific adoption instructions.
+Existing jobs resolve a clear, already-authorized account automatically at their next
+run. They inherit current native model and fallback policy unless the job explicitly
+overrides it, including an empty fallback list. No review or per-job save is needed.
+This run-local conversion does not change job IDs, schedules, enabled state, payloads,
+or delivery. Ambiguous or unavailable accounts fail noninteractively; personal
+accounts require the job's authenticated owner. Existing recorded account lifetimes
+are retained, so conversion does not revive revoked or replaced authorizations.
+Doctor remains available to inspect or persist legacy account bindings explicitly;
+it is not required to enable healthy jobs or newly inherited fallback models.
 Run `openclaw doctor --lint` to preview missing bindings. Add `--all` to inspect
 unavailable profiles referenced by saved account order. An empty per-agent credential store
 can be valid when credentials are inherited from the shared store; Doctor checks
@@ -267,25 +264,25 @@ missing profile from account order or recreate its credentials automatically.
 
 Managed updates and the standard container entrypoint run repairing Doctor before
 activation. A manual source upgrade must include `openclaw doctor --fix` before
-starting the Gateway. Startup checks potentially unmigrated host-account jobs in the background without
-delaying cron readiness or operations. The scan has a five-second aggregate budget;
+starting the Gateway. Startup checks account availability in the background without delaying cron readiness
+or operations; a missing private binding alone does not require user action. The scan has a five-second aggregate budget;
 if it expires, one warning reports how many jobs were not checked and points to
 `openclaw doctor --lint` for a complete check. Startup does not capture credentials
 or rewrite jobs.
 
 Keys in the environment or provider config have no stored account to record. A job
-on such a route stays unbound and runs on that key; once a stored account becomes eligible for its route, the
-job stops with the adoption instructions instead of switching to that account. Job
-creation follows the same rule. An account refusal ends the run; it never falls back
-to another model or provider. Credentialless models remain usable without an account.
+on such a route stays unbound and uses the normal configured authentication policy.
+When that policy selects a clear stored account, the run captures its current
+authorization automatically. Unavailable optional candidates are skipped; losing a
+recorded account authorization stops the run rather than selecting a replacement.
+Credentialless primary models retain their native authentication behavior.
 
 Unbound CLI-runtime automations need no inference binding when the CLI account
-selector chooses native login. If it selects a stored profile, scheduled runs refuse
-to borrow that account: Doctor, lint, and startup name the job and its explicit
-`openclaw automations edit <jobId> --model <provider/model>@<profileId>` recovery
-command. This edit also sets the primary model; Doctor never adopts CLI accounts
-automatically. To explicitly choose Claude CLI's native login, use
-`anthropic/<model>@anthropic:claude-cli` with the same edit command.
+selector chooses native login. A clear stored profile that the configured backend
+can forward is inherited automatically. Missing, ambiguous, or unauthorized
+accounts remain noninteractive failures. To explicitly choose Claude CLI's native
+login, use `openclaw automations edit <jobId> --model
+anthropic/<model>@anthropic:claude-cli`.
 OpenClaw does not forward a stored inference profile on the native-only path.
 Jobs with a saved inference binding keep using that account.
 Known provider-auth environment variables and the backend's credential exclusions

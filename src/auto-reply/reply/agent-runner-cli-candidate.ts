@@ -492,13 +492,8 @@ export async function runCliFallbackCandidate(
                     }),
                 }),
             authProfileId,
-            // The CLI owner rechecks this after awaits and before credential/transport effects.
-            assertCurrent: scheduledInference
-              ? () => {
-                  assertSettlementCurrent();
-                  scheduledInference.runParams.authProfileBinding?.assertCurrent();
-                }
-              : undefined,
+            // Includes run authority even when this candidate has no stored credential.
+            assertCurrent: assertSettlementCurrent,
             nativeAuthOnly:
               turn.followupRun.run.scheduledAutomation && !params.scheduledInference
                 ? true

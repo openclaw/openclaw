@@ -16,6 +16,7 @@ import {
 } from "../agents/cli-execution-auth.js";
 import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
+import { hasSyntheticLocalProviderAuthConfig } from "../agents/model-auth-provider-config.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
@@ -27,12 +28,22 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
-import { type CronInferenceBinding, describeCronInferenceBinding } from "./inference-binding.js";
+import { logWarn } from "../logger.js";
+import { modelKey } from "../shared/model-key.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
+import { prepareUserModelAccountAuthority } from "../state/user-model-account-operations.js";
+import { cronExecutionActor } from "./human-owner.js";
+import {
+  type CronInferenceBinding,
+  type CronRunInferencePolicy,
+  describeCronInferenceBinding,
+} from "./inference-binding.js";
 import { resolveCronCandidateExecution } from "./isolated-agent/candidate-execution.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
 } from "./isolated-agent/model-selection.js";
+import type { CronStoredJob } from "./types.js";
 
 /** Capture a current owner; null means an explicit, validated native CLI account selection. */
 export async function captureCronInferenceBinding(params: {
@@ -88,6 +99,8 @@ async function captureSelectedCronInferenceBinding(
   params: Parameters<typeof captureCronInferenceBinding>[0],
   owner: Awaited<ReturnType<typeof resolveCronModelSelectionOwner>>,
   model: { provider: string; model: string; configuredProfileId?: string },
+  requireAvailable = false,
+  allowNativePrimary = false,
 ): Promise<CronInferenceBinding | null | undefined> {
   const { config: cfg, agentId, agentDir } = owner;
   // The account follows the config's runtime policy, so a job binds the account it always has.
@@ -124,6 +137,9 @@ async function captureSelectedCronInferenceBinding(
       agentId,
     })
   ) {
+    if (requireAvailable && !allowNativePrimary) {
+      throw new Error("runtime does not forward a supported stored account");
+    }
     return undefined;
   }
   // A temporary creator model does not change the model an unpinned job will run.
@@ -175,6 +191,9 @@ async function captureSelectedCronInferenceBinding(
       return null;
     }
     if (selected?.kind !== "stored") {
+      if (requireAvailable && !allowNativePrimary) {
+        throw new Error("no available stored account for the configured CLI runtime");
+      }
       return undefined;
     }
     selection = {
@@ -241,6 +260,14 @@ async function captureSelectedCronInferenceBinding(
         throw new Error(
           "Automation requires a stored inference account or a key in the environment or provider config. Select an account with model@profile.",
         );
+      }
+      if (
+        requireAvailable &&
+        source?.kind !== "direct" &&
+        !allowNativePrimary &&
+        !hasSyntheticLocalProviderAuthConfig({ cfg, provider: model.provider })
+      ) {
+        throw new Error("no eligible stored account or configured key");
       }
       return undefined;
     }
@@ -347,8 +374,12 @@ export async function acquireCronInferenceAuthorization(params: {
 
 /** Resolve an optional alternate without choosing an ambient or round-robin billing account. */
 export async function captureCronAlternateInferenceBinding(
-  params: Parameters<typeof captureCronInferenceBinding>[0] & { model: string },
-): Promise<CronInferenceBinding> {
+  params: Parameters<typeof captureCronInferenceBinding>[0] & {
+    model: string;
+    /** Native-owned primary login behavior predates automatic account capture. */
+    primary?: boolean;
+  },
+): Promise<CronInferenceBinding | undefined> {
   const selected = resolveSimpleCompletionSelectionForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -369,28 +400,40 @@ export async function captureCronAlternateInferenceBinding(
       externalCli: { mode: "none" },
       allowKeychainPrompt: false,
     });
+    const cliProvider = resolveCliRuntimeExecutionProvider({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      provider: selected.provider,
+      modelId: selected.modelId,
+    });
+    const cliSelection = cliProvider
+      ? await resolveCliExecutionAuthSelection({
+          cliExecutionProvider: cliProvider,
+          authProfileProvider: selected.provider,
+          config: params.cfg,
+          agentDir: owner.agentDir,
+        })
+      : undefined;
+    const accountProvider =
+      cliSelection?.kind === "stored" ? cliSelection.provider : (cliProvider ?? selected.provider);
     const { order } = resolveExplicitAuthOrderSelection({
       storeOrder: store.order,
       configuredOrder: params.cfg.auth?.order,
-      providerKey: selected.provider,
-      providerAuthKey: resolveProviderIdForAuth(selected.provider, { config: params.cfg }),
+      providerKey: accountProvider,
+      providerAuthKey: resolveProviderIdForAuth(accountProvider, { config: params.cfg }),
     });
     const eligible = (id: string) =>
       resolveAuthProfileEligibility({
         cfg: params.cfg,
         store,
-        provider: selected.provider,
+        provider: accountProvider,
         profileId: id,
         includePendingOAuthRefresh: true,
       }).eligible;
     const choices =
       order === undefined ? Object.keys(store.profiles).filter(eligible) : order.filter(eligible);
-    if (!choices.length || (order === undefined && choices.length !== 1)) {
-      throw new Error(
-        choices.length
-          ? "multiple eligible accounts; select model@profile"
-          : "no eligible stored account",
-      );
+    if (choices.length > 1 && order === undefined) {
+      throw new Error("multiple eligible accounts; select model@profile");
     }
     profileId = choices[0];
   }
@@ -400,9 +443,127 @@ export async function captureCronAlternateInferenceBinding(
     { ...params, sessionEntry: undefined, recordedRuntime: undefined },
     owner,
     { provider: selected.provider, model: selected.modelId, configuredProfileId: profileId },
+    true,
+    params.primary === true,
   );
-  if (!binding) {
+  if (binding === null && !params.primary) {
     throw new Error("runtime does not forward a supported stored account");
   }
-  return binding;
+  return binding ?? undefined;
+}
+
+/** Derive native policy once per admitted run, without rewriting or rescheduling stored jobs. */
+export async function inheritCronInferencePolicy(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  job: CronStoredJob;
+  primary: { provider: string; model: string };
+  candidates: readonly { provider: string; model: string }[];
+  fallbacks: readonly string[];
+  primaryProfileId?: string;
+  runtimeSessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
+}): Promise<CronRunInferencePolicy> {
+  const job: CronStoredJob = params.job;
+  if (job.runtimeAuthority) {
+    return {};
+  }
+  const grants: NonNullable<CronRunInferencePolicy["grants"]> = { ...job.inferenceGrants };
+  const policy = { binding: job.inferenceBinding, grants };
+  const selections = params.fallbacks.map((modelRef) =>
+    resolveSimpleCompletionSelectionForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      modelRef,
+    }),
+  );
+  for (const candidate of params.candidates) {
+    const key = modelKey(candidate.provider, candidate.model);
+    const primary = key === modelKey(params.primary.provider, params.primary.model);
+    if (primary && policy.binding?.provider === candidate.provider) {
+      continue;
+    }
+    const profileId = primary
+      ? params.primaryProfileId
+      : selections.find(
+          (selection) =>
+            selection?.provider === candidate.provider && selection.modelId === candidate.model,
+        )?.profileId;
+    const saved = grants[key];
+    if (saved && (!profileId || saved.profileId === profileId)) {
+      if (primary && !policy.binding) {
+        policy.binding = saved;
+      }
+      continue;
+    }
+    // A new model does not mint a new lifetime for an already-recorded account.
+    const retained = profileId
+      ? [policy.binding, ...Object.values(grants)].find(
+          (binding) => binding?.provider === candidate.provider && binding.profileId === profileId,
+        )
+      : policy.binding?.provider === candidate.provider
+        ? policy.binding
+        : undefined;
+    const cliProvider = resolveCliRuntimeExecutionProvider({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      provider: candidate.provider,
+      modelId: candidate.model,
+      authProfileId: profileId,
+    });
+    if (retained && (!cliProvider || cliProvider === retained.runtime)) {
+      grants[key] = retained;
+      if (primary && !policy.binding) {
+        policy.binding = retained;
+      }
+      continue;
+    }
+    try {
+      const captured = await captureCronAlternateInferenceBinding({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        model: profileId ? key + "@" + profileId : key,
+        primary: primary && !policy.binding,
+        runtimeSessionEntry: primary ? params.runtimeSessionEntry : undefined,
+        authorizeProfile: async (authProfileId) => {
+          if (!isUserModelAuthProfileId(authProfileId)) {
+            return undefined;
+          }
+          const actor = cronExecutionActor(job);
+          if (actor?.type !== "human" || actor.source !== "profile" || !actor.id) {
+            throw new Error("no authenticated owner for this personal inference account");
+          }
+          const authority = await prepareUserModelAccountAuthority({
+            profileId: actor.id,
+            authProfileId,
+          });
+          const assertCurrent = () => {
+            if (!authority?.isCurrent()) {
+              throw new Error(
+                "personal inference account is unavailable to this automation's owner",
+              );
+            }
+          };
+          assertCurrent();
+          return assertCurrent;
+        },
+      });
+      const recorded =
+        captured &&
+        [policy.binding, ...Object.values(job.inferenceGrants ?? {})].find(
+          (binding) => binding?.profileId === captured.profileId,
+        );
+      const binding =
+        captured && recorded
+          ? { ...captured, authorizationId: recorded.authorizationId }
+          : captured;
+      grants[key] = binding;
+      if (primary && !policy.binding) {
+        policy.binding = binding;
+      }
+    } catch (error) {
+      delete grants[key];
+      logWarn("[cron:" + job.id + "] Fallback " + key + " unavailable: " + String(error));
+    }
+  }
+  return policy;
 }

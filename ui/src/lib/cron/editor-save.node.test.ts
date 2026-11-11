@@ -80,13 +80,9 @@ async function saveAndReopen(state: CronState, readJob: () => CronJob) {
 }
 
 describe("automation save editor ownership", () => {
-  it.each([
-    { reviewModelPolicy: false, model: "openai/test" },
-    { reviewModelPolicy: true, model: "openai/test" },
-    { reviewModelPolicy: true, model: "openai/changed" },
-  ])(
-    "sends model-policy review with explicit intent=$reviewModelPolicy and model=$model",
-    async ({ reviewModelPolicy, model }) => {
+  it.each(["openai/test", "openai/changed"])(
+    "saves model %s without a separate review and preserves unchanged account selection",
+    async (model) => {
       const stored = storedJob({
         payload: { kind: "agentTurn", message: "run", model: "openai/test" },
       });
@@ -106,22 +102,16 @@ describe("automation save editor ownership", () => {
       const state = createStateWithRequest(request);
       startCronEdit(state, readPublicJob(stored));
       state.cronForm.name = "Unrelated edit";
-      state.cronForm.reviewModelPolicy = reviewModelPolicy;
       state.cronForm.payloadModel = model;
       await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: stored.id });
       const submitted = request.mock.calls.find(([method]) => method === "cron.update")?.[1];
-      if (reviewModelPolicy) {
-        expect(submitted).toHaveProperty("reviewModelPolicy", true);
-      } else {
-        expect(submitted).not.toHaveProperty("reviewModelPolicy");
-      }
-      if (reviewModelPolicy && model === "openai/test") {
+      expect(submitted).not.toHaveProperty("reviewModelPolicy");
+      if (model === "openai/test") {
         expect(submitted).not.toHaveProperty("patch.payload.model");
       } else {
         expect(submitted).toHaveProperty("patch.payload.model", model);
       }
       expect(state.cronNotice).toBe("Fallback unavailable");
-      expect(state.cronForm.reviewModelPolicy).toBe(false);
       expect(stored.payload).toMatchObject({ model });
     },
   );

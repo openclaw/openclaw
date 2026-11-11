@@ -47,7 +47,6 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   payloadLocked: false,
   payloadText: "",
   payloadModel: "",
-  reviewModelPolicy: false,
   payloadThinking: "",
   payloadLightContext: false,
   payloadIncludeReasoning: false,

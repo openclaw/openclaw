@@ -134,7 +134,7 @@ describe("cron inference admission", () => {
     });
   });
 
-  it("refuses an unapproved candidate even when eager admission is omitted", async () => {
+  it("refuses an unconfigured candidate even when eager admission is omitted", async () => {
     const binding = await capture(cfg, `openai/gpt-4.1@${platformId}`);
     h.runWithModelFallbackMock.mockImplementationOnce(async (params) => ({
       result: await runFallbackModelAttempt(params, "openai", "gpt-4o", "rate_limit"),
@@ -147,7 +147,7 @@ describe("cron inference admission", () => {
       makeAuthJob({ inferenceBinding: binding ?? undefined, inferenceGrants: {} }),
     );
     expect(result.status).toBe("error");
-    expect(result.error).toContain("no recorded account authorization");
+    expect(result.error).toContain("no available authorized account");
     expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(h.runCliAgentMock).not.toHaveBeenCalled();
   });

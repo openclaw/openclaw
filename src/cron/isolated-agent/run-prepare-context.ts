@@ -316,22 +316,20 @@ export async function resolveCronRunPreparation(params: CronRunPreparationParams
         provider: resolvedModelSelection.provider,
         model: resolvedModelSelection.model,
       };
-      const bindingFor = (provider: string, model: string) =>
-        resolveCronCandidateInferenceBinding(
-          {
-            binding: input.job.inferenceBinding,
-            grants: input.job.inferenceGrants,
-            primary: inferencePrimary,
-          },
-          provider,
-          model,
-        );
       const preflight = await resolveCronPreflight({
+        trigger: input.trigger,
         cfg: cfgWithAgentDefaults,
         job: input.job,
         agentId: modelOwner.agentId,
         provider: resolvedModelSelection.provider,
         model: resolvedModelSelection.model,
+        primaryProfileId:
+          resolvedModelSelection.configuredProfileId ??
+          ((cronSession.sessionEntry.providerOverride ?? cronSession.sessionEntry.modelProvider) ===
+          inferencePrimary.provider
+            ? cronSession.sessionEntry.authProfileOverride
+            : undefined),
+        runtimeSessionEntry: cronSession.sessionEntry,
         useSubagentFallbacks,
         inheritDefaultFallbacksForAgentStringModel,
         sessionModelOverrideSource,
@@ -351,7 +349,14 @@ export async function resolveCronRunPreparation(params: CronRunPreparationParams
           }),
         };
       }
-      const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
+      const { provider, model, modelFallbacksOverride, runtimePluginCandidates, inferencePolicy } =
+        preflight;
+      const bindingFor = (candidateProvider: string, candidateModel: string) =>
+        resolveCronCandidateInferenceBinding(
+          { ...inferencePolicy, primary: inferencePrimary },
+          candidateProvider,
+          candidateModel,
+        );
       // A captured runtime replaces the override the cron session copied from its source row.
       const runtimeSessionEntry = resolveCronRuntimeSessionEntry(
         bindingFor(provider, model),
@@ -673,6 +678,7 @@ export async function resolveCronRunPreparation(params: CronRunPreparationParams
             suppressExecNotifyOnExit: deliveryPlan.mode === "none",
             skillsSnapshot,
             inferencePrimary,
+            inferencePolicy,
             liveSelection,
             useSubagentFallbacks,
             inheritDefaultFallbacksForAgentStringModel,

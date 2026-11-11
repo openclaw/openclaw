@@ -1169,7 +1169,7 @@ var External = [
     /(^mode$|^to$)/u,
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^to$)/u,
     /(^threadId$|^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
-    /(^id$|^patch$|^reviewModelPolicy$|^dryRun$|^expectedConfigRevision$)/u,
+    /(^id$|^patch$|^expectedConfigRevision$)/u,
     /(^ownerProfileId$|^name$|^displayName$|^agentId$|^sessionKey$|^description$|^enabled$|^deleteAfterRun$|^schedule$|^pacing$|^activeHours$|^idleOnly$|^trigger$|^sessionTarget$|^wakeMode$|^payload$|^delivery$|^failureAlert$|^state$)/u,
     /\S/u,
     /(^min$|^max$)/u,
@@ -1184,7 +1184,7 @@ var External = [
     /(^mode$|^to$)/u,
     /(^threadId$|^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
     /(^nextRunAtMs$|^runningAtMs$|^lastRunAtMs$|^lastRunStatus$|^lastStatus$|^lastError$|^lastErrorReason$|^lastDurationMs$|^consecutiveErrors$|^consecutiveSkipped$|^lastDelivered$|^lastDeliveryStatus$|^lastDeliveryError$|^lastFailureNotificationDelivered$|^lastFailureNotificationDeliveryStatus$|^lastFailureNotificationDeliveryError$|^lastFailureAlertAtMs$|^lastTriggerEvalAtMs$|^triggerEvalCount$|^lastTriggerFireAtMs$|^triggerState$|^streamStatus$|^streamError$|^streamConsecutiveFailures$|^streamRestartExhausted$|^streamDroppedBatches$|^streamCoalescedBatches$|^streamLastStartedAtMs$|^streamLastExitAtMs$)/u,
-    /(^jobId$|^patch$|^reviewModelPolicy$|^dryRun$|^expectedConfigRevision$)/u,
+    /(^jobId$|^patch$|^expectedConfigRevision$)/u,
     /(^id$|^expectedConfigRevision$)/u,
     /(^jobId$|^expectedConfigRevision$)/u,
     /(^id$|^mode$|^expectedProcessInstanceId$|^waitTimeoutMs$)/u,
@@ -11067,10 +11067,6 @@ var External = [
     ) &&
     check_6(value.id) &&
     check_1657(value.patch) &&
-    (value.reviewModelPolicy === void 0 ||
-      !("reviewModelPolicy" in value) ||
-      check_181(value.reviewModelPolicy)) &&
-    (value.dryRun === void 0 || !("dryRun" in value) || check_181(value.dryRun)) &&
     (value.expectedConfigRevision === void 0 ||
       !("expectedConfigRevision" in value) ||
       check_263(value.expectedConfigRevision)),
@@ -11477,10 +11473,6 @@ var External = [
     ) &&
     check_6(value.jobId) &&
     check_1657(value.patch) &&
-    (value.reviewModelPolicy === void 0 ||
-      !("reviewModelPolicy" in value) ||
-      check_181(value.reviewModelPolicy)) &&
-    (value.dryRun === void 0 || !("dryRun" in value) || check_181(value.dryRun)) &&
     (value.expectedConfigRevision === void 0 ||
       !("expectedConfigRevision" in value) ||
       check_263(value.expectedConfigRevision)),

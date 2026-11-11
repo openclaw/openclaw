@@ -370,7 +370,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       : undefined;
   const resolveRuntimeAuthProfile = async () => {
     const binding = opts?.scheduledAutomation?.job.inferenceBinding;
-    if (binding) {
+    if (binding?.provider === provider) {
       return { authProfileId: binding.profileId, authProfileIdSource: binding.source };
     }
     if (

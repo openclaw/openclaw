@@ -36,6 +36,7 @@ export type CronRunExecutionParams = Pick<
   | "sessionModelOverrideSource"
   | "modelFallbacksOverride"
   | "inferencePrimary"
+  | "inferencePolicy"
   | "liveSelection"
   | "cronSession"
   | "commandBody"

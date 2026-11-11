@@ -20,18 +20,25 @@ export type CronInferenceBinding = {
 /** Unordered authorizations. The payload/default policy alone owns candidate ordering. */
 export type CronInferenceGrants = Record<string, CronInferenceBinding>;
 
-/** The original primary keeps its account/runtime even when an old optional grant matches it. */
+/** One admitted run's native policy; undefined entries use configured keys or native auth. */
+export type CronRunInferencePolicy = {
+  binding?: CronInferenceBinding;
+  grants?: Record<string, CronInferenceBinding | undefined>;
+};
+
+/** Keep a compatible primary account; a changed provider uses its own authorized candidate. */
 export function resolveCronCandidateInferenceBinding(
   params: {
     binding?: CronInferenceBinding;
-    grants?: CronInferenceGrants;
+    grants?: CronRunInferencePolicy["grants"];
     primary: { provider: string; model: string };
   },
   provider: string,
   model: string,
 ): CronInferenceBinding | undefined {
   return params.grants === undefined ||
-    modelKey(provider, model) === modelKey(params.primary.provider, params.primary.model)
+    (modelKey(provider, model) === modelKey(params.primary.provider, params.primary.model) &&
+      (!params.binding || params.binding.provider === provider))
     ? params.binding
     : params.grants[modelKey(provider, model)];
 }
@@ -51,7 +58,7 @@ export function normalizeCronInferenceGrants(value: unknown): CronInferenceGrant
       !key.startsWith(binding.provider + "/") ||
       key.length <= binding.provider.length + 1
     ) {
-      throw new Error("Invalid automation inference grant; review the model policy again.");
+      throw new Error("Invalid automation inference grant.");
     }
     grants[key] = binding;
   }

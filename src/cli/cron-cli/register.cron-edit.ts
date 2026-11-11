@@ -84,12 +84,6 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--clear-fallbacks", "Remove per-job fallback override", false)
       .option(
-        "--review-model-policy",
-        "Review configured fallback accounts without pinning models",
-        false,
-      )
-      .option("--dry-run", "Preview --review-model-policy without changing the automation", false)
-      .option(
         "--clear-model",
         "Remove the per-job model override (restore normal cron model precedence)",
         false,
@@ -687,23 +681,9 @@ export function registerCronEditCommand(cron: Command) {
             patch.failureAlert = failureAlert;
           }
 
-          const reviewModelPolicy =
-            opts.reviewModelPolicy === true ||
-            hasModel ||
-            opts.clearModel === true ||
-            typeof opts.fallbacks === "string" ||
-            opts.clearFallbacks === true;
-          if (opts.dryRun && (!opts.reviewModelPolicy || Object.keys(patch).length > 0)) {
-            throw new CronCliError("--dry-run requires --review-model-policy without other edits");
-          }
-          if (opts.reviewModelPolicy || opts.dryRun) {
-            await readExistingCronJob();
-          }
           const res = await callGatewayFromCli("cron.update", opts, {
             id,
             patch,
-            ...(reviewModelPolicy ? { reviewModelPolicy: true } : {}),
-            ...(opts.dryRun ? { dryRun: true } : {}),
             ...(expectedConfigRevision !== undefined ? { expectedConfigRevision } : {}),
           });
           defaultRuntime.writeJson(res);

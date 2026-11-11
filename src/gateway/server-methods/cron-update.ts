@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   errorShape,
@@ -102,15 +101,6 @@ export const cronUpdateHandler: GatewayRequestHandler = async ({
     return;
   }
   const patch: CronJobPatch = normalizedPatch;
-  const reviewOnly = p.reviewModelPolicy === true && Object.keys(patch).length === 0;
-  if (p.dryRun && !reviewOnly) {
-    respondInvalidCronParams(
-      respond,
-      "cron.update",
-      "dryRun requires reviewModelPolicy and an empty patch",
-    );
-    return;
-  }
   const cfg = context.getRuntimeConfig();
   const currentJob = await context.cron.readJob(jobId);
   if (
@@ -240,7 +230,7 @@ export const cronUpdateHandler: GatewayRequestHandler = async ({
   };
   try {
     streamExecPolicy = resolveCronStreamExecPolicy(client, requiresStreamExec, context);
-    capture = reviewOnly ? undefined : resolveCronCreatorAuthorityCapture(creatorScope);
+    capture = resolveCronCreatorAuthorityCapture(creatorScope);
     const runtimeAuthority = capture?.captureRuntimeAuthority();
     capture &&= { ...capture, captureRuntimeAuthority: () => runtimeAuthority };
     const nextJob = await validateUpdate(currentJob);
@@ -253,12 +243,11 @@ export const cronUpdateHandler: GatewayRequestHandler = async ({
       currentJob.streamOperatorSource,
     );
     if (
-      !reviewOnly &&
-      (creatorScope ||
-        (sourceBound &&
-          (requiresStreamExec ||
-            patch.enabled === true ||
-            sealed?.executionRevision !== nextSourceRevision)))
+      creatorScope ||
+      (sourceBound &&
+        (requiresStreamExec ||
+          patch.enabled === true ||
+          sealed?.executionRevision !== nextSourceRevision))
     ) {
       operatorSourceExecutionRevision = nextSourceRevision;
       operatorCapture = await captureCronCreatorSession(
@@ -288,7 +277,7 @@ export const cronUpdateHandler: GatewayRequestHandler = async ({
             signal,
             hasCurrentClientAuthority,
           },
-          { currentJob, explicit: p.reviewModelPolicy === true },
+          currentJob,
         );
   } catch (err) {
     operatorCapture?.disposeOperatorSource?.();
@@ -337,41 +326,6 @@ export const cronUpdateHandler: GatewayRequestHandler = async ({
   };
   let job: Awaited<ReturnType<typeof context.cron.update>>;
   try {
-    if (reviewOnly) {
-      const latest = await context.cron.readJob(jobId);
-      if (!latest) {
-        respondCronJobNotFound(respond, jobId);
-        return;
-      }
-      const expected = p.expectedConfigRevision ?? resolveCronJobConfigRevision(currentJob);
-      const actual = resolveCronJobConfigRevision(latest);
-      if (actual !== expected) {
-        throw new CronJobConfigRevisionConflictError(expected, actual);
-      }
-      commitGuard?.();
-      const changed =
-        inference?.inferenceGrants !== undefined &&
-        !isDeepStrictEqual(
-          currentJob.inferenceGrants === undefined ? undefined : { ...currentJob.inferenceGrants },
-          { ...inference.inferenceGrants },
-        );
-      if (p.dryRun || !changed) {
-        respond(
-          true,
-          {
-            ...cronJobReadView(latest),
-            modelPolicyReview: {
-              dryRun: p.dryRun === true,
-              changed,
-              approvedCandidates: Object.keys(inference?.inferenceGrants ?? {}),
-            },
-            ...(inference?.inferenceWarning ? { warning: inference.inferenceWarning } : {}),
-          },
-          undefined,
-        );
-        return;
-      }
-    }
     if (
       requiresStreamExec &&
       !currentJob.streamSandbox &&

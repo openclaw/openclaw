@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelKey } from "../shared/model-key.js";
 import {
   type CronInferenceBinding,
-  type CronInferenceGrants,
+  type CronRunInferencePolicy,
   describeCronInferenceBinding,
   resolveCronCandidateInferenceBinding,
   resolveCronRuntimeSessionEntry,
@@ -178,7 +178,7 @@ function stopInferenceFallback(error: unknown): never {
 /** One run owns its captured candidate leases; missing grants never enter auth preparation. */
 export function createCronRunInferenceCandidates(params: {
   binding?: CronInferenceBinding;
-  grants?: CronInferenceGrants;
+  grants?: CronRunInferencePolicy["grants"];
   primary: { provider: string; model: string };
   cfg: OpenClawConfig;
   agentDir: string;
@@ -186,6 +186,10 @@ export function createCronRunInferenceCandidates(params: {
   const leases = new Map<string, CronRunInference | undefined>();
   let disposed = false;
   const primaryKey = modelKey(params.primary.provider, params.primary.model);
+  const authorityKey =
+    params.binding && params.binding.provider !== params.primary.provider
+      ? "recorded-primary-authority"
+      : primaryKey;
   const bindingFor = (provider: string, model: string) =>
     resolveCronCandidateInferenceBinding(params, provider, model);
   // Losing any admitted account ends the run; another grant cannot replace that authority.
@@ -210,11 +214,15 @@ export function createCronRunInferenceCandidates(params: {
   const admit = async (provider: string, model: string): Promise<string | undefined> => {
     assertCurrent();
     // The saved primary remains authoritative even when selection omits its model.
-    await acquire(primaryKey, params.binding);
+    await acquire(authorityKey, params.binding);
     assertCurrent();
     const key = modelKey(provider, model);
-    if (params.grants !== undefined && key !== primaryKey && !Object.hasOwn(params.grants, key)) {
-      return `Automation candidate ${key} has no recorded account authorization; review its model policy to enable failover.`;
+    if (
+      params.grants !== undefined &&
+      (key !== primaryKey || authorityKey !== primaryKey || !params.binding) &&
+      !Object.hasOwn(params.grants, key)
+    ) {
+      return `Automation candidate ${key} has no available authorized account.`;
     }
     const binding = bindingFor(provider, model);
     if (binding && binding.provider !== provider) {
@@ -234,41 +242,10 @@ export function createCronRunInferenceCandidates(params: {
       if (reason) {
         throw new Error(reason);
       }
-      const lease = leases.get(modelKey(provider, model));
-      const account = lease?.runParams.authProfileBinding;
-      if (!lease || !account) {
-        return lease;
-      }
-      // Both runtime adapters carry this assertion through awaited preparation to their
-      // final HTTP/process effect. Keep raw leases in the map to avoid recursive guards.
-      return {
-        ...lease,
-        runParams: {
-          ...lease.runParams,
-          authProfileBinding: {
-            ...account,
-            assertCurrent,
-            async revalidate() {
-              assertCurrent();
-              await account.revalidate();
-              assertCurrent();
-            },
-          },
-        },
-        assertCandidate(candidateProvider: string, cliExecution: boolean, runtime?: string) {
-          assertCurrent();
-          lease.assertCandidate(candidateProvider, cliExecution, runtime);
-        },
-        async resolveCliAuthProfile(
-          resolve: Parameters<CronRunInference["resolveCliAuthProfile"]>[0],
-        ) {
-          assertCurrent();
-          const profileId = await lease.resolveCliAuthProfile(resolve);
-          assertCurrent();
-          return profileId;
-        },
-      };
+      return leases.get(modelKey(provider, model));
     },
+    // Source admission owns this lifetime even for configured-key/credentialless candidates.
+    assertCurrent,
     dispose: () => {
       disposed = true;
       for (const lease of leases.values()) {

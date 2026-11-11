@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { installPrivateUpdateHandoffStore } from "../../../test/helpers/private-update-handoff-store.js";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { createTestModelDefinition } from "../../commands/test-runtime-config-helpers.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -76,8 +77,9 @@ function service(storePath: string) {
 }
 afterEach(() => vi.restoreAllMocks());
 
-it("inspects stored CLI and selected configured-key sources once without rewriting jobs", async () => {
+it("keeps healthy stored CLI and configured-key jobs quiet without rewriting them", async () => {
   await withOpenClawTestState({ label: "cron-inference-startup" }, async (state) => {
+    installPrivateUpdateHandoffStore(state.root);
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
     await persistAuthProfileBatch({
@@ -124,18 +126,7 @@ it("inspects stored CLI and selected configured-key sources once without rewriti
       await clock.advanceBy(0);
       await cron.list({ includeDisabled: true });
       expect(describe).toHaveBeenCalledTimes(jobs.length);
-      expect(warn.mock.calls).toEqual([
-        [
-          { jobId: "stored", name: "stored" },
-          expect.stringContaining(
-            `openclaw automations edit stored --model ${model}@anthropic:token`,
-          ),
-        ],
-        [
-          { jobId: "profile-key", name: "profile-key" },
-          expect.stringContaining("openclaw doctor --fix"),
-        ],
-      ]);
+      expect(warn).not.toHaveBeenCalled();
       expect((await loadCronJobsStore(storePath)).jobs).toEqual(jobs);
     } finally {
       cron.stop();
@@ -147,6 +138,7 @@ it.each(["budget", "stop"])(
   "%s keeps cron load/list free and stops the active diagnostic before more preparation",
   async (cutoff) => {
     await withOpenClawTestState({ label: "cron-diagnostic-cutoff" }, async (state) => {
+      installPrivateUpdateHandoffStore(state.root);
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
       const jobs: CronStoredJob[] = [

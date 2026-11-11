@@ -61,7 +61,6 @@ export type CronFormState = {
   payloadLocked: boolean;
   payloadText: string;
   payloadModel: string;
-  reviewModelPolicy: boolean;
   payloadThinking: string;
   payloadLightContext: boolean;
   payloadIncludeReasoning: boolean;

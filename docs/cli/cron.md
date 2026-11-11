@@ -83,41 +83,23 @@ that label with `automations add|edit --display-name`. Use
 the stable name in list and detail views. The set and clear options cannot be
 combined.
 
-## Review fallback accounts
+## Model and fallback accounts
 
-New agent jobs capture eligible stored accounts for their effective model fallback
-policy. An unavailable or ambiguous optional account produces a save warning; it
-does not prevent a healthy primary from running. Configured keys, credentialless
-providers, and native CLI logins keep their existing primary behavior, but are not
-automatically captured as alternate accounts.
+Existing and new agent jobs inherit the normal configured model and fallback policy
+automatically. No migration command, review checkbox, or per-job save is needed when
+inherited models change. Explicit model and fallback overrides stay in force; an
+empty fallback list disables failover, and clearing the override restores inheritance.
 
-Existing jobs are not migrated automatically. Changing defaults, adding an account,
-or saving an unrelated field does not authorize a new fallback account. Deliberately
-set or clear `--model` or `--fallbacks`, select **Review fallback accounts on save**
-in the editor, or review selected jobs with:
+Each run resolves its policy without rewriting the stored job or its schedule. It
+uses already-authorized configured accounts and keys, preserves recorded account
+lifetimes, and checks revocation through execution. Missing or ambiguous accounts
+produce a warning or a noninteractive failure, not an unattended login prompt.
+Personal accounts must belong to the automation's authenticated owner.
 
-```bash
-openclaw automations review-model-policy <job-id> --dry-run
-openclaw automations review-model-policy <job-id>
-openclaw automations review-model-policy --all --dry-run
-```
-
-Use either exact job IDs or `--all` (including disabled jobs). Each job is checked
-against its loaded configuration revision and reports its own result; uncertain
-writes are not retried. This review preserves the primary account and schedule.
-To adopt a reconnected primary account, explicitly save
-`--model <provider/model>@<profile-id>` again. `edit --review-model-policy` reviews
-one job; combine it with `--dry-run` and no other edits for a preview.
-
-Fallback order still comes from the existing model policy. Authorizations are
-exact-model-specific: newly inherited models need review even when they use an
-already recorded account. An explicit empty fallback list disables failover;
-clearing the override restores inheritance.
-Runs freeze the admitted policy and authorizations, while credential revocation
-still takes effect. Unapproved candidates are skipped without contacting their
-provider. Revoked, replaced, or incompatible captured accounts stop the run;
-unattended jobs never initiate login or an account chooser. Supported same-account
-noninteractive token refresh remains available.
+Changing models does not reauthorize a revoked or replaced recorded account. To use
+a reconnected primary account, explicitly select it with
+`--model <provider/model>@<profile-id>`. Native CLI primary behavior is unchanged;
+an alternate CLI account must be forwardable by its configured runtime.
 
 ## Schedule types
 

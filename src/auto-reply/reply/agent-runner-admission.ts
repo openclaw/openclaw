@@ -24,7 +24,11 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 
 /** Owns reply admission and closes its delivery grant after deferred and terminal writes settle. */
-export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string) {
+export function prepareReplyTurnExecution(
+  params: AgentTurnParams,
+  runId: string,
+  assertInferenceCurrent?: () => void,
+) {
   const admittedRunContext: { current?: AdmittedRunContext } = {};
   const gatewayContextResolver =
     readChannelContextGatewayContextResolver(params.sessionCtx) ??
@@ -43,6 +47,7 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
       : undefined,
     params.followupRun.run.internalEventExecution?.assertCurrent,
     automation?.assertCurrent,
+    assertInferenceCurrent,
   ]);
   if (automation && !sessionKey) {
     throw new Error("A scheduled session turn requires its admitted session key");

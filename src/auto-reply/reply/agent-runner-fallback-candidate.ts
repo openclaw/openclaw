@@ -165,7 +165,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         ...buildRunEntrySelection(selection, turn.followupRun.run),
         admitCandidate: params.scheduledInferenceCandidates?.admit,
         resolveCandidateAuthProfileId:
-          turn.followupRun.run.scheduledAutomation?.job.inferenceGrants === undefined
+          params.scheduledInferenceCandidates === undefined
             ? undefined
             : (provider, model) =>
                 params.scheduledInferenceCandidates?.bindingFor(provider, model)?.profileId,

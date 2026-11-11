@@ -241,7 +241,6 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
               ? payload.script
               : "",
     payloadModel: agentTurn?.model ?? "",
-    reviewModelPolicy: false,
     payloadThinking: agentTurn?.thinking ?? "",
     payloadLightContext: agentTurn?.lightContext === true,
     payloadIncludeReasoning: agentTurn?.includeReasoning === true,

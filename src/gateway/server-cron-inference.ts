@@ -78,7 +78,6 @@ async function describeCronInferenceMigration(
       cfg,
       agentId,
       agentDir: selection.owner.agentDir,
-      job,
       provider: selection.provider,
       model: selection.model,
       configuredProfileId: selection.configuredProfileId,
@@ -87,7 +86,8 @@ async function describeCronInferenceMigration(
     });
     signal?.throwIfAborted();
     if (account.cliExecution) {
-      return account.warning ? `cron: ${account.warning}` : undefined;
+      // Native login and clear stored-account selection are resolved by the scheduled run.
+      return undefined;
     }
     const runtime =
       resolveSessionRuntimeOverrideForProvider({
@@ -140,15 +140,15 @@ async function describeCronInferenceMigration(
           context,
         }),
     }).attempts;
-    if (isConfiguredKeyAuthSource(attempt?.plan.credentialSource)) {
+    if (attempt?.kind === "profile" || isConfiguredKeyAuthSource(attempt?.plan.credentialSource)) {
       return undefined;
     }
-    return "cron: automation has no recorded inference account; run openclaw doctor --fix before its next scheduled run to migrate a clear stored account or see the explicit adoption needed. This is an account check, not a requirement to pin its model.";
+    return "cron: automation has no available inference account or configured key; check its configured model account before the next scheduled run.";
   } catch {
     if (signal?.aborted) {
       return undefined;
     }
     // A diagnostic cannot turn an unresolved model/agent into a Gateway startup refusal.
-    return "cron: legacy inference account readiness could not be determined; inspect it with openclaw doctor --lint before the next scheduled run.";
+    return "cron: inference account readiness could not be determined; the next scheduled run will check current account access.";
   }
 }

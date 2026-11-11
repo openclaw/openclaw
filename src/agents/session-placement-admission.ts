@@ -421,7 +421,11 @@ export async function withLocalSessionPlacementTurnSettlement(
           const assertClaimCurrent = resolveSessionPlacementTurnSettlementAssertion();
           let open = true;
           const assertSettlementCurrent = composeSessionSourceAssertion(
-            [assertClaimCurrent],
+            [
+              assertClaimCurrent,
+              options.preparedRunAdmission?.assertSourceCurrent,
+              assertAdmittedRunCurrent,
+            ],
             (assertSource) => {
               // Cancellation keeps terminal custody until cleanup releases this turn.
               if (!open || (operation && !isCurrentSessionControllerOperation(operation))) {

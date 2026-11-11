@@ -12,7 +12,7 @@ import { resolveEffectiveAgentRuntime } from "./run.runtime.js";
 export function createCronRuntimeOverrideResolver(
   params: Pick<
     CronRunExecutionParams,
-    "cfgWithAgentDefaults" | "cronSession" | "job" | "inferencePrimary"
+    "cfgWithAgentDefaults" | "cronSession" | "inferencePrimary" | "inferencePolicy"
   >,
 ) {
   return (provider: string, model: string) =>
@@ -21,8 +21,7 @@ export function createCronRuntimeOverrideResolver(
       entry: resolveCronRuntimeSessionEntry(
         resolveCronCandidateInferenceBinding(
           {
-            binding: params.job.inferenceBinding,
-            grants: params.job.inferenceGrants,
+            ...params.inferencePolicy,
             primary: params.inferencePrimary,
           },
           provider,
@@ -42,8 +41,8 @@ export function createCronCandidateExecutionResolver(
     | "agentId"
     | "runSessionKey"
     | "cronSession"
-    | "job"
     | "inferencePrimary"
+    | "inferencePolicy"
   >,
 ) {
   return (provider: string, model: string, sessionRuntimeOverride: string | undefined) =>
@@ -59,8 +58,7 @@ export function createCronCandidateExecutionResolver(
         sessionEntry: resolveCronRuntimeSessionEntry(
           resolveCronCandidateInferenceBinding(
             {
-              binding: params.job.inferenceBinding,
-              grants: params.job.inferenceGrants,
+              ...params.inferencePolicy,
               primary: params.inferencePrimary,
             },
             provider,

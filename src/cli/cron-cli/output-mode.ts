@@ -32,7 +32,6 @@ const CRON_OUTPUT_COMMANDS = {
   runs: [],
   run: [],
   edit: [],
-  "review-model-policy": [],
   scratch: [],
 } as const;
 

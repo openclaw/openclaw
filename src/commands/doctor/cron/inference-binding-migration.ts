@@ -155,16 +155,12 @@ export async function maybeRepairCronInferenceBindings(params: {
           cfg: selected.cfgWithAgentDefaults,
           agentId,
           agentDir: selected.owner.agentDir,
-          job: { id: stored.id, name: job.name },
           provider: selected.provider,
           model: selected.model,
           configuredProfileId: selected.configuredProfileId,
           session,
         });
         if (account.cliExecution) {
-          if (account.warning) {
-            warnings.push(account.warning);
-          }
           continue;
         }
         const runtime =
@@ -386,9 +382,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         }
         const description = `Automation ${label}: retain ${candidate.profileId} for ${modelRef}; model/default/fallback selections stay unchanged.${alternatives.length > 0 ? ` Also eligible: ${alternatives.join(", ")}; to change, run openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef}@<profileId>`)}.` : ""}`;
         if (!params.shouldRepair) {
-          warnings.push(
-            `${description} Its runs are refused until it records this account. Run openclaw doctor --fix to record it.`,
-          );
+          // Healthy jobs inherit at run admission; explicit offline repair may still record it.
           continue;
         }
         const authority = await captureAuthProfileAuthorization({

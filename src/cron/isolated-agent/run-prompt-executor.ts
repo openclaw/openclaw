@@ -30,6 +30,7 @@ import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-pl
 import { resolveAgentLifecycleTerminalMetadata } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
 import {
@@ -161,15 +162,12 @@ export function createCronPromptExecutor(
 
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
     let currentContextSnapshot: CronCompletedPromptRun["currentContextSnapshot"];
-    using inferenceLease = new DisposableStack();
     const inferenceCandidates = createCronRunInferenceCandidates({
-      binding: params.job.inferenceBinding,
-      grants: params.job.inferenceGrants,
+      ...params.inferencePolicy,
       primary: params.inferencePrimary,
       cfg: params.cfgWithAgentDefaults,
       agentDir: params.agentDir,
     });
-    inferenceLease.defer(inferenceCandidates.dispose);
     let canReusePreparedSession = preparedSessionAvailable;
     preparedSessionAvailable = false;
     // A retry can fail during preparation, before any backend start callback.
@@ -207,10 +205,13 @@ export function createCronPromptExecutor(
       scheduledExecution,
       operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,
-      // A child running in its parent's workspace loses every effect once that parent resets.
-      ...(params.occurrence.childParent?.binding
-        ? { assertSourceCurrent: params.occurrence.childParent.assertCurrent }
-        : {}),
+      // Account authority belongs to the run, not the candidate's credential source.
+      assertSourceCurrent: composeSessionSourceAssertion([
+        inferenceCandidates.assertCurrent,
+        params.occurrence.childParent?.binding
+          ? params.occurrence.childParent.assertCurrent
+          : undefined,
+      ]),
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
@@ -223,7 +224,13 @@ export function createCronPromptExecutor(
       scheduledToolPolicy,
       executionIdentity: params.executionIdentity,
     });
-    params.onPromptAdmission(cronAdmission);
+    const promptLease = new DisposableStack();
+    promptLease.defer(inferenceCandidates.dispose);
+    promptLease.defer(cronAdmission.close);
+    params.onPromptAdmission({
+      close: () => promptLease.dispose(),
+      finish: () => cronAdmission.finish().finally(() => promptLease.dispose()),
+    });
     // Record the cron source fact at its producer for the run's lifetime so
     // exec-approval creation and standing-grant use never infer job identity
     // from session keys or run ids. Cleared when the run settles. A job whose
@@ -265,7 +272,7 @@ export function createCronPromptExecutor(
         fallbacksOverride: cronFallbacksOverride,
         admitCandidate: inferenceCandidates.admit,
         resolveCandidateAuthProfileId:
-          params.job.inferenceGrants === undefined
+          params.inferencePolicy.grants === undefined
             ? undefined
             : (provider, model) => inferenceCandidates.bindingFor(provider, model)?.profileId,
       },
@@ -577,13 +584,7 @@ export function createCronPromptExecutor(
                   ),
                   provider: executionProvider,
                   authProfileId,
-                  // Keep the recorded credential lifetime live through CLI preparation and launch.
-                  assertCurrent: inference
-                    ? () => {
-                        assertSettlementCurrent();
-                        inference.runParams.authProfileBinding?.assertCurrent();
-                      }
-                    : undefined,
+                  assertCurrent: assertSettlementCurrent,
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,

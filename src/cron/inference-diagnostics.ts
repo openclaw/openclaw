@@ -10,7 +10,6 @@ import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-ro
 import { isCliProvider } from "../agents/model-selection-cli.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
-import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -68,12 +67,11 @@ export async function prepareCronInferenceDiagnosticSession(params: {
   });
 }
 
-/** Read-only CLI warnings and prepared host auth facts; never grants account adoption. */
+/** Read-only CLI validation and prepared host auth facts; never changes job or account state. */
 export async function inspectCronInferenceAccount(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
-  job: Pick<CronStoredJob, "id" | "name">;
   provider: string;
   model: string;
   configuredProfileId?: string;
@@ -83,14 +81,14 @@ export async function inspectCronInferenceAccount(params: {
     "sessionEntry" | "initialSessionEntry" | "isNewSession"
   >;
 }): Promise<
-  | { cliExecution: true; warning?: string }
+  | { cliExecution: true }
   | {
       cliExecution: false;
       preference: ReturnType<typeof resolveSessionAuthProfilePreference>;
       store: AuthProfileStore | undefined;
     }
 > {
-  const { cfg, agentId, provider, model, session, job } = params;
+  const { cfg, agentId, provider, model, session } = params;
   params.signal?.throwIfAborted();
   // Compatibility is checked on the read-only snapshot, never persisted as a repair.
   const store = session.sessionEntry.authProfileOverride
@@ -150,7 +148,7 @@ export async function inspectCronInferenceAccount(params: {
   const authStore =
     store ?? (await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir));
   params.signal?.throwIfAborted();
-  const selected = selectCliExecutionAuthProfile({
+  selectCliExecutionAuthProfile({
     cliExecutionProvider: execution.executionProvider,
     authProfileProvider: provider,
     config: cfg,
@@ -163,17 +161,6 @@ export async function inspectCronInferenceAccount(params: {
       ? undefined
       : getCliSessionBinding(session.sessionEntry, execution.executionProvider),
   });
-  if (selected?.kind !== "stored") {
-    return { cliExecution: true };
-  }
-  const modelRef = `${provider}/${model}`;
-  const edit = `openclaw automations edit ${quoteCliArg(job.id)} --model`;
-  const native =
-    execution.executionProvider === "claude-cli"
-      ? ` To explicitly use Claude CLI's native login instead, run ${edit} ${quoteCliArg(`${modelRef}@anthropic:claude-cli`)}.`
-      : "";
-  return {
-    cliExecution: true,
-    warning: `Automation ${job.name || job.id} (${job.id}): runtime ${execution.executionProvider} on ${modelRef} selects stored inference account ${selected.profileId}. Scheduled CLI runs never borrow a stored account; an explicit choice is required. To adopt it, run ${edit} ${quoteCliArg(`${modelRef}@${selected.profileId}`)}. This also sets the primary model.${native}`,
-  };
+  // Healthy stored selections are inherited at run admission, not adopted by a resave.
+  return { cliExecution: true };
 }

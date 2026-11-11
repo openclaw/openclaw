@@ -163,7 +163,7 @@ export async function captureCronInferencePolicyForCaller(
       inferenceBinding: primary?.inferenceBinding,
       inferenceGrants,
       inferenceWarning: warnings.length
-        ? `Fallback unavailable (${warnings.join("; ")}). Review this automation's model policy after selecting an account.`
+        ? `Fallback unavailable (${warnings.join("; ")}). Check the configured account's availability and access.`
         : undefined,
       assertInferenceSelectionCurrent: () => {
         for (const capture of captures) {
