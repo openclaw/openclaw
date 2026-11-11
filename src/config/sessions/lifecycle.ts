@@ -16,6 +16,7 @@ export {
 } from "./work-start-error.js";
 
 export {
+  RESET_WORK_START,
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
 } from "./session-work-start.js";

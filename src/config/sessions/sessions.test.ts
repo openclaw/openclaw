@@ -337,3 +337,32 @@ it("fails closed while trusted session initialization is pending", () => {
   );
   expect(resolveSessionWorkStartError(key, entry)).toBeUndefined();
 });
+
+it("lets only session replacement pass a provider-review pause", () => {
+  const key = "agent:main:main";
+  const entry = {
+    sessionId: "reviewed-session",
+    providerReview: {
+      id: "review-1",
+      sessionId: "reviewed-session",
+      runId: "flagged-run",
+      provider: "openai",
+      model: "gpt-test",
+      runtimeId: "codex",
+    },
+  };
+  expect(resolveSessionWorkStartError(key, entry)).toContain("paused as a precaution");
+  expect(resolveSessionWorkStartError(key, entry, { allowPendingWorkspace: true })).toContain(
+    "paused as a precaution",
+  );
+  expect(
+    resolveSessionWorkStartError(key, entry, { allowProviderReviewReplacement: true }),
+  ).toBeUndefined();
+  expect(
+    resolveSessionWorkStartError(
+      key,
+      { ...entry, archivedAt: 100 },
+      { allowProviderReviewReplacement: true },
+    ),
+  ).toContain("archived");
+});

@@ -73,13 +73,14 @@ export async function loadReplySessionInitializationForAttempt(
 export function assertReplySessionInitializationAllowed(
   sessionKey: string,
   entry: Parameters<typeof resolveSessionWorkStartBlock>[1],
-  options: {
-    providerReviewAcknowledgment: InitSessionStateParams["providerReviewAcknowledgment"];
-  },
+  params: Pick<InitSessionStateParams, "providerReviewAcknowledgment">,
+  /** `/new` and `/reset` start a new generation instead of continuing the reviewed run. */
+  resetTriggered: boolean,
 ) {
   const error = resolveSessionWorkStartBlock(sessionKey, entry, {
-    ...options,
+    providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     allowPendingWorkspace: captureAgentWorkspaceReadiness(sessionKey) ? true : undefined,
+    allowProviderReviewReplacement: resetTriggered ? true : undefined,
   });
   if (error) {
     throw error;

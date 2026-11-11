@@ -31,6 +31,19 @@ before the session can continue. Queued messages stay held; review and retry eac
 message separately after continuation is accepted. A session stopped without
 reviewable findings cannot continue.
 
+If acknowledging the findings keeps pausing the session again, replace the
+session instead of continuing it. This also works for the main session
+(`agent:main:main`). Reset gives it a new session id. The reviewed conversation
+stays in history, and the findings are not continued:
+
+```bash
+openclaw gateway call sessions.reset --params '{"key":"agent:main:main","agentId":"main"}'
+```
+
+You can also send `/reset` or `/new` from a channel such as Discord or
+Telegram. Before this fix, every reset failed with
+`Session "agent:main:main" is paused as a precaution. Review the provider findings in chat before continuing.`
+
 An existing session with an empty transcript shows **No messages yet** and keeps
 the composer available. The agent welcome and recent sessions appear only on the
 **New session** page. If no model is configured, the existing session's composer
