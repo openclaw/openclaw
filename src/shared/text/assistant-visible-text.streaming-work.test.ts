@@ -82,6 +82,16 @@ it("strips a relevant-memories tag behind an unbounded whitespace gap", () => {
   expect(stream.text).toContain("After.");
 });
 
+// A whitespace run split across many appends must not push ``<`` out of the tail.
+// The unclosed block hides everything after its opener, so assert batch parity too.
+it("strips a memory tag behind many single-space deltas", () => {
+  const chunks = ["Before.\n<", ...Array<string>(64).fill(" "), "relevant-memories>secret\nDone."];
+  const stream = createAssistantVisibleStreamText("final_answer");
+  chunks.forEach((chunk) => stream.append(chunk));
+  expect(stream.text).not.toContain("secret");
+  expect(stream.text).toBe(sanitizeAssistantVisibleStreamText(chunks.join(""), "final_answer"));
+});
+
 // Same gate for the minimax stage: a bare ``minimax:tool_call`` mention must not latch
 // the whole-reply re-scan either.
 it("keeps a bare minimax:tool_call mention off the whole-reply re-scan", () => {
@@ -108,6 +118,20 @@ it("strips a completed invoke block without an exact minimax envelope", () => {
     (text) => sanitizeAssistantVisibleStreamText(text, "final_answer"),
   );
   expect(sanitizeAssistantVisibleStreamText(source, "final_answer")).not.toContain("secret");
+});
+
+// The canonical transform needs its marker anywhere in the text, so an invocation
+// shape may arrive before the marker and must still be remembered.
+it("strips an invoke block whose minimax marker arrives later", () => {
+  const chunks = [
+    'Ready.\n<invoke name="exec">secret</invoke>\n',
+    "x".repeat(64),
+    "\nminimax:tool_call\nDone.",
+  ];
+  const stream = createAssistantVisibleStreamText("final_answer");
+  chunks.forEach((chunk) => stream.append(chunk));
+  expect(stream.text).not.toContain("secret");
+  expect(stream.text).toBe(sanitizeAssistantVisibleStreamText(chunks.join(""), "final_answer"));
 });
 
 it("keeps a split tool header across an unbounded whitespace gap", () => {

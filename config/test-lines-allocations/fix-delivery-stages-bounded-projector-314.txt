@@ -1,4 +1,4 @@
-92
+109
 # BUG-314: add bare-mention vs real-tag gate tests for the relevant-memories and
 # minimax delivery filters, plus whitespace-tolerant memory-tag activation cases.
 # The streaming-work suite had no coverage proving a bare word mention does not latch

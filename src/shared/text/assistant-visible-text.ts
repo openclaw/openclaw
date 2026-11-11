@@ -74,31 +74,36 @@ const invisibleTextFilter: TextFilter = {
 
 const profileFilters = new Map<string, readonly TextFilter[]>();
 
-// Collapse each delta's whitespace runs so the canonical ``\s*`` grammar fits a
-// bounded tail. ``requires`` latches an earlier marker that must be present before
-// ``shape`` can activate: this keeps bare mentions off the whole-reply re-scan while
-// still covering the canonical transforms' invocation-cleanup paths. One char after
-// the match is required so a tag word split across deltas is confirmed at its boundary.
+// Normalize the carried tail and the incoming delta together, so whitespace runs
+// spanning many appends collapse into one char instead of pushing the opening ``<``
+// out of the bounded tail. ``shape`` and the optional ``requires`` marker are latched
+// independently: the canonical MiniMax transform needs its marker anywhere in the
+// accumulated text, so the invocation shape may arrive first. A bare mention alone
+// satisfies neither shape nor marker (when required) and stays off the re-scan.
+// One char after a shape match is required to confirm a delta-split word boundary.
 function createBoundedTagProjector(
   transform: (text: string) => string,
   shape: RegExp,
   requires?: RegExp,
 ): TextProjector {
   let tail = "";
-  let armed = !requires;
+  let markerSeen = !requires;
+  let shapeSeen = false;
   let active = false;
   return createConditionalTextProjector(transform, (input) => {
     if (active) {
       return true;
     }
-    const folded = (input.delta ?? input.text).toLowerCase().replace(/\s+/g, " ");
-    const joined = tail + folded;
-    tail = joined.slice(-32);
+    const joined = (tail + (input.delta ?? input.text)).toLowerCase().replace(/\s+/g, " ");
     if (requires?.test(joined)) {
-      armed = true;
+      markerSeen = true;
     }
-    const match = armed ? shape.exec(joined) : null;
-    active = Boolean(match && match.index + match[0].length < joined.length);
+    const match = shape.exec(joined);
+    if (match && match.index + match[0].length < joined.length) {
+      shapeSeen = true;
+    }
+    tail = joined.slice(-32);
+    active = markerSeen && shapeSeen;
     return active;
   });
 }
