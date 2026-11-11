@@ -40,7 +40,14 @@ vi.mock("../../scripts/npm-preflight-tooling-identity.mjs", () => ({
 // mock-isolation: release-page admission reads the live GitHub release.
 vi.mock("../../scripts/lib/release-publish-closeout-preflight.mts", () => ({
   inspectPublishReleasePage: () => undefined,
-  inspectStableCloseoutPreflight: () => [],
+  inspectStableCloseoutPreflight: () => [
+    {
+      id: "stable-closeout.fixture",
+      status: "WARN",
+      message: "Regular stable closeout",
+      remediation: "",
+    },
+  ],
 }));
 // mock-isolation: package inventory and GitHub run observation read live state.
 vi.mock("../../scripts/lib/release-publish-state.mts", () => ({
@@ -230,6 +237,7 @@ describe("extended-stable publication preflight", () => {
         });
         expect(report.rows.find((row) => row.id === "dispatch.inputs")?.status).toBe("PASS");
         if (scenario === "exact") {
+          expect(report.rows.filter((row) => row.id.startsWith("stable-closeout."))).toEqual([]);
           expect(
             report.failed,
             JSON.stringify(report.rows.filter((row) => row.status === "FAIL")),

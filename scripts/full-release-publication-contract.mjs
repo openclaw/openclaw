@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { isPreparedClawHubTrustedPublisher } from "./clawhub-prepared-artifact.mjs";
 import { canonicalizeJsonValue, compareAscii } from "./lib/canonical-json.mjs";
-import { classifyClawHubPublication } from "./lib/clawhub-publication-state.mjs";
+import {
+  classifyClawHubPublication,
+  isPreparedClawHubTrustedPublisher,
+} from "./lib/clawhub-publication-state.mjs";
 import {
   dispatchEnvelopeFromInputs,
   publicationInputRecord as object,
@@ -23,6 +25,38 @@ export {
   publicationIntentInputs,
   publicationSourceJson,
 } from "./lib/full-release-publication-inputs.mjs";
+
+// Qualification preflight and source admission share the same committed-version policy.
+export function validatePublicationVersionSelection(version, selection) {
+  const parsed = parseReleaseVersion(version);
+  if (!parsed) {
+    throw new Error("invalid publication source version");
+  }
+  if (parsed.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  const train = classifyReleaseTrain(parsed);
+  if (train === "unsupported-extended-stable-correction") {
+    throw new Error("unsupported extended-stable correction");
+  }
+  const extended = selection.route === "extended-stable";
+  const allowedTags =
+    train === "stable"
+      ? ["beta", "latest"]
+      : train === "extended-stable"
+        ? ["extended-stable"]
+        : [parsed.channel];
+  if (!allowedTags.includes(selection.npmDistTag) || (train === "extended-stable") !== extended) {
+    throw new Error("publication selection does not match the committed release version");
+  }
+  if (selection.route === "prepared" && !["beta", "stable"].includes(train)) {
+    throw new Error("prepared publication requires a regular beta/stable candidate");
+  }
+  if (selection.windowsNodeTag && train !== "stable") {
+    throw new Error("Windows assets require a stable publication");
+  }
+  return parsed;
+}
 
 export const FULL_RELEASE_SOURCE_ADMISSION_CONTRACT = "1";
 export const FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT = "1";

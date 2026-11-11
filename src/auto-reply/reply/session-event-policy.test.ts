@@ -99,6 +99,36 @@ it.each([
 );
 
 it.each([
+  ["enablement", { advisor: { enabled: true } }],
+  ["settings", { advisor: { enabled: true, config: { everyMinutes: 5 } } }],
+  ["secret reference", { advisor: { enabled: true, config: { token: "${ADVISOR_TOKEN}" } } }],
+] as const)("leaves plugin %s changes to the plugin reload owner", (_scenario, entries) => {
+  const before: OpenClawConfig = { plugins: { entries: { advisor: { enabled: false } } } };
+  const after: OpenClawConfig = { plugins: { entries } };
+  setConfigResolutionFacts(before, createConfigResolutionFacts([]));
+  setConfigResolutionFacts(
+    after,
+    createConfigResolutionFacts(
+      [{ varName: "ADVISOR_TOKEN", configPath: "plugins.entries.advisor.config.token" }],
+      new Map([["plugins.entries.advisor.config.token", "ADVISOR_TOKEN"]]),
+    ),
+  );
+  // Scheduled and unscheduled session events share this relevance check.
+  for (const job of [makeCronJob({}), undefined]) {
+    const check = captureSessionEventConfigRelevance(
+      captureRuntimeConfigWithSource(before, before),
+      "main",
+      job,
+    );
+    expect(check(captureRuntimeConfigWithSource(after, after), [])).toBe(true);
+    // Policy outside the plugin owner still revokes the occurrence.
+    expect(
+      check(captureRuntimeConfigWithSource({ ...after, tools: { deny: ["exec"] } }, after), []),
+    ).toBe(false);
+  }
+});
+
+it.each([
   ["profile binding", false],
   ["provider alias", false],
   ["model endpoint alias", false],

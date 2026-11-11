@@ -277,6 +277,10 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
   const recorder = turn.userTurnTranscriptRecorder;
   const receipt = recorder?.getAdmissionReceipt();
   const admission = receipt ? { ...receipt } : undefined;
+  // Unpersisted input is admitted after the policy gate; persisted input must already be readable.
+  if (recorder?.hasPersisted() && !admission) {
+    throw new Error("Cloud worker turn has no readable canonical user admission");
+  }
   const userMessageAlreadyPersisted =
     admission !== undefined || turn.suppressNextUserMessagePersistence === true;
   // Validate context after reentrant phase callbacks have finished.

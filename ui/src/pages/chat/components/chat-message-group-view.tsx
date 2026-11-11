@@ -231,7 +231,7 @@ export function MessageGroupContent(props: {
   const options = createMemo(() => resolveFileLinkOwnerOptions(props.group, props.options));
   return (
     <Show
-      when={!isActivityMessageGroup(props.group, options())}
+      when={!isActivityMessageGroup(props.group, options().bubbleMode)}
       fallback={
         <ActivityGroup groups={[props.group]} options={options()} presentation="continuation" />
       }
@@ -603,13 +603,9 @@ function FramedMessageGroup(props: {
                   when={frame().sendStatus}
                   fallback={
                     <MessageMeta
-                      timestamp={
-                        frame().normalizedRole === "user"
-                          ? frame().preparedMessages[frame().lastMessageIndex]!.source
-                              .normalizedMessage.timestamp
-                          : props.group.timestamp
-                      }
+                      timestamp={frame().footerTimestamp}
                       meta={frame().meta}
+                      durationMs={frame().turnDurationMs}
                     />
                   }
                 >
@@ -706,7 +702,7 @@ export function MessageGroup(props: {
         }
       >
         <Show
-          when={!isActivityMessageGroup(props.group, options())}
+          when={!isActivityMessageGroup(props.group, options().bubbleMode)}
           fallback={
             <ActivityGroup groups={[props.group]} options={options()} presentation="standalone" />
           }

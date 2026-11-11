@@ -48,6 +48,8 @@ export type TemplateAddPlanContext = {
   workspace?: string;
   existingAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
+  /** Workspace owned by the caller's exact pending ordinary creation receipt. */
+  admittedWorkspace?: string;
   existingMcpServerNames?: Iterable<string>;
   existingMcpServers?: Record<string, Record<string, unknown>>;
   packagePreflight?: TemplatePackagePreflight;
@@ -88,6 +90,7 @@ export async function buildTemplateAddPlan(params: {
     context.agentId ??
     selectNextTemplateAgentId(params.manifest.agent.id, context.existingAgentIds ?? []);
   const copyNumber = templateAgentCopyNumber(params.manifest.agent.id, finalId);
+  const copyNameBase = params.manifest.agent.name ?? params.manifest.agent.identity?.name;
   const workspace = canonicalWorkspacePath(
     context.workspace ?? resolve(resolveRequiredHomeDir(), ".openclaw", `workspace-${finalId}`),
   );
@@ -141,7 +144,7 @@ export async function buildTemplateAddPlan(params: {
   const agentConfig: TemplateAddPlan["agent"]["config"] = templateOwnedAgentConfig({
     ...params.manifest.agent,
     ...persistedOpenClawAgentSettings,
-    ...(copyNumber > 1 ? { name: `${params.manifest.agent.name} ${copyNumber}` } : {}),
+    ...(copyNumber > 1 && copyNameBase ? { name: `${copyNameBase} ${copyNumber}` } : {}),
     id: finalId,
     workspace,
   });
@@ -176,7 +179,9 @@ export async function buildTemplateAddPlan(params: {
   const workspaceExistsOnDisk = await lstat(workspace)
     .then(() => true)
     .catch(() => false);
-  const workspaceBlocked = configuredWorkspaceConflict || workspaceExistsOnDisk;
+  const workspaceBlocked =
+    configuredWorkspaceConflict ||
+    (workspaceExistsOnDisk && context.admittedWorkspace !== workspace);
   const workspaceCollisionMessage = configuredWorkspaceConflict
     ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
     : `Workspace ${JSON.stringify(workspace)} already exists.`;
