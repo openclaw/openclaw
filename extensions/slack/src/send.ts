@@ -175,6 +175,8 @@ const SLACK_PERMANENT_UPLOAD_REJECTIONS: Readonly<Record<string, string>> = {
   missing_scope: "add the files:write bot scope and reinstall the Slack app",
   not_allowed_token_type: "send files with a bot token",
 };
+const SLACK_REJECTED_ATTACHMENT_NOTE =
+  "(The attachment could not be uploaded because this Slack app is not allowed to upload files. Ask a Slack workspace admin to enable file uploads for the app.)";
 
 function resolvePermanentSlackUploadRejection(err: unknown): string | undefined {
   if (asOptionalRecord(err)?.code !== "slack_webapi_platform_error") {
@@ -1086,10 +1088,7 @@ export async function sendMessageSlack(
               `attachment upload rejected (${rejectedUploadCode}); delivering reply text without it: ${SLACK_PERMANENT_UPLOAD_REJECTIONS[rejectedUploadCode]}`,
             );
             uploadedMedia = false;
-            chunksToPost = [
-              ...resolvedChunks,
-              `(attachment could not be uploaded: ${rejectedUploadCode})`,
-            ];
+            chunksToPost = [...resolvedChunks, SLACK_REJECTED_ATTACHMENT_NOTE];
           } else {
             await reportDelivery(
               createSlackSendResult(

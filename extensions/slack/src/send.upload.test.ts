@@ -243,7 +243,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     const posts = client.chat.postMessage.mock.calls.map(([args]) => args);
     expect(posts).toMatchObject([
       { channel: "C123CHAN", text: "here is your chart", thread_ts: "171.222" },
-      { text: "(attachment could not be uploaded: missing_scope)", thread_ts: "171.222" },
+      { text: expect.stringContaining("Ask a Slack workspace admin"), thread_ts: "171.222" },
     ]);
     expect(
       posts.map((post) => (post as MessageMetadataPost).metadata?.event_payload),
