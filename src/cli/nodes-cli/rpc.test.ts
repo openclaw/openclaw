@@ -14,6 +14,7 @@ import {
   parseOptionalNodeInteger,
   resolveCliNode,
   resolveNodeDiagnosticsId,
+  callNodeDiagnosticsGatewayCli,
 } from "./rpc.js";
 
 function requestError(params: ConstructorParameters<typeof GatewayClientRequestError>[0]) {
@@ -72,6 +73,39 @@ describe("node inventory resolution", () => {
   it("rejects explicit blank --timeout before transport", async () => {
     await expect(resolveCliNode({ timeout: "" }, "some-node")).rejects.toThrow(/Invalid --timeout/);
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not retry diagnostics authentication after the read is interrupted", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("Inventory read interrupted", "AbortError");
+    callGateway.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw Object.assign(new Error("stored auth unavailable"), {
+        name: "GatewayStoredDeviceAuthUnavailableError",
+      });
+    });
+
+    await expect(
+      callNodeDiagnosticsGatewayCli("node.list", {}, {}, controller.signal),
+    ).rejects.toBe(reason);
+    expect(calledMethods()).toEqual(["node.list"]);
+  });
+
+  it("keeps cancellation through the older Gateway node-resolution fallback", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("Inventory read interrupted", "AbortError");
+    callGateway.mockImplementation(async (method) => {
+      if (method === "node.list") {
+        throw requestError({});
+      }
+      controller.abort(reason);
+      return paired("legacy-node", "Legacy Node");
+    });
+
+    await expect(resolveNodeDiagnosticsId({}, "Legacy Node", controller.signal)).rejects.toBe(
+      reason,
+    );
+    expect(calledMethods()).toEqual(["node.list", "node.list", "node.pair.list"]);
   });
 });
 

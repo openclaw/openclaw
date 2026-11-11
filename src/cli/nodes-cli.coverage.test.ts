@@ -1,9 +1,11 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerNodesCli } from "./nodes-cli.js";
 import { callNodesGatewayCli } from "./nodes-cli/rpc.js";
 
 type NodeInvokeCall = {
+  signal?: AbortSignal;
   method?: string;
   timeoutMs?: number | null;
   params?: {
@@ -314,4 +316,77 @@ describe("nodes-cli coverage", () => {
     expect(runtimeErrors.at(-1)).toContain(`${flag} must be`);
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  describe.each([false, true])("inventory reads (JSON: %s)", (json) => {
+    it.each([
+      ["status", [], "node.list"],
+      ["pending", [], "node.pair.list"],
+      ["list", [], "node.pair.list"],
+      ["list", [], "node.list"],
+      ["list", ["--connected"], "node.list"],
+      ["describe", ["--node", "mac-1"], "node.list"],
+      ["describe", ["--node", "mac-1"], "node.describe"],
+    ] as const)("quietly cancels nodes %s %j during %s", async (command, args, method) => {
+      const scope = new AsyncWorkScope();
+      callGateway.mockImplementation(async (request) => {
+        if (request.method === method) {
+          scope.beginClose(new DOMException("Inventory read interrupted", "AbortError"));
+          request.signal?.throwIfAborted();
+        }
+        return request.method === "node.pair.list"
+          ? { pending: [], paired: [{ nodeId: "mac-1" }] }
+          : request.method === "node.describe"
+            ? { nodeId: "mac-1" }
+            : { nodes: [{ nodeId: "mac-1", paired: true, connected: true }] };
+      });
+
+      await scope.run(() => parseNodes(["nodes", command, ...args, ...(json ? ["--json"] : [])]));
+
+      expect(runtimeLogs).toEqual([]);
+      expect(runtimeErrors).toEqual([]);
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(methods().at(-1)).toBe(method);
+    });
+  });
+
+  it("does not start an inventory read after the invocation is interrupted", async () => {
+    const scope = new AsyncWorkScope();
+    scope.beginClose(new DOMException("Inventory read interrupted", "AbortError"));
+
+    await scope.run(() => parseNodes(["nodes", "status", "--json"]));
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtimeLogs).toEqual([]);
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  it.each([
+    ["approve", ["r1"], "node.pair.approve"],
+    ["reject", ["r1"], "node.pair.reject"],
+    ["remove", ["--node", "mac-1"], "node.pair.remove"],
+    ["rename", ["--node", "mac-1", "--name", "Renamed"], "node.rename"],
+    ["invoke", ["--node", "mac-1", "--command", "system.which"], "node.invoke"],
+    ["push", ["--node", "mac-1"], "push.test"],
+  ] as const)(
+    "retains nodes %s receipts when interrupted during preparation or admission",
+    async (command, args, method) => {
+      const scope = new AsyncWorkScope();
+      const receipt = { ok: true, nodeId: "mac-1" };
+      callGateway.mockImplementation(async (request) => {
+        scope.beginClose(new DOMException("Invocation interrupted", "AbortError"));
+        request.signal?.throwIfAborted();
+        return request.method === method
+          ? receipt
+          : request.method === "node.pair.list"
+            ? pairingList("r1")
+            : { nodes: [{ nodeId: "mac-1" }] };
+      });
+
+      await scope.run(() => parseNodes(["nodes", command, ...args, "--json"]));
+
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(receipt);
+      expect(methods().at(-1)).toBe(method);
+      expect(runtimeErrors).toEqual([]);
+    },
+  );
 });

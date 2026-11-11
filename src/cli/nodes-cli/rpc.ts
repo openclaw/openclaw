@@ -110,28 +110,36 @@ export const callNodesGatewayCli = async (
   opts: NodesRpcOpts,
   params?: unknown,
   callOpts?: {
+    signal?: AbortSignal;
     scopes?: OperatorScope[];
     useStoredDeviceAuth?: boolean;
     requiredStoredDeviceAuthScopes?: OperatorScope[];
     useLocalBackendSharedAuth?: boolean;
   },
 ) => {
+  const signal = callOpts?.signal;
+  signal?.throwIfAborted();
   const invokeTimeoutMs =
     method === "node.invoke" && isRecord(params) ? params.timeoutMs : undefined;
   const useLocalBackendSharedAuth = callOpts?.useLocalBackendSharedAuth === true;
-  return await callGatewayFromCliWithTransport(method, opts, params, {
-    label: `Nodes ${method}`,
-    timeoutMs: resolveNodesTransportTimeoutMs(opts, invokeTimeoutMs),
-    scopes: callOpts?.scopes,
-    useStoredDeviceAuth: callOpts?.useStoredDeviceAuth,
-    requiredStoredDeviceAuthScopes: callOpts?.requiredStoredDeviceAuthScopes,
-    requireLocalBackendSharedAuth: useLocalBackendSharedAuth,
-    clientName: useLocalBackendSharedAuth
-      ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
-      : GATEWAY_CLIENT_NAMES.CLI,
-    mode: useLocalBackendSharedAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
-    sharedStateMode: "read-only",
-  });
+  try {
+    return await callGatewayFromCliWithTransport(method, opts, params, {
+      label: `Nodes ${method}`,
+      timeoutMs: resolveNodesTransportTimeoutMs(opts, invokeTimeoutMs),
+      scopes: callOpts?.scopes,
+      useStoredDeviceAuth: callOpts?.useStoredDeviceAuth,
+      requiredStoredDeviceAuthScopes: callOpts?.requiredStoredDeviceAuthScopes,
+      requireLocalBackendSharedAuth: useLocalBackendSharedAuth,
+      clientName: useLocalBackendSharedAuth
+        ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+        : GATEWAY_CLIENT_NAMES.CLI,
+      mode: useLocalBackendSharedAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+      sharedStateMode: "read-only",
+      signal,
+    });
+  } finally {
+    signal?.throwIfAborted();
+  }
 };
 
 /** Read node diagnostics with pairing details when authorized, otherwise keep read-only access. */
@@ -139,6 +147,7 @@ export const callNodeDiagnosticsGatewayCli = async (
   method: "node.list" | "node.describe",
   opts: NodesRpcOpts,
   params?: unknown,
+  signal?: AbortSignal,
 ) => {
   for (const auth of [
     {
@@ -148,14 +157,14 @@ export const callNodeDiagnosticsGatewayCli = async (
     { scopes: ["operator.read", "operator.pairing"], useLocalBackendSharedAuth: true },
   ] satisfies NonNullable<Parameters<typeof callNodesGatewayCli>[3]>[]) {
     try {
-      return await callNodesGatewayCli(method, opts, params, auth);
+      return await callNodesGatewayCli(method, opts, params, { ...auth, signal });
     } catch (error) {
       if (!isDiagnosticsAuthFallbackError(error)) {
         throw error;
       }
     }
   }
-  return await callNodesGatewayCli(method, opts, params);
+  return await callNodesGatewayCli(method, opts, params, { signal });
 };
 
 /** Call pairing approval methods with explicit operator scopes. */
@@ -253,33 +262,41 @@ export function parseOptionalNodeFiniteNumber(
 }
 
 /** Resolve a node query to a node id via live node list or paired-node fallback. */
-export async function resolveCliNodeId(opts: NodesRpcOpts, query: string) {
-  return (await resolveCliNode(opts, query)).nodeId;
+export async function resolveCliNodeId(opts: NodesRpcOpts, query: string, signal?: AbortSignal) {
+  return (await resolveCliNode(opts, query, signal)).nodeId;
 }
 
 /** Resolve a node through the pairing-aware diagnostics view when available. */
-export async function resolveNodeDiagnosticsId(opts: NodesRpcOpts, query: string) {
+export async function resolveNodeDiagnosticsId(
+  opts: NodesRpcOpts,
+  query: string,
+  signal?: AbortSignal,
+) {
   try {
-    const res = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
+    const res = await callNodeDiagnosticsGatewayCli("node.list", opts, {}, signal);
     return resolveNodeFromNodeList(parseNodeList(res), query).nodeId;
   } catch (error) {
     if (!isUnknownGatewayMethodError(error, "node.list")) {
       throw error;
     }
-    return await resolveCliNodeId(opts, query);
+    return await resolveCliNodeId(opts, query, signal);
   }
 }
 
-export async function resolveCliNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
+export async function resolveCliNode(
+  opts: NodesRpcOpts,
+  query: string,
+  signal?: AbortSignal,
+): Promise<NodeListNode> {
   let nodes: NodeListNode[];
   try {
-    const res = await callNodesGatewayCli("node.list", opts, {});
+    const res = await callNodesGatewayCli("node.list", opts, {}, { signal });
     nodes = parseNodeList(res);
   } catch (error) {
     if (!isUnknownGatewayMethodError(error, "node.list")) {
       throw error;
     }
-    const res = await callNodesGatewayCli("node.pair.list", opts, {});
+    const res = await callNodesGatewayCli("node.pair.list", opts, {}, { signal });
     const { paired } = parsePairingList(res);
     nodes = paired.map((n) => ({
       nodeId: n.nodeId,

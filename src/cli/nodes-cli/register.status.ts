@@ -17,7 +17,7 @@ import { shortenHomeInString } from "../../utils.js";
 import { formatPairingApproveCommand } from "../pairing-command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { formatVersionLabel } from "../version-format.js";
-import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { formatConnectionFlagReminder, getNodesTheme, runNodesReadCommand } from "./cli-utils.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
   callNodesGatewayCli,
@@ -195,10 +195,14 @@ function matchesNodeConnectionFilter(
   );
 }
 
-async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
+async function tryReadNodeList(
+  opts: NodesRpcOpts,
+  signal?: AbortSignal,
+): Promise<NodeListNode[] | null> {
   try {
-    return parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}));
+    return parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}, signal));
   } catch (error) {
+    signal?.throwIfAborted();
     // Best-effort enrichment may degrade to pairing-only rows, but never
     // silently: without this notice the table looks authoritative while
     // omitting connected/commands state. Stderr keeps --json output clean.
@@ -219,10 +223,10 @@ export function registerNodesStatusCommands(nodes: Command) {
       .option("--connected", "Only show connected nodes")
       .option("--last-connected <duration>", "Only show nodes connected within duration (e.g. 24h)")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("status", async () => {
+        await runNodesReadCommand("status", async (signal) => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected);
-          const result = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
+          const result = await callNodeDiagnosticsGatewayCli("node.list", opts, {}, signal);
           const obj: Record<string, unknown> =
             typeof result === "object" && result !== null ? result : {};
           const { ok, warn, muted } = getNodesTheme();
@@ -338,11 +342,16 @@ export function registerNodesStatusCommands(nodes: Command) {
       .description("Describe a node (capabilities + supported invoke commands)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("describe", async () => {
-          const nodeId = await resolveNodeDiagnosticsId(opts, opts.node ?? "");
-          const result = await callNodeDiagnosticsGatewayCli("node.describe", opts, {
-            nodeId,
-          });
+        await runNodesReadCommand("describe", async (signal) => {
+          const nodeId = await resolveNodeDiagnosticsId(opts, opts.node ?? "", signal);
+          const result = await callNodeDiagnosticsGatewayCli(
+            "node.describe",
+            opts,
+            {
+              nodeId,
+            },
+            signal,
+          );
           if (opts.json) {
             defaultRuntime.writeJson(result);
             return;
@@ -455,10 +464,10 @@ export function registerNodesStatusCommands(nodes: Command) {
       .option("--connected", "Only show connected nodes")
       .option("--last-connected <duration>", "Only show nodes connected within duration (e.g. 24h)")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("list", async () => {
+        await runNodesReadCommand("list", async (signal) => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected);
-          const result = await callNodesGatewayCli("node.pair.list", opts, {});
+          const result = await callNodesGatewayCli("node.pair.list", opts, {}, { signal });
           const { pending, paired } = parsePairingList(result);
           const { heading, muted } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
@@ -467,8 +476,8 @@ export function registerNodesStatusCommands(nodes: Command) {
           // Pending requests carry no connection state to filter on; hiding
           // them under --connected printed "Pending: 0" while requests waited.
           const effectiveNodes = hasFilters
-            ? parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}))
-            : await tryReadNodeList(opts);
+            ? parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}, signal))
+            : await tryReadNodeList(opts, signal);
           let effectivePairedRows: PairedNodeListRow[] = paired;
           if (effectiveNodes !== null) {
             const pairedById = new Map(paired.map((node) => [node.nodeId, node]));
