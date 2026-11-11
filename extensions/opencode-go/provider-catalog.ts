@@ -32,9 +32,7 @@ const OPENCODE_GO_SEED_CATALOG: ProviderCatalogSnapshot = new Map(
       baseUrl: "baseUrl" in row ? row.baseUrl : OPENCODE_GO_MANIFEST_PROVIDER.baseUrl,
     };
     // SAFETY: Bundled rows and inherited transport supply the complete runtime model shape.
-    const hydrated = inheritedTransport as OpencodeGoModelDefinition;
-    // SAFETY: Normalization preserves the hydrated model's transport and input shape.
-    const model = normalizeModelCompat(hydrated) as OpencodeGoModelDefinition;
+    const model = inheritedTransport as OpencodeGoModelDefinition;
     return [
       model.id.toLowerCase(),
       {

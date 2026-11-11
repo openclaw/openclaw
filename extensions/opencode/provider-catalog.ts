@@ -9,7 +9,6 @@ import {
   type ProjectedUpstreamProviderCatalogModel as OpencodeZenModelDefinition,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeBaseUrl } from "openclaw/plugin-sdk/provider-http";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_ID = "opencode";
@@ -24,12 +23,12 @@ const OPENCODE_ZEN_MANIFEST_PROVIDER = manifest.modelCatalog.providers.opencode;
 const OPENCODE_ZEN_SEED_CATALOG: ProviderCatalogSnapshot = new Map(
   OPENCODE_ZEN_MANIFEST_PROVIDER.models.map((row) => {
     // SAFETY: Bundled rows and inherited transport supply the complete runtime model shape.
-    const model = normalizeModelCompat({
+    const model = {
       ...row,
       provider: PROVIDER_ID,
       api: row.api ?? OPENCODE_ZEN_MANIFEST_PROVIDER.api,
       baseUrl: row.baseUrl ?? OPENCODE_ZEN_MANIFEST_PROVIDER.baseUrl,
-    } as OpencodeZenModelDefinition) as OpencodeZenModelDefinition;
+    } as OpencodeZenModelDefinition;
     return [
       model.id,
       {
