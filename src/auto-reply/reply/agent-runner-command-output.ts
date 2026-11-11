@@ -2,6 +2,7 @@ import { asFiniteNumber as readFiniteNumberValue } from "@openclaw/normalization
 import { asOptionalRecord as readRecordValue } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedAgentEvent } from "../../agents/embedded-agent-subscribe.shared-types.js";
+import { stripOpenClawMcpToolPrefix } from "../../agents/tool-display-call.js";
 import { inferToolMetaFromArgsCore, isShellToolDisplayName } from "../../agents/tool-display.js";
 import type { GetReplyOptions } from "../types.js";
 
@@ -70,7 +71,9 @@ export function buildCommandOutputFromToolResultEvent(
   const args = evt.data.args;
   const title =
     evt.data.title ??
-    (args ? inferToolMetaFromArgsCore(name, args, { detailMode: "explain" }) : undefined);
+    (args
+      ? inferToolMetaFromArgsCore(stripOpenClawMcpToolPrefix(name), args, { detailMode: "explain" })
+      : undefined);
   return {
     itemId: evt.data.itemId,
     phase: "end",

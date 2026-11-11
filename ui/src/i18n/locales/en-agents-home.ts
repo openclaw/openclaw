@@ -1,34 +1,31 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const enAgentsHome = {
   agentsHome: {
-    manage: "Manage agents",
-    create: "New agent",
-    openChat: "Open chat",
-    openMainChat: "Open main chat",
-    allSessions: "All sessions",
-    collapseOthers: "Collapse others",
+    pinnedAgents: "Pinned agents",
+    noAssistantMessage: "No agent reply yet",
+    viewSessions: "Sessions",
+    deleteAgentConfirm: "Delete {agent}?",
+    deleteAgentDetails:
+      "Its workspace, agent state, and session transcripts move to Trash. Its channel accounts remain configured.",
     agentOptions: "Options for {agent}",
-    expandAgent: "Expand {agent}",
-    collapseAgent: "Collapse {agent}",
     working: "Working now",
-    workingPreview: "Working: {preview}",
-    seeAll: "See all",
-    seeAllCount: "See all {count} agents",
-    lastActive: "Active {time}",
-    neverActive: "No recent activity",
-    noMessage: "No messages yet",
-    loading: "Loading agents…",
-    disconnected: "Connect to the Gateway to see your agents.",
-    loadFailed: "Could not load agents. Try again.",
-    empty: "Your team starts here. Add an agent to get started.",
+  },
+  templatesDraft: {
+    title: "Create template",
+    reviewDisabled:
+      "Your private draft is saved. Turn on Templates in Settings → Labs to review it.",
+    reviewUnavailable:
+      "Your private draft is saved. Template review requires a connected administrator session with Template creation and chat access.",
+    openLabs: "Open Labs",
   },
 } satisfies TranslationMap;
 
 export const registerAgentsHomeEnglish = Object.assign(
   () => {
-    Object.assign(en, enAgentsHome);
+    mergeCatalog(en, enAgentsHome);
   },
   { catalog: enAgentsHome },
 );

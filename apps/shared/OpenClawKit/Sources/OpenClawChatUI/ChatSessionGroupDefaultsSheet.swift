@@ -69,7 +69,7 @@ final class ChatSessionGroupDefaultsModel {
         self.repository = nil
         self.worktree = false
         self.failure = nil
-        // ui/src/components/session-group-defaults-dialog.ts:102–123: generations reject A→B→A replies;
+        // ui/src/components/session-group-defaults-dialog.tsx: generations reject A→B→A replies;
         // only initial validation or Retry of the original folder may restore the saved worktree mode.
         let path = (self.cwd.isEmpty ? self.agentWorkspace ?? "" : self.cwd)
             .trimmingCharacters(in: .whitespacesAndNewlines)

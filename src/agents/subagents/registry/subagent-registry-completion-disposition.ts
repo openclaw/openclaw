@@ -1,35 +1,5 @@
 import { isSubagentRunStillRunning } from "../announce/subagent-announce-output.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
-
-/**
- * A run that already published its explicit-deadline timeout, and whose
- * announcement or cleanup already drained, fences later duplicate completions.
- */
-export function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
-  if (
-    entry.execution.outcome?.status !== "timeout" ||
-    typeof entry.execution.endedAt !== "number" ||
-    // A wait-expiry publication describes the waiter, not the run. Fencing the
-    // run behind it would discard the child's own terminal callback and leave
-    // the parent's last word "timed out" for a child that went on to finish.
-    isSubagentRunStillRunning(entry.execution.outcome)
-  ) {
-    return false;
-  }
-  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
-  if (deadlineMs === undefined || entry.execution.endedAt < deadlineMs) {
-    return false;
-  }
-  return (
-    entry.cleanupHandled === true ||
-    typeof entry.cleanupCompletedAt === "number" ||
-    typeof entry.endedHookEmittedAt === "number" ||
-    entry.delivery?.status === "delivered" ||
-    typeof entry.delivery?.announcedAt === "number"
-  );
-}
 
 /**
  * A wait-expiry publication described the waiter, not the run, so the announce

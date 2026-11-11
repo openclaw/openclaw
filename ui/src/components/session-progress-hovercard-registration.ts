@@ -4,47 +4,48 @@ import {
   type HovercardBootstrapTrigger,
 } from "./lazy-hovercard-registration.ts";
 import {
-  SESSION_TITLE_TARGET_SELECTOR,
+  installSessionTitleRegistrar,
   sessionProgressHoverTargetFromEvent,
 } from "./session-progress-hovercard-target.ts";
-import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.ts";
+import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
 
-let bootstrapObserver: MutationObserver | null = null;
-
 const bootstrap = new LazyHovercardBootstrap<SessionProgressHovercardProvider>({
   tag: HOVERCARD_TAG,
-  load: async () =>
-    (await import("./session-progress-hovercard.runtime.ts")).SessionProgressHovercardProvider,
-  onDefined: () => {
-    bootstrapObserver?.disconnect();
-    bootstrapObserver = null;
+  load: async () => {
+    await import("./session-progress-hovercard.runtime.tsx");
+    return customElements.get(HOVERCARD_TAG)!;
   },
 });
 
-function handleBootstrapMutations(records: MutationRecord[]): void {
-  for (const record of records) {
-    for (const node of record.addedNodes) {
-      if (!(node instanceof Element)) {
-        continue;
-      }
-      if (
-        node.matches(SESSION_TITLE_TARGET_SELECTOR) ||
-        node.querySelector(SESSION_TITLE_TARGET_SELECTOR)
-      ) {
-        void bootstrap.define();
-        return;
-      }
-    }
+installSessionTitleRegistrar((target, label, display) => {
+  let active = true;
+  let release: (() => void) | undefined;
+  // The registrar promise lets producers finish mounting before this lookup.
+  const provider = bootstrap.providerFor(target);
+  if (provider) {
+    void bootstrap
+      .define()
+      .then(async () => {
+        await provider.updateComplete;
+        if (active && target.isConnected && bootstrap.providerFor(target) === provider) {
+          release = provider.registerSessionTitleTarget(target, label, display);
+        }
+      })
+      .catch(() => undefined);
   }
-}
+  return () => {
+    active = false;
+    release?.();
+  };
+});
 
 async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
   if (
+    // Touch pointers are rejected by sessionProgressHoverTargetFromEvent below.
     trigger === "pointer" &&
-    ((event instanceof PointerEvent && event.pointerType === "touch") ||
-      !globalThis.matchMedia?.("(hover: hover)").matches)
+    !globalThis.matchMedia?.("(hover: hover)").matches
   ) {
     return;
   }
@@ -69,11 +70,5 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   );
 }
 
-bootstrap.install(activateHovercard);
-if (!customElements.get(HOVERCARD_TAG)) {
-  bootstrapObserver = new MutationObserver(handleBootstrapMutations);
-  bootstrapObserver.observe(document, { childList: true, subtree: true });
-  if (document.querySelector(SESSION_TITLE_TARGET_SELECTOR)) {
-    void bootstrap.define();
-  }
-}
+// The native link/title remains usable when optional hovercard code cannot load.
+bootstrap.install((event, trigger) => activateHovercard(event, trigger).catch(() => undefined));

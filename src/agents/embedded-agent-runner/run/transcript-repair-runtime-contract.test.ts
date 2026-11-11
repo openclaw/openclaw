@@ -67,7 +67,6 @@ describe("embedded agent transcript repair runtime contract", () => {
     expect(result.prompt).toContain("please inspect this inline image");
     expect(result.prompt).toContain("[image_url] inline data URI (image/png, 4118 chars)");
     expect(result.prompt).not.toContain("data:");
-    expect(result.prompt).not.toContain("data:image/png;base64,");
     expect(result.prompt).not.toContain("aaaa");
   });
 });

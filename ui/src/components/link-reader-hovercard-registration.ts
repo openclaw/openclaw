@@ -12,10 +12,22 @@ import {
   resolveHoverPreviewTarget,
 } from "./link-reader-target.ts";
 
+export const HOVER_PREVIEW_UNAVAILABLE_EVENT = "link-reader-hover-preview-unavailable";
+let runtimeLoadFailed = false;
+
 export const linkReaderHovercardBootstrap = new LazyHovercardBootstrap<LinkReaderHovercardProvider>(
   {
     tag: LINK_READER_HOVERCARD_PROVIDER_TAG,
-    load: async () => (await import("./link-reader-hovercard.ts")).LinkReaderHovercardProvider,
+    load: async () => {
+      try {
+        const provider = (await import("./link-reader-hovercard.ts")).LinkReaderHovercardProvider;
+        runtimeLoadFailed = false;
+        return provider;
+      } catch (error) {
+        runtimeLoadFailed = true;
+        throw error;
+      }
+    },
   },
 );
 
@@ -27,9 +39,11 @@ function hoverTargetForAnchor(anchor: HTMLAnchorElement) {
 
 export function ownsHoverPreview(anchor: HTMLAnchorElement): boolean {
   const target = hoverTargetForAnchor(anchor);
-  // Cold public-page imports can fail: keep title hints until a runtime exists.
+  // Reserve reader hints while loading, but release them after a failed import.
   return Boolean(
-    target && (target.reader || customElements.get(LINK_READER_HOVERCARD_PROVIDER_TAG)),
+    target &&
+    (customElements.get(LINK_READER_HOVERCARD_PROVIDER_TAG) ||
+      (target.reader && !runtimeLoadFailed)),
   );
 }
 
@@ -45,14 +59,25 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   if (!anchor || !target) {
     return;
   }
+  const triggerTarget = event.composedPath()[0];
   const startedAt = performance.now();
   try {
     await linkReaderHovercardBootstrap.define();
   } catch {
+    if (anchor.isConnected && hovercardBootstrapIntentActive(anchor, trigger)) {
+      // Refresh the existing title owner without replaying pointer/focus input or another load.
+      (triggerTarget instanceof Element ? triggerTarget : anchor).dispatchEvent(
+        new CustomEvent(HOVER_PREVIEW_UNAVAILABLE_EVENT, {
+          bubbles: true,
+          composed: true,
+          detail: trigger,
+        }),
+      );
+    }
     return;
   }
   const provider = linkReaderHovercardBootstrap.providerFor(anchor);
-  // Definition can precede Lit replaying values assigned before the lazy upgrade.
+  // Wait for the host to replay values assigned before the lazy upgrade.
   await provider?.updateComplete;
   const current = hoverTargetForAnchor(anchor);
   if (

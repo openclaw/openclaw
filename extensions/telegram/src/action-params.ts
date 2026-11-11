@@ -1,16 +1,21 @@
 import {
   readPositiveIntegerParam,
   readStringOrNumberParam,
+  readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import {
   isRecord,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramTargetChatType } from "./targets.js";
 
 const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
   0x6fb9f0, 0xffd67e, 0xcb86db, 0x8eee98, 0xff93b2, 0xfb6f5f,
 ] as const;
 type TelegramForumTopicIconColor = (typeof TELEGRAM_FORUM_TOPIC_ICON_COLORS)[number];
+const SEND_MEDIA_FIELDS = ["mediaUrl", "media", "path", "filePath", "fileUrl"];
+const ATTACHMENT_MEDIA_FIELDS = ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"];
+const TELEGRAM_MESSAGE_EFFECT_ID_RE = /^\d+$/;
 
 export function readTelegramPositiveIntegerParam(params: Record<string, unknown>, key: string) {
   return readPositiveIntegerParam(params, key, { message: `${key} must be a positive integer.` });
@@ -22,11 +27,8 @@ export function readTelegramForumTopicIconColor(
   const iconColor = readPositiveIntegerParam(params, "iconColor", {
     message: "iconColor must be one of Telegram's supported forum topic colors.",
   });
-  if (iconColor == null) {
-    return undefined;
-  }
   const supportedColor = TELEGRAM_FORUM_TOPIC_ICON_COLORS.find((color) => color === iconColor);
-  if (supportedColor === undefined) {
+  if (iconColor != null && supportedColor === undefined) {
     throw new Error("iconColor must be one of Telegram's supported forum topic colors.");
   }
   return supportedColor;
@@ -54,22 +56,26 @@ export function readTelegramReplyToMessageId(params: Record<string, unknown>) {
   );
 }
 
+/** Telegram effects take a numeric Bot API id and apply only to known private chats. */
+export function readTelegramMessageEffectId(params: Record<string, unknown>, to: string) {
+  const effectId = readStringParam(params, "effectId") ?? readStringParam(params, "effect");
+  if (
+    !effectId ||
+    !TELEGRAM_MESSAGE_EFFECT_ID_RE.test(effectId) ||
+    resolveTelegramTargetChatType(to) !== "direct"
+  ) {
+    return undefined;
+  }
+  return effectId;
+}
+
 export function readTelegramSendMediaUrls(params: Record<string, unknown>) {
   const attachments = Array.isArray(params.attachments) ? params.attachments.filter(isRecord) : [];
   return normalizeUniqueTrimmedStringList([
-    params.mediaUrl,
-    params.media,
-    params.path,
-    params.filePath,
-    params.fileUrl,
+    ...SEND_MEDIA_FIELDS.map((field) => params[field]),
     ...(Array.isArray(params.mediaUrls) ? params.mediaUrls : []),
-    ...attachments.flatMap((attachment) => [
-      attachment.media,
-      attachment.mediaUrl,
-      attachment.path,
-      attachment.filePath,
-      attachment.fileUrl,
-      attachment.url,
-    ]),
+    ...attachments.flatMap((attachment) =>
+      ATTACHMENT_MEDIA_FIELDS.map((field) => attachment[field]),
+    ),
   ]);
 }

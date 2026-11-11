@@ -65,13 +65,13 @@ flow:
         - set: beforeRestartOutboundCount
           value:
             expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound').length"
-        - set: beforeRestartCursor
+        - set: beforeRestartInboundCursors
           value:
-            expr: state.getSnapshot().cursor
+            expr: "state.getSnapshot().events.filter((event) => event.kind === 'inbound-message' && event.accountId === transport.accountId).map((event) => event.cursor)"
         - call: waitForCondition
           args:
             - lambda:
-                expr: "state.getAcknowledgedPollCursor(transport.accountId) >= beforeRestartCursor ? true : undefined"
+                expr: "beforeRestartInboundCursors.every((cursor) => state.hasCompletedInboundEvent(transport.accountId, cursor)) || undefined"
             - 10000
             - 25
         - assert:

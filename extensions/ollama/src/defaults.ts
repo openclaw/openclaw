@@ -1,3 +1,5 @@
+import { isCloudModelRef } from "openclaw/plugin-sdk/model-ref-parse";
+
 export const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 export const OLLAMA_DEFAULT_API_KEY = "ollama-local";
 const OLLAMA_DOCKER_HOST_BASE_URL = "http://host.docker.internal:11434";
@@ -24,26 +26,29 @@ export const OLLAMA_CLOUD_DEFAULT_MODELS = [
   {
     id: "minimax-m2.7",
     contextWindow: 196_608,
+    // Ollama Cloud rejects larger requests: "exceeds model's maximum output tokens (131072)".
+    maxTokens: 131_072,
     capabilities: ["completion", "thinking", "tools"],
   },
   {
     id: "minimax-m3",
     contextWindow: 524_288,
+    // Ollama Cloud caps output at 131,072 tokens and rejects a larger request.
+    maxTokens: 131_072,
     capabilities: ["completion", "thinking", "tools", "vision"],
   },
   {
     id: "kimi-k3",
     contextWindow: 1_048_576,
+    // No separate output limit: https://ollama.com/library/kimi-k3
+    maxTokens: 1_048_576,
     capabilities: ["completion", "thinking", "tools", "vision"],
-  },
-  {
-    id: "glm-5.1",
-    contextWindow: 202_752,
-    capabilities: ["completion", "thinking", "tools"],
   },
   {
     id: OLLAMA_GLM52_CLOUD_MODEL_ID,
     contextWindow: 1_000_000,
+    // https://docs.z.ai/guides/llm/glm-5.2
+    maxTokens: 131_072,
     capabilities: ["completion", "thinking", "tools"],
   },
 ] as const;
@@ -56,9 +61,29 @@ export function normalizeOllamaCloudModelId(modelId: string): string {
     .replace(/(?::cloud|-cloud)$/, "");
 }
 
+export function resolveOllamaCloudDefaultModel(modelId: string) {
+  const normalized = normalizeOllamaCloudModelId(modelId);
+  return OLLAMA_CLOUD_DEFAULT_MODELS.find((model) => model.id === normalized);
+}
+
+/**
+ * Hosted Ollama output budget. Local models return undefined and take the shared
+ * context-sized default, which keeps prompt room inside the local num_ctx.
+ */
+export function resolveOllamaOutputBudget(params: {
+  modelId: string;
+  contextWindow?: number;
+  remote?: boolean;
+}): number | undefined {
+  return params.remote || isCloudModelRef(params.modelId)
+    ? (resolveOllamaCloudDefaultModel(params.modelId)?.maxTokens ??
+        params.contextWindow ??
+        OLLAMA_DEFAULT_CONTEXT_WINDOW)
+    : undefined;
+}
+
 export const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
 export const OLLAMA_LOCAL_CONTEXT_TOKENS = 32_768;
-export const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 export const OLLAMA_DEFAULT_COST = {
   input: 0,
   output: 0,

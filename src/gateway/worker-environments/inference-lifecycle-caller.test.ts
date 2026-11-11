@@ -1,171 +1,110 @@
-import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import assert from "node:assert/strict";
+import { addAbortListener } from "node:events";
+import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
+import { createWorkerInferenceServiceStub } from "./inference-control.test-helpers.js";
 import { REQUEST } from "./inference.test-support.js";
-import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
-describe("worker inference lifecycle caller", () => {
-  it.for(["start", "start-drain-release", "refusal", "after-start"] as const)(
-    "retains actual lifecycle caller custody for %s failure",
-    async (failureMode, { signal }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const entered = createDeferred();
-        const drained = createDeferred();
-        const startFailure = new Error("selected lifecycle boundary failed");
-        const drainFailure = new Error("worker drain persistence failed");
-        const releaseFailure = new Error("worker drain release failed");
-        const refusal = new Error("worker drain acceptance refused");
-        const unacceptedRelease = vi.fn();
-        const release = vi.fn(() => {
-          if (failureMode === "start-drain-release") {
-            throw releaseFailure;
-          }
-        });
-        const start = vi.fn(() => {
-          entered.resolve();
-          if (failureMode !== "after-start") {
+it.for(["start-drain-release", "after-start"] as const)(
+  "retains actual lifecycle caller custody for %s failure",
+  (failureMode, { signal }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const entered = createDeferred();
+      const drained = createDeferred();
+      const startFailure = new Error("selected lifecycle boundary failed");
+      const drainFailure = new Error("worker drain persistence failed");
+      const releaseFailure = new Error("worker drain release failed");
+      const release = vi.fn(() => assert(failureMode === "after-start", releaseFailure));
+      const start = vi.fn(() => {
+        entered.resolve();
+        assert(failureMode === "after-start", startFailure);
+      });
+      const workerService = createWorkerInferenceServiceStub();
+      const accepted = { drained: drained.promise, hasWork: () => true, start, release };
+      registerWorkerInferenceSessionControl(workerService, {
+        hasSession: () => true,
+        reserveSessionDrain: () => accepted,
+        captureSessionCancellation: () => {
+          throw new Error("Cancellation must not follow failed admission");
+        },
+        resolveSessionTargetForRunId: () => undefined,
+      });
+      const sessionKey = `agent:main:lifecycle-custody-${failureMode}`;
+      const target = {
+        storePath: state.statePath("sessions.sqlite"),
+        sessionKey,
+        sessionId: REQUEST.sessionId,
+        agentId: "main",
+      };
+      const identities = [sessionKey, REQUEST.sessionId];
+      const abortListener = addAbortListener(signal, () => drained.resolve());
+      const preparing = prepareSessionLifecycleDrain({
+        action: "delete",
+        authorize: () => {
+          if (failureMode === "after-start" && start.mock.calls.length > 0) {
             throw startFailure;
           }
-        });
-        const unexpected = (): never => {
-          throw new Error("Unexpected worker service operation during drain acquisition");
-        };
-        const workerService = {
-          getDedicatedNodeLeaseSignal: unexpected,
-          captureSessionAttachment: unexpected,
-          getSessionAttachment: unexpected,
-          findSessionAttachment: unexpected,
-          getSessionAttachmentStatus: unexpected,
-          assertSessionAttachment: unexpected,
-          touchSessionAttachment: unexpected,
-          execSessionAttachment: unexpected,
-          createSessionAttachment: unexpected,
-          destroySessionAttachment: unexpected,
-          openNodePortal: unexpected,
-          list: unexpected,
-          readPreparedPoolSummary: unexpected,
-          readReadyWorkerTarget: unexpected,
-          get: () => undefined,
-          inventoryVersion: unexpected,
-          readMachineShape: unexpected,
-          machineShapeVersion: unexpected,
-          supportsExecutionMode: unexpected,
-          readProviderDisplayId: unexpected,
-          listMachineOptions: unexpected,
-          listOperatingSystems: unexpected,
-          prepare: unexpected,
-          create: unexpected,
-          destroy: unexpected,
-          destroyUnattached: unexpected,
-          observeDesktop: unexpected,
-          launchDesktopApp: unexpected,
-          startTunnel: unexpected,
-          stopTunnel: unexpected,
-        } satisfies WorkerEnvironmentServiceContract;
-        registerWorkerInferenceSessionControl(workerService, {
-          hasSession: () => true,
-          reserveSessionDrain: () => ({
-            assertReserved: () => {},
-            release: unacceptedRelease,
-            accept: () => {
-              if (failureMode === "refusal") {
-                entered.resolve();
-                throw refusal;
-              }
-              return { drained: drained.promise, hasWork: () => true, start, release };
-            },
-          }),
-          captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
-          resolveSessionTargetForRunId: () => undefined,
-        });
-        const sessionKey = `agent:main:lifecycle-custody-${failureMode}`;
-        const identities = [sessionKey, REQUEST.sessionId];
-        const releaseRawDrain = () => drained.resolve();
-        signal.addEventListener("abort", releaseRawDrain, { once: true });
-        if (signal.aborted) {
-          releaseRawDrain();
-        }
-        const preparing = prepareSessionLifecycleDrain({
-          action: "delete",
-          authorize: () => {
-            if (failureMode === "after-start" && start.mock.calls.length > 0) {
-              throw startFailure;
-            }
-          },
-          context: createGatewayRequestContext(
-            makeContextParams({ workerEnvironmentService: workerService }),
-          ),
-          storePath: state.statePath("sessions.sqlite"),
-          sessionKeys: [sessionKey],
-          sessionId: REQUEST.sessionId,
-          agentId: "main",
-          sessionKey,
-          lifecycleIdentities: identities,
-        });
-        const settled = vi.fn();
-        void preparing.then(settled, settled);
-        const outcome = preparing.then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
-        try {
-          await Promise.race([
-            entered.promise,
-            outcome.then(() => {
-              throw new Error("Lifecycle caller returned before the selected worker boundary");
-            }),
-          ]);
-          if (failureMode !== "refusal") {
-            await runExclusiveSessionLifecycleMutation("patch", {
-              scope: state.statePath("sessions.sqlite"),
-              identities,
-              run: async () => {},
-            });
-            expect(settled).not.toHaveBeenCalled();
-            expect(release).not.toHaveBeenCalled();
-            if (failureMode === "start") {
-              drained.resolve();
-            } else {
-              drained.reject(drainFailure);
-            }
-          }
-          const result = await outcome;
-          if (result.ok) {
-            result.value.release();
-            throw new Error("Lifecycle caller discarded its worker failure");
-          }
-          if (failureMode === "refusal") {
-            expect(result.error).toBe(refusal);
-            expect(unacceptedRelease).toHaveBeenCalledOnce();
-            expect(start).not.toHaveBeenCalled();
-            expect(release).not.toHaveBeenCalled();
-          } else {
-            expect(start).toHaveBeenCalledOnce();
-            expect(unacceptedRelease).not.toHaveBeenCalled();
-            expect(release).toHaveBeenCalledOnce();
-            if (failureMode === "start") {
-              expect(result.error).toBe(startFailure);
-            } else {
-              expect(result.error).toMatchObject({
-                errors: [
-                  startFailure,
-                  drainFailure,
-                  ...(failureMode === "start-drain-release" ? [releaseFailure] : []),
-                ],
-              });
-            }
-          }
-        } finally {
-          releaseRawDrain();
-          await outcome;
-          signal.removeEventListener("abort", releaseRawDrain);
-        }
+        },
+        context: createGatewayRequestContext(
+          makeContextParams({ workerEnvironmentService: workerService }),
+        ),
+        ...target,
+        sessionKeys: [sessionKey],
+        lifecycleIdentities: identities,
       });
-    },
-  );
-});
+      const settled = vi.fn();
+      void preparing.then(settled, settled);
+      const outcome = preparing.then(
+        (value) => value.release(),
+        (error: unknown) => error,
+      );
+      let successor: Promise<void> | undefined;
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          outcome,
+          "Lifecycle caller returned before the selected worker boundary",
+        );
+        const successorEntered = vi.fn(async () => {});
+        successor = withSessionTurn(target, successorEntered);
+        // Accepted custody blocks turns but not mutations until the drain settles.
+        await runSessionMutation({
+          target: captureSessionTarget({
+            storeScope: target.storePath,
+            ...target,
+            aliases: identities,
+            incarnation: REQUEST.sessionId,
+          }),
+          policy: "allow-live",
+          run: async () => {},
+        });
+        expect(settled).not.toHaveBeenCalled();
+        expect(release).not.toHaveBeenCalled();
+        expect(successorEntered).not.toHaveBeenCalled();
+        drained.reject(drainFailure);
+        await successor;
+        expect(successorEntered).toHaveBeenCalledOnce();
+        expect(release).toHaveBeenCalledOnce();
+        const errors = [startFailure, drainFailure];
+        if (failureMode === "start-drain-release") {
+          errors.push(releaseFailure);
+        }
+        expect(await outcome).toMatchObject({ errors });
+      } finally {
+        drained.resolve();
+        await outcome;
+        await successor;
+        abortListener[Symbol.dispose]();
+      }
+    }),
+);

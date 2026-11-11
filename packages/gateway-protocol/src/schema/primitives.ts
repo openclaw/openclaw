@@ -8,6 +8,7 @@ import {
   SECRET_PROVIDER_ALIAS_PATTERN,
   SINGLE_VALUE_FILE_REF_ID,
 } from "../secret-ref-contract.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../session-limits.js";
 import { closedObject } from "./closed-object.js";
 import { USER_PROFILE_ID_MAX_LENGTH } from "./user-profile-constants.js";
 
@@ -35,7 +36,7 @@ export const UserProfileIdSchema = Type.String({
   maxLength: USER_PROFILE_ID_MAX_LENGTH,
 });
 /** Maximum stable session key length accepted by chat-send protocol requests. */
-export const CHAT_SEND_SESSION_KEY_MAX_LENGTH = 512;
+export { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../session-limits.js";
 /** Chat-send session key string primitive with bounded length. */
 export const ChatSendSessionKeyString = Type.String({
   minLength: 1,

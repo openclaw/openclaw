@@ -117,6 +117,13 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
     "base",
     [
       {
+        // Personal-library authoring left skill_workshop for skill_library; the candidate
+        // must keep this pre-split allowlist covering it exactly once.
+        id: "tools-allow-skill-workshop",
+        intent: "skill-library-split",
+        argv: ["config", "set", "tools.allow", '["read","skill_workshop"]', "--strict-json"],
+      },
+      {
         id: "logging-file",
         intent: "logging",
         // Raw debug output stays in the isolated home, outside uploaded artifact roots.
@@ -189,7 +196,7 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   ],
 ]);
 
-export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
+function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
   return scenarioConfigSteps.get(scenario) ?? [];
 }
 
@@ -264,47 +271,45 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
       argv: [...step.argv.slice(0, 3), JSON.stringify({ mode: "tools" }), ...step.argv.slice(4)],
     };
   }
+  if (
+    step.id !== "agents" &&
+    (step.id !== "channels-discord" ||
+      compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") !== -1)
+  ) {
+    return step;
+  }
+  const json = step.argv[3];
+  if (json === undefined) {
+    throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+  }
+  let value = JSON.parse(json);
   if (step.id === "agents") {
-    const agentsJson = step.argv[3];
-    if (agentsJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+    // beta.1 retired heartbeat defaults; those baselines are idle without the legacy setting.
+    if ((compareReleaseVersions(baselineVersion ?? "", "2026.11.5-beta.1") ?? -1) >= 0) {
+      delete value.defaults.heartbeat;
     }
-    const agents = JSON.parse(agentsJson);
     // Keyed rosters shipped before explicit ownership; those baselines still
     // require the legacy default marker.
     if (compareReleaseVersions(baselineVersion ?? "", "2026.8.1-beta.2") === -1) {
-      agents.entries.main.default = true;
-      delete agents.ownership;
+      value.entries.main.default = true;
+      delete value.ownership;
     }
     if (compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1) {
-      agents.list = Object.entries<Record<string, unknown>>(agents.entries).map(([id, entry]) =>
+      value.list = Object.entries<Record<string, unknown>>(value.entries).map(([id, entry]) =>
         Object.assign(entry, { id }),
       );
-      delete agents.entries;
+      delete value.entries;
     }
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
-    };
-  }
-  if (
-    step.id === "channels-discord" &&
-    compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1
-  ) {
-    const discordJson = step.argv[3];
-    if (discordJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
-    }
+  } else {
     // beta.4 retired nested DM policy. Older baselines retain the shipped
     // specimen so candidate Doctor must migrate it without changing access.
-    const { dmPolicy, allowFrom, ...discord } = JSON.parse(discordJson);
-    discord.dm = { policy: dmPolicy, allowFrom };
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(discord), ...step.argv.slice(4)],
-    };
+    const { dmPolicy, allowFrom, ...discord } = value;
+    value = { ...discord, dm: { policy: dmPolicy, allowFrom } };
   }
-  return step;
+  return {
+    ...step,
+    argv: [...step.argv.slice(0, 3), JSON.stringify(value), ...step.argv.slice(4)],
+  };
 }
 
 function* adaptRecipeForBaseline(
@@ -374,6 +379,24 @@ function* adaptRecipeForBaseline(
       continue;
     }
     yield adaptStepForBaseline(step, baselineVersion);
+    // 2026.10.5 shipped skills.workshop; later candidates move it into the plugin's config.
+    if (
+      step.id === "skills" &&
+      pinnedVersion &&
+      (compareReleaseVersions(pinnedVersion, "2026.10.5") ?? -1) >= 0
+    ) {
+      yield {
+        id: "skill-workshop-settings",
+        intent: "skill-workshop-settings",
+        argv: [
+          "config",
+          "set",
+          "skills.workshop",
+          JSON.stringify({ autonomous: { mode: "off" }, maxSkillBytes: 8000 }),
+          "--strict-json",
+        ],
+      };
+    }
   }
 }
 
@@ -395,21 +418,15 @@ export function resolveUpgradeSurvivorOpenClawCommand(
   params: UpgradeSurvivorCommandParams = {},
 ) {
   const platform = params.platform ?? process.platform;
-  if (platform === "win32") {
-    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(params.env ?? process.env);
-    return {
-      command: comSpec,
-      args: ["/d", "/s", "/c", buildCmdExeCommandLine("openclaw.cmd", argv)],
-      commandLabel: ["openclaw", ...argv].join(" "),
-      shell: false,
-      windowsVerbatimArguments: true,
-    };
-  }
+  const windows = platform === "win32";
   return {
-    command: "openclaw",
-    args: argv,
+    command: windows
+      ? (params.comSpec ?? resolveWindowsCmdExePath(params.env ?? process.env))
+      : "openclaw",
+    args: windows ? ["/d", "/s", "/c", buildCmdExeCommandLine("openclaw.cmd", argv)] : argv,
     commandLabel: ["openclaw", ...argv].join(" "),
     shell: false,
+    ...(windows ? { windowsVerbatimArguments: true } : {}),
   };
 }
 

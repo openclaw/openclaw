@@ -14,7 +14,7 @@ export function bindHarnessReplyMedia(params: {
   if (!attempt.workspaceDir) {
     return undefined;
   }
-  const context = Object.freeze({
+  const context = {
     cfg: params.config ?? {},
     workspaceDir: attempt.workspaceDir,
     agentId: attempt.agentId,
@@ -31,7 +31,7 @@ export function bindHarnessReplyMedia(params: {
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     runId: attempt.runId,
     reasoningLevel: attempt.reasoningLevel,
-  });
+  };
   const attemptSignal = attempt.abortSignal;
   return async (request) => {
     const assertSourceCurrent = request.assertCurrent;

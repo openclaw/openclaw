@@ -1,0 +1,304 @@
+import { createSignal, flush } from "solid-js";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { page, userEvent } from "vitest/browser";
+import { nextFrame } from "../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { saveIndicatorProps } from "./settings-save-indicator.test-support.ts";
+import { SettingsSaveIndicator } from "./settings-save-indicator.tsx";
+import { SettingsSegmented, SettingsToggleRow } from "./solid/settings-ui.tsx";
+import startupStyles from "../styles.css?inline";
+import settingsStyles from "../styles/settings.css?inline";
+
+const optionsFor = (...values: string[]) =>
+  values.map((value) => ({ value, label: value[0]!.toUpperCase() + value.slice(1) }));
+
+it("keeps the native switch geometry and blocks activation while its initial read is pending", async () => {
+  const host = document.body.appendChild(document.createElement("div"));
+  onTestFinished(() => host.remove());
+  const target = host.attachShadow({ mode: "open" }).appendChild(document.createElement("div"));
+  const [pending, setPending] = createSignal(true);
+  const onChange = vi.fn();
+  mountSolid(
+    () => (
+      <>
+        <style>
+          {startupStyles}
+          {settingsStyles}
+        </style>
+        <SettingsToggleRow
+          title="Session source"
+          checked={true}
+          pending={pending()}
+          onChange={onChange}
+        />
+      </>
+    ),
+    { container: target },
+  );
+  await nextFrame();
+  const input = target.querySelector<HTMLInputElement>("input")!;
+  const control = target.querySelector<HTMLElement>(".settings-toggle__control")!;
+  const before = control.getBoundingClientRect().toJSON();
+  expect(input.disabled).toBe(true);
+  expect(input.getAttribute("aria-hidden")).toBe("true");
+  expect(getComputedStyle(control).visibility).toBe("hidden");
+  input.click();
+  expect(onChange).not.toHaveBeenCalled();
+  setPending(false);
+  flush();
+  await nextFrame();
+  expect(target.querySelector("input")).toBe(input);
+  expect(control.getBoundingClientRect().toJSON()).toEqual(before);
+  expect(input.disabled).toBe(false);
+  expect(input.hasAttribute("aria-hidden")).toBe(false);
+  expect(getComputedStyle(control).visibility).toBe("visible");
+  input.click();
+  expect(onChange).toHaveBeenCalledExactlyOnceWith(false);
+});
+
+it("animates Applying before lazy settings styles load", async () => {
+  const container = document.createElement("div");
+  // Keep lazy route keyframes from masking a missing startup animation owner.
+  const root = container.attachShadow({ mode: "open" });
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  const target = root.appendChild(document.createElement("div"));
+  mountSolid(
+    () => (
+      <>
+        <style>{startupStyles}</style>
+        <SettingsSaveIndicator {...saveIndicatorProps({ needsApply: true, applying: true })} />
+      </>
+    ),
+    { container: target },
+  );
+  await waitForSolid(() =>
+    expect(target.querySelector(".settings-save-indicator__spinner")).not.toBeNull(),
+  );
+  const spinner = target.querySelector<HTMLElement>(".settings-save-indicator__spinner")!;
+  const animation = spinner.getAnimations()[0]!;
+  expect(animation).toBeDefined();
+  const duration = Number(animation.effect!.getComputedTiming().duration);
+  expect(duration).toBeGreaterThan(0);
+  animation.pause();
+  animation.currentTime = duration / 4;
+  const transform = new DOMMatrixReadOnly(getComputedStyle(spinner).transform);
+  expect(transform).toMatchObject({ a: expect.closeTo(0), b: expect.closeTo(1) });
+});
+
+it("restores inherited fieldset restrictions when busy state clears", () => {
+  const [busy, setBusy] = createSignal(true);
+  const onChange = vi.fn();
+  const { container } = mountSolid(() => (
+    <fieldset disabled={busy()}>
+      <SettingsSegmented
+        value="first"
+        options={optionsFor("first", "second")}
+        onChange={onChange}
+      />
+    </fieldset>
+  ));
+  const second = container.querySelector<HTMLInputElement>('input[value="second"]')!;
+  expect(second.matches(":disabled")).toBe(true);
+  second.click();
+  expect(onChange).not.toHaveBeenCalled();
+  setBusy(false);
+  flush();
+  expect(second.matches(":disabled")).toBe(false);
+  second.click();
+  expect(onChange).toHaveBeenCalledWith("second", expect.any(HTMLElement));
+});
+
+function mountBusyControls() {
+  const [busy, setBusy] = createSignal(false);
+  const [disabled, setDisabled] = createSignal(false);
+  const [checked, setChecked] = createSignal(false);
+  const [mode, setMode] = createSignal("first");
+  const [size, setSize] = createSignal("small");
+  const save = <T,>(set: (value: T) => void) =>
+    vi.fn((value: T) => {
+      set(value);
+      setBusy(true);
+    });
+  const onToggle = save(setChecked);
+  const onMode = save(setMode);
+  const onSize = save(setSize);
+  const view = mountSolid(() => (
+    <>
+      <SettingsToggleRow
+        title="Audit log"
+        checked={checked()}
+        saving={busy()}
+        disabled={disabled()}
+        onChange={onToggle}
+      />
+      <SettingsSegmented
+        ariaLabel="Mode"
+        value={mode()}
+        saving={busy()}
+        disabled={disabled()}
+        options={optionsFor("first", "second")}
+        onChange={onMode}
+      />
+      <SettingsSegmented
+        mode="buttons"
+        ariaLabel="Size"
+        value={size()}
+        saving={busy()}
+        disabled={disabled()}
+        options={optionsFor("small", "large")}
+        onChange={onSize}
+      />
+    </>
+  ));
+  const settle = () => {
+    setBusy(false);
+    flush();
+  };
+  return { ...view, onToggle, onMode, onSize, settle, setDisabled };
+}
+
+const unavailable = (element: Element) => element.matches(':disabled, [aria-disabled="true"]');
+
+// Browsers move focus off a natively disabled element during a later rendering update.
+async function expectFocusKeptWhileBusy(control: HTMLElement) {
+  await waitForSolid(() => expect(unavailable(control)).toBe(true));
+  await nextFrame();
+  await nextFrame();
+  expect(document.activeElement).toBe(control);
+  expect(control.getAttribute("aria-disabled")).toBe("true");
+}
+
+it("keeps a busy switch focused and ignores Space until the save settles", async () => {
+  const view = mountBusyControls();
+  const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  toggle.focus();
+  await userEvent.keyboard(" ");
+  await expectFocusKeptWhileBusy(toggle);
+  await userEvent.keyboard(" ");
+  view.container.querySelector<HTMLElement>(".settings-row__title")!.click();
+  toggle.click();
+  expect(view.onToggle).toHaveBeenCalledExactlyOnceWith(true);
+  expect(toggle.checked).toBe(true);
+  view.settle();
+  expect(document.activeElement).toBe(toggle);
+  expect(toggle.hasAttribute("aria-disabled")).toBe(false);
+  await userEvent.keyboard(" ");
+  expect(view.onToggle).toHaveBeenLastCalledWith(false);
+});
+
+it("keeps a busy radio focused and ignores arrow keys until the save settles", async () => {
+  const view = mountBusyControls();
+  const radio = (value: string) =>
+    view.container.querySelector<HTMLInputElement>(`input[type=radio][value="${value}"]`)!;
+  radio("first").focus();
+  await userEvent.keyboard("{ArrowRight}");
+  await expectFocusKeptWhileBusy(radio("second"));
+  await userEvent.keyboard("{ArrowRight}");
+  radio("first").click();
+  expect(view.onMode).toHaveBeenCalledExactlyOnceWith("second", expect.any(HTMLElement));
+  expect(document.activeElement).toBe(radio("second"));
+  expect(radio("second").checked).toBe(true);
+  view.settle();
+  expect(radio("second").hasAttribute("aria-disabled")).toBe(false);
+  await userEvent.keyboard("{ArrowRight}");
+  expect(view.onMode).toHaveBeenLastCalledWith("first", expect.any(HTMLElement));
+  expect(document.activeElement).toBe(radio("first"));
+});
+
+it("keeps a busy segmented button focused and ignores Enter until the save settles", async () => {
+  const view = mountBusyControls();
+  const button = (name: string) =>
+    [...view.container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent === name,
+    )!;
+  button("Large").focus();
+  await userEvent.keyboard("{Enter}");
+  await expectFocusKeptWhileBusy(button("Large"));
+  await userEvent.keyboard("{Enter}");
+  button("Small").click();
+  expect(view.onSize).toHaveBeenCalledExactlyOnceWith("large");
+  expect(button("Large").getAttribute("aria-pressed")).toBe("true");
+  view.settle();
+  expect(document.activeElement).toBe(button("Large"));
+  expect(button("Large").hasAttribute("aria-disabled")).toBe(false);
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}{Enter}");
+  expect(view.onSize).toHaveBeenLastCalledWith("small");
+});
+
+it("keeps non-saving restrictions native when they arrive during a save", async () => {
+  const view = mountBusyControls();
+  const controls = [
+    ...view.container.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button"),
+  ];
+  const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  toggle.focus();
+  await userEvent.keyboard(" ");
+  await expectFocusKeptWhileBusy(toggle);
+  view.setDisabled(true);
+  flush();
+  await nextFrame();
+  await nextFrame();
+  for (const control of controls) {
+    expect(control.disabled).toBe(true);
+    control.focus();
+    expect(document.activeElement).not.toBe(control);
+    control.click();
+  }
+  expect(view.onToggle).toHaveBeenCalledExactlyOnceWith(true);
+  expect(view.onMode).not.toHaveBeenCalled();
+  expect(view.onSize).not.toHaveBeenCalled();
+  view.settle();
+  expect(controls.every((control) => control.disabled)).toBe(true);
+  await userEvent.tab();
+  expect(document.activeElement).not.toBe(toggle);
+  await userEvent.keyboard(" ");
+  expect(view.onToggle).toHaveBeenCalledExactlyOnceWith(true);
+  expect(toggle.checked).toBe(true);
+  view.setDisabled(false);
+  flush();
+  expect(controls.every((control) => !control.disabled)).toBe(true);
+});
+
+it.each([
+  [["Form", "Raw"], 60],
+  [["Aktuelle Instanz", "Historische Abstammungslinie"], 180],
+])("keeps segmented labels %j whole in a %ipx phone column", async (labels, width) => {
+  await page.viewport(390, 844);
+  const host = document.createElement("div");
+  const root = host.attachShadow({ mode: "open" });
+  document.body.append(host);
+  onTestFinished(() => host.remove());
+  const target = root.appendChild(document.createElement("div"));
+  mountSolid(
+    () => (
+      <>
+        <style>{startupStyles}</style>
+        <style>{settingsStyles}</style>
+        <div class="shell--settings" style={{ width: `${width}px` }}>
+          <SettingsSegmented
+            mode="buttons"
+            value={labels[0]!}
+            options={labels.map((label) => ({ value: label, label }))}
+            onChange={() => undefined}
+          />
+        </div>
+      </>
+    ),
+    { container: target },
+  );
+  await nextFrame();
+  const buttons = [...target.querySelectorAll("button")];
+  expect(buttons).toHaveLength(labels.length);
+  for (const button of buttons) {
+    const text = button.firstChild!;
+    for (const match of text.textContent!.matchAll(/\S+/g)) {
+      const range = document.createRange();
+      range.setStart(text, match.index);
+      range.setEnd(text, match.index + match[0].length);
+      const lines = new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)));
+      expect(lines.size, match[0]).toBe(1);
+    }
+  }
+});

@@ -131,7 +131,7 @@ describe("node workspace transfer service", () => {
       return result.stdout.trim();
     };
     try {
-      const plain = await service.prepareSync({ ...request, generation: 1 });
+      const plain = await service.prepareSync(request);
       expect(plain.snapshot.manifest.baseCommit).toBeNull();
 
       if (process.platform !== "win32") {
@@ -201,7 +201,7 @@ describe("node workspace transfer service", () => {
 
       await git("init", "--quiet", "--object-format=sha1");
 
-      const staged = await service.prepareSync({ ...request, generation: 2 });
+      const staged = await service.prepareSync(request);
       expect(staged.snapshot.manifest.baseCommit).toBeNull();
       expect(staged.snapshot.manifestRef).toBe(plain.snapshot.manifestRef);
       expect(staged.snapshot.manifest.entries).toContainEqual(
@@ -219,13 +219,11 @@ describe("node workspace transfer service", () => {
         "-m",
         "tracked workspace",
       );
-      const committed = await service.prepareSync({ ...request, generation: 3 });
+      const committed = await service.prepareSync(request);
       expect(committed.snapshot.manifest.baseCommit).toBe(await git("rev-parse", "HEAD"));
 
       await fs.writeFile(path.join(localPath, ".git", "HEAD"), "invalid HEAD\n");
-      await expect(service.prepareSync({ ...request, generation: 4 })).rejects.toThrow(
-        "Worker workspace sync failed",
-      );
+      await expect(service.prepareSync(request)).rejects.toThrow("Worker workspace sync failed");
     } finally {
       await service.closeAll();
     }
@@ -264,7 +262,6 @@ describe("node workspace transfer service", () => {
         environmentId: "environment-1",
         ownerEpoch: 3,
         sessionId: "session-1",
-        generation: 2,
         localPath,
         isAuthorized: () => true,
       });
@@ -535,7 +532,6 @@ describe("node workspace transfer service", () => {
       environmentId: "environment-close",
       ownerEpoch: 1,
       sessionId: "session-close",
-      generation: 7,
       localPath,
       isAuthorized: () => true,
     });
@@ -590,7 +586,6 @@ describe("node workspace transfer service", () => {
         environmentId,
         ownerEpoch: 1,
         sessionId: `session-${environmentId}`,
-        generation: 1,
         localPath,
         isAuthorized: () => true,
       });
@@ -653,12 +648,11 @@ describe("node workspace transfer service", () => {
       });
 
       await Promise.all(
-        [first, second].map((kind, index) => {
+        [first, second].map((kind) => {
           const owner = {
             environmentId: "environment-serialize",
             ownerEpoch: 1,
             sessionId: "session-serialize",
-            generation: index + 1,
             isAuthorized: () => true,
           };
           return kind === "sync"
@@ -697,7 +691,6 @@ describe("node workspace transfer service", () => {
           environmentId,
           ownerEpoch: 1,
           sessionId,
-          generation: 1,
           baseCommit: "b".repeat(40),
           baseManifestRef,
           isAuthorized: () => true,
@@ -761,7 +754,6 @@ describe("node workspace transfer service", () => {
       environmentId: "environment-owner",
       ownerEpoch: 1,
       sessionId: "session-owner",
-      generation: 1,
       localPath,
       isAuthorized: () => true,
     });

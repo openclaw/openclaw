@@ -1,0 +1,2 @@
+# Regression coverage for active background-run identity, stale terminals, membership cache invalidation, and both chat/dashboard compaction flows.
+304

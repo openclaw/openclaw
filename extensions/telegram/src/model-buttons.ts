@@ -213,7 +213,10 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       currentSelection === (currentSelection.includes("/") ? `${provider}/${model}` : model);
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
     const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;
-    const displayText = truncateModelLabel(displayLabel, MODEL_BUTTON_LABEL_MAX_LENGTH);
+    const displayText =
+      displayLabel.length <= MODEL_BUTTON_LABEL_MAX_LENGTH
+        ? displayLabel
+        : `…${sliceUtf16Safe(displayLabel, -(MODEL_BUTTON_LABEL_MAX_LENGTH - 1))}`;
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 
     rows.push([
@@ -239,13 +242,6 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
 
 export function buildBrowseProvidersButton(): ButtonRow[] {
   return [[{ text: "Browse providers", callback_data: CALLBACK_PREFIX.providers }]];
-}
-
-function truncateModelLabel(modelLabel: string, maxLen: number): string {
-  if (modelLabel.length <= maxLen) {
-    return modelLabel;
-  }
-  return `…${sliceUtf16Safe(modelLabel, -(maxLen - 1))}`;
 }
 
 export function getModelsPageSize(): number {

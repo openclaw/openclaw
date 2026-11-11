@@ -1,5 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { readServiceChildMessage } from "../process/supervisor/service-child-protocol.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
 import { waitFor, type PtyRun } from "./tui-pty-test-support.js";
@@ -194,23 +198,31 @@ export async function cleanupStartedFixture(
   await fixture.cleanup();
 }
 
-export function createLocalShellControlFloodPreload() {
-  return `
+export async function createLocalShellControlFloodOwner(tempDir: string) {
+  const anchorPath = path.join(tempDir, "control-flood-anchor.mjs");
+  const anchor = resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor");
+  await writeFile(
+    anchorPath,
+    `
+    import { createRequire } from "node:module";
+    const require = createRequire(import.meta.url);
     const fs = require("node:fs");
     const path = require("node:path");
     const { Socket } = require("node:net");
-    const role = /service-child-(relay|group-anchor)\\.[cm]?[jt]s$/.exec(process.argv[1] || "")?.[1];
     const pidPath = process.env.OPENCLAW_CONTROL_PROBE_PATH;
-    if (role) fs.appendFileSync(pidPath, role + " " + process.pid + "\\n");
+    fs.appendFileSync(pidPath, "group-anchor " + process.pid + "\\n");
     const originalWrite = Socket.prototype.write;
     let armed = false;
     Socket.prototype.write = function (chunk, ...args) {
       const text = String(chunk);
-      if (armed || role !== "group-anchor" || !text.includes('"type":"ready"')) {
+      if (armed || !text.includes('"type":"ready"')) {
         return originalWrite.call(this, chunk, ...args);
       }
       armed = true;
       const ready = JSON.parse(text);
+      if (ready.treeOwnership !== "linux-subreaper") {
+        fs.appendFileSync(pidPath, "relay " + process.ppid + "\\n");
+      }
       const releasePath = pidPath + ".release";
       let released = false;
       const release = () => {
@@ -229,7 +241,11 @@ export function createLocalShellControlFloodPreload() {
       release();
       return accepted;
     };
-  `;
+    await import(${JSON.stringify(anchor.href)});
+  `,
+    "utf8",
+  );
+  return pathToFileURL(anchorPath).href;
 }
 
 export function readLocalShellControlFloodPids(rolePidPath: string, commandPidPath: string) {

@@ -1,7 +1,8 @@
-// Plugin tool contract tests cover bundled plugin tool schemas and invocation contracts.
 import fs from "node:fs";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import * as ts from "typescript/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
@@ -11,271 +12,92 @@ import {
 
 type PluginManifestFile = {
   id?: unknown;
-  contracts?: {
-    tools?: unknown;
-  };
+  contracts?: { tools?: unknown };
 };
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 function walkFiles(dir: string): string[] {
-  const gitFiles = listGitFiles(dir);
-  if (gitFiles) {
-    return gitFiles;
-  }
-
-  const files: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) {
-      continue;
-    }
-    const entryPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...walkFiles(entryPath));
-      continue;
-    }
-    files.push(entryPath);
-  }
-  return files;
+  return listGitFiles(
+    dir,
+    (line) =>
+      !line
+        .split("/")
+        .some((part) => part === "node_modules" || part === "dist" || part.startsWith(".")),
+  );
 }
 
-function repoRelativePath(filePath: string): string {
-  return toRepoRelativePath(process.cwd(), filePath);
-}
-
-function isSkippedRepoPath(relativePath: string): boolean {
-  return relativePath
-    .split("/")
-    .some((part) => part === "node_modules" || part === "dist" || part.startsWith("."));
-}
-
-function listGitFiles(dir: string): string[] | null {
-  const relativeDir = repoRelativePath(dir);
-  if (!relativeDir || relativeDir.startsWith("..") || path.isAbsolute(relativeDir)) {
-    return null;
-  }
+function listGitFiles(dir: string, include: (relativePath: string) => boolean): string[] {
+  const relativeDir = toRepoRelativePath(process.cwd(), dir);
   const files = listGitTrackedFiles({ pathspecs: relativeDir });
-  if (!files) {
-    return null;
-  }
-  return files
-    .filter((line) => !isSkippedRepoPath(line))
-    .map((line) => path.join(process.cwd(), ...line.split("/")))
-    .filter((filePath) => fs.existsSync(filePath))
-    .toSorted();
-}
-
-function listGitPluginManifestPaths(extensionsDir: string): string[] | null {
-  const relativeDir = repoRelativePath(extensionsDir);
-  if (!relativeDir || relativeDir.startsWith("..") || path.isAbsolute(relativeDir)) {
-    return null;
-  }
-  const files = listGitTrackedFiles({ pathspecs: relativeDir });
-  if (!files) {
-    return null;
-  }
-  return files
-    .filter((line) => /^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(line))
-    .map((line) => path.join(process.cwd(), ...line.split("/")))
-    .filter((filePath) => fs.existsSync(filePath))
-    .toSorted();
+  expect(files, "tool contract scans require a Git checkout").not.toBeNull();
+  return (files ?? []).filter(include).map((line) => path.join(process.cwd(), ...line.split("/")));
 }
 
 function listPluginManifestPaths(extensionsDir: string): string[] {
-  const gitPaths = listGitPluginManifestPaths(extensionsDir);
-  if (gitPaths) {
-    return gitPaths;
-  }
-
-  return fs
-    .readdirSync(extensionsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => path.join(extensionsDir, entry.name, "openclaw.plugin.json"))
-    .filter((manifestPath) => fs.existsSync(manifestPath));
+  return listGitFiles(extensionsDir, (line) =>
+    /^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(line),
+  );
 }
 
 function isProductionSource(filePath: string): boolean {
-  if (!/\.(?:cjs|mjs|js|ts|tsx)$/.test(filePath)) {
-    return false;
-  }
-  const normalized = toRepoPath(filePath);
-  return !/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(normalized);
+  return (
+    /\.(?:cjs|mjs|js|ts|tsx)$/.test(filePath) &&
+    !/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(toRepoPath(filePath))
+  );
 }
 
-function readBalancedCallArguments(source: string, openParenIndex: number): string | undefined {
-  let depth = 0;
-  let quote: '"' | "'" | "`" | undefined;
-  let escaped = false;
-  for (let index = openParenIndex; index < source.length; index += 1) {
-    const char = source[index];
-    if (!char) {
-      continue;
-    }
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "(" || char === "{" || char === "[") {
-      depth += 1;
-      continue;
-    }
-    if (char === ")" || char === "}" || char === "]") {
-      depth -= 1;
-      if (depth === 0 && char === ")") {
-        return source.slice(openParenIndex + 1, index);
-      }
-    }
+function listRegisterToolCalls(filePath: string, source: string): string[][] {
+  if (!source.includes("registerTool")) {
+    return [];
   }
-  return undefined;
-}
-
-function listRegisterToolCalls(source: string): string[] {
-  const calls: string[] = [];
-  const pattern = /\bregisterTool\s*\(/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(source))) {
-    const openParenIndex = source.indexOf("(", match.index);
-    const args = readBalancedCallArguments(source, openParenIndex);
-    if (args !== undefined) {
-      calls.push(args);
+  const sourceFile = parser.parseSourceFile(filePath, source);
+  const calls: string[][] = [];
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      const callee = ts.isPropertyAccessExpression(node.expression)
+        ? node.expression.name
+        : node.expression;
+      if (ts.isIdentifier(callee) && callee.text === "registerTool") {
+        calls.push(
+          node.arguments
+            .slice(0, 2)
+            .map((argument) => argument.getText(sourceFile))
+            .filter((argument) => argument.startsWith("{"))
+            .flatMap(extractStaticRegisteredToolNamesFromObject),
+        );
+      }
     }
+    node.forEachChild(visit);
   }
+  visit(sourceFile);
   return calls;
 }
 
-function splitTopLevelArgs(args: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let quote: '"' | "'" | "`" | undefined;
-  let escaped = false;
-  let start = 0;
-  for (let index = 0; index < args.length; index += 1) {
-    const char = args[index];
-    if (!char) {
-      continue;
-    }
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "(" || char === "{" || char === "[") {
-      depth += 1;
-      continue;
-    }
-    if (char === ")" || char === "}" || char === "]") {
-      depth -= 1;
-      continue;
-    }
-    if (char === "," && depth === 0) {
-      const part = args.slice(start, index).trim();
-      if (part.length > 0) {
-        parts.push(part);
-      }
-      start = index + 1;
-    }
-  }
-  const part = args.slice(start).trim();
-  if (part.length > 0) {
-    parts.push(part);
-  }
-  return parts;
-}
-
 function extractStringLiterals(source: string): string[] {
-  const names: string[] = [];
-  const pattern = /["']([^"']+)["']/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(source))) {
-    if (match[1]) {
-      names.push(match[1]);
-    }
-  }
-  return names;
+  return [...source.matchAll(/["']([^"']+)["']/g)].flatMap((match) => (match[1] ? [match[1]] : []));
 }
 
 function extractStaticRegisteredToolNamesFromObject(source: string): string[] {
-  const names = new Set<string>();
-  const namesPattern = /\bnames\s*:\s*\[([\s\S]*?)\]/g;
-  let namesMatch: RegExpExecArray | null;
-  while ((namesMatch = namesPattern.exec(source))) {
-    for (const name of extractStringLiterals(namesMatch[1] ?? "")) {
-      names.add(name);
-    }
-  }
-
-  const namePattern = /\bname\s*:\s*["']([^"']+)["']/g;
-  let nameMatch: RegExpExecArray | null;
-  while ((nameMatch = namePattern.exec(source))) {
-    if (nameMatch[1]) {
-      names.add(nameMatch[1]);
-    }
-  }
-  return [...names];
-}
-
-function extractStaticRegisteredToolNames(callArgs: string): string[] {
-  const args = splitTopLevelArgs(callArgs);
-  const names = new Set<string>();
-  const firstArg = args[0]?.trim() ?? "";
-  const optionsArg = args[1]?.trim() ?? "";
-  if (firstArg.startsWith("{")) {
-    for (const name of extractStaticRegisteredToolNamesFromObject(firstArg)) {
-      names.add(name);
-    }
-  }
-  if (optionsArg.startsWith("{")) {
-    for (const name of extractStaticRegisteredToolNamesFromObject(optionsArg)) {
-      names.add(name);
-    }
-  }
-  return [...names];
-}
-
-function readManifest(manifestPath: string): PluginManifestFile {
-  return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as PluginManifestFile;
+  return [
+    ...new Set([
+      ...[...source.matchAll(/\bnames\s*:\s*\[([\s\S]*?)\]/g)].flatMap((match) =>
+        extractStringLiterals(match[1] ?? ""),
+      ),
+      ...[...source.matchAll(/\bname\s*:\s*["']([^"']+)["']/g)].flatMap((match) =>
+        match[1] ? [match[1]] : [],
+      ),
+    ]),
+  ];
 }
 
 function normalizeManifestTools(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((item): item is string => typeof item === "string" && item.trim() !== "");
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "")
+    : [];
 }
 
 describe("bundled plugin tool manifest contracts", () => {
-  let toolContractFailures: string[] = [];
-
-  beforeAll(() => {
-    listGitTrackedFiles({ pathspecs: "extensions" });
-    toolContractFailures = collectToolContractFailures(path.join(process.cwd(), "extensions"));
-  });
-
   it("lists plugin tool contract inputs from git without walking extension roots", () => {
     const extensionsDir = path.join(process.cwd(), "extensions");
     expectNoReaddirSyncDuring(() => {
@@ -290,7 +112,7 @@ describe("bundled plugin tool manifest contracts", () => {
   });
 
   it("declares every production registerTool owner in contracts.tools", () => {
-    expect(toolContractFailures).toStrictEqual([]);
+    expect(collectToolContractFailures(path.join(process.cwd(), "extensions"))).toStrictEqual([]);
   });
 });
 
@@ -299,23 +121,13 @@ function collectToolContractFailures(extensionsDir: string): string[] {
 
   for (const manifestPath of listPluginManifestPaths(extensionsDir)) {
     const pluginDir = path.dirname(manifestPath);
-    const manifest = readManifest(manifestPath);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as PluginManifestFile;
     const pluginId = typeof manifest.id === "string" ? manifest.id : path.basename(pluginDir);
     const declaredTools = new Set(normalizeManifestTools(manifest.contracts?.tools));
-    const registeredNames = new Set<string>();
-    let registerCallCount = 0;
-
-    for (const filePath of walkFiles(pluginDir).filter(isProductionSource)) {
-      const source = fs.readFileSync(filePath, "utf-8");
-      for (const call of listRegisterToolCalls(source)) {
-        registerCallCount += 1;
-        for (const name of extractStaticRegisteredToolNames(call)) {
-          registeredNames.add(name);
-        }
-      }
-    }
-
-    if (registerCallCount === 0) {
+    const calls = walkFiles(pluginDir)
+      .filter(isProductionSource)
+      .flatMap((filePath) => listRegisterToolCalls(filePath, fs.readFileSync(filePath, "utf-8")));
+    if (calls.length === 0) {
       continue;
     }
     if (declaredTools.size === 0) {
@@ -323,7 +135,9 @@ function collectToolContractFailures(extensionsDir: string): string[] {
       continue;
     }
 
-    const missing = [...registeredNames].filter((name) => !declaredTools.has(name)).toSorted();
+    const missing = [...new Set(calls.flat())]
+      .filter((name) => !declaredTools.has(name))
+      .toSorted();
     if (missing.length > 0) {
       failures.push(`${pluginId}: missing contracts.tools for ${missing.join(", ")}`);
     }

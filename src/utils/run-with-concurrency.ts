@@ -4,20 +4,6 @@ import pMap from "p-map";
 /** Controls whether the worker pool keeps scheduling after a task failure. */
 type ConcurrencyErrorMode = "continue" | "stop";
 
-/** Options for running a fixed list of promise factories through a bounded worker pool. */
-export type RunTasksWithConcurrencyOptions<T> = {
-  /** Task factories are started lazily so the helper can enforce `limit`. */
-  tasks: Array<() => Promise<T>>;
-  /** Maximum number of tasks allowed to run at the same time; clamped to at least one. */
-  limit: number;
-  /** `stop` prevents new work after the first failure; in-flight workers still settle. */
-  errorMode?: ConcurrencyErrorMode;
-  /** Reject immediately on a task failure instead of returning aggregate error state. */
-  throwOnError?: boolean;
-  /** Called once per failed task with the original task index. */
-  onTaskError?: (error: unknown, index: number) => void;
-};
-
 /** Ordered task results plus aggregate error state for callers that keep partial success. */
 export type RunTasksWithConcurrencyResult<T> = {
   /** Results are written at their original task indexes; failed or unscheduled indexes stay empty. */
@@ -29,9 +15,18 @@ export type RunTasksWithConcurrencyResult<T> = {
 };
 
 /** Runs async tasks with bounded concurrency while preserving result indexes. */
-export async function runTasksWithConcurrency<T>(
-  params: RunTasksWithConcurrencyOptions<T>,
-): Promise<RunTasksWithConcurrencyResult<T>> {
+export async function runTasksWithConcurrency<T>(params: {
+  /** Task factories are started lazily so the helper can enforce `limit`. */
+  tasks: Array<() => Promise<T>>;
+  /** Maximum number of tasks allowed to run at the same time; clamped to at least one. */
+  limit: number;
+  /** `stop` prevents new work after the first failure; in-flight workers still settle. */
+  errorMode?: ConcurrencyErrorMode;
+  /** Reject immediately on a task failure instead of returning aggregate error state. */
+  throwOnError?: boolean;
+  /** Called once per failed task with the original task index. */
+  onTaskError?: (error: unknown, index: number) => void;
+}): Promise<RunTasksWithConcurrencyResult<T>> {
   const { tasks, limit, onTaskError, throwOnError = false } = params;
   const errorMode = params.errorMode ?? "continue";
   if (tasks.length === 0) {

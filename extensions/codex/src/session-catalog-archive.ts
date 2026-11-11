@@ -12,7 +12,7 @@ import { catalogSessionActions } from "./session-catalog-node-adoption.js";
 import { CatalogParamsError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
-function assertNoPendingSupervisionBranch(params: {
+async function assertNoPendingSupervisionBranch(params: {
   agentId: string;
   bindingStore: CodexAppServerBindingStore;
   config: OpenClawConfig;
@@ -20,14 +20,17 @@ function assertNoPendingSupervisionBranch(params: {
   threadId: string;
   sourceHomeId?: string;
   allowLegacy?: boolean;
-}): void {
-  const adoptedEntries = [
+}): Promise<void> {
+  const agentIds = [
     params.agentId,
     ...listAgentIds(params.config).filter((agentId) => agentId !== params.agentId),
-  ]
-    .flatMap((agentId) =>
-      params.runtime.agent.session.listSessionEntries({ agentId, readOnly: true }),
+  ];
+  const adoptedEntries = (
+    await Promise.all(
+      agentIds.map((agentId) => params.runtime.agent.session.listSessionEntriesAsync({ agentId })),
     )
+  )
+    .flat()
     .filter(
       (candidate) =>
         isAdoptionSessionKeyForThread(candidate.sessionKey, params.threadId, params.sourceHomeId) ||
@@ -45,7 +48,7 @@ function assertNoPendingSupervisionBranch(params: {
     if (!sessionId) {
       continue;
     }
-    const binding = params.bindingStore.read(
+    const binding = await params.bindingStore.readAsync(
       sessionBindingIdentity({
         sessionId,
         sessionKey: adopted.sessionKey,
@@ -81,7 +84,7 @@ export async function archiveLocalCodexSession(params: {
     () =>
       params.bindingStore.withThreadArchiveFence(() =>
         params.control.withPinnedConnection(async (control) => {
-          assertNoPendingSupervisionBranch(params);
+          await assertNoPendingSupervisionBranch(params);
           await control.requireEligibleThread(params.threadId);
           // Eligibility reads metadata before checking membership; activity can change meanwhile.
           const thread = await control.readThread(params.threadId, false);

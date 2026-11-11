@@ -5,6 +5,8 @@ import { hasErrnoCode, isMissingPathError } from "./errno.js";
 import { root as openFsRoot } from "./fs-safe.js";
 import type { PackageDistContentInventoryEntry } from "./package-dist-inventory.js";
 
+export { pathEntryExists as packageRootExists } from "./path-existence.js";
+
 export type LocalOverridePackageRoot = Awaited<ReturnType<typeof openFsRoot>>;
 
 export type LocalPackageOverrideConflictReason =
@@ -63,18 +65,6 @@ export function emptyResult(
     conflicts: [],
     warnings: [],
   };
-}
-
-export async function packageRootExists(packageRoot: string): Promise<boolean> {
-  try {
-    await fs.lstat(packageRoot);
-    return true;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
 }
 
 export type LocalPackageOverrideTargetProbe =

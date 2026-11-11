@@ -7,10 +7,10 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { makeKilledSubagentCompletion } from "./subagent-registry-lifecycle-completion.test-support.js";
 import {
   createRunEntry,
   type createLifecycleControllerFixture,
-  makeKilledSubagentCompletion,
   readLifecycleRun,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";

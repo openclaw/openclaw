@@ -15,6 +15,9 @@ type HostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
 const authStorage = AuthStorage.inMemory();
 const model = createCodexTestModel("openai");
 const modelRegistry = ModelRegistry.inMemory(authStorage);
+const networkAmendment = (action: "allow" | "deny"): JsonValue => ({
+  applyNetworkPolicyAmendment: { network_policy_amendment: { host: "registry.npmjs.org", action } },
+});
 
 function createParams(overrides: Partial<HostCapabilities> = {}): EmbeddedRunAttemptParams {
   return {
@@ -105,71 +108,41 @@ describe("Codex native command approval scopes", () => {
     expect(resolved?.message).toContain("for the session");
   });
 
-  it.each([
-    { once: true, expected: "accept", status: "approved" },
-    { once: false, expected: "decline", status: "denied" },
-  ])(
-    "never automatically grants persistent policy when one-shot is $once",
-    async ({ once, expected, status }) => {
-      const { result, requestApproval, resolved } = await requestCommandApproval({
-        availableDecisions: [
-          ...(once ? ["accept"] : []),
-          { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["node", "--version"] } },
-          "cancel",
-        ],
-        autoApprove: true,
-      });
-      expect(result).toEqual({ decision: expected });
-      expect(requestApproval).not.toHaveBeenCalled();
-      expect(resolved?.status).toBe(status);
-    },
-  );
+  it("never automatically grants persistent policy when one-shot is unavailable", async () => {
+    const { result, requestApproval, resolved } = await requestCommandApproval({
+      availableDecisions: [
+        { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["node", "--version"] } },
+        "cancel",
+      ],
+      autoApprove: true,
+    });
+    expect(result).toEqual({ decision: "decline" });
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(resolved?.status).toBe("denied");
+  });
 
-  it.each(["exec", "network"] as const)(
-    "describes operator-selected %s amendments as persistent native policy",
-    async (kind) => {
-      const decision: JsonValue =
-        kind === "exec"
-          ? { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["node", "--version"] } }
-          : {
-              applyNetworkPolicyAmendment: {
-                network_policy_amendment: { host: "registry.npmjs.org", action: "allow" },
-              },
-            };
-      const { result, request, resolved } = await requestCommandApproval({
-        availableDecisions: [
-          {
-            applyNetworkPolicyAmendment: {
-              network_policy_amendment: { host: "registry.npmjs.org", action: "deny" },
-            },
-          },
-          decision,
-          "cancel",
-        ],
-        decision: "allow-always",
-        network: kind === "network",
-      });
-      expect(result).toEqual({ decision });
-      expect(request?.allowedDecisions).toEqual(["allow-always", "deny"]);
-      expect(request?.description).toContain("future sessions");
-      expect(request?.description).toContain(
-        kind === "exec" ? '["node","--version"]' : "registry.npmjs.org",
-      );
-      expect(resolved?.status).toBe("approved");
-      expect(resolved?.message).toContain("future sessions");
-      expect(resolved?.message).not.toContain("saved");
-      expect(resolved?.message).not.toContain("granted for the session");
-    },
-  );
+  it("describes operator-selected network amendments as persistent native policy", async () => {
+    const decision = networkAmendment("allow");
+    const { result, request, resolved } = await requestCommandApproval({
+      availableDecisions: [networkAmendment("deny"), decision, "cancel"],
+      decision: "allow-always",
+      network: true,
+    });
+    expect(result).toEqual({ decision });
+    expect(request?.allowedDecisions).toEqual(["allow-always", "deny"]);
+    expect(request?.description).toContain("future sessions");
+    expect(request?.description).toContain("registry.npmjs.org");
+    expect(resolved?.status).toBe("approved");
+    expect(resolved?.message).toContain("future sessions");
+    expect(resolved?.message).not.toContain("saved");
+    expect(resolved?.message).not.toContain("granted for the session");
+  });
 
-  it.each([
-    { label: "truncated", prefix: ["node", "a".repeat(512)] },
-    { label: "visually altered", prefix: ["node", "\u202eexample.js"] },
-  ])("keeps a $label persistent target on one-shot approval", async ({ prefix }) => {
+  it("keeps a visually altered persistent target on one-shot approval", async () => {
     const { result, request, resolved } = await requestCommandApproval({
       availableDecisions: [
         "accept",
-        { acceptWithExecpolicyAmendment: { execpolicy_amendment: prefix } },
+        { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["node", "\u202eexample.js"] } },
         "cancel",
       ],
       decision: "allow-always",

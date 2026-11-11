@@ -1,7 +1,10 @@
-import type { AgentRunDisposition } from "../internal-event-contract.js";
+import type {
+  AgentInternalEventStatus,
+  AgentRunDisposition,
+} from "../internal-event-contract.js";
 
 export type SubagentRunOutcome = {
-  status: "ok" | "error" | "timeout" | "unknown";
+  status: AgentInternalEventStatus;
   /**
    * Written only by producers that observed something other than the run
    * publishing its own terminal state: a waiter whose budget expired while the

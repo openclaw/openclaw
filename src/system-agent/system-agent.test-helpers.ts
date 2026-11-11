@@ -1,5 +1,7 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import * as authStore from "../agents/auth-profiles/store-runtime.js";
+import * as cliAuthEpoch from "../agents/cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 // OpenClaw test helpers build runtime environments for rescue tests.
@@ -9,6 +11,8 @@ import {
   fingerprintResolvedAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
+import * as harnessRegistry from "../agents/harness/registry.js";
+import * as modelAuth from "../agents/model-auth.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,18 +27,49 @@ import {
   loadPluginMetadataSnapshot,
   type resolvePluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import {
-  createSystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceDeps,
-} from "./verified-inference.js";
+  resolveSystemAgentConfiguredRouteFromConfig,
+  type SystemAgentConfigSnapshot,
+} from "./inference-route.js";
+import { createSystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
+import {
+  mockPluginRegistry,
+  pluginRecord,
+  profileAuth,
+  requireFingerprint,
+} from "./verified-inference.test-support.js";
 
-type SystemAgentVerifiedInferenceTestFixture = {
-  binding: SystemAgentVerifiedInferenceBinding;
-  deps: SystemAgentVerifiedInferenceDeps;
-};
+export async function createSystemAgentSelectedProfileTestBinding(
+  config: OpenClawConfig,
+  profileId: string,
+  agentHarnessId?: string,
+) {
+  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(config);
+  if (!configuredRoute) {
+    throw new Error("missing test route");
+  }
+  const resolvedAuth = profileAuth(profileId, "test-key");
+  vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockResolvedValue({
+    version: 1,
+    profiles: {
+      [profileId]: { type: "api_key", provider: configuredRoute.provider, key: "test-key" },
+    },
+  });
+  vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockResolvedValue(resolvedAuth);
+  return createSystemAgentVerifiedInferenceBinding({
+    configuredRoute,
+    executionRoute: { ...configuredRoute, authProfileId: profileId },
+    auth: {
+      authProfileId: profileId,
+      authFingerprint: requireFingerprint(fingerprintResolvedProviderAuth(resolvedAuth)),
+      ...(agentHarnessId ? { agentHarnessId } : {}),
+      modelId: configuredRoute.model,
+      modelApi: "openai-responses",
+    },
+  });
+}
 
 export type SystemAgentPluginMetadataTestSnapshot = {
   /** Rebind one prepared inventory to the exact authored config under test. */
@@ -125,7 +160,7 @@ export function readLastSystemAgentAuditEntry(): unknown {
   return listSystemAgentAuditEntriesForTests().at(-1)?.value;
 }
 
-export function requireTestRecord(value: unknown, label: string): Record<string, unknown> {
+function requireTestRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -154,7 +189,8 @@ export function expectSystemAgentAuditRecord(
 /** Build exact, revalidatable proof for a test config without reading host credentials. */
 export async function createSystemAgentVerifiedInferenceTestFixture(
   config: OpenClawConfig,
-): Promise<SystemAgentVerifiedInferenceTestFixture> {
+  snapshot?: SystemAgentConfigSnapshot,
+) {
   const routeAgentId = resolveAmbientOwnerAgentId(config);
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: config,
@@ -178,13 +214,17 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
           key: "test-key",
         } as const)
       : undefined;
-  const loadAuthProfileStoreForRuntime = (() => ({
+  vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockResolvedValue({
     version: 1,
-    profiles: selectedProfileId ? { [selectedProfileId]: selectedCredential } : {},
-  })) as never;
-  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(config, undefined, {
-    loadAuthProfileStoreForRuntime,
+    profiles:
+      selectedProfileId && selectedCredential ? { [selectedProfileId]: selectedCredential } : {},
   });
+  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+    config,
+    undefined,
+    {},
+    snapshot,
+  );
   if (!configuredRoute) {
     throw new Error("missing test route");
   }
@@ -212,29 +252,43 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
     configuredRoute.provider === "openai" ? "codex" : undefined,
     configuredRoute.provider === "claude-cli" ? "anthropic" : undefined,
   ].filter((id, index, ids): id is string => Boolean(id) && ids.indexOf(id) === index);
-  const deps: SystemAgentVerifiedInferenceDeps = {
-    loadAuthProfileStoreForRuntime,
-    resolveApiKeyForProvider: async () => resolvedAuth,
-    validateAgentHarnessRuntimeArtifact: async () => true,
-    loadPluginRegistrySnapshot: (() => ({
-      plugins: testOwnerPluginIds.map((pluginId) => ({
-        pluginId,
-        origin: "global",
-        rootDir: `/plugins/${pluginId}`,
-        manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
-        manifestHash: `${pluginId}-manifest-v1`,
-        source: `/plugins/${pluginId}/index.js`,
-        packageName: `@openclaw/${pluginId}`,
-        packageVersion: "1.0.0",
-        installRecordHash: `${pluginId}-install-v1`,
-        packageJson: {
-          path: `/plugins/${pluginId}/package.json`,
-          hash: `${pluginId}-package-v1`,
-        },
-      })),
-    })) as never,
-    fingerprintPluginRuntimeArtifact: (record) => `${record.pluginId}-test-runtime-v1`,
-  };
+  vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockResolvedValue(resolvedAuth);
+  const records = testOwnerPluginIds.map((pluginId) => pluginRecord(pluginId));
+  mockPluginRegistry(records);
+  const fingerprintPluginRuntimeArtifact = vi
+    .spyOn(pluginArtifactIdentity, "fingerprintPluginRuntimeArtifact")
+    .mockImplementation((record) => `${record.pluginId}-test-runtime-v1`);
+  const agentHarnessId =
+    configuredRoute.runner === "embedded"
+      ? configuredRoute.agentHarnessRuntimeOverride === "auto"
+        ? "openclaw"
+        : (configuredRoute.agentHarnessRuntimeOverride ?? "codex")
+      : undefined;
+  const authFingerprint =
+    configuredRoute.runner === "cli"
+      ? undefined
+      : profileId && agentHarnessId !== "openclaw"
+        ? fingerprintResolvedAuthProfileCredential({ profileId, credential, resolvedAuth })
+        : fingerprintResolvedProviderAuth(resolvedAuth);
+  const harnessMock = vi
+    .spyOn(harnessRegistry, "getRegisteredAgentHarness")
+    .mockImplementation((id) =>
+      id === configuredHarnessId || id === "codex"
+        ? {
+            harness: {
+              id,
+              label: id,
+              authBootstrap: "harness",
+              supports: () => ({ supported: true }),
+              runAttempt: async () => {
+                throw new Error("Synthetic inference never runs a harness");
+              },
+              runtimeArtifact: { validate: async () => true },
+              authBinding: { fingerprint: async () => authFingerprint },
+            },
+          }
+        : undefined,
+    );
 
   if (configuredRoute.runner === "cli") {
     const runtimeArtifactId = configuredRoute.provider;
@@ -272,11 +326,15 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
     if (!runtimeOwnerFingerprint) {
       throw new Error("missing test CLI runtime owner fingerprint");
     }
-    deps.resolveCliRuntimeArtifactFingerprint = async () => runtimeArtifactFingerprint;
-    deps.resolveCliRuntimeOwnerFingerprint = async (params) =>
-      params.runtimeArtifactFingerprint === runtimeArtifactFingerprint
-        ? resolveRuntimeOwnerFingerprint(params.config)
-        : undefined;
+    vi.spyOn(cliAuthEpoch, "resolveCliRuntimeArtifactFingerprint").mockResolvedValue(
+      runtimeArtifactFingerprint,
+    );
+    vi.spyOn(cliAuthEpoch, "resolveCliRuntimeOwnerFingerprint").mockImplementation(
+      async (params) =>
+        params.runtimeArtifactFingerprint === runtimeArtifactFingerprint
+          ? resolveRuntimeOwnerFingerprint(params.config)
+          : undefined,
+    );
     const binding = await createSystemAgentVerifiedInferenceBinding({
       configuredRoute,
       executionRoute: configuredRoute,
@@ -288,23 +346,13 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
         runtimeArtifactId,
         runtimeArtifactFingerprint,
       },
-      deps,
     });
-    return { binding, deps };
+    return { binding, fingerprintPluginRuntimeArtifact, harnessMock };
   }
 
-  const agentHarnessId =
-    configuredRoute.agentHarnessRuntimeOverride === "auto"
-      ? "openclaw"
-      : (configuredRoute.agentHarnessRuntimeOverride ?? "codex");
-  const authFingerprint =
-    profileId && agentHarnessId !== "openclaw"
-      ? fingerprintResolvedAuthProfileCredential({ profileId, credential, resolvedAuth })
-      : fingerprintResolvedProviderAuth(resolvedAuth);
   if (!authFingerprint) {
     throw new Error("missing test embedded auth fingerprint");
   }
-  deps.resolveAgentHarnessAuthBindingFingerprint = async () => authFingerprint;
   const binding = await createSystemAgentVerifiedInferenceBinding({
     configuredRoute,
     executionRoute: configuredRoute,
@@ -324,7 +372,6 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
             runtimeArtifactFingerprint: `${agentHarnessId}-test-fingerprint`,
           }),
     },
-    deps,
   });
-  return { binding, deps };
+  return { binding, fingerprintPluginRuntimeArtifact, harnessMock };
 }

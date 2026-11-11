@@ -1,0 +1,2 @@
+43
+# Fake carrier playback regression: echo tail, local/provider interruption, and renewed playback.
