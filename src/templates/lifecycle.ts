@@ -630,7 +630,6 @@ export async function buildTemplateAddPlan(params: {
     agentId: finalId,
   });
 
-  // Strict v1 validation permits only deterministic main or isolated targets.
   // Templates keep one conversation per agent: Add schedules every declared automation
   // in the agent's main session and drops its delivery, since a Template can only
   // announce to the last channel, which the scheduler rejects on multi-channel hosts.

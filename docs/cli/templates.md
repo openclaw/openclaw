@@ -186,7 +186,7 @@ automations:
   - id: daily-summary
     name: Daily incident summary
     schedule: { cron: "0 9 * * *", timezone: UTC }
-    session: isolated
+    session: main
     message: Summarize active incidents.
 ```
 
@@ -210,8 +210,8 @@ Use `automations` for scheduled work. The retired `cronJobs` key is rejected;
 move its declarations to `automations` and remove `cronJobs`.
 
 Add schedules every declared automation in the new agent's main session, with
-no delivery, so its runs appear in the agent's own conversation. `session` and
-`delivery` are still accepted in `CLAW.md`, but Add does not apply them. To run
+no delivery, so its runs appear in the agent's own conversation. `CLAW.md` still
+requires `session` and accepts `delivery`, but Add does not apply either. To run
 an automation in an isolated session or post its summary to a channel, change
 it in the automation's settings after Add.
 
