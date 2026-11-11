@@ -121,7 +121,7 @@ Top-level keys under `plugins.entries.voice-call.config` not shown above:
 | ------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled`                       | `false`      | Master on/off switch.                                                                                                           |
 | `inboundPolicy`                 | `"disabled"` | `disabled` \| `allowlist` \| `pairing` \| `open`. See [Inbound calls](/plugins/voice-call/tts-and-inbound-calls#inbound-calls). |
-| `allowFrom`                     | `[]`         | E.164 allowlist for `inboundPolicy: "allowlist"`.                                                                               |
+| `allowFrom`                     | `[]`         | E.164 allowlist for `inboundPolicy: "allowlist"` and `"pairing"`.                                                               |
 | `callbacks`                     | disabled     | Accepts recent outbound recipients only for realtime calls; classic STT/TTS still applies the inbound policy.                   |
 | `maxDurationSeconds`            | `300`        | Hard per-call duration cap, enforced regardless of answered state.                                                              |
 | `staleCallReaperSeconds`        | `120`        | See [Stale call reaper](/plugins/voice-call/tts-and-inbound-calls#stale-call-reaper). `0` disables it.                          |

@@ -37,10 +37,12 @@
       "placeholder": "+15550001234"
     },
     "inboundPolicy": {
-      "label": "Inbound Policy"
+      "label": "Inbound Policy",
+      "help": "disabled rejects inbound calls, allowlist accepts callers listed in the inbound allowlist, open accepts any caller. pairing currently behaves like allowlist: unknown callers are rejected and no pairing request is created."
     },
     "allowFrom": {
-      "label": "Inbound Allowlist"
+      "label": "Inbound Allowlist",
+      "help": "E.164 numbers accepted when the inbound policy is allowlist or pairing."
     },
     "inboundGreeting": {
       "label": "Inbound Greeting",
