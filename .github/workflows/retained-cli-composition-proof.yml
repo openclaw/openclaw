@@ -23,7 +23,6 @@ jobs:
       matrix:
         node: ["24.22.1", "26.12.1"]
     env:
-      OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS: "1"
       BASELINE_OWNER: 9303386795597b59c8bc02ca5d8a4a5c12ae3694
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,7 +66,8 @@ jobs:
           $status = $LASTEXITCODE
           if ($status -eq 0) { throw "Pre-fix short-path composition unexpectedly passed" }
           $lines = @(Get-Content .artifacts/cli-composition/baseline-alias.log | ForEach-Object { $_ -replace '\x1b\[[0-9;]*m', '' })
-          $admissions = @($lines | Where-Object { $_.StartsWith('{"phase":"cli-composition-admitted"') } | ForEach-Object { $_ | ConvertFrom-Json })
+          $proofLines = @($lines | Where-Object { $_.StartsWith('RETAINED_CLI_PROOF ') } | ForEach-Object { $_.Substring('RETAINED_CLI_PROOF '.Length) })
+          $admissions = @($proofLines | Where-Object { $_.StartsWith('{"phase":"cli-composition-admitted"') } | ForEach-Object { $_ | ConvertFrom-Json })
           if ($admissions.Count -ne 1) { throw "Expected exactly one parsed alias admission" }
           $admission = $admissions[0]
           if ($admission.requested -isnot [string] -or $admission.observed -isnot [string] -or $admission.physical -isnot [string] -or
@@ -78,16 +78,22 @@ jobs:
           if (-not $cleanupUri.IsFile -or $cleanupUri.AbsolutePath -cnotmatch '/cli/runtime-cleanup\.js$') {
             throw "Alias admission did not identify the cleanup module"
           }
-          $cleanupPath = $cleanupUri.LocalPath.Replace('\', '/')
-          $errorsPath = $cleanupPath -creplace '/cli/runtime-cleanup\.js$', '/infra/errors.js'
-          $diagnostics = (($lines | Where-Object { $_.StartsWith('[openclaw] ') }) -join "`n").Replace('\', '/')
-          $missingReporter = '(?m)^\[openclaw\] Error \[ERR_MODULE_NOT_FOUND\]: Cannot find module ''' + [regex]::Escape($errorsPath) + ''' imported from ' + [regex]::Escape($cleanupPath) + '$'
-          $zeroDisposal = '(?m)^\[openclaw\] AssertionError \[ERR_ASSERTION\]: real CLI finalizer did not dispose the retained harness\n\[openclaw\] 0 !== 1\n\[openclaw\] +at Object\.finalize \([^\n]*/cli/runtime-cleanup-retained\.test-support\.js:[0-9]+:[0-9]+\)$'
-          if ($diagnostics -cnotmatch $missingReporter -or $diagnostics -cnotmatch $zeroDisposal) {
+          $resolutionFailures = @($proofLines | Where-Object { $_.StartsWith('{"phase":"cli-composition-resolution-failed"') } | ForEach-Object { $_ | ConvertFrom-Json })
+          $disposalFailures = @($proofLines | Where-Object { $_.StartsWith('{"phase":"cli-composition-disposal-failed"') } | ForEach-Object { $_ | ConvertFrom-Json })
+          if ($resolutionFailures.Count -ne 1 -or $disposalFailures.Count -ne 1) {
+            throw "Expected one reporter resolution failure and one disposal assertion receipt"
+          }
+          $resolution = $resolutionFailures[0]
+          $disposal = $disposalFailures[0]
+          $missingUri = [uri]$resolution.requested
+          $expectedMissingUri = [uri]::new($cleanupUri, '../infra/errors.js')
+          if ($resolution.parent -cne $admission.observed -or $resolution.code -cne 'ERR_MODULE_NOT_FOUND' -or
+              $missingUri.AbsoluteUri -cne $expectedMissingUri.AbsoluteUri -or
+              $disposal.actual -ne 0 -or $disposal.expected -ne 1) {
             throw "Pre-fix failure lacked the admitted cleanup reporter import and exact zero-disposal assertion"
           }
-          # runCliDisposer imports its error formatter before logging the caught error.
-          # This reporter failure masks the original disposer error/name; neither is observed.
+          # The resolution hook rethrows unchanged; the disposal receipt precedes its assertion.
+          # Neither receipt identifies the original error masked by the failed reporter import.
           "Expected admitted alias cleanup reporter failure and zero disposal; original disposer error/name unobserved; exit=$status" | Set-Content .artifacts/cli-composition/baseline-disposition.txt
           exit 0
       - name: Upload source-bound proof including failures
@@ -118,7 +124,7 @@ jobs:
           cache-mode: "off"
       - name: Materialize canonical formatting and exact bytes
         run: |
-          files=(scripts/lib/vitest-worker-build-entries.mts src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts src/infra/update-candidate-io.ts src/infra/update-retained-runtime-tree.ts .github/workflows/retained-cli-composition-proof.yml)
+          files=(scripts/lib/vitest-worker-compiler.mts scripts/lib/vitest-worker-artifacts.mts scripts/lib/vitest-worker-cache.mts scripts/lib/vitest-worker-fixture-graph.mts test/scripts/vitest-worker-cache.test.ts test/scripts/vitest-worker-fixture-graph.test.ts scripts/lib/vitest-worker-build-entries.mts src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts src/infra/update-candidate-io.ts src/infra/update-retained-runtime-tree.ts .github/workflows/retained-cli-composition-proof.yml)
           pnpm exec oxfmt --write --threads=1 "${files[@]}"
           git diff --binary -- "${files[@]}" > .artifacts/composition-static/formatted.patch
           sha256sum "${files[@]}" > .artifacts/composition-static/formatted.sha256
@@ -132,7 +138,7 @@ jobs:
           import fs from "node:fs";
           import { createChangedCiTypeCheckPlan } from "./scripts/run-tsgo-core-test-shards.mts";
           // Only changed TypeScript selects compiler consumers; the workflow cannot widen it.
-          const paths = ["scripts/lib/vitest-worker-build-entries.mts", "src/cli/cli-entrypoint.test-support.ts", "src/cli/runtime-cleanup-scope.retirement.test.ts", "src/cli/runtime-cleanup-retained.test-support.ts", "src/infra/update-retained-runtime-imports.process.test.ts", "src/infra/update-retained-runtime-alias.test-support.ts", "src/infra/update-retained-runtime.ts", "src/infra/update-candidate-plugin-hash.ts", "src/infra/update-candidate-io.ts", "src/infra/update-retained-runtime-tree.ts"];
+          const paths = ["scripts/lib/vitest-worker-compiler.mts", "scripts/lib/vitest-worker-artifacts.mts", "scripts/lib/vitest-worker-cache.mts", "scripts/lib/vitest-worker-fixture-graph.mts", "test/scripts/vitest-worker-cache.test.ts", "test/scripts/vitest-worker-fixture-graph.test.ts", "scripts/lib/vitest-worker-build-entries.mts", "src/cli/cli-entrypoint.test-support.ts", "src/cli/runtime-cleanup-scope.retirement.test.ts", "src/cli/runtime-cleanup-retained.test-support.ts", "src/infra/update-retained-runtime-imports.process.test.ts", "src/infra/update-retained-runtime-alias.test-support.ts", "src/infra/update-retained-runtime.ts", "src/infra/update-candidate-plugin-hash.ts", "src/infra/update-candidate-io.ts", "src/infra/update-retained-runtime-tree.ts"];
           const plan = await createChangedCiTypeCheckPlan(paths);
           if (!plan.graphs.length) throw new Error("Missing compiler ownership for changed TypeScript");
           fs.writeFileSync(".artifacts/composition-static/type-plan.json", JSON.stringify({ paths, ...plan }, null, 2) + "\n");
@@ -180,7 +186,7 @@ jobs:
               node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json "[\"$GRAPH\"]" --concurrency 1 2>&1 | tee .artifacts/composition-static/result.log
               ;;
             static-tests)
-              files=(src/cli/runtime-cleanup-scope.retirement.test.ts)
+              files=(src/cli/runtime-cleanup-scope.retirement.test.ts test/scripts/vitest-worker-cache.test.ts test/scripts/vitest-worker-fixture-graph.test.ts)
               if test "$FIXTURE_ONLY" != "true"; then
                 files+=(src/infra/update-retained-runtime-imports.process.test.ts)
               fi
@@ -188,8 +194,9 @@ jobs:
               ;;
             static-checks)
               {
-                pnpm exec oxfmt --check scripts/lib/vitest-worker-build-entries.mts src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts src/infra/update-candidate-io.ts src/infra/update-retained-runtime-tree.ts .github/workflows/retained-cli-composition-proof.yml
-                node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/lib/vitest-worker-build-entries.mts
+                pnpm exec oxfmt --check scripts/lib/vitest-worker-compiler.mts scripts/lib/vitest-worker-artifacts.mts scripts/lib/vitest-worker-cache.mts scripts/lib/vitest-worker-fixture-graph.mts test/scripts/vitest-worker-cache.test.ts test/scripts/vitest-worker-fixture-graph.test.ts scripts/lib/vitest-worker-build-entries.mts src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts src/infra/update-candidate-io.ts src/infra/update-retained-runtime-tree.ts .github/workflows/retained-cli-composition-proof.yml
+                node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/lib/vitest-worker-compiler.mts scripts/lib/vitest-worker-artifacts.mts scripts/lib/vitest-worker-cache.mts scripts/lib/vitest-worker-fixture-graph.mts scripts/lib/vitest-worker-build-entries.mts
+                node scripts/run-oxlint.mjs --tsconfig test/tsconfig.json test/scripts/vitest-worker-cache.test.ts test/scripts/vitest-worker-fixture-graph.test.ts
                 node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts src/infra/update-candidate-io.ts src/infra/update-retained-runtime-tree.ts
                 pnpm check:workflows
                 git diff --check

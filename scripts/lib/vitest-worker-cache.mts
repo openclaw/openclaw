@@ -275,6 +275,7 @@ export async function retainVitestWorkerArtifacts(
     outputs: manifest.outputs,
     durationMs: manifest.durationMs,
     cacheSignature: manifest.cacheSignature,
+    ...(manifest.fixtures ? { fixtures: manifest.fixtures } : {}),
   };
   const bytes = `${JSON.stringify(completed)}\n`;
   const outputs = outputInventory(directory, completed, bytes);

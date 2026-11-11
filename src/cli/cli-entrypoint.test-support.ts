@@ -123,6 +123,21 @@ export const cliCleanupRetirementEntrypoints = {
   },
 } as const;
 
+// Computed imports in the composition and its compiler-owned copy use these same roots.
+// Values are relative to the preserved src/ namespace, not a hand-picked dependency list.
+export const cliRetainedCompositionModules = {
+  cleanup: "cli/runtime-cleanup.js",
+  scope: "cli/runtime-cleanup-scope.js",
+  entry: "entry.js",
+  registry: "agents/harness/registry.js",
+  pluginRuntime: "plugins/runtime.js",
+  emptyRegistry: "plugins/registry-empty.js",
+  captureStore: "proxy-capture/store.async.js",
+  retention: "infra/update-retained-runtime.js",
+  swap: "infra/package-update-swap.js",
+  workerGeneration: "infra/runtime-worker-generation.js",
+} as const;
+
 // The composition fixture preserves real CLI/finalizer module identities.
 export const cliRetainedCompositionEntrypoint = {
   currentModuleUrl: import.meta.url,

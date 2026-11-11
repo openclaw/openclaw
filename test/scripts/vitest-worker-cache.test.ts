@@ -101,10 +101,12 @@ function fixture() {
         .toSorted(([left], [right]) => left.localeCompare(right))
         .map(([name, bytes]) => [name, hashVitestWorkerArtifact(bytes)]),
     );
+    const fixtures = { retainedCliComposition: Object.keys(hashes) };
     const manifest: VitestWorkerManifest = {
       inputs,
       outputs: hashes,
-      identity: hashVitestWorkerArtifact(JSON.stringify([inputs, hashes])),
+      fixtures,
+      identity: hashVitestWorkerArtifact(JSON.stringify([inputs, hashes, fixtures])),
       durationMs: 1,
     };
     fs.writeFileSync(path.join(directory, "manifest.json"), JSON.stringify(manifest));
@@ -216,6 +218,7 @@ describe("compiled worker content cache", () => {
     const restored = await f.restore();
     expect(restored).toBeDefined();
     expect(restored!.outputs).toEqual(manifest.outputs);
+    expect(restored!.fixtures).toEqual(manifest.fixtures);
     expect(fs.readFileSync(path.join(f.directory, "dist/nested/deeper.js"), "utf8")).toBe(
       'export const nested = "fixture";\n',
     );

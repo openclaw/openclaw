@@ -4,12 +4,17 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
+import { cliRetainedCompositionModules } from "../../src/cli/cli-entrypoint.test-support.ts";
+import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
+import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
+import { createVitestWorkerFixtureGraph } from "./vitest-worker-fixture-graph.mts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
 import { collectRuntimeImportClosure } from "./runtime-import-closure.mts";
 import {
   getStandaloneRuntimeProcessOutputOptions,
+  runtimeProcessCoreEntrypoints,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
@@ -65,6 +70,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     await writeVitestWorkerManifest(directory, restored.inputs, restored.outputs, started, {
       restored: true,
       cacheSignature: restored.cacheSignature,
+      fixtures: restored.fixtures,
     });
     console.error("[vitest-workers] reused local compiler outputs");
     return;
@@ -109,6 +115,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ...vitestWorkerDeclarationEntries,
   };
   const outDir = path.join(directory, "dist");
+  const fixtureGraph = createVitestWorkerFixtureGraph(outDir);
   const shouldBundleWorkspaceDependency = (id: string) =>
     (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
     id !== "@openclaw/fs-safe" &&
@@ -155,6 +162,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             outputs[outputPrefix + name] = hashVitestWorkerArtifact(
               output.type === "chunk" ? output.code : Buffer.from(output.source),
             );
+            if (output.type === "chunk") {
+              fixtureGraph.chunk(outputPrefix, name, [...output.imports, ...output.dynamicImports]);
+            } else {
+              fixtureGraph.asset(outputPrefix + name);
+            }
           }
         },
       },
@@ -413,9 +425,22 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.writeFileSync(destination, contents, { flag: "wx" });
     // Output paths stay relative to dist, including package-root runtime assets.
-    outputs[path.relative(outDir, destination).replaceAll("\\", "/")] = hash;
+    const relative = path.relative(outDir, destination).replaceAll("\\", "/");
+    outputs[relative] = hash;
+    fixtureGraph.asset(relative);
   }
-  const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started);
+  // Computed fixture imports share declarations with the runtime. Retain the
+  // complete core worker/recovery set: runtime-selected worker names are not
+  // compiler import edges. This is conservative, not a claim of minimality.
+  const fixtures = {
+    retainedCliComposition: fixtureGraph.select([
+      ...Object.values(cliRetainedCompositionModules).map((name) => legacyOutputPrefix + "src/" + name),
+      ...runtimeProcessCoreEntrypoints.map((entry) => entry.distWorkerPath),
+      managedHandoffRuntimeEntrypoint.distWorkerPath,
+      packageActivationRuntimeEntrypoint.distWorkerPath,
+    ]),
+  };
+  const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started, { fixtures });
   reportPhase("compiler outputs verified");
   if (cache) {
     manifest.cacheSignature = await cache.seal(manifest);
@@ -430,7 +455,11 @@ async function writeVitestWorkerManifest(
   inputs: Record<string, string>,
   outputs: Record<string, string>,
   started: number,
-  { restored = false, cacheSignature }: { restored?: boolean; cacheSignature?: string } = {},
+  { restored = false, cacheSignature, fixtures }: {
+    restored?: boolean;
+    cacheSignature?: string;
+    fixtures?: VitestWorkerManifest["fixtures"];
+  } = {},
 ): Promise<VitestWorkerManifest> {
   const outDir = path.join(directory, "dist");
   // Version consumers need the built source identity without making this
@@ -438,6 +467,11 @@ async function writeVitestWorkerManifest(
   const buildInfo = `${JSON.stringify(resolveBuildInfo({ rootDir: root }), null, 2)}\n`;
   fs.writeFileSync(path.join(outDir, "build-info.json"), buildInfo, restored ? {} : { flag: "wx" });
   outputs["build-info.json"] = hashVitestWorkerArtifact(buildInfo);
+  if (fixtures) {
+    fixtures = {
+      retainedCliComposition: [...new Set([...fixtures.retainedCliComposition, "build-info.json"])].sort(),
+    };
+  }
   const sortedInputs = Object.fromEntries(
     Object.entries(inputs).toSorted(([a], [b]) => a.localeCompare(b)),
   );
@@ -445,10 +479,11 @@ async function writeVitestWorkerManifest(
     Object.entries(outputs).toSorted(([a], [b]) => a.localeCompare(b)),
   );
   const manifest: VitestWorkerManifest = {
-    identity: hashVitestWorkerArtifact(JSON.stringify([sortedInputs, sortedOutputs])),
+    identity: hashVitestWorkerArtifact(JSON.stringify([sortedInputs, sortedOutputs, fixtures])),
     inputs: sortedInputs,
     outputs: sortedOutputs,
     durationMs: performance.now() - started,
+    ...(fixtures ? { fixtures } : {}),
     ...(cacheSignature ? { cacheSignature } : {}),
   };
   // Restoration verified these bytes before transferring exclusive ownership.

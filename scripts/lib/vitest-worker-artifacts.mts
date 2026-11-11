@@ -11,6 +11,7 @@ export type VitestWorkerManifest = {
   outputs: Record<string, string>;
   durationMs: number;
   cacheSignature?: string;
+  fixtures?: { retainedCliComposition: string[] };
 };
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export const hashVitestWorkerArtifact = (bytes: string | Buffer) =>

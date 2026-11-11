@@ -85,26 +85,6 @@ export async function withUpdateCandidateIoBudget<T>(
   },
   run: (signal: AbortSignal, reportProgress: () => void) => Promise<T>,
 ): Promise<T> {
-  // Temporary CI diagnostics; remove before production integration.
-  const diagnostics = process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS === "1";
-  const started = diagnostics ? performance.now() : 0;
-  let probesStarted = 0;
-  let probesSettled = 0;
-  let reportedProgress = 0;
-  const trace = (stage: string) => {
-    if (diagnostics) {
-      process.stderr.write(
-        JSON.stringify({
-          phase: "retained-io",
-          stage,
-          elapsedMs: Math.round(performance.now() - started),
-          probesStarted,
-          probesSettled,
-          reportedProgress,
-        }) + "\n",
-      );
-    }
-  };
   params.signal?.throwIfAborted();
   // Each period without observable progress receives the shared SQLite IO allowance.
   const budgetFor = (bytes: number) =>
@@ -140,6 +120,7 @@ export async function withUpdateCandidateIoBudget<T>(
     }
   };
   let cancelDeadline = scheduleAbsoluteDeadline(deadline, checkDeadline);
+  let reportedProgress = 0;
   const reportProgress = () => {
     signal.throwIfAborted();
     const now = Date.now();
@@ -162,12 +143,6 @@ export async function withUpdateCandidateIoBudget<T>(
             continue;
           }
         }
-        if (diagnostics) {
-          probesStarted++;
-          if (probesStarted <= 8 || [16, 32, 64, 128].includes(probesStarted)) {
-            trace("probe-start");
-          }
-        }
         const probe = await runUtf8CommandWithTimeout(
           [
             params.nodeRunner ?? process.execPath,
@@ -186,12 +161,6 @@ export async function withUpdateCandidateIoBudget<T>(
             maxOutputBytes: { stdout: 1024, stderr: 4000 },
           },
         );
-        if (diagnostics) {
-          probesSettled++;
-          if (probesSettled <= 8 || [16, 32, 64, 128].includes(probesSettled)) {
-            trace("probe-settled");
-          }
-        }
         if (probe.cleanup === "uncertain") {
           throw Object.assign(new Error("Update progress check cleanup could not be confirmed"), {
             cleanup: probe.cleanup,
@@ -218,7 +187,6 @@ export async function withUpdateCandidateIoBudget<T>(
         }
       }
     } catch (error) {
-      trace("monitor-caught");
       if (isRecord(error) && error.cleanup === "uncertain") {
         probeFailure =
           error instanceof Error
@@ -229,24 +197,19 @@ export async function withUpdateCandidateIoBudget<T>(
         stalled.abort(error);
       }
     }
-    trace("monitor-settled");
   })();
   let outcome: { value: T } | { error: unknown };
   try {
     outcome = { value: await run(signal, reportProgress) };
-    trace("operation-returned");
   } catch (error) {
     outcome = { error };
-    trace("operation-failed");
   }
   if (Date.now() >= deadline) {
     expire();
   }
-  trace("monitor-join-start");
   finished.abort();
   cancelDeadline();
   await monitor;
-  trace("monitor-join-completed");
   // Uncertain probe cleanup outranks both worker results and caller cancellation.
   if (probeFailure) {
     throw probeFailure;

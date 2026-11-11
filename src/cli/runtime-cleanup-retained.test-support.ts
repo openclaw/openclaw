@@ -5,7 +5,9 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Worker } from "node:worker_threads";
 import type { AgentHarness } from "../agents/harness/types.js";
+import { hasNodeErrorCode } from "../infra/path-guards.js";
 import type { StagedPackageSwapParams } from "../infra/package-update-swap-contract.js";
+import { cliRetainedCompositionModules } from "./cli-entrypoint.test-support.js";
 
 export type CliRetainedCompositionFixture = {
   root: string;
@@ -25,10 +27,16 @@ export async function copyCliRetainedCompositionGraph(params: {
   assert(index >= 0, "composition requires the prepared JavaScript graph");
   const source = entry.slice(0, index + marker.length);
   const destination = path.join(params.root, "dist");
-  await fs.cp(source, destination, {
-    recursive: true,
-    filter: (file) => !file.endsWith(".map"),
-  });
+  const manifest: { fixtures?: { retainedCliComposition?: string[] } } = JSON.parse(
+    await fs.readFile(path.join(source, "..", "manifest.json"), "utf8"),
+  );
+  const files = manifest.fixtures?.retainedCliComposition;
+  assert(files, "composition requires the compiler-owned fixture graph");
+  for (const name of files) {
+    const target = path.join(destination, name);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.copyFile(path.join(source, name), target);
+  }
   const sourceUrl = pathToFileURL(source).href;
   const destinationUrl = pathToFileURL(path.join(params.importRoot, "dist") + path.sep).href;
   // Preserved compiler boundaries use absolute URLs. Move those declared graph
@@ -53,22 +61,12 @@ export async function copyCliRetainedCompositionGraph(params: {
 }
 
 async function runComposition(fixture: CliRetainedCompositionFixture): Promise<void> {
-  const started = performance.now();
-  const stage = (phase: string) =>
-    process.stderr.write(
-      JSON.stringify({
-        phase: "cli-composition-child",
-        stage: phase,
-        elapsedMs: Math.round(performance.now() - started),
-      }) + "\n",
-    );
-  stage("entry");
   const moduleUrl = (relative: string) =>
     pathToFileURL(path.join(fixture.importRoot, "dist/legacy-finalizer/src", relative)).href;
   const physicalUrl = (relative: string) =>
     pathToFileURL(path.join(fixture.root, "dist/legacy-finalizer/src", relative)).href;
-  const cleanupUrl = moduleUrl("cli/runtime-cleanup.js");
-  const registryUrl = moduleUrl("agents/harness/registry.js");
+  const cleanupUrl = moduleUrl(cliRetainedCompositionModules.cleanup);
+  const registryUrl = moduleUrl(cliRetainedCompositionModules.registry);
   const lateResolutions: string[] = [];
   let settled = false;
   let observedParent: string | undefined;
@@ -78,12 +76,35 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
   // Observation only: nextResolve receives the original operands, and its
   // result/error is never changed. The production retained-import hook owns repair.
   let admittedParent: string | undefined;
+  let reportedResolutionFailure = false;
   const sourceObservation = registerHooks({
     resolve(specifier, context, nextResolve) {
       if (context.parentURL === cleanupUrl) {
         admittedParent = context.parentURL;
       }
-      const result = nextResolve(specifier, context);
+      let result: ReturnType<typeof nextResolve>;
+      try {
+        result = nextResolve(specifier, context);
+      } catch (error) {
+        // Observe the reporter failure itself, never infer the masked disposer error.
+        if (
+          !reportedResolutionFailure &&
+          context.parentURL === cleanupUrl &&
+          specifier === "../infra/errors.js" &&
+          hasNodeErrorCode(error, "ERR_MODULE_NOT_FOUND")
+        ) {
+          reportedResolutionFailure = true;
+          console.log(
+            JSON.stringify({
+              phase: "cli-composition-resolution-failed",
+              parent: context.parentURL,
+              requested: new URL(specifier, context.parentURL).href,
+              code: "ERR_MODULE_NOT_FOUND",
+            }),
+          );
+        }
+        throw error;
+      }
       if (
         settled &&
         context.parentURL === retainedCleanupUrl &&
@@ -99,25 +120,26 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
   const observeWorker = (worker: Worker) => supervisors.push(worker);
   process.on("worker", observeWorker);
   const { withCliProcessScope }: typeof import("./runtime-cleanup-scope.js") = await import(
-    moduleUrl("cli/runtime-cleanup-scope.js")
+    moduleUrl(cliRetainedCompositionModules.scope)
   );
-  const { runMainOrRootHelp }: typeof import("../entry.js") = await import(moduleUrl("entry.js"));
+  const { runMainOrRootHelp }: typeof import("../entry.js") = await import(
+    moduleUrl(cliRetainedCompositionModules.entry)
+  );
   const registry: typeof import("../agents/harness/registry.js") = await import(registryUrl);
   const runtime: typeof import("../plugins/runtime.js") = await import(
-    moduleUrl("plugins/runtime.js")
+    moduleUrl(cliRetainedCompositionModules.pluginRuntime)
   );
   const { createEmptyPluginRegistry }: typeof import("../plugins/registry-empty.js") = await import(
-    moduleUrl("plugins/registry-empty.js")
+    moduleUrl(cliRetainedCompositionModules.emptyRegistry)
   );
   const { acquireDebugProxyCaptureStoreAsync }: typeof import("../proxy-capture/store.async.js") =
-    await import(moduleUrl("proxy-capture/store.async.js"));
+    await import(moduleUrl(cliRetainedCompositionModules.captureStore));
   const { withRetainedUpdateRuntime }: typeof import("../infra/update-retained-runtime.js") =
-    await import(moduleUrl("infra/update-retained-runtime.js"));
+    await import(moduleUrl(cliRetainedCompositionModules.retention));
   const { swapStagedPackageInstall }: typeof import("../infra/package-update-swap.js") =
-    await import(moduleUrl("infra/package-update-swap.js"));
+    await import(moduleUrl(cliRetainedCompositionModules.swap));
   const { captureRuntimeWorkerSource }: typeof import("../infra/runtime-worker-generation.js") =
-    await import(moduleUrl("infra/runtime-worker-generation.js"));
-  stage("owners-loaded");
+    await import(moduleUrl(cliRetainedCompositionModules.workerGeneration));
   let store: Awaited<ReturnType<typeof acquireDebugProxyCaptureStoreAsync>>["store"] | undefined;
   let resource: ReturnType<typeof setInterval> | undefined;
   let disposeCalls = 0;
@@ -142,10 +164,7 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
       runtime.setActivePluginRegistry(activeRegistry);
       // Acquire outside the update worker generation: the executable owns this
       // resource until its later finalizers, not just until retention settlement.
-      stage("capture-store-acquire-start");
       ({ store } = await acquireDebugProxyCaptureStoreAsync());
-      stage("capture-store-acquired");
-      stage("initial-write-start");
       await store.upsertSession({
         id: "retained-cli",
         startedAt: 1,
@@ -153,7 +172,6 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
         sourceScope: "openclaw",
         sourceProcess: "fixture",
       });
-      stage("initial-write-completed");
       assert(supervisors.some((worker) => worker.threadId !== -1));
       const harness: AgentHarness = {
         id: "retained-cli",
@@ -167,13 +185,11 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
           return [];
         },
         dispose: async () => {
-          stage("harness-dispose-start");
           disposeCalls++;
           assert(settled, "harness disposal preceded update retention settlement");
           assert(resource?.hasRef(), "harness never acquired its referenced resource");
           assert(store && !store.isClosed, "shared state closed before harness disposal");
           phases.push("dispose-after-retention");
-          stage("terminal-write-start");
           await store.recordEvent({
             sessionId: "retained-cli",
             ts: 2,
@@ -186,12 +202,9 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
           });
           committed = true;
           phases.push("write-committed");
-          stage("terminal-write-completed");
           clearInterval(resource);
-          stage("harness-dispose-completed");
         },
       };
-      stage("harness-acquire-start");
       runtime.withPluginRegistrationContext(activeRegistry, "fixture", () =>
         registry.registerAgentHarness(harness),
       );
@@ -203,34 +216,26 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
         agentDir: fixture.root,
         workspaceDir: fixture.root,
       });
-      stage("harness-acquired");
-      stage("retention-start");
       await withRetainedUpdateRuntime(cleanupUrl, async (retain) => {
-        stage("source-retain-start");
         const retained = await retain({
           mutationRoots: [fixture.root],
           installTarget: fixture.swap.installTarget,
           timeoutMs: 30_000,
           assertCurrent() {},
         });
-        stage("source-retain-completed");
         assert(retained && retained.entries > 0, "running source was not retained");
         retainedRegistryUrl = captureRuntimeWorkerSource(new URL(registryUrl)).moduleUrl.href;
         retainedCleanupUrl = captureRuntimeWorkerSource(new URL(cleanupUrl)).moduleUrl.href;
         assert.notEqual(retainedRegistryUrl, registryUrl, "registry source was not retained");
-        stage("package-swap-start");
         const result = await swapStagedPackageInstall({ ...fixture.swap, timeoutMs: 30_000 });
-        stage("package-swap-completed");
         assert.equal(result.status, "committed", JSON.stringify(result));
         await assert.rejects(fs.stat(new URL(physicalUrl("cli/runtime-cleanup.js"))), {
           code: "ENOENT",
         });
         phases.push("source-replaced");
-        stage("source-removal-verified");
       });
       settled = true;
       phases.push("retention-settled");
-      stage("retention-settled");
       observation = registerHooks({
         resolve(specifier, context, nextResolve) {
           if (context.parentURL === cleanupUrl && settled) {
@@ -240,21 +245,27 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
           return nextResolve(specifier, context);
         },
       });
-      stage("command-return");
     },
   });
-  const argv = [process.execPath, fileURLToPath(moduleUrl("entry.js")), "config", "get", "fixture"];
+  const argv = [process.execPath, fileURLToPath(moduleUrl(cliRetainedCompositionModules.entry)), "config", "get", "fixture"];
   process.argv = argv;
-  stage("cli-dispatch");
   await withCliProcessScope(() =>
     runMainOrRootHelp(argv, {
       finalize: async () => {
-        stage("finalizer-entered");
+        if (disposeCalls !== 1) {
+          // Bind the failure receipt to the unchanged assertion at this boundary.
+          console.log(
+            JSON.stringify({
+              phase: "cli-composition-disposal-failed",
+              actual: disposeCalls,
+              expected: 1,
+            }),
+          );
+        }
         assert.equal(disposeCalls, 1, "real CLI finalizer did not dispose the retained harness");
         assert(committed, "late accepted database write did not commit");
         assert(store?.isClosed, "canonical shared-state finalizer did not close the store");
         await assert.rejects(store.listSessions(), /closed/iu);
-        stage("closed-store-read-rejected");
         assert(supervisors.length > 0);
         assert(
           supervisors.every((worker) => worker.threadId === -1),
@@ -284,11 +295,9 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
             resolvedRegistryUrl,
           }),
         );
-        stage("finalizer-completed");
       },
     }),
   );
-  stage("cli-returned");
   observation?.deregister();
   sourceObservation.deregister();
   process.off("worker", observeWorker);
