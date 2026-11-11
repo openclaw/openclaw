@@ -430,7 +430,8 @@ export function readChatTranscriptAttachmentSource(state: ChatState) {
     messages: state.chatMessages,
     pagination: state.chatHistoryPagination,
     coverage: known ? (state.chatHistoryPagination.hasMore ? "partial" : "complete") : "unknown",
-    loading: isChatHistoryLoading(load),
+    // Refreshing an accepted window does not make its attachment coverage unknown.
+    loading: !known && isChatHistoryLoading(load),
     error: load.phase === "failed" ? load.message : undefined,
   } as const;
 }

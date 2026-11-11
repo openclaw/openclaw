@@ -46,7 +46,8 @@ it("prints saved legacy output caps as a doctor note without failing health", as
   expect(note).toHaveBeenCalledTimes(1);
   const [text, title] = note.mock.calls[0] as [string, string];
   expect(title).toBe("Model output caps");
-  expect(text).toContain('Provider "custom" pins maxTokens');
+  expect(text).toContain('Provider "custom" has saved maxTokens values');
+  expect(text).toContain("may leave the output cap unchanged or lower it");
   expect(text).toContain("big-model (4096)");
   expect(text).toContain("remove maxTokens");
   expect(ctx.healthOk).not.toBe(false);

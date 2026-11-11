@@ -3,9 +3,12 @@ import { performance } from "node:perf_hooks";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
 import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
+import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { LocalWorkspacePausePhase } from "../sandbox/local-workspace-quiescence.js";
 
 type PreparationPhase =
+  | `reuse.${LocalWorkspacePausePhase | "probeCanonical" | "probeProjection" | "capturePreparation"}`
   | "allocate"
   | "allocationWait"
   | "mutationWait"
@@ -35,6 +38,7 @@ type PreparationPhase =
   | "warmPoolApply"
   | "templateRelease"
   | "provision"
+  | "provisionEstimate"
   | "provisionInspect"
   | "provisionCopy"
   | "provisionCopyWait"
@@ -48,6 +52,8 @@ type PreparationPhase =
   | "templatePrepare"
   | "templateRetire"
   | "templateValidate"
+  | "templateClone"
+  | "templateValidateOutput"
   | "templateApply"
   | "snapshot"
   | "synchronizeCanonical"
@@ -75,6 +81,7 @@ type PreparationTimingState = {
   enabled: boolean;
   template: TemplateState;
   templateDetails: TemplateDetails;
+  copyDetails?: ProvisionCopyDetails;
   phases: Partial<Record<PreparationPhase, number>>;
   activePhases: number;
   coveredSince: number;
@@ -112,6 +119,13 @@ export function recordWorktreePreparationFailure(phase: PreparationPhase, error:
     (!current.failure || !collectNestedErrorCandidates(error).includes(current.failure.error))
   ) {
     current.failure = { error, phase };
+  }
+}
+
+export function setWorktreePreparationCopyDetails(details: ProvisionCopyDetails) {
+  const current = preparation.getStore();
+  if (current) {
+    current.copyDetails = details;
   }
 }
 
@@ -197,6 +211,9 @@ export async function withWorktreePreparationTiming<T>(
         const phaseDurationsMs = Object.fromEntries(
           Object.entries(current.phases).map(([phase, duration]) => [phase, Math.round(duration)]),
         );
+        const reuseDominantPhase = Object.entries(current.phases)
+          .filter(([phase]) => phase.startsWith("reuse."))
+          .toSorted((a, b) => b[1] - a[1])[0]?.[0];
         recordDiagnosticsTimelineDuration(`worktree.${kind}`, end - start);
         for (const [phase, duration] of Object.entries(current.phases)) {
           recordDiagnosticsTimelineDuration(`worktree.${kind}.${phase}`, duration);
@@ -206,15 +223,17 @@ export async function withWorktreePreparationTiming<T>(
           Math.max(0, end - start - coveredMs),
         );
         log.info("managed worktree preparation", {
-          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} outcome=${outcome} errorDetails=${JSON.stringify(errorDetails)} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
+          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} copyDetails=${JSON.stringify(current.copyDetails ?? {})} outcome=${outcome} errorDetails=${JSON.stringify(errorDetails)} durationMs=${durationMs} unattributedMs=${unattributedMs} reuseDominantPhase=${reuseDominantPhase ?? "none"} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
           kind,
           template: current.template,
           templateDetails: current.templateDetails,
+          copyDetails: current.copyDetails,
           outcome,
           ...errorDetails,
           durationMs,
           unattributedMs,
           phaseDurationsMs,
+          reuseDominantPhase,
         });
         emit?.({
           name: "worktree.preparation",
@@ -231,7 +250,14 @@ export async function withWorktreePreparationTiming<T>(
               ]),
             ),
             outcome,
+            ...Object.fromEntries(
+              Object.entries(current.copyDetails ?? {}).map(([key, value]) => [
+                `copy.${key}`,
+                value,
+              ]),
+            ),
             ...errorDetails,
+            ...(reuseDominantPhase ? { reuseDominantPhase } : {}),
             unattributedMs,
             ...phaseDurationsMs,
           },

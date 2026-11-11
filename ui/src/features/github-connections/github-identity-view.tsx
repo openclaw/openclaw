@@ -538,16 +538,28 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
           detailsLabel={t("githubConnections.details")}
           hasDetails={identity() !== null}
           title={
-            identity()?.account ? `@${identity()!.account!.login}` : t("agentTools.githubNoAccount")
+            identity() ? (
+              identity()!.account ? (
+                "@" + identity()!.account!.login
+              ) : (
+                t("agentTools.githubNoAccount")
+              )
+            ) : (
+              <GitHubUnloadedStatus request={view()} />
+            )
           }
           description={
-            identity()?.source === "agent-override"
-              ? t("githubConnections.agentOverride")
-              : t("githubConnections.system")
+            identity()
+              ? identity()!.source === "agent-override"
+                ? t("githubConnections.agentOverride")
+                : t("githubConnections.system")
+              : undefined
           }
           control={
             <>
-              <GitHubHealth identity={identity()} request={view()} />
+              <Show when={identity()}>
+                <GitHubHealth identity={identity()} request={view()} />
+              </Show>
               <button class="btn btn--sm" onClick={() => props.onOpenConnections()}>
                 {t("githubConnections.manageCommon")}
               </button>

@@ -198,7 +198,7 @@ suite.define(() => {
   it("keeps agent identity controls inside their fields at desktop and mobile widths", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
+        featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "agents.update"],
       });
       await page.goto(`${suite.server.baseUrl}settings/agents`);
       const editor = page.locator(".agent-identity-editor");

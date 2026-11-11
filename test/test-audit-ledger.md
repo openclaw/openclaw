@@ -530,6 +530,32 @@ Independent preservation review and full local ClawSweeper review found no
 lost contract or actionable source finding. Hosted CI and landing remain
 pending; local proof does not establish either.
 
+### PR gate changed-test routing
+
+At `ee9f6b4d5e0cd405a399b706b071a0e9998ef67f`, changing
+`scripts/pr-lib/gates.sh` selected nine explicit test owners but omitted
+`pr-prepare-testbox.test.ts`. One owner entry restores that suite in ordinary
+local selection and bounded CI selection without changing discovery policy.
+
+One parameterized regression in the existing routing suite covers both modes;
+the bounded case also requires Testbox in the declared owner targets. Both cases
+failed on the omitted target before the repair and passed afterward in an
+independently installed native checkout. The focused baseline took 14.43 seconds
+wall time and the repaired run 9.95 seconds; these single runs are correctness
+evidence, not a performance comparison. The routing and planner suites passed
+all 324 cases together in 109.94 seconds wall time.
+The changed routing file separately passed all 114 cases in 33.08 seconds wall
+time (31.29 seconds Vitest duration). It exercises real checkout inventories,
+import-graph selection and subprocess routing; this repair adds no new fixture
+or subprocess, and its bounded case retains the real CI selection boundary.
+
+The regression adds 13 test lines, recorded in its own allocation. It adds no
+fixtures, mocks, timers or parallel discovery path. Independent source review
+found no lost contract or unnecessary scope. Targeted tooling typecheck, lint,
+formatting, source-line and test-line ratchets passed. Full local ClawSweeper
+review of `6c07f87ef1c397281053836c97af0968d3e6be01` found no actionable issues.
+Hosted CI and landing remain pending.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
@@ -541,7 +567,6 @@ pending; local proof does not establish either.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.
 - CI merge-preparation source/comment candidates remain pending Linux keeper proof; the independent Git-owner admission guard stays. Do not treat a stopped Testbox allocation as a product result.
-- The `gates.sh` changed-file owner list omits `pr-prepare-testbox.test.ts`; full tooling includes it and direct edits select it. Repair that routing separately from the preparation proof audit.
 
 Remaining: classify unread core/plugin/native/script declarations and shared
 fixtures; qualify candidates at their actual boundaries; validate and land owner

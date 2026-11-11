@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
+import type { TemplateInstallOutcome } from "../shared/template-install-notice.js";
 import type { TemplateAddStateOptions } from "./add-state-write.js";
 import type { PlannedTemplatePackage } from "./package-plan-action.js";
 import type { TemplatePluginRuntimeOptions } from "./plugin-runtime.js";
@@ -22,4 +23,5 @@ export type InstallTemplatePackagesOptions = TemplatePluginRuntimeOptions &
     pluginConsent?: TemplatePluginInstallConsent;
     skillConsent?: TemplateSkillInstallConsent;
     nowMs?: number;
+    onSetupOutcome?: (outcome: TemplateInstallOutcome) => Promise<void>;
   };
