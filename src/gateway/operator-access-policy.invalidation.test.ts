@@ -11,9 +11,14 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { emitUserProfilesChanged } from "../state/user-profile-events.js";
 import { resolvePreparedGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 
-it.each(["profile-invalidated", "grant-revoked", "plugin-lifetime-retired"] as const)(
-  "retains the first %s cause for every affected person without disclosing source errors",
-  async (cause) => {
+it.each([
+  ["profile-invalidated", false],
+  ["grant-revoked", false],
+  ["plugin-lifetime-retired", false],
+  ["plugin-lifetime-retired", true],
+] as const)(
+  "retains the first %s cause for every affected person (quiesced=%s) without disclosing source errors",
+  async (cause, quiesced) => {
     const instance = createOwnedTestInstance("person-access");
     const grant = new AbortController();
     let profileCurrent = true;
@@ -49,6 +54,11 @@ it.each(["profile-invalidated", "grant-revoked", "plugin-lifetime-retired"] as c
         emitUserProfilesChanged();
       } else if (cause === "grant-revoked") {
         grant.abort(new Error("PRIVATE synthetic source detail"));
+      } else if (quiesced) {
+        instance.quiesce();
+        for (const authority of authorities) {
+          expect(authority?.assertCurrent).toThrow(`[access-cause=${cause}]`);
+        }
       } else {
         await instance.dispose();
       }

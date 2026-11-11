@@ -1,5 +1,5 @@
 import { types } from "node:util";
-import type { GatewayOperatorAccessCause } from "../../packages/gateway-protocol/src/operator-access.js";
+import type { GatewayOperatorAccessCause } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type {
   PluginGatewayAccessAuthority,
   PluginGatewayAccessPolicy,
@@ -96,11 +96,11 @@ function bindAccessAuthority(
         return instance.run(assertCurrent);
       } catch (error) {
         failureCause ??=
-          instance.disposing || instance.lifecycle.signal.aborted
+          instance.disposing ||
+          instance.lifecycle.signal.aborted ||
+          error instanceof PluginInstanceUnavailableError
             ? "plugin-lifetime-retired"
-            : error instanceof PluginInstanceUnavailableError
-              ? "plugin-invocation-unavailable"
-              : "policy-check-failed";
+            : "policy-check-failed";
         throw error;
       }
     },

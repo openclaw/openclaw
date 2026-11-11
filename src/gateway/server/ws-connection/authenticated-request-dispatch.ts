@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import { gatewayOperatorAccessError } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import type {
   ConnectParams,
   ErrorShape,
@@ -15,7 +16,6 @@ import {
   formatValidationErrors,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { gatewayOperatorAccessError } from "../../../../packages/gateway-protocol/src/operator-access.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import {
   createChildDiagnosticTraceContext,

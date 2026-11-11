@@ -18,11 +18,12 @@ import {
 } from "./connect-error-details.js";
 
 it("keeps the longest access diagnostic within the WebSocket close reason budget", () => {
-  const error = gatewayOperatorAccessError("plugin-invocation-unavailable");
+  const error = gatewayOperatorAccessError("access-record-inactive");
   expect(new TextEncoder().encode(error.message).byteLength).toBeLessThanOrEqual(123);
   expect(readGatewayOperatorAccessClose(4001, error.message)).toMatchObject({
+    message: error.message,
     retryable: false,
-    details: { code: "OPERATOR_ACCESS_DENIED", accessCause: "plugin-invocation-unavailable" },
+    details: { code: "OPERATOR_ACCESS_DENIED", accessCause: "access-record-inactive" },
   });
   expect(readGatewayOperatorAccessClose(1008, error.message)).toBeNull();
 });

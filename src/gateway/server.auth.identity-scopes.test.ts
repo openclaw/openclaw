@@ -534,7 +534,7 @@ test("denies missing person access, retires grant or alias authority, and preser
       policyUnavailable = true;
       expect((await connect("visitor@example.com")).connected).toMatchObject({
         ok: false,
-        error: { details: { accessCause: "policy-rejected" }, retryable: false },
+        error: { details: { accessCause: "policy-check-failed" }, retryable: false },
       });
       expect(grant.signal.aborted).toBe(false);
       expect((await rpcReq(guest.ws, "status")).ok).toBe(true);

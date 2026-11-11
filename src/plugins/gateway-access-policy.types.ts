@@ -1,4 +1,4 @@
-import type { GatewayOperatorAccessCause } from "../../packages/gateway-protocol/src/operator-access.js";
+import type { GatewayOperatorAccessCause } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export type GatewayAccessGrantRef = Readonly<{ pluginId: string; grantId: string }>;

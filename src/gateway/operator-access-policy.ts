@@ -2,7 +2,7 @@ import {
   gatewayOperatorAccessError,
   readGatewayOperatorAccessCause,
   type GatewayOperatorAccessCause,
-} from "../../packages/gateway-protocol/src/operator-access.js";
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -212,7 +212,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
         throw invalidate("profile-invalidated");
       }
     } catch {
-      throw invalidate("profile-unavailable");
+      throw invalidate("profile-invalidated");
     }
   };
   // Observe before plugin callbacks: an alias can move away and back during authorization.
@@ -300,7 +300,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     releaseProfiles();
     // Policy errors can contain private configuration; only a closed cause crosses ingress.
     throw invalidate(
-      error instanceof GatewayOperatorAccessDeniedError ? error.accessCause : "policy-rejected",
+      error instanceof GatewayOperatorAccessDeniedError ? error.accessCause : "policy-check-failed",
     );
   }
 }

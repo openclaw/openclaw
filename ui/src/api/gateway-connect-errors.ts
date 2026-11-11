@@ -75,7 +75,7 @@ export function resolveBrowserGatewayClose(
   if (startupDelay !== undefined) {
     return { retry: true, notify: true, reconnectDelayMs: startupDelay, pendingError: error };
   }
-  const connectError = error instanceof GatewayRequestError ? toGatewayErrorInfo(error) : undefined;
+  const connectError = error instanceof GatewayRequestError ? error : undefined;
   const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
   // This decision drives both scheduling and the store's reconnect rendering.
   const retry =

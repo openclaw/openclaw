@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { gatewayOperatorAccessError } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
-import { gatewayOperatorAccessError } from "../../../../packages/gateway-protocol/src/operator-access.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveAuthenticatedDeviceTokenIdentity } from "../../../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../../../infra/device-pairing-store-readonly.js";
@@ -23,7 +23,7 @@ export function prepareGatewayConnectOperatorAccess(client: GatewayWsClient): vo
   const profile = client.authenticatedUserProfile;
   const config = getRuntimeConfig();
   if (hasGatewayOperatorAccessPolicies(config) && !profile) {
-    throw new GatewayOperatorAccessDeniedError("profile-unavailable");
+    throw new GatewayOperatorAccessDeniedError("profile-invalidated");
   }
   const operatorAccessAuthority = profile
     ? resolveGatewayOperatorAccessAuthority(profile.profileId, config)
@@ -38,7 +38,7 @@ export async function rejectGatewayConnectOperatorAccess(
   error: unknown,
 ): Promise<void> {
   const denial = gatewayOperatorAccessError(
-    error instanceof GatewayOperatorAccessDeniedError ? error.accessCause : "profile-unavailable",
+    error instanceof GatewayOperatorAccessDeniedError ? error.accessCause : "profile-invalidated",
   );
   context.markHandshakeFailure("operator-access-denied", {
     accessCause: denial.details.accessCause,
