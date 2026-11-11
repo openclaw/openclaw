@@ -59,7 +59,7 @@ const personal: ThemeCatalogEntry = {
 };
 
 suite.define(() => {
-  it("previews each catalog palette independently of selection, accent overrides and color mode", async () => {
+  it("previews each catalog palette independently of selection, accent overrides and color mode", async (testContext) => {
     const context = await suite.newBrowserContext({
       viewport: { width: 1440, height: 1000 },
       colorScheme: "dark",
@@ -67,6 +67,8 @@ suite.define(() => {
     const page = await context.newPage();
     const current = { id: "knot", mode: "dark", scope: "gateway", overrides: {} };
     let failPlugin = false;
+    const paletteReady = Promise.withResolvers<void>();
+    testContext.onTestFinished(() => paletteReady.resolve());
     const gateway = await installMockGateway(
       page,
       {
@@ -82,10 +84,13 @@ suite.define(() => {
       },
       {
         requestHandlers: {
-          "themes.get": (params) => {
+          "themes.get": async (params) => {
             const id = requireRecord(params, "theme request").id;
             if (failPlugin && id === plugin.id) {
               throw new Error("Palette preview temporarily unavailable");
+            }
+            if (id === plugin.id) {
+              await paletteReady.promise;
             }
             const theme = [plugin, personal].find((entry) => entry.id === id);
             expect(theme).toBeDefined();
@@ -119,7 +124,10 @@ suite.define(() => {
       );
       await writeFile(path.join(suite.artifactDir, `${mode}.png`), frame.elements[0]!.png);
     };
-    // Capture before assertions too, so the red baseline retains the actual broken picker.
+    // A held plugin read must not borrow the selected theme’s red accent.
+    await expect.poll(async () => (await colors(plugin.id)).accent).toBe("rgb(138, 138, 148)");
+    expect((await colors(plugin.id)).secondary).toBe("rgb(138, 138, 148)");
+    paletteReady.resolve();
     await capture("initial-dark");
     await expect
       .poll(() => colors(plugin.id))

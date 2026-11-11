@@ -93,7 +93,14 @@ function ThemeCardVisual(props: {
   const previewStyle = createMemo(() => {
     const palette = props.palette;
     if (!palette) {
-      return undefined;
+      // Catalog cards stay neutral until their own palette is available.
+      return props.id.includes("/")
+        ? {
+            "--theme-chip-bg": "var(--bg-hover)",
+            "--theme-chip-accent": "var(--muted)",
+            "--theme-chip-accent-2": "var(--muted)",
+          }
+        : undefined;
     }
     return {
       "--theme-chip-bg": `light-dark(${palette.light.bg}, ${palette.dark.bg})`,

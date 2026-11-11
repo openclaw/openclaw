@@ -529,13 +529,6 @@
   --theme-chip-accent-2: var(--accent-2);
 }
 
-/* Keep unloaded/failed catalog previews neutral, never the selected palette. */
-.settings-theme-card--catalog {
-  --theme-chip-bg: var(--bg-hover);
-  --theme-chip-accent: var(--muted);
-  --theme-chip-accent-2: var(--muted);
-}
-
 .settings-accent-swatches {
   --settings-accent-swatch-size: 28px;
 
