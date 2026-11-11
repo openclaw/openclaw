@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type {
   AcpRuntimeEvent,
   AcpRuntimeTurn,
@@ -7,6 +8,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { createAcceptedFixture } from "./manager.ownership.test-support.js";
 import {
@@ -25,8 +27,12 @@ const runtimeExit = { code: "ACP_TURN_FAILED", message: "acpx exited with code 1
 describe("AcpSessionManager turn results", () => {
   installAcpSessionManagerTestLifecycle();
 
-  function setupRuntime(meta = readySessionMeta(), sessionKey = "agent:codex:acp:session-1") {
-    const f = createAcceptedFixture({ sessionKey, meta });
+  function setupRuntime(
+    meta = readySessionMeta(),
+    sessionKey = "agent:codex:acp:session-1",
+    cfg: OpenClawConfig = baseCfg,
+  ) {
+    const f = createAcceptedFixture({ sessionKey, meta, cfg });
     const run = (overrides: Partial<Parameters<typeof f.manager.runTurn>[0]> = {}) =>
       f.run("turn-result", { text: "Do work", ...overrides });
     const start = (result: (requestId: string) => Partial<AcpRuntimeTurn> = () => ({})) => {
@@ -98,6 +104,28 @@ describe("AcpSessionManager turn results", () => {
       expect(failure).toMatchObject({ message: expect.stringContaining("openclaw doctor --fix") });
       expect(String(failure)).toContain("Gateway log");
       expect(String(failure)).not.toContain(workspaceDir);
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(state.runTurn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("refuses a persisted ACP turn in another configured workspace needing repair", async () => {
+    await withStateDirEnv("openclaw-acp-other-workspace-", async ({ tempRoot }) => {
+      const otherWorkspace = path.join(tempRoot, "other-workspace");
+      await fs.mkdir(otherWorkspace);
+      await fs.writeFile(path.join(otherWorkspace, "openclaw-workspace-state.json"), "retained");
+      const cfg = {
+        ...baseCfg,
+        agents: {
+          ownership: "explicit" as const,
+          entries: { codex: {}, other: { workspace: otherWorkspace } },
+        },
+      };
+      const state = setupRuntime(readySessionMeta({ cwd: otherWorkspace }), undefined, cfg);
+      const startTurn = state.start();
+      await expect(state.run()).rejects.toMatchObject({
+        cause: { kind: "legacy-workspace" },
+      });
       expect(startTurn).not.toHaveBeenCalled();
       expect(state.runTurn).not.toHaveBeenCalled();
     });

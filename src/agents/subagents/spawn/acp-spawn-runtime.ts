@@ -39,6 +39,7 @@ export async function resolveRuntimeCwdForAcpSpawn(params: {
   resolvedCwd?: string;
   explicitCwd?: string;
   managedWorkspaceDir: string;
+  configuredWorkspaceDirs: readonly string[];
   requireExistingCwd?: boolean;
 }): Promise<string | undefined> {
   if (!params.resolvedCwd) {
@@ -59,19 +60,14 @@ export async function resolveRuntimeCwdForAcpSpawn(params: {
       throw error;
     }
   }
-  if (
-    isPathInside(
-      resolveCanonicalWorkspacePath(params.managedWorkspaceDir),
-      resolveCanonicalWorkspacePath(params.resolvedCwd),
-    )
-  ) {
-    assertNoUnmigratedWorkspaceState({ workspaceDir: params.managedWorkspaceDir });
-    if (
-      explicitCwd &&
-      !params.requireExistingCwd &&
-      resolveCanonicalWorkspacePath(params.resolvedCwd) !==
-        resolveCanonicalWorkspacePath(params.managedWorkspaceDir)
-    ) {
+  const current = resolveCanonicalWorkspacePath(params.resolvedCwd);
+  for (const workspaceDir of [params.managedWorkspaceDir, ...params.configuredWorkspaceDirs]) {
+    const managed = resolveCanonicalWorkspacePath(workspaceDir);
+    if (!isPathInside(managed, current)) {
+      continue;
+    }
+    assertNoUnmigratedWorkspaceState({ workspaceDir });
+    if (explicitCwd && !params.requireExistingCwd && current !== managed) {
       assertNoUnmigratedWorkspaceState({ workspaceDir: params.resolvedCwd });
     }
   }

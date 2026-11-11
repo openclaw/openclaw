@@ -16,7 +16,11 @@ import { listAgentIds } from "../../../agents/agent-roster.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/subagents/spawn/acp-spawn-policy.js";
-import { resolveRuntimeCwdForAcpSpawn } from "../../../agents/subagents/spawn/acp-spawn-runtime.js";
+import {
+  formatAcpSpawnCwdError,
+  resolveRuntimeCwdForAcpSpawn,
+} from "../../../agents/subagents/spawn/acp-spawn-runtime.js";
+import { listAgentWorkspaceDirs } from "../../../agents/workspace-dirs.js";
 import {
   readChannelContextAdmissionEvidence,
   readChannelContextGatewayContextResolver,
@@ -25,6 +29,7 @@ import { updateSessionEntry } from "../../../config/sessions/session-accessor.js
 import { getGatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { findStartupMaintenanceRequiredError } from "../../../infra/startup-maintenance-required.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   captureSessionTarget,
@@ -149,11 +154,16 @@ export async function handleAcpSpawnAction(
       resolvedCwd,
       explicitCwd: spawn.cwd,
       managedWorkspaceDir: resolveAgentWorkspaceDir(params.cfg, ownerAgentId),
+      configuredWorkspaceDirs: listAgentWorkspaceDirs(params.cfg),
     });
   } catch (error) {
     const unavailable = replyForUnavailableWorkspace(error);
     if (unavailable) {
-      return commandReply(unavailable);
+      return commandReply(
+        findStartupMaintenanceRequiredError(error)?.kind === "legacy-workspace"
+          ? { ...unavailable, text: formatAcpSpawnCwdError(error, false) }
+          : unavailable,
+      );
     }
     return acpCommandErrorReply(
       error,

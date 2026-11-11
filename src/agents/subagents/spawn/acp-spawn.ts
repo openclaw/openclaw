@@ -58,6 +58,7 @@ import type { SpawnRequesterConversationSource } from "../../spawn-requester-ori
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import { listAgentWorkspaceDirs } from "../../workspace-dirs.js";
 import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
 import {
@@ -372,6 +373,7 @@ export async function spawnAcpDirect(
       resolvedCwd,
       explicitCwd: params.cwd,
       managedWorkspaceDir: resolveAgentWorkspaceDir(cfg, ownerAgentId),
+      configuredWorkspaceDirs: listAgentWorkspaceDirs(cfg),
       requireExistingCwd: senderRestricted,
     });
   } catch (error) {

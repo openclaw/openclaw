@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { formatAcpSpawnCwdError, resolveRuntimeCwdForAcpSpawn } from "./acp-spawn-runtime.js";
 
-it("leaves an explicit external cwd to its owner", async () => {
+it("leaves an external cwd to its owner while checking configured workspaces", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async (state) => {
     const cwd = state.path("external");
     const managed = state.path("managed");
@@ -22,6 +22,7 @@ it("leaves an explicit external cwd to its owner", async () => {
         resolvedCwd: cwd,
         explicitCwd: cwd,
         managedWorkspaceDir: managed,
+        configuredWorkspaceDirs: [managed],
       }),
     ).resolves.toBe(cwd);
     await expect(
@@ -29,12 +30,14 @@ it("leaves an explicit external cwd to its owner", async () => {
         resolvedCwd: managed,
         explicitCwd: managed,
         managedWorkspaceDir: managed,
+        configuredWorkspaceDirs: [managed],
       }),
     ).rejects.toMatchObject({ kind: "legacy-workspace" });
     const failure = await resolveRuntimeCwdForAcpSpawn({
       resolvedCwd: managedChild,
       explicitCwd: managedChild,
       managedWorkspaceDir: managed,
+      configuredWorkspaceDirs: [managed],
     }).catch((error: unknown) => error);
     expect(failure).toMatchObject({ kind: "legacy-workspace" });
     expect(formatAcpSpawnCwdError(failure, false)).toContain("Gateway log");
@@ -42,6 +45,7 @@ it("leaves an explicit external cwd to its owner", async () => {
       resolveRuntimeCwdForAcpSpawn({
         resolvedCwd: restrictedChild,
         managedWorkspaceDir: managed,
+        configuredWorkspaceDirs: [managed],
         requireExistingCwd: true,
       }),
     ).rejects.toMatchObject({ kind: "legacy-workspace" });
@@ -52,6 +56,15 @@ it("leaves an explicit external cwd to its owner", async () => {
         resolvedCwd: managedChild,
         explicitCwd: managedChild,
         managedWorkspaceDir: managed,
+        configuredWorkspaceDirs: [managed],
+      }),
+    ).rejects.toMatchObject({ kind: "legacy-workspace" });
+    await expect(
+      resolveRuntimeCwdForAcpSpawn({
+        resolvedCwd: managedChild,
+        explicitCwd: managedChild,
+        managedWorkspaceDir: cwd,
+        configuredWorkspaceDirs: [managedChild],
       }),
     ).rejects.toMatchObject({ kind: "legacy-workspace" });
     expect(await fs.readFile(source, "utf8")).toBe("not-json");
@@ -65,11 +78,19 @@ it("refuses an inherited missing cwd with a retained sibling marker", async () =
     await fs.mkdir(managed);
     await fs.writeFile(`${missing}.attested`, "openclaw-workspace-attestation:v1\n");
     await expect(
-      resolveRuntimeCwdForAcpSpawn({ resolvedCwd: missing, managedWorkspaceDir: managed }),
+      resolveRuntimeCwdForAcpSpawn({
+        resolvedCwd: missing,
+        managedWorkspaceDir: managed,
+        configuredWorkspaceDirs: [managed],
+      }),
     ).rejects.toMatchObject({ kind: "legacy-workspace" });
     await fs.rm(`${missing}.attested`);
     await expect(
-      resolveRuntimeCwdForAcpSpawn({ resolvedCwd: missing, managedWorkspaceDir: managed }),
+      resolveRuntimeCwdForAcpSpawn({
+        resolvedCwd: missing,
+        managedWorkspaceDir: managed,
+        configuredWorkspaceDirs: [managed],
+      }),
     ).resolves.toBeUndefined();
   });
 });

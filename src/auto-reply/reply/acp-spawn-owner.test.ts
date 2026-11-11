@@ -153,6 +153,7 @@ it.each([
             );
             const result = await handleAcpSpawnAction(params, args);
             expect(result?.reply?.text).toContain("openclaw doctor --fix");
+            expect(result?.reply?.text).toContain("Gateway log");
             expect(result?.reply?.text).not.toContain(state.workspaceDir);
             expect(await fs.readFile(source, "utf8")).toBe("not-json");
             return;
