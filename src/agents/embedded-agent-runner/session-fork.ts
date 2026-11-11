@@ -2,6 +2,7 @@ import {
   independentResponsesRequest,
   responsesRequestLifecycle,
 } from "@openclaw/ai/internal/openai";
+import { uncachedSuffixMessage } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
 import type { Context, Model } from "../../llm/types.js";
@@ -102,7 +103,17 @@ export async function runEmbeddedSessionFork(params: {
       }
     }
   }
-  context.messages.push({ role: "user", content: params.question, timestamp: Date.now() });
+  // The session already cached the input of its latest response. Its next call sends and
+  // writes what follows itself, beside this fork, and nothing reads the fork's question.
+  const latestResponse = context.messages.findLastIndex((message) => message.role === "assistant");
+  if (latestResponse >= 0) {
+    for (let index = latestResponse + 1; index < context.messages.length; index++) {
+      context.messages[index] = uncachedSuffixMessage.mark({ ...context.messages[index]! });
+    }
+  }
+  context.messages.push(
+    uncachedSuffixMessage.mark({ role: "user", content: params.question, timestamp: Date.now() }),
+  );
   const usage = createUsageAccumulator();
   for (let iteration = 0; iteration < 3; iteration++) {
     assertCurrent();
@@ -134,8 +145,6 @@ export async function runEmbeddedSessionFork(params: {
           delete payload.tool_choice;
         }
         delete payload.previous_response_id;
-        // Reconstruction does not share the parent's one-shot request preparation.
-        delete payload.prompt_cache_key;
         return payload;
       },
     };
