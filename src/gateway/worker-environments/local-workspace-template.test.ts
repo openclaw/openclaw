@@ -1,23 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { materializeProviderContext } from "../../agents/embedded-agent-runner/run/images.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import type { prepareSandboxDependencyTemplate } from "../../agents/sandbox/dependency-template.js";
+import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
 import { withWorktreeAllocationLease } from "../../agents/worktrees/allocation.js";
 import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-backend.test-support.js";
-import { requireGit } from "../../agents/worktrees/git.js";
+import * as worktreeGit from "../../agents/worktrees/git.js";
 import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
+import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
+import type { RuntimeMsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
+import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { initializeLocalWorkspaceProjection } from "./local-workspace-checkout.js";
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
 import { cloneLocalWorkspaceTemplate } from "./local-workspace-template.js";
+import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
 
 const mocks = vi.hoisted(() => ({
   backend: vi.fn(),
@@ -52,8 +60,8 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const sandbox = resolveSandboxConfigForAgent();
 const read = (root: string, relative: string) => fs.readFile(path.join(root, relative), "utf8");
-const git = (root: string, ...args: string[]) => requireGit(root, args);
-const sourceText = "export const version = 'original';\n";
+const git = (root: string, ...args: string[]) => worktreeGit.requireGit(root, args);
+const sourceText = "export const version = 'initial';\n";
 const firstLock = "lockfileVersion: '9.0'\n# first generation\n";
 const secondLock = "lockfileVersion: '9.0'\n# second generation\n";
 const dependencyFile = "node_modules/dependency/index.js";
@@ -146,25 +154,31 @@ async function fixture(signal: AbortSignal) {
     const temporaryRoot = path.join(root, `${name}-temporary`);
     const destination = path.join(root, name);
     await fs.mkdir(temporaryRoot);
-    await expect(
-      cloneLocalWorkspaceTemplate({
-        source,
-        repoRoot: source,
+    const manifest = await cloneLocalWorkspaceTemplate({
+      source,
+      repoRoot: source,
+      baseCommit: commit,
+      branch: `openclaw/${name}`,
+      destination,
+      temporaryRoot,
+      templateRoot,
+      env,
+      sandbox,
+      guard: {
+        signal,
+        commitGuard: () => signal.throwIfAborted(),
+        rollbackGuard: () => {},
+        requireDiskSpace: async () => {},
+      },
+    });
+    expect(manifest).toEqual(
+      await captureWorkspaceManifestDocument({
+        root: destination,
         baseCommit: commit,
-        branch: `openclaw/${name}`,
-        destination,
-        temporaryRoot,
-        templateRoot,
-        env,
-        sandbox,
-        guard: {
-          signal,
-          commitGuard: () => signal.throwIfAborted(),
-          rollbackGuard: () => {},
-          requireDiskSpace: async () => {},
-        },
+        buildCacheInputs: new Set(),
+        signal,
       }),
-    ).resolves.toBe(true);
+    );
     return destination;
   };
 }
@@ -183,19 +197,31 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
   assert(template, "Template was not reserved");
   const indexPath = path.join(template.path, ".git", "index");
   const originalIndex = await fs.readFile(indexPath);
-  // Warm validation must not refresh an index that another reader can be cloning.
+  // Reuse consumes producer validation without rescanning or changing the shared index.
   await fs.utimes(path.join(template.path, "source.ts"), 1, 1);
   await write(first, dependencyFile, "consumer edit\n");
+  using commands = vi.spyOn(worktreeGit, "runGit");
   const second = await clone("second");
+  expect(commands.mock.calls.filter(([, args]) => args.includes("status"))).toEqual([]);
   expect((await fs.readFile(indexPath)).equals(originalIndex)).toBe(true);
   expect(await read(second, dependencyFile)).toBe(firstLock);
   expect(await read(first, dependencyFile)).toBe("consumer edit\n");
   expect(await git(second, "branch", "--show-current")).toBe("openclaw/second");
   expect(mocks.install).toHaveBeenCalledOnce();
-  const refreshed = await Promise.all([
-    clone("updated-a", sourceCommit),
-    clone("updated-b", sourceCommit),
-  ]);
+  // Replacement refs must not hide same-size changes from exact-commit refreshes.
+  await git(source, "replace", sourceCommit, baseCommit);
+  let refreshed: string[];
+  try {
+    refreshed = await withWorktreePreparationTiming("managed", () =>
+      Promise.all([clone("updated-a", sourceCommit), clone("updated-b", sourceCommit)]),
+    );
+    expect(mocks.preparation.mock.lastCall?.[0].details).toMatchObject({
+      templateClone: expect.any(Number),
+      templateValidateOutput: expect.any(Number),
+    });
+  } finally {
+    await git(source, "replace", "--delete", sourceCommit);
+  }
   for (const checkout of refreshed) {
     expect(await git(checkout, "rev-parse", "HEAD")).toBe(sourceCommit);
     expect(await read(checkout, "source.ts")).toBe("export const version = 'updated';\n");
@@ -225,6 +251,59 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
     "template.priorSourceCommit": sourceCommit.slice(0, 12),
     "template.requestedSourceCommit": changedCommit.slice(0, 12),
   });
+  for (const commit of [baseCommit, sourceCommit, changedCommit]) {
+    const reused = await clone(`return-${commit}`, commit);
+    expect(await git(reused, "rev-parse", "HEAD")).toBe(commit);
+    expect(await read(reused, dependencyFile)).toBe(
+      commit === changedCommit ? secondLock : firstLock,
+    );
+    expect(await read(reused, "node_modules/source-derived.txt")).toBe(
+      commit === baseCommit ? sourceText : "export const version = 'updated';\n",
+    );
+    if (commit === baseCommit) {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR }, async () => {
+        const image = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+        const original = path.join(env.OPENCLAW_STATE_DIR!, "media/inbound/template-photo.png");
+        await fs.mkdir(path.dirname(original), { recursive: true });
+        await fs.writeFile(original, image);
+        const media = [
+          { path: original, url: "media://inbound/template-photo.png", contentType: "image/png" },
+        ];
+        // Admission precedes staging; replay retains the original reference, not the private copy.
+        const message = buildPersistedUserTurnMessage({ text: "Describe the photo", media });
+        const ctx: RuntimeMsgContext = { media };
+        await stageSandboxMedia({
+          ctx,
+          sessionCtx: ctx as TemplateContext,
+          agentId: "main",
+          sessionKey: "agent:main:template-photo",
+          workspaceDir: reused,
+          cfg: {
+            agents: {
+              entries: { main: { workspace: reused } },
+              defaults: { skipBootstrap: true, sandbox: { mode: "all", workspaceAccess: "rw" } },
+            },
+          },
+        });
+        const staged = ctx.media?.[0];
+        assert(staged?.path && staged.staged, "retained-template attachment was not staged");
+        expect(staged.workspaceDir).toBe(reused);
+        expect(await fs.readFile(path.join(reused, staged.path))).toEqual(image);
+        const provider = await materializeProviderContext({
+          context: { messages: [message] },
+          workspaceDir: reused,
+          workspaceOnly: true,
+          sandbox: { root: reused, bridge: createHostSandboxFsBridge(reused) },
+        });
+        expect(provider.messages[0]?.content).toContainEqual({
+          type: "image",
+          data: image.toString("base64"),
+          mimeType: "image/png",
+        });
+      });
+    }
+  }
+  expect(mocks.install).toHaveBeenCalledTimes(3);
   const attributes = await clone("attributes", attributeCommit);
   expect(await read(attributes, "source.ts")).toBe("export const version = 'updated';\r\n");
   expect(backend.createTemplate).toHaveBeenCalledTimes(3);
@@ -293,6 +372,7 @@ it.for(["none", "same", "previous"])(
       expect(mocks.install).toHaveBeenCalledOnce();
       vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
       expect(await git(projectionPath, "config", "--get-all", "remote.origin.url")).toBe(url);
+      expect(await git(projectionPath, "config", "--get-all", "openclaw.projection")).toBe("true");
       // The same-origin template and its projection each apply the fetch defaults.
       const config = await read(projectionPath, ".git/config");
       for (const remote of ["origin", url.slice(0, -4), url]) {
@@ -423,7 +503,14 @@ it("joins background preparation through the allocation owner", async ({ signal 
       }),
     );
     release.resolve();
-    await expect(cloning).resolves.toBe(true);
+    expect(await cloning).toEqual(
+      await captureWorkspaceManifestDocument({
+        root: destination,
+        baseCommit: selectedCommit,
+        buildCacheInputs: new Set(),
+        signal,
+      }),
+    );
     await preparation;
     expect(await read(destination, dependencyFile)).toBe(secondLock);
     expect(mocks.install).toHaveBeenCalledOnce();

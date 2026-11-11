@@ -1,0 +1,3 @@
+# Real Gateway close: preserve durable queued ingress inputs while rejecting new admission.
+# Cover actual grant revocation, scheduler fence joins, and transport/authority separation.
+272

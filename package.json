@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.11.1",
+  "version": "2026.11.3",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "updatePreflightProtocol": 1,
@@ -1817,6 +1817,7 @@
     "bench:ui:copies": "node --import ./scripts/tsx.mjs scripts/bench-control-ui-copies.ts",
     "bench:usage-refresh-memory": "node --import ./scripts/tsx.mjs scripts/bench-usage-refresh-memory.ts",
     "build": "node --import ./scripts/tsx.mjs scripts/build-all.mts",
+    "build:iroh": "node scripts/build-iroh.mjs",
     "build:ci-artifacts": "node --import ./scripts/tsx.mjs scripts/build-all.mts ciArtifacts",
     "build:docker": "pnpm plugins:assets:build && node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node --import ./scripts/tsx.mjs scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/build-stamp.mts && node --import ./scripts/tsx.mjs scripts/runtime-postbuild-stamp.mts && pnpm plugins:assets:copy && node --import ./scripts/tsx.mjs scripts/write-build-info.ts && node --import ./scripts/tsx.mjs scripts/write-cli-startup-metadata.ts",
     "build:package": "node --import ./scripts/tsx.mjs scripts/build-all.mts package",

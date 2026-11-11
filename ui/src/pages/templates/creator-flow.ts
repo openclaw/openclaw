@@ -153,6 +153,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
       return;
     }
     this.retirePendingStart();
+    let generation = this.generation;
     this.busy = "starting";
     this.error = null;
     this.changed();
@@ -160,7 +161,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
       const created = await client.request<TemplatesDraftsCreateResult>("templates.drafts.create", {
         agentId,
       });
-      if (this.context.gateway.snapshot.client !== client) {
+      if (this.context.gateway.snapshot.client !== client || this.generation !== generation) {
         return;
       }
       const target = {
@@ -169,7 +170,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         sessionKey: this.mainSessionKey(agentId),
         client,
       };
-      const generation = this.reset(target);
+      generation = this.reset(target);
       const ack = await client.request<{ status?: string }>("chat.send", {
         sessionKey: target.sessionKey,
         ...(isUiGlobalSessionKey(target.sessionKey) ? { agentId } : {}),
@@ -193,9 +194,9 @@ export class TemplateCreatorFlow implements TemplateCreator {
       this.navigate(target);
       this.schedulePoll(target, generation);
     } catch (error) {
-      if (this.context.gateway.snapshot.client === client) {
+      if (this.context.gateway.snapshot.client === client && this.generation === generation) {
         const message = formatUiError(error);
-        this.reset(null);
+        generation = this.reset(null);
         this.error = message;
         showToast({
           severity: "error",
@@ -205,19 +206,20 @@ export class TemplateCreatorFlow implements TemplateCreator {
         });
       }
     } finally {
-      if (this.context.gateway.snapshot.client === client) {
+      if (this.context.gateway.snapshot.client === client && this.generation === generation) {
         this.busy = null;
         this.changed();
       }
     }
   }
 
-  open(agentId: string, draftId: string) {
+  open(agentId: string, draftId: string, sessionKey = this.mainSessionKey(agentId)) {
     const client = this.context.gateway.snapshot.client;
     if (!client) {
       return;
     }
-    const target = { agentId, draftId, sessionKey: this.mainSessionKey(agentId), client };
+    const target = { agentId, draftId, sessionKey, client };
+    this.busy = null;
     const generation = this.reset(target);
     this.navigate(target);
     this.schedulePoll(target, generation, 0);

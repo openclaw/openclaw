@@ -54,6 +54,8 @@ export default async function setup(project: TestProject) {
   const browser = available
     ? await chromium.launchServer({
         executablePath,
+        // Secretless namespaces need not carry host DNS or /etc/hosts.
+        host: "127.0.0.1",
         // Match private suite launches: full-tile CPU rasterization is deterministic.
         args: ["--disable-partial-raster", "--disable-gpu-rasterization"],
       })

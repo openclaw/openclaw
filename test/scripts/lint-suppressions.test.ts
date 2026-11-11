@@ -255,10 +255,14 @@ describe("production lint suppressions", () => {
         "scripts/perf/tools-catalog-copy-measure.ts|no-extend-native|2",
         // The SQLite probe restores both native methods and forwards their original receivers.
         "scripts/perf/trajectory-runtime-append.ts|typescript/unbound-method|2",
+        // The untimed SQL census preserves native statement receivers and restores all methods.
+        "scripts/perf/transcript-maintenance-measure.worker.ts|typescript/unbound-method|1",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
         // The pager probe forwards native prepare with its original receiver and restores it.
         "scripts/perf/usage-refresh-stats-measure.ts|typescript/unbound-method|1",
+        // Node worker ports have no browser target origin.
+        "scripts/perf/worktree-provisioning-copy-measure.ts|unicorn/require-post-message-target-origin|1",
         // Rollback failure retains both caught errors in one AggregateError cause.
         "scripts/pr-lib/cache-lifetime.mjs|preserve-caught-error|1",
         // These owners sort only fresh private arrays, preserving their source collections.
@@ -283,6 +287,8 @@ describe("production lint suppressions", () => {
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
         "src/agents/prepared-model-runtime.synthetic-auth.ts|unicorn/no-array-sort|1",
         "src/agents/session-dirs.ts|unicorn/no-array-sort|1",
+        // Binary output must escape C0/C1 bytes while preserving tab, LF and CR.
+        "src/agents/shell-utils.ts|no-control-regex|1",
         "src/agents/tool-schema-hints.ts|unicorn/no-array-sort|1",
         // Media list snapshots must honor the JSON serialization contract; structuredClone cannot materialize plugin-bound proxies.
         "src/agents/tools/media-generate-tool-actions-shared.ts|unicorn/prefer-structured-clone|1",
@@ -436,6 +442,8 @@ describe("production lint suppressions", () => {
         "ui/src/components/solid/sanitized-html.tsx|solid/no-innerhtml|1",
         // JSON materializes the bounded preview; structuredClone retains sliced string backing storage.
         "ui/src/pages/activity/tool-activity.ts|unicorn/prefer-structured-clone|1",
+        // A fresh one-shot MessageChannel port uses onmessage to start delivery and closes both ports.
+        "ui/src/pages/chat/yield-chat-task.ts|unicorn/prefer-add-event-listener|1",
         // PanelRefreshStatus keeps its shared className prop across rendering callers.
         "ui/src/pages/custodian/custodian-surface.tsx|solid/no-react-specific-props|1",
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",

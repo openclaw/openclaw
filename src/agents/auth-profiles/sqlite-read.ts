@@ -6,6 +6,7 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
 import { captureSqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import { runSqliteReadOnlyWorker } from "../../infra/sqlite-readonly-worker.js";
+import { getArtifactPreservingSqliteRead } from "../../infra/sqlite-snapshot-source.js";
 import {
   inspectDatabasePathIdentitySync,
   type DatabasePathIdentity,
@@ -212,16 +213,17 @@ export function prepareAgentAuthProfileRowsRead(options: {
     if (!identity.key.startsWith("file:")) {
       return missing;
     }
+    const inspection = getArtifactPreservingSqliteRead(databasePath);
     const rows = postgres
       ? await readAgentAuthProfileRows(
           { databasePath, agentId, env },
           assertCurrent,
           controller.signal,
         )
-      : await runSqliteReadOnlyWorker(databasePath, {
+      : await runSqliteReadOnlyWorker(inspection?.canonicalPath ?? databasePath, {
           mode: "auth-profile-rows",
-          source: "canonical",
-          expectedIdentity: identity.key,
+          source: inspection ? "snapshot" : "canonical",
+          expectedIdentity: inspection?.key ?? identity.key,
           env,
           signal: controller.signal,
         });

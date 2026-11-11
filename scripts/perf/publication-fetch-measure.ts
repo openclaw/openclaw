@@ -95,7 +95,7 @@ try {
     }
     return owner.runPublicationCommand(
       argv.map((arg) =>
-        arg === "https://github.com/synthetic/fixture.git" ? pathToFileURL(remote).href : arg,
+        arg.replace("https://github.com/synthetic/fixture.git", pathToFileURL(remote).href),
       ),
       options,
     );
@@ -179,7 +179,18 @@ try {
   assert.equal(await fs.readFile(path.join(cwd, ".git/shallow"), "utf8").catch(() => ""), shallow);
   git(cwd, ["merge-base", "--is-ancestor", base, values.present ? base : target]);
   if (values.contents) {
-    assert.equal(git(cwd, ["show", `${target}:target/missing.txt`]).length, 18432);
+    assert(
+      !git(cwd, [
+        "rev-list",
+        "--objects",
+        "--missing=print",
+        "--no-object-names",
+        "--max-count=1",
+        values.present ? base : target,
+      ])
+        .split("\n")
+        .some((line) => line.startsWith("?")),
+    );
   }
   const result = {
     variant: values["base-file"] ? "base" : "candidate",

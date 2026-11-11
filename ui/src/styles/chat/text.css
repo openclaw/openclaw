@@ -1226,7 +1226,7 @@
 }
 
 .code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-wrap {
-  display: none;
+  visibility: hidden;
 }
 
 .code-block-expand {
@@ -1261,10 +1261,10 @@
   --code-block-icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
 }
 
-/* The wrap control is offered only once a line measurably overflows, so it never
-   advertises an action that would change nothing. */
+/* Reserve the wrap slot during streaming; hidden controls remain unfocusable. */
 .code-block-wrap {
-  display: none;
+  display: inline-flex;
+  visibility: hidden;
   align-items: center;
   justify-content: center;
   width: 32px;
@@ -1279,14 +1279,16 @@
 
 .code-block-wrapper.has-horizontal-overflow .code-block-wrap,
 .code-block-wrapper.is-wrapped .code-block-wrap {
-  display: inline-flex;
+  visibility: visible;
 }
 
 .code-block-wrap__icon {
   --code-block-icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 6h18M3 12h15a3 3 0 1 1 0 6h-4m2-2-2 2 2 2M3 18h7'/></svg>");
 }
 
-.code-block-wrapper.is-wrapped .code-block-viewport :where(pre code) {
+/* Human fences have no wrap control; share wrapped code layout, except aligned block art. */
+.code-block-wrapper.is-wrapped .code-block-viewport :where(pre code),
+.chat-group.user :where(pre code:not(.markdown-block-art)) {
   width: auto;
   min-width: 0;
   overflow-wrap: anywhere;

@@ -76,7 +76,12 @@ export async function connectPreparedCliTurn(context: PreparedCliRunContext, sig
 }
 
 export function scopedToolFixture<T>(tools: T[], workspaceDir: string) {
-  return { agentId: "main", workspaceDir, captureFinalCronCreatorTools: undefined, tools };
+  return {
+    agentId: "main",
+    workspaceDir,
+    captureFinalCronCreatorTools: undefined,
+    tools,
+  };
 }
 
 export function captureGrant(token: string, captureKey: string, runtimeOwnerToken: string) {

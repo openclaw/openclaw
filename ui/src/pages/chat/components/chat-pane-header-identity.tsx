@@ -159,7 +159,12 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
   );
 }
 
-function SessionRenameInput(props: ChatPaneHeaderProps) {
+export function SessionRenameInput(
+  props: Pick<
+    ChatPaneHeaderProps,
+    "renameValue" | "renameDisabledReason" | "onRenameInput" | "onCommitRename" | "onCancelRename"
+  > & { class?: string; renameBusy?: boolean },
+) {
   let input!: HTMLInputElement;
   onSettled(() => {
     input.focus();
@@ -167,8 +172,10 @@ function SessionRenameInput(props: ChatPaneHeaderProps) {
   });
   return (
     <input
-      class="chat-pane__session-title-input"
+      class={["chat-pane__session-title-input", props.class]}
       value={props.renameValue}
+      readonly={props.renameBusy}
+      aria-busy={props.renameBusy ? "true" : undefined}
       aria-label={t("chat.sessionHeader.renameInputAria")}
       placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
       onInput={(event) => props.onRenameInput(event.currentTarget.value)}
