@@ -1,4 +1,0 @@
-# Strict-mode setup planner regression coverage: required nullable command schema
-# and safe handling of conversational responses without a command.
-# 12 additional test lines, with 1 line of existing budget headroom.
-11
