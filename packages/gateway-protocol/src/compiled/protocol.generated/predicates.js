@@ -14503,7 +14503,8 @@ var External = [
     value === "agent-roster" ||
     value === "command-palette" ||
     value === "skill-workshop" ||
-    value === "workboard-lifecycle",
+    value === "workboard-lifecycle" ||
+    value === "sessions-search",
   check_2176 = (value) => check_2177(value) || check_398(value) || check_2096(value),
   check_2177 = (value) => typeof value == "string" && value === "compact",
   check_2178 = (value) =>

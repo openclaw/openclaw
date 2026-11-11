@@ -10,7 +10,7 @@ import type { prepareSandboxDependencyTemplate } from "../../agents/sandbox/depe
 import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
 import { withWorktreeAllocationLease } from "../../agents/worktrees/allocation.js";
 import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-backend.test-support.js";
-import { requireGit } from "../../agents/worktrees/git.js";
+import * as worktreeGit from "../../agents/worktrees/git.js";
 import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
@@ -60,7 +60,7 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const sandbox = resolveSandboxConfigForAgent();
 const read = (root: string, relative: string) => fs.readFile(path.join(root, relative), "utf8");
-const git = (root: string, ...args: string[]) => requireGit(root, args);
+const git = (root: string, ...args: string[]) => worktreeGit.requireGit(root, args);
 const sourceText = "export const version = 'initial';\n";
 const firstLock = "lockfileVersion: '9.0'\n# first generation\n";
 const secondLock = "lockfileVersion: '9.0'\n# second generation\n";
@@ -197,10 +197,12 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
   assert(template, "Template was not reserved");
   const indexPath = path.join(template.path, ".git", "index");
   const originalIndex = await fs.readFile(indexPath);
-  // Warm validation must not refresh an index that another reader can be cloning.
+  // Reuse consumes producer validation without rescanning or changing the shared index.
   await fs.utimes(path.join(template.path, "source.ts"), 1, 1);
   await write(first, dependencyFile, "consumer edit\n");
+  using commands = vi.spyOn(worktreeGit, "runGit");
   const second = await clone("second");
+  expect(commands.mock.calls.filter(([, args]) => args.includes("status"))).toEqual([]);
   expect((await fs.readFile(indexPath)).equals(originalIndex)).toBe(true);
   expect(await read(second, dependencyFile)).toBe(firstLock);
   expect(await read(first, dependencyFile)).toBe("consumer edit\n");
@@ -210,10 +212,13 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
   await git(source, "replace", sourceCommit, baseCommit);
   let refreshed: string[];
   try {
-    refreshed = await Promise.all([
-      clone("updated-a", sourceCommit),
-      clone("updated-b", sourceCommit),
-    ]);
+    refreshed = await withWorktreePreparationTiming("managed", () =>
+      Promise.all([clone("updated-a", sourceCommit), clone("updated-b", sourceCommit)]),
+    );
+    expect(mocks.preparation.mock.lastCall?.[0].details).toMatchObject({
+      templateClone: expect.any(Number),
+      templateValidateOutput: expect.any(Number),
+    });
   } finally {
     await git(source, "replace", "--delete", sourceCommit);
   }
