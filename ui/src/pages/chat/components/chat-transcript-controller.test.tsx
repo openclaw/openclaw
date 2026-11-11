@@ -806,6 +806,11 @@ it("renews a live end destination after the native scroll target expires", async
   geometry(container, { scrollHeight: 4900 });
   scrollTo.mockClear();
   transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
+  await Promise.resolve();
+  flush();
+  emitRowSizes(transcriptRows(container), 120);
+  flushFrames();
+  await Promise.resolve();
   expect(scrollTo).toHaveBeenLastCalledWith({ top: 4300, behavior: "smooth" });
 });
 

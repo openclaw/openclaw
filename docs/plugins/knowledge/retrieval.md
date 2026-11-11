@@ -58,18 +58,21 @@ finds the current answer.
 - Replacements come after every direct match, ranked by the earlier record's
   BM25 score, then ID. A record that is already a direct match, or reached from
   a better-ranked earlier record, appears once.
-- These hits have `matches: ["superseded"]`, `score: null` (so a memory search
-  with `minScore` leaves them out), an opening excerpt
-  (`snippet.matchLocated: false`), and a citation for the current record. `via`
-  identifies the earlier record that matched: ID, title, and revision, plus
-  path and hash with `detail: "full"`.
+- `via` identifies the earlier record that matched by ID and revision. In the
+  complete hits the Control UI receives, these hits also have
+  `matches: ["superseded"]`, `score: null` (so a memory search with `minScore`
+  leaves them out), an opening excerpt (`snippet.matchLocated: false`), a
+  citation for the current record, and the earlier record's title, path, and
+  hash in `via`.
 - `total`, `offset`, and `nextOffset` count direct and replacement hits
   together. `lifecycle: "superseded"` and `"all"` return superseded records
   directly and do not follow replacements.
 
 ## Results and citations
 
-Each hit has a summary, lifecycle, matched fields, attribution and assertion
+Agent tools receive [list rows](/plugins/knowledge/tools#agent-response-shapes)
+with a short snippet. Complete hits, as the Control UI receives them, have a
+summary, lifecycle, matched fields, attribution and assertion
 origin, and the stable ID, path, revision, and SHA-256 of the observed Markdown.
 
 - Snippets are at most 480 UTF-16 characters with zero-based start/end offsets.
@@ -96,8 +99,9 @@ whose replacement chain reaches a current record. Only records whose content
 hash changed are re-indexed. These tables are not shared with `memory-core` or
 other plugins.
 
-- A publication receipt's `indexed: false` means indexing is pending until the
-  next search, not a failed save.
+- A complete publication receipt's `indexed: false` (shown by
+  `knowledge_mutation` and `knowledge_history`) means indexing is pending until
+  the next search, not a failed save.
 - `index.state: "ready"` with `lag: false` means the projections match this
   query's snapshot. Compare `snapshot` across pages and restart if it changes;
   edits to superseded records change it too.
@@ -178,6 +182,6 @@ ranges without claiming an exact instant.
   24 KiB response budget.
 - Follow `nextOffset` with unchanged filters and the returned `snapshot`.
 
-Query responses report `freshness.queriedAt`, `freshness.scannedAt`, and, for
-keyword queries, `freshness.indexedAt`. An older `scannedAt` means the scan was
+Complete query responses (Control UI) report `freshness.queriedAt`,
+`freshness.scannedAt`, and, for keyword queries, `freshness.indexedAt`. An older `scannedAt` means the scan was
 reused while files were unchanged, not that results are stale.

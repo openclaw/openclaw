@@ -976,6 +976,8 @@ class NodeRuntimeAgentSelectionTest {
           "main=${runtime.mainSessionKey.value} chat=${runtime.chat.sessionKey.value}"
 
       try {
+        // Finish constructor hydration before replacing its request adapters with this recorder.
+        withTimeout(2_000) { runtime.chat.historyLoading.first { !it } }
         val refreshes = answerAgentList(runtime, "agent-b", beforeAnswer = { releaseRoster.await() })
         installChatGateway(runtime, requestGateway = { method, params ->
           observations += "${diagnosticState()} method=$method params=$params"

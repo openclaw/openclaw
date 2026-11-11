@@ -290,8 +290,8 @@ jobs:
     if: (inputs.expected_sha == '' || inputs.run_mock_parity) && (github.event_name != 'workflow_dispatch' || (inputs.scenario == '' && inputs.matrix_scenario == ''))
     runs-on: &linux_runner_large >-
       ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(inputs.runner_group), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' ||
-      'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04'
+      toJSON(inputs.runner_group), toJSON(contains(fromJSON('["github","boat"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'ubuntu-24.04' ||
+      'blacksmith-4vcpu-ubuntu-2404'))) || (contains(fromJSON('["github","boat"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'ubuntu-24.04'
       || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 30
     env:
