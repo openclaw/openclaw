@@ -844,9 +844,11 @@ includes every worker and native allocation, so `rss_threshold` uses the smaller
 physical RAM and the process/cgroup memory constraint, independently of V8 heap
 limits. On Node/Linux with a positive process constraint below physical RAM,
 `process_memory_threshold` also checks the remaining constrained allowance using
-`process.availableMemory()`. Its `usedBytes` is the constraint minus that remaining
-allowance, not process RSS: cgroup charges can exhaust headroom before RSS reaches
-the same 80%/90% thresholds. This signal follows heap and RSS priority within each
+`process.availableMemory()`. When raw usage reaches 80%, it reads the owning cgroup
+hierarchy and estimates each controller's working set by excluding inactive
+file-cache pages, then compares that estimate with its own limit. Anonymous, active-file and kernel charges, including
+children, still count. Unavailable hierarchy or usage evidence retains the raw
+constrained allowance. This signal follows heap and RSS priority within each
 severity. Unknown limits are omitted; Bun's compatibility heap metadata is not
 treated as a V8 limit. RSS growth alone does not indicate pressure.
 

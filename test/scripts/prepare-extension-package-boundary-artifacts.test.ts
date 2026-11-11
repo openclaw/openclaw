@@ -12,7 +12,6 @@ import {
   withDistArtifactOwnership,
 } from "../../scripts/lib/dist-artifact-lock.mts";
 import * as managedChildProcess from "../../scripts/lib/managed-child-process.mts";
-import * as processMemory from "../../scripts/lib/process-memory.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   createPrefixedOutputWriter,
@@ -23,6 +22,7 @@ import {
   runNodeSteps as runNodeStepsImpl,
   runNodeStepsInParallel as runNodeStepsInParallelImpl,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
+import * as processMemory from "../../src/process/process-memory.ts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";

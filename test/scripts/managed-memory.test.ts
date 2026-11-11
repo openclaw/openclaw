@@ -8,7 +8,7 @@ import {
 } from "../../scripts/lib/managed-child-process.mts";
 import { runLinuxMemoryCommand } from "../../scripts/lib/managed-memory.mts";
 import * as memory from "../../scripts/lib/managed-memory.mts";
-import { hasLinuxMemoryContainment } from "../../scripts/lib/process-memory.mts";
+import { hasLinuxMemoryContainment } from "../../src/process/process-memory.ts";
 import { createDeferred } from "../helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({

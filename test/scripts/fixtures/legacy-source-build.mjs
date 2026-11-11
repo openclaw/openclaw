@@ -238,10 +238,10 @@ if (
     );
   }
 }
-const memoryUrl = pathToFileURL(path.join(source, "scripts/lib/process-memory.mts")).href;
+const memoryUrl = pathToFileURL(path.join(source, "src/process/process-memory.ts")).href;
 // The compiler is synthetic; its capacity must not depend on other CI workers.
 modules.set(
-  "scripts/lib/process-memory",
+  "src/process/process-memory",
   `import { readProcessMemoryCapacity as actual } from ${JSON.stringify(memoryUrl + "?original")};
   export function readProcessMemoryCapacity() {
     const bytes = 16 * 1024 ** 3;

@@ -17,10 +17,6 @@ import {
 } from "vitest";
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import {
-  readProcessCgroupV2Snapshot,
-  readProcessMemoryCapacity,
-} from "../../scripts/lib/process-memory.mts";
-import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -43,6 +39,11 @@ import {
   runTsdownBuildInvocation as runTsdownBuildInvocationImpl,
   sanitizeTsdownBuildOutputRoots,
 } from "../../scripts/tsdown-build.mts";
+import {
+  readProcessCgroupV2Snapshot,
+  readProcessCgroupMemoryPressure,
+  readProcessMemoryCapacity,
+} from "../../src/process/process-memory.ts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   fixtureReceiptClientSource,
@@ -784,6 +785,27 @@ describe("resolveTsdownBuildInvocation", () => {
       ),
     };
   }
+
+  it("compares ancestor pressure against its own ceiling", () => {
+    const memory = cgroupMemory("0::/child\n", v2Mount, [
+      [`${cgroupRoot}/memory.max`, String(24 * GiB)],
+      [`${cgroupRoot}/memory.high`, "max"],
+      [`${cgroupRoot}/memory.current`, String(22 * GiB)],
+      [`${cgroupRoot}/memory.stat`, "inactive_file 0\n"],
+      [`${cgroupRoot}/child/memory.max`, String(16 * GiB)],
+      [`${cgroupRoot}/child/memory.high`, "max"],
+      [`${cgroupRoot}/child/memory.current`, String(GiB)],
+      [`${cgroupRoot}/child/memory.stat`, "inactive_file 0\n"],
+    ]);
+    vi.spyOn(fs, "readFileSync").withImplementation(
+      (file) => memory.fs!.readFileSync(String(file), "utf8"),
+      () =>
+        expect(readProcessCgroupMemoryPressure()).toEqual({
+          usedBytes: 22 * GiB,
+          limitBytes: 24 * GiB,
+        }),
+    );
+  });
 
   it("observes raw counters along the mapped cgroup subtree and ancestors", () => {
     const mountPoint = "/sys/fs/cgroup dir";

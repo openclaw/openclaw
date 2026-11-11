@@ -6,6 +6,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
+import { readProcessMemoryCapacity } from "../src/process/process-memory.ts";
 import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import {
   listCacheFiles,
@@ -36,7 +37,6 @@ import {
 } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveTsgoTimeoutMs } from "./run-tsgo.mts";
 // Native compiler output uses long Windows paths even when Node entered through an 8.3 alias.

@@ -441,7 +441,7 @@ it.concurrent.for([
       "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
       "scripts/macos-native-runtime-artifact.mjs": "workflow native runtime artifact script\n",
       ...readFiles([
-        "scripts/lib/process-memory.mts",
+        "src/process/process-memory.ts",
         "packages/normalization-core/src/mountinfo-path.ts",
       ]),
     };

@@ -10,8 +10,11 @@ import type {
   TestSpecification,
   Vitest,
 } from "vitest/node";
+import {
+  readProcessCgroupV2Snapshot,
+  readProcessMemoryCapacity,
+} from "../../src/process/process-memory.ts";
 import { createCiTestObservationCapture } from "./ci-test-observation-capture.mts";
-import { readProcessCgroupV2Snapshot, readProcessMemoryCapacity } from "./process-memory.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
 import { detectVitestHostInfo } from "./vitest-local-scheduling.mts";
 

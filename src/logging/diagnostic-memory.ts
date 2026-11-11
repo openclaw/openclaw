@@ -11,6 +11,7 @@ import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js"
 import { getOldGenerationAfterGcBytes } from "../infra/gc-observer.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
+import { readProcessCgroupMemoryPressure } from "../process/process-memory.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 const WARNING_RATIO = 0.8;
@@ -348,13 +349,16 @@ export function emitDiagnosticMemorySample(
     processLimitBytes < physicalMemoryBytes
       ? process.availableMemory()
       : undefined;
-  const processMemory =
+  let processMemory =
     availableMemoryBytes !== undefined &&
     Number.isFinite(availableMemoryBytes) &&
     availableMemoryBytes >= 0 &&
     availableMemoryBytes <= processLimitBytes
       ? { usedBytes: processLimitBytes - availableMemoryBytes, limitBytes: processLimitBytes }
       : undefined;
+  if (processMemory && processMemory.usedBytes >= processMemory.limitBytes * WARNING_RATIO) {
+    processMemory = readProcessCgroupMemoryPressure() ?? processMemory;
+  }
   const rssLimitBytes = memoryLimits.length ? Math.min(...memoryLimits) : undefined;
   const shouldEmitSample = collectDiagnostics && options?.emitSample !== false;
   memory.heapSizeLimitBytes = heapLimitBytes;

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readProcessMemoryCapacity } from "../src/process/process-memory.ts";
 import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import {
   distArtifactEntryArgs,
@@ -16,7 +17,6 @@ import {
   resolveLocalCheckEnv,
 } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
-import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import {
   shouldPrepareExtensionPackageBoundaryArtifacts,
   shouldPrepareOxlintArtifacts,

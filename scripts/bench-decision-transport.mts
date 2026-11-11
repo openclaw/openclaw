@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { availableParallelism, cpus, freemem, loadavg, totalmem } from "node:os";
 import path from "node:path";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import { readProcessMemoryCapacity } from "../src/process/process-memory.ts";
 import {
   emitBenchmarkReport,
   parseBenchmarkInteger,
@@ -13,7 +14,6 @@ import {
   runBenchmarkWorker,
   summarizeBenchmarkTimings,
 } from "./lib/benchmark-harness.mts";
-import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 
 function nonNegative(value: unknown): number {
   assert(typeof value === "number" && Number.isFinite(value) && value >= 0);

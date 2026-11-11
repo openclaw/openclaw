@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
+import type { MemoryLimitParams } from "../src/process/process-memory.ts";
 import {
   finalizeBuildStepCache,
   resetBuildCacheInputs,
@@ -29,7 +30,6 @@ import {
   writeRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
-import type { MemoryLimitParams } from "./lib/process-memory.mts";
 import { resolveRunNodeInputSignature } from "./lib/run-node-input-state.mts";
 import { preflightInstalledSourceArtifacts } from "./lib/source-update-artifact-preflight.mts";
 import { TSDOWN_PACKAGE_CONFIG_GROUP } from "./lib/tsdown-config-groups.mts";

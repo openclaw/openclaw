@@ -76,7 +76,8 @@ const striped = [
   "scripts/run-oxlint-shards.mts",
   "--only=core",
   "--split-core",
-  "--core-stripe=1/5",
+  // Exercise striped preparation without depending on fixture directory order.
+  "--core-stripe=1/1",
   "--files-json",
   JSON.stringify([consumer]),
   "--threads=1",

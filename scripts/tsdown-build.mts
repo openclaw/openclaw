@@ -13,6 +13,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
+import {
+  readProcessMemoryCapacity,
+  type MemoryLimitParams,
+} from "../src/process/process-memory.ts";
 import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
@@ -31,7 +35,6 @@ import {
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot, controlUiBuildSiblingPid } from "./lib/output-root-guard.mjs";
-import { readProcessMemoryCapacity, type MemoryLimitParams } from "./lib/process-memory.mts";
 import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
   TSDOWN_DECLARATION_CONFIG_GROUPS,

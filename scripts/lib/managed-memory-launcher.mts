@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
+import { hasLinuxMemoryContainment } from "../../src/process/process-memory.ts";
 import { signalExitCode } from "./managed-child-process.mts";
-import { hasLinuxMemoryContainment } from "./process-memory.mts";
 
 const [rawLimit, scope, shell, bin, ...args] = process.argv.slice(2);
 const maxBytes = Number(rawLimit);

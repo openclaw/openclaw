@@ -345,6 +345,7 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
       capacityBytes: Math.trunc(configuredLimit),
       unresolved: false,
       usageKnown: false,
+      pressure: undefined,
     };
   }
 
@@ -391,6 +392,7 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
   let sawDisabledV2MemoryController = false;
   let sawUnreadableControllerFile = false;
   let usageKnown = true;
+  let pressure: { usedBytes: number; limitBytes: number } | undefined;
   for (const limitPath of resolvedPaths.paths) {
     try {
       const rawLimit = fsImpl.readFileSync(limitPath, "utf8");
@@ -430,12 +432,15 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
           }
           // Total controller usage includes kernel and unreclaimable file charges. Credit only
           // inactive file pages and this wrapper's resident set before sizing its child.
-          const competingBytes = Math.max(
-            0,
-            usageBytes -
-              Math.min(usageBytes, inactiveFileBytes) -
-              (processResidentMemoryBytes ?? 0),
-          );
+          const usedBytes = Math.max(0, usageBytes - Math.min(usageBytes, inactiveFileBytes));
+          // Compare each controller to its own limit; ancestors can have a different ceiling.
+          if (
+            limitBytes > 0 &&
+            (!pressure || usedBytes / limitBytes > pressure.usedBytes / pressure.limitBytes)
+          ) {
+            pressure = { usedBytes, limitBytes };
+          }
+          const competingBytes = Math.max(0, usedBytes - (processResidentMemoryBytes ?? 0));
           availableBytes = Math.max(0, limitBytes - competingBytes);
         }
       } catch {
@@ -470,6 +475,7 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
     limitBytes: tightestLimitBytes,
     capacityBytes,
     usageKnown,
+    pressure,
     unresolved:
       resolvedPaths.cgroupRecordReadFailed ||
       sawUnreadableControllerFile ||
@@ -484,6 +490,15 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
           !sawUnreadableControllerFile
         )),
   };
+}
+
+/** Estimate the working set without inactive file pages; other charges remain pressure. */
+export function readProcessCgroupMemoryPressure() {
+  const memory = readCgroupMemoryLimitBytes({
+    constrainedMemoryBytes: 0,
+    processResidentMemoryBytes: 0,
+  });
+  return memory.unresolved || !memory.usageKnown ? undefined : memory.pressure;
 }
 
 function parseProcMemoryBytes(value: string, field: "MemAvailable" | "MemTotal") {
@@ -541,7 +556,7 @@ function readHostAvailableMemoryBytes(params: MemoryLimitParams) {
 }
 
 export function readProcessMemoryCapacity(params: MemoryLimitParams) {
-  const cgroupMemory = readCgroupMemoryLimitBytes(params);
+  const { pressure: _pressure, ...cgroupMemory } = readCgroupMemoryLimitBytes(params);
   if (cgroupMemory.unresolved) {
     return { ...cgroupMemory, limitBytes: null, availableBytes: null, capacityBytes: null };
   }

@@ -9,6 +9,7 @@ import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { DummyRuleMap, OxlintConfig } from "oxlint";
+import { readProcessMemoryCapacity } from "../src/process/process-memory.ts";
 import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import {
   limitsAreAdvisory,
@@ -28,7 +29,6 @@ import { applyLocalOxlintPolicy, resolveLocalCheckEnv } from "./lib/local-check-
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveUntouchedOxlintExclusions } from "./lib/oxlint-changed-scope.mts";
 import { isCiEnvironment } from "./lib/pinned-bun.mts";
-import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 const PREPARE_EXTENSION_BOUNDARY_ARGS = distArtifactEntryArgs(

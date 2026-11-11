@@ -1,5 +1,6 @@
 // Diagnostic memory tests cover pressure events and diagnostic log output.
 import { channel } from "node:diagnostics_channel";
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -31,6 +32,27 @@ import { resetLogger, setLoggerOverride } from "./logger.js";
 
 function flushDiagnosticEvents() {
   return vi.runAllTimersAsync();
+}
+
+const readFileSync = syncFs.readFileSync.bind(syncFs);
+function mockKernelMemoryFiles(files = new Map<string, string>()) {
+  vi.spyOn(syncFs, "readFileSync").mockImplementation(
+    (file, options?: BufferEncoding | syncFs.ReadFileSyncOptions | null) => {
+      if (typeof file === "string" && (file.startsWith("/proc/") || file.startsWith("/sys/"))) {
+        const value = files.get(file);
+        if (value === undefined) {
+          throw Object.assign(new Error("Synthetic unavailable kernel counter"), {
+            code: "ENOENT",
+          });
+        }
+        return value;
+      }
+      return readFileSync(
+        file,
+        typeof options === "string" ? { encoding: options } : (options ?? {}),
+      );
+    },
+  );
 }
 
 function memoryUsage(overrides: Partial<NodeJS.MemoryUsage>): NodeJS.MemoryUsage {
@@ -87,6 +109,7 @@ describe("diagnostic memory", () => {
     events = [];
     stopEvents = onDiagnosticEvent((event) => events.push(event));
     resetDiagnosticMemoryForTest();
+    mockKernelMemoryFiles();
     uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     resetLogger();
@@ -410,6 +433,52 @@ describe("diagnostic memory", () => {
         : [],
     );
   });
+
+  it.each([
+    ["inactive file cache", "anon 100\nfile 850\ninactive_file 850\n", false],
+    ["anonymous children", "anon 950\nfile 0\ninactive_file 0\n", true],
+    ["active files", "anon 100\nfile 850\nactive_file 850\ninactive_file 0\n", true],
+    ["kernel charges", "anon 100\nkernel 850\ninactive_file 0\n", true],
+    ["missing statistics", undefined, true],
+    ["unmapped hierarchy", "inactive_file 850\n", true, "/other"],
+  ] as const)(
+    "preserves constrained retirement for %s",
+    (...[_label, stat, retires, mountRoot]) => {
+      mockProcessPlatform("linux");
+      vi.spyOn(process, "availableMemory").mockReturnValue(50);
+      const files = new Map<string, string>([
+        ["/proc/self/cgroup", "0::/\n"],
+        [
+          "/proc/self/mountinfo",
+          `1 2 0:28 ${mountRoot ?? "/"} /sys/fs/cgroup rw - cgroup2 cgroup rw\n`,
+        ],
+        ["/proc/self/limits", "Max address space unlimited unlimited bytes\n"],
+        ["/sys/fs/cgroup/memory.max", "1000"],
+        ["/sys/fs/cgroup/memory.high", "max"],
+        ["/sys/fs/cgroup/memory.current", "950"],
+        ...(stat === undefined ? [] : [["/sys/fs/cgroup/memory.stat", stat] as [string, string]]),
+      ]);
+      mockKernelMemoryFiles(files);
+      const pressure = channel("openclaw.memory.critical");
+      const retireIdle = vi.fn();
+      pressure.subscribe(retireIdle);
+      try {
+        emitDiagnosticMemorySample(
+          {
+            isBunRuntime: false,
+            memoryUsage: memoryUsage({}),
+            heapSizeLimitBytes: 4000,
+            processMemoryLimitBytes: 1000,
+            physicalMemoryBytes: 4000,
+          },
+          false,
+        );
+        expect(retireIdle).toHaveBeenCalledTimes(retires ? 1 : 0);
+      } finally {
+        pressure.unsubscribe(retireIdle);
+      }
+    },
+  );
 
   it.each([
     ["linux", false, 0, 4000],

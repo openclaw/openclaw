@@ -32,7 +32,7 @@ it.each([
   writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   if (!fixture.missing) {
     for (const file of [
-      "scripts/lib/process-memory.mts",
+      "src/process/process-memory.ts",
       "packages/normalization-core/src/mountinfo-path.ts",
     ]) {
       const target = path.join(root, ".ci-harness", file);
