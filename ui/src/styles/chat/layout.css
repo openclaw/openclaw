@@ -201,7 +201,8 @@ openclaw-pending-session-create {
   color: var(--text);
 }
 
-.chat-cloud-disk-space-notice {
+.chat-cloud-disk-space-notice,
+.task-suggestion__repository {
   display: grid;
   gap: 8px;
 }
@@ -329,7 +330,16 @@ openclaw-pending-session-create {
   font-weight: 600;
 }
 
-.chat-composer-neighbor-card__copy span {
+.chat-composer-neighbor-card__copy span,
+.session-suggestion__state,
+.task-suggestion__repository-choice small,
+.chat-pr[data-state="draft"] .chat-pr__icon,
+.chat-pr[data-state="branch"] .chat-pr__icon,
+.chat-pr__checks,
+.chat-pr__checks-row-label,
+.agent-chat__disabled-banner-icon--archive,
+.agent-chat__disabled-banner-detail,
+.agent-chat__disabled-banner-icon--eye {
   color: var(--muted);
 }
 
@@ -1660,10 +1670,6 @@ openclaw-chat-video-player {
   background: var(--panel-hover);
 }
 
-.session-suggestion__state {
-  color: var(--muted);
-}
-
 .session-suggestion__text {
   max-height: 12rem;
   overflow: auto;
@@ -1933,11 +1939,6 @@ openclaw-chat-video-player {
   background: var(--task-suggestion-prompt-bg);
 }
 
-.task-suggestion__repository {
-  display: grid;
-  gap: 8px;
-}
-
 .task-suggestion__repository label {
   display: grid;
   gap: 4px;
@@ -1959,10 +1960,6 @@ openclaw-chat-video-player {
   justify-content: stretch;
   text-align: left;
   overflow-wrap: anywhere;
-}
-
-.task-suggestion__repository-choice small {
-  color: var(--muted);
 }
 
 .task-suggestion__actions {
@@ -2084,11 +2081,6 @@ openclaw-chat-video-player {
   color: var(--ok);
 }
 
-.chat-pr[data-state="draft"] .chat-pr__icon,
-.chat-pr[data-state="branch"] .chat-pr__icon {
-  color: var(--muted);
-}
-
 .chat-pr[data-state="closed"] .chat-pr__icon,
 .chat-pr__deletions,
 .chat-pr__checks[data-checks="failing"],
@@ -2161,10 +2153,6 @@ button.chat-pr__diff {
 .chat-pr__checks[data-checks="passing"],
 .chat-ci__status[data-state="passed"] {
   color: var(--ok);
-}
-
-.chat-pr__checks {
-  color: var(--muted);
 }
 
 .chat-pr__checks[data-checks="pending"],
@@ -2248,7 +2236,11 @@ button.chat-pr__diff {
   color: var(--muted);
 }
 
-.chat-pr__checks-menu-header a:hover {
+.chat-pr__checks-menu-header a:hover,
+.chat-ci__step[data-state="failed"],
+.chat-ci__job-link:hover,
+.chat-pr__publication-status > summary:hover,
+.chat-pr__dismiss:hover {
   color: var(--text);
 }
 
@@ -2265,10 +2257,6 @@ button.chat-pr__diff {
   align-items: center;
   gap: 5px;
   white-space: nowrap;
-}
-
-.chat-pr__checks-row-label {
-  color: var(--muted);
 }
 
 .chat-pr__checks-row-count {
@@ -2472,20 +2460,12 @@ openclaw-chat-ci-details {
   line-height: 1.4;
 }
 
-.chat-ci__step[data-state="failed"] {
-  color: var(--text);
-}
-
 .chat-ci__job-link {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   color: var(--muted);
   font-size: 11px;
-}
-
-.chat-ci__job-link:hover {
-  color: var(--text);
 }
 
 .chat-ci__empty-steps {
@@ -2594,10 +2574,6 @@ openclaw-chat-ci-details {
   display: none;
 }
 
-.chat-pr__publication-status > summary:hover {
-  color: var(--text);
-}
-
 .chat-pr__publication-status > summary:focus-visible {
   border-radius: 4px;
   outline: none;
@@ -2651,10 +2627,6 @@ openclaw-chat-ci-details {
   background: none;
   color: var(--muted);
   cursor: var(--cursor-action);
-}
-
-.chat-pr__dismiss:hover {
-  color: var(--text);
 }
 
 @media (max-width: 640px) {
@@ -2787,10 +2759,6 @@ openclaw-chat-ci-details {
   color: color-mix(in srgb, var(--warn) 72%, var(--muted));
 }
 
-.agent-chat__disabled-banner-icon--archive {
-  color: var(--muted);
-}
-
 .agent-chat__disabled-banner-icon svg {
   width: 18px;
   height: 18px;
@@ -2800,10 +2768,6 @@ openclaw-chat-ci-details {
   color: var(--text-strong);
   font-weight: 600;
   line-height: 1.35;
-}
-
-.agent-chat__disabled-banner-detail {
-  color: var(--muted);
 }
 
 .agent-chat__disabled-banner--compact {
@@ -2830,10 +2794,6 @@ openclaw-chat-ci-details {
   height: 10px;
   fill: currentColor;
   stroke: none;
-}
-
-.agent-chat__disabled-banner-icon--eye {
-  color: var(--muted);
 }
 
 .agent-chat__disabled-banner-icon--eye svg {
