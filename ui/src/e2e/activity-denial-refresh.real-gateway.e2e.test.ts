@@ -4,12 +4,15 @@ import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
+  acquireGatewayE2ePortBlock,
+  startClaimedGateway,
+} from "../../../src/gateway/test-helpers.listener.ts";
+import {
   setDisplayName,
   setUserProfileRole,
 } from "../../../src/state/user-profile-writes.worker.ts";
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
-import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { activityPersonLocation } from "../app-route-paths.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -28,20 +31,21 @@ const scopes = ["operator.sessions.read", "operator.sessions.write"];
 
 suite.define(() => {
   it("keeps a real guest timeline denial stable across unrelated session mutations", async (test) => {
-    const port = await getFreePort();
-    const state = await createOpenClawTestState({
-      label: "activity-denial",
-      layout: "home",
-      env: {
-        ...deviceGatewayEnv,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-      },
-    });
+    let cleanupState: (() => Promise<void>) | undefined;
     let gateway: GatewayServer | undefined;
     let proxy: ViteDevServer | undefined;
     await suite.runScenario(test, {
       async run() {
+        const state = await createOpenClawTestState({
+          label: "activity-denial",
+          layout: "home",
+          env: {
+            ...deviceGatewayEnv,
+            OPENCLAW_GATEWAY_PASSWORD: undefined,
+            OPENCLAW_GATEWAY_TOKEN: undefined,
+          },
+        });
+        cleanupState = state.cleanup;
         const email = "activity-guest@example.test";
         const guest = ensureProfileForEmail(email);
         const other = ensureProfileForEmail("activity-other@example.test");
@@ -55,29 +59,33 @@ suite.define(() => {
           requiredHeaders: ["x-forwarded-proto"],
           userHeader: "x-forwarded-user",
         };
-        await state.writeConfig({
-          agents: {
-            ownership: "explicit",
-            defaults: { workspace: state.workspaceDir },
-            entries: { main: {} },
-          },
-          gateway: {
-            port,
-            auth: { mode: "trusted-proxy", trustedProxy },
-            trustedProxies: ["127.0.0.1", "::1"],
-            controlUi: { enabled: false, allowedOrigins: [new URL(suite.server.baseUrl).origin] },
-            roles: {
-              default: "guest",
-              definitions: { guest: { agents: ["main"], sessions: { others: "view" }, scopes } },
+        const claim = await acquireGatewayE2ePortBlock();
+        const port = claim.port;
+        gateway = await startClaimedGateway(claim, async () => {
+          await state.writeConfig({
+            agents: {
+              ownership: "explicit",
+              defaults: { workspace: state.workspaceDir },
+              entries: { main: {} },
             },
-          },
-        });
-        const { startGatewayServer } = await import("../../../src/gateway/server.js");
-        gateway = await startGatewayServer(port, {
-          auth: { mode: "trusted-proxy", trustedProxy },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
+            gateway: {
+              port,
+              auth: { mode: "trusted-proxy", trustedProxy },
+              trustedProxies: ["127.0.0.1", "::1"],
+              controlUi: { enabled: false, allowedOrigins: [new URL(suite.server.baseUrl).origin] },
+              roles: {
+                default: "guest",
+                definitions: { guest: { agents: ["main"], sessions: { others: "view" }, scopes } },
+              },
+            },
+          });
+          const { startGatewayServer } = await import("../../../src/gateway/server.js");
+          return await startGatewayServer(port, {
+            auth: { mode: "trusted-proxy", trustedProxy },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+          });
         });
         const route = gatewayProxyRoute(port, email);
         proxy = await createGatewayProxy(state.workspaceDir, {
@@ -178,8 +186,8 @@ suite.define(() => {
           async () => {},
           () => proxy?.close(),
           () => gateway?.close({ reason: "Activity proof cleanup" }),
-          () => state.cleanup(),
         ),
+      release: async () => cleanupState?.(),
     });
   });
 });
