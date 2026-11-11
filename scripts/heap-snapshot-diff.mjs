@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHmac, randomBytes } from "node:crypto";
 import { closeSync, openSync, readFileSync, readSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 
@@ -129,7 +130,7 @@ const publicLabels = new Set([
   "prototype",
 ]);
 
-function readGraph(file, safeLabels = null, stringLimit = 1024) {
+export function readGraph(file, safeLabels = null, stringLimit = 1024, scriptAllowlist = null) {
   const reader = new Reader(file);
   try {
     const header = reader.find('"nodes"', true).replace(/,\s*$/u, "");
@@ -214,6 +215,25 @@ function readGraph(file, safeLabels = null, stringLimit = 1024) {
     }
     reader.find('"strings"');
     const strings = new Map();
+    const codeData = scriptAllowlist
+      ? {
+          types,
+          rawNames: names.slice(),
+          identities: new Map(),
+          edgeTags: new Map(),
+          builtins: new Set(),
+          // Per-run key: identities group within one report but cannot confirm guessed paths.
+          identityKey: randomBytes(32),
+        }
+      : null;
+    const codeNameIds = codeData ? new Set() : null;
+    if (codeData) {
+      for (let node = 0; node < count; node++) {
+        if (typeNames[types[node]] === "code") {
+          codeNameIds.add(names[node]);
+        }
+      }
+    }
     let maxName = 0;
     if (safeLabels) {
       for (const name of names) {
@@ -232,6 +252,28 @@ function readGraph(file, safeLabels = null, stringLimit = 1024) {
     const safeNames = new Map();
     reader.array(
       (value, index) => {
+        if (codeData) {
+          if (["script", "shared", "code", "feedback_cell", "source", "name"].includes(value)) {
+            codeData.edgeTags.set(index, value);
+          }
+          if (codeNameIds.has(index)) {
+            // Node 26.12 labels Scripts by bare name; newer V8 prefixes "system / Script".
+            const label = value.startsWith("system / Script")
+              ? value.slice("system / Script".length).replace(/^ \/ /u, "")
+              : value;
+            const normalized = label.split(/[?#]/u, 1)[0];
+            const complete = normalized.length > 0 && value.length < stringLimit;
+            codeData.identities.set(index, {
+              identityHash: complete
+                ? createHmac("sha256", codeData.identityKey).update(normalized).digest("hex")
+                : null,
+              name: complete && scriptAllowlist.has(normalized) ? normalized : "(redacted)",
+            });
+            if (/ builtin (?:code|instruction stream)\)$/u.test(value)) {
+              codeData.builtins.add(index);
+            }
+          }
+        }
         if (sessionStrings) {
           sessionStrings[index] = Number(/^agent:[^:]+:.+/u.test(value));
           tableStrings[index] = Number(value === "table");
@@ -325,6 +367,7 @@ function readGraph(file, safeLabels = null, stringLimit = 1024) {
       names,
       labels,
       meta,
+      codeData,
       ...(safeLabels
         ? {
             edgeNames,
@@ -343,11 +386,18 @@ function readGraph(file, safeLabels = null, stringLimit = 1024) {
   }
 }
 
-function summarize(file, keepGraph = false, safeLabels = null, stringLimit = 1024) {
+function summarize(
+  file,
+  keepGraph = false,
+  safeLabels = null,
+  stringLimit = 1024,
+  scriptAllowlist = null,
+) {
   const { count, ids, sizes, starts, targets, names, labels, meta, ...summaryData } = readGraph(
     file,
     safeLabels,
     stringLimit,
+    scriptAllowlist,
   );
   const numbers = new Uint32Array(count);
   const vertices = new Uint32Array(count + 1);
@@ -868,6 +918,322 @@ function duplicateRetainers(snapshot, top) {
   };
 }
 
+function summarizeCode(snapshot, top) {
+  const {
+    count,
+    sizes,
+    starts,
+    targets,
+    edgeNames,
+    edgeKinds,
+    immediateDominators,
+    retained,
+    meta,
+    codeData,
+  } = snapshot;
+  const { types, rawNames, identities, edgeTags, builtins } = codeData;
+  const nodeKinds = meta.node_types[meta.node_fields.indexOf("type")];
+  const kinds = meta.edge_types[meta.edge_fields.indexOf("type")];
+  const isCode = (node) => node < count && nodeKinds[types[node]] === "code";
+  const internalTag = (edge) =>
+    kinds[edgeKinds[edge]] === "internal" ? edgeTags.get(edgeNames[edge]) : undefined;
+  const reachable = (node) => node < count && immediateDominators[node] !== count;
+  const scripts = new Set();
+  for (let node = 0; node < count; node++) {
+    if (!isCode(node) || !reachable(node)) {
+      continue;
+    }
+    let source = false;
+    let name = false;
+    for (let edge = starts[node]; edge < starts[node + 1]; edge++) {
+      const tag = internalTag(edge);
+      if (tag === "script" && isCode(targets[edge])) {
+        scripts.add(targets[edge]);
+      }
+      source ||= tag === "source" && targets[edge] < count;
+      name ||= tag === "name" && targets[edge] < count;
+    }
+    if (source && name) {
+      scripts.add(node);
+    }
+  }
+  const empty = () => ({ codeObjects: 0, shallowBytes: 0, retainedBytes: 0 });
+  const rows = [empty(), empty()];
+  const groups = new Map();
+  const owners = new Uint32Array(count);
+  const fixed = new Uint8Array(count);
+  for (const node of scripts) {
+    const identity = identities.get(rawNames[node]);
+    // Anonymous/truncated names cannot establish duplicate compilation identity.
+    const key = identity.identityHash ?? node;
+    let group = groups.get(key);
+    if (group === undefined) {
+      group = rows.length;
+      groups.set(key, group);
+      rows.push({ ...identity, instanceCount: 0, ...empty() });
+    }
+    rows[group].instanceCount++;
+    owners[node] = group;
+    fixed[node] = 1;
+  }
+  for (let node = 0; node < count; node++) {
+    if (!isCode(node) || !reachable(node) || fixed[node]) {
+      continue;
+    }
+    if (builtins.has(rawNames[node])) {
+      owners[node] = 1;
+      fixed[node] = 1;
+      continue;
+    }
+    for (let edge = starts[node]; edge < starts[node + 1]; edge++) {
+      if (internalTag(edge) === "script" && scripts.has(targets[edge])) {
+        owners[node] = owners[targets[edge]];
+        fixed[node] = 1;
+        break;
+      }
+    }
+  }
+  // Each node transitions at most twice: unassigned -> one script -> shared.
+  const queue = new Uint32Array(count * 2);
+  let end = 0;
+  for (let node = 0; node < count; node++) {
+    if (owners[node]) {
+      queue[end++] = node;
+    }
+  }
+  function assign(node, owner) {
+    if (
+      !isCode(node) ||
+      !reachable(node) ||
+      fixed[node] ||
+      owners[node] === owner ||
+      owners[node] === 1
+    ) {
+      return;
+    }
+    owners[node] = owners[node] ? 1 : owner;
+    queue[end++] = node;
+  }
+  for (let node = 0; node < count; node++) {
+    if (nodeKinds[types[node]] !== "closure" || !reachable(node)) {
+      continue;
+    }
+    let owner = 0;
+    for (let edge = starts[node]; edge < starts[node + 1]; edge++) {
+      if (internalTag(edge) === "shared" && targets[edge] < count) {
+        owner = owners[targets[edge]];
+      }
+    }
+    if (!owner) {
+      continue;
+    }
+    for (let edge = starts[node]; edge < starts[node + 1]; edge++) {
+      if (["code", "feedback_cell"].includes(internalTag(edge))) {
+        assign(targets[edge], owner);
+      }
+    }
+  }
+  for (let read = 0; read < end; read++) {
+    const node = queue[read];
+    for (let edge = starts[node]; edge < starts[node + 1]; edge++) {
+      if (["internal", "hidden"].includes(kinds[edgeKinds[edge]])) {
+        assign(targets[edge], owners[node]);
+      }
+    }
+  }
+  // Reuse the dominator relation to union same-group subtrees, including non-code data.
+  const children = new Uint32Array(count);
+  const next = new Uint32Array(count);
+  for (let node = 1; node < count; node++) {
+    if (!reachable(node)) {
+      continue;
+    }
+    const parent = immediateDominators[node];
+    next[node] = children[parent];
+    children[parent] = node;
+  }
+  const active = new Uint32Array(rows.length);
+  const total = empty();
+  let activeCode = 0;
+  function enter(node) {
+    if (!isCode(node)) {
+      return;
+    }
+    const row = rows[owners[node]];
+    row.codeObjects++;
+    row.shallowBytes += sizes[node];
+    total.codeObjects++;
+    total.shallowBytes += sizes[node];
+    if (!active[owners[node]]++) {
+      row.retainedBytes += retained[node];
+    }
+    if (!activeCode++) {
+      total.retainedBytes += retained[node];
+    }
+  }
+  let node = 0;
+  enter(node);
+  while (true) {
+    if (children[node]) {
+      const child = children[node];
+      children[node] = next[child];
+      node = child;
+      enter(node);
+    } else {
+      if (isCode(node)) {
+        active[owners[node]]--;
+        activeCode--;
+      }
+      if (!node) {
+        break;
+      }
+      node = immediateDominators[node];
+    }
+  }
+  const ranked = rows
+    .slice(2)
+    .toSorted((a, b) => b.retainedBytes - a.retainedBytes || b.shallowBytes - a.shallowBytes);
+  const sourceGroups = new Map();
+  const sourceNodes = new Set();
+  let sourceBytes = 0;
+  for (const script of scripts) {
+    const owner = owners[script];
+    let group = sourceGroups.get(owner);
+    if (!group) {
+      const { name, identityHash, instanceCount } = rows[owner];
+      group = { name, identityHash, instanceCount, nodes: new Set(), shallowBytes: 0 };
+      sourceGroups.set(owner, group);
+    }
+    const pending = [];
+    for (let edge = starts[script]; edge < starts[script + 1]; edge++) {
+      if (internalTag(edge) === "source") {
+        pending.push(targets[edge]);
+      }
+    }
+    // Source ropes can share backing strings within and across script identities.
+    while (pending.length) {
+      const source = pending.pop();
+      if (!reachable(source) || group.nodes.has(source)) {
+        continue;
+      }
+      const kind = nodeKinds[types[source]];
+      if (!["string", "concatenated string", "sliced string"].includes(kind)) {
+        continue;
+      }
+      group.nodes.add(source);
+      group.shallowBytes += sizes[source];
+      if (!sourceNodes.has(source)) {
+        sourceNodes.add(source);
+        sourceBytes += sizes[source];
+      }
+      if (kind !== "string") {
+        for (let edge = starts[source]; edge < starts[source + 1]; edge++) {
+          if (kinds[edgeKinds[edge]] === "internal") {
+            pending.push(targets[edge]);
+          }
+        }
+      }
+    }
+  }
+  return {
+    total,
+    scriptCount: scripts.size,
+    identityCount: groups.size,
+    unattributed: rows[0],
+    sharedOrRuntime: rows[1],
+    topScripts: ranked.slice(0, top),
+    duplicateScripts: ranked.filter((row) => row.instanceCount > 1),
+    sourceStrings: {
+      stringNodes: sourceNodes.size,
+      shallowBytes: sourceBytes,
+      topScripts: [...sourceGroups.values()]
+        .filter((group) => group.nodes.size)
+        .map((group) => ({
+          name: group.name,
+          identityHash: group.identityHash,
+          instanceCount: group.instanceCount,
+          shallowBytes: group.shallowBytes,
+          stringNodes: group.nodes.size,
+        }))
+        .toSorted((a, b) => b.shallowBytes - a.shallowBytes)
+        .slice(0, top),
+    },
+    notes: [
+      "Only exact reviewed script names after stripping query/hash are emitted; other names are redacted. SHA-256 identities compare normalized names, not source contents. Anonymous/truncated names have null hashes and remain separate.",
+      "Instances count reachable V8 Script objects, not functions, module evaluations or reclaimable duplicates. Attribution seeds Script/SFI and closure code/feedback edges, then follows only strong internal/hidden code-to-code edges. Script/SFI seeds stay fixed; conflicting associations and tagged builtins are shared/runtime. Unassociated code stays unattributed.",
+      "Shallow bytes partition reachable code nodes once. Retained bytes union each group's dominated subtrees, including source strings and other non-code data; different rows may overlap and must not be summed. Top scripts are bounded by --top; duplicateScripts includes every repeated complete identity. Attribution is inferred from V8 snapshot structure, not a loader or security-boundary verdict.",
+      "Source strings follow Script.source and strong internal string edges through concatenated/sliced backing strings. Counts and shallow bytes union nodes within each script identity and across the total. Per-script source rows may overlap: this is source association, not exclusive dominator retention or RSS. Source contents are never emitted.",
+    ],
+  };
+}
+
+function summarizeNodeGroups(snapshot, file) {
+  const groups = JSON.parse(readFileSync(file, "utf8"));
+  if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
+    throw new Error("--node-groups requires a JSON object of reviewed names to node-ID arrays");
+  }
+  const wanted = new Map();
+  for (const [name, ids] of Object.entries(groups)) {
+    if (
+      !/^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u.test(name) ||
+      !Array.isArray(ids) ||
+      ids.some((id) => !Number.isSafeInteger(id) || id <= 0)
+    ) {
+      throw new Error("Invalid --node-groups name or node-ID array");
+    }
+    for (const id of ids) {
+      wanted.set(id, undefined);
+    }
+  }
+  const { ids, count, immediateDominators, sizes, retained } = snapshot;
+  for (let node = 0; node < count; node++) {
+    if (wanted.has(ids[node])) {
+      wanted.set(ids[node], node);
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(groups).map(([name, requested]) => {
+      const unique = new Set(requested);
+      const found = [...unique].map((id) => wanted.get(id)).filter((node) => node !== undefined);
+      const selected = new Set(found.filter((node) => immediateDominators[node] < count));
+      let retainedUnionBytes = 0;
+      let subtreeRoots = 0;
+      let shallowBytes = 0;
+      for (const node of selected) {
+        shallowBytes += sizes[node];
+        let ancestor = node;
+        let covered = false;
+        while (ancestor !== 0) {
+          ancestor = immediateDominators[ancestor];
+          if (selected.has(ancestor)) {
+            covered = true;
+            break;
+          }
+        }
+        // Existing dominator subtrees are nested or disjoint; count only uncovered roots.
+        if (!covered) {
+          retainedUnionBytes += retained[node];
+          subtreeRoots++;
+        }
+      }
+      return [
+        name,
+        {
+          requestedCount: requested.length,
+          uniqueRequestedCount: unique.size,
+          matchedCount: found.length,
+          missingCount: unique.size - found.length,
+          reachableCount: selected.size,
+          unreachableCount: found.length - selected.size,
+          subtreeRoots,
+          shallowBytes,
+          retainedUnionBytes,
+        },
+      ];
+    }),
+  );
+}
+
 function summarizeRetention(file, options) {
   const safeLabels = new Set(publicLabels);
   if (options.labels) {
@@ -877,7 +1243,21 @@ function summarizeRetention(file, options) {
       }
     }
   }
-  const snapshot = summarize(file, true, safeLabels, options.stringLimit);
+  const scriptAllowlist = options.codeByScript
+    ? new Set(
+        options.scriptAllowlist
+          ? readFileSync(options.scriptAllowlist, "utf8").split(/\r?\n/u).filter(Boolean)
+          : [],
+      )
+    : null;
+  const snapshot = summarize(file, true, safeLabels, options.stringLimit, scriptAllowlist);
+  if (options.codeByScript) {
+    return {
+      nodes: snapshot.count,
+      reachable: snapshot.visited,
+      codeByScript: summarizeCode(snapshot, options.top),
+    };
+  }
   const {
     count,
     ids,
@@ -1021,10 +1401,14 @@ function summarizeRetention(file, options) {
     duplicateStrings: snapshot.duplicateStrings,
     duplicateStringRetainers: stringRetainers,
     inspectedNodes,
+    ...(options.nodeGroups
+      ? { nodeGroups: summarizeNodeGroups(snapshot, options.nodeGroups) }
+      : {}),
     retainers,
     notes: [
       "Only fixed built-in labels and the explicit reviewed-source label allowlist are emitted; other names are redacted. No string values or session keys are emitted.",
       "Retained sizes exclude weak and shortcut edges; ephemerons follow V8 internal edges. Class totals overlap across classes; nested same-class subtrees count once.",
+      "Node-group retainedUnionBytes is the exact union of individually dominated subtrees in this graph. Different groups overlap. Shared descendants dominated by none of the selected nodes are excluded: this is not the hypothetical memory freed by deleting all selected nodes together. Group names come from the caller's reviewed manifest; node IDs are snapshot-local.",
       "Duplicate estimates cover flat string nodes sharing a V8 string-table entry, including unreachable nodes; names at or above stringLimit are excluded because V8 truncates them. Match --string-limit to the capturing runtime flag (Node default 1024). Sliced/concatenated strings and external backing are excluded. Savings retain the largest copy and are not a measured reclamation result.",
       "Duplicate retainer attribution keeps the first largest copy per string group and charges each other node once to one reachable strong incoming edge, preferring property/context edges. Multiple incoming edges are counted, not charged again. Attribution is representative, not exclusive ownership or a promise of producer-local savings; ownerId is the nearest context/named-constructor dominator, or the root. Unattributed bytes have no reachable strong incoming edge. Displayed groups are top-N; attributedBytes includes all groups. Requested --node children contain only allowlisted labels and element-reference counts, not array length or Map.size.",
       "Session scaling counts references to agent:<agent>:<session> keys, not unique sessions or Map.size; shared keys and backing tables can appear in multiple rows. Other key formats are not detected.",
@@ -1035,14 +1419,17 @@ function summarizeRetention(file, options) {
 }
 
 const usage =
-  "Single snapshot: node scripts/heap-snapshot-diff.mjs --summary <snapshot> [--labels reviewed-source-labels.txt] [--string-limit N] [--top N] [--max-depth N]\nUsage: node scripts/heap-snapshot-diff.mjs <before.heapsnapshot> <after.heapsnapshot> [--independent-ids] [--json] [--top N] [--node ID] [--max-depth N]";
+  "Single snapshot: node scripts/heap-snapshot-diff.mjs --summary <snapshot> [--labels reviewed-source-labels.txt] [--node-groups reviewed-node-groups.json] [--code-by-script] [--script-allowlist reviewed-build-files.txt] [--string-limit N] [--top N] [--max-depth N]\nUsage: node scripts/heap-snapshot-diff.mjs <before.heapsnapshot> <after.heapsnapshot> [--independent-ids] [--json] [--top N] [--node ID] [--max-depth N]";
 
 function parseArgs(args) {
   const options = {
     json: false,
     independentIds: false,
     summary: false,
+    codeByScript: false,
+    scriptAllowlist: null,
     labels: null,
+    nodeGroups: null,
     stringLimit: 1024,
     files: [],
     top: 30,
@@ -1055,9 +1442,14 @@ function parseArgs(args) {
       options.json = true;
     } else if (arg === "--summary") {
       options.summary = true;
-    } else if (arg === "--labels") {
-      options.labels = args[++index];
-      if (!options.labels || options.labels.startsWith("--")) {
+    } else if (arg === "--code-by-script") {
+      options.codeByScript = true;
+      options.summary = true;
+    } else if (["--labels", "--script-allowlist", "--node-groups"].includes(arg)) {
+      const key =
+        arg === "--labels" ? "labels" : arg === "--node-groups" ? "nodeGroups" : "scriptAllowlist";
+      options[key] = args[++index];
+      if (!options[key] || options[key].startsWith("--")) {
         throw new Error(usage);
       }
     } else if (arg === "--independent-ids") {
@@ -1082,7 +1474,9 @@ function parseArgs(args) {
   if (
     options.files.length !== (options.summary ? 1 : 2) ||
     (options.summary && options.independentIds) ||
-    (options.labels && !options.summary)
+    (options.labels && !options.summary) ||
+    (options.nodeGroups && (!options.summary || options.codeByScript)) ||
+    (options.scriptAllowlist && !options.codeByScript)
   ) {
     throw new Error(usage);
   }
@@ -1182,9 +1576,11 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error.message);
-  process.exitCode = 1;
+if (import.meta.main) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
 }

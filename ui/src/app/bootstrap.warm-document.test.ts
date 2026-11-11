@@ -1,11 +1,13 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import * as browserGateway from "../api/gateway.ts";
 import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { clearBootRecords } from "./boot-record.ts";
 import { makeBootRecord } from "./bootstrap.test-support.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import { captureGatewayClients } from "./gateway-store.test-support.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
 
 const originalUrl = window.location.href;
@@ -20,7 +22,6 @@ const mainRecord = () =>
     groups: [{ name: "Main private group", position: 0 }],
     sectionOrder: ["Main private group"],
   });
-
 const replies = new Map<string, () => unknown>([
   ["agents.list", () => mainRecord().agents],
   ["sessions.groups.list", () => ({ groups: [], sectionOrder: [] })],
@@ -46,14 +47,7 @@ beforeEach(() => {
   vi.spyOn(NativeClient.prototype, "request").mockImplementation(
     async (method) => replies.get(method)?.() ?? {},
   );
-  vi.spyOn(browserGateway, "GatewayBrowserClient").mockImplementation(
-    class extends NativeClient {
-      constructor(options: GatewayBrowserClientOptions) {
-        super(options);
-        connections.push(options);
-      }
-    },
-  );
+  captureGatewayClients((_client, options) => connections.push(options));
 });
 afterEach(async () => {
   runtimes.splice(0).forEach((runtime) => runtime.stop());
@@ -64,7 +58,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
 function open(path: string) {
   window.history.replaceState({}, "", path);
   const runtime = bootstrapApplication();
@@ -102,6 +95,63 @@ function reject(opts: GatewayBrowserClientOptions, message: string) {
     error: { code: "PAIRING_REQUIRED", message },
   });
 }
+
+it.each(["pagehide", "hidden"])(
+  "preserves a peer's sidebar profile while self discovery is pending at %s",
+  async (boundary) => {
+    const self = createDeferred<unknown>();
+    replies.set("users.self", () => self.promise);
+    try {
+      const { runtime, opts } = open("/chat/main");
+      opts.onHello?.({
+        type: "hello-ok",
+        protocol: 1,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          method: "token",
+          recoveryScope: "main-device",
+        },
+        snapshot: { authMode: "token", presence: [] },
+      });
+      await runtime.context.agents.ensureList();
+      await runtime.context.sessions.groupsLoad();
+      expect(runtime.context.gateway.snapshot.selfUser).toBeUndefined();
+      if (boundary === "pagehide") {
+        window.dispatchEvent(new Event("pagehide"));
+      } else {
+        vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+      expect(localStorage.getItem(key)).toBe(bytes);
+
+      const loaded = runtime.context.gateway.loadSelfProfile();
+      self.resolve({
+        profile: {
+          id: "same-profile",
+          displayName: "Riley",
+          emails: [],
+          avatarMime: null,
+          hasAvatar: false,
+          githubIdentity: null,
+          mergedInto: null,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      });
+      await loaded;
+      window.dispatchEvent(new Event("pagehide"));
+      expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({
+        recoveryScope: "main-device",
+        profileId: "same-profile",
+        groups: [],
+      });
+    } finally {
+      self.resolve({});
+      replies.delete("users.self");
+    }
+  },
+);
 
 it.each(["/focus/terminal", "/approve/exec%3A1", "/ask/question-1"])(
   "keeps shellless %s out of main admission reads, publication, and retirement",

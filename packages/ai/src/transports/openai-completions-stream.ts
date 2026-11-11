@@ -31,11 +31,11 @@ import {
   type ToolArgumentPreviewSchedule,
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { createDsmlRecoverer } from "./openai-completions-dsml.js";
 import { createGemmaToolCallRecoverer } from "./openai-completions-gemma.js";
+import { requiresReasoningContentReplay } from "./openai-completions-reasoning-replay.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
   isOpenAICompletionsThinkingEnabled,
@@ -51,6 +51,10 @@ import {
 } from "./openai-transport-shared.js";
 import type { RecoveredTextToolCall, TextToolCallRecoveryPart } from "./text-tool-call-recovery.js";
 import { iterateModelStream, throwIfModelStreamAborted } from "./transport-stream-shared.js";
+
+let reasoningParserModule:
+  | Promise<typeof import("../utils/reasoning-tag-text-partitioner.js")>
+  | undefined;
 
 type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> & {
   choices: (ChatCompletionChunk["choices"][number] & {
@@ -138,6 +142,8 @@ export async function processCompletionsStream(
     | { mode?: "managed"; beforeContentBlock?: never }
   ),
 ) {
+  const { createReasoningTagTextPartitioner } = await (reasoningParserModule ??=
+    import("../utils/reasoning-tag-text-partitioner.js"));
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const directMode = options?.mode === "direct";
   const emitReasoning = options?.emitReasoning ?? true;
@@ -408,15 +414,27 @@ export async function processCompletionsStream(
       continue;
     }
     const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
-    output.responseId ||= chunk.id;
-    // Retain the provider-returned model when it differs from the requested id so
-    // routed/alias responses are not misattributed, matching the direct provider
-    // stream and the anthropic/responses managed transports.
-    if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
-      output.responseModel ||= chunk.model;
-    }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     const usage = chunk.usage || choice?.usage;
+    const rawChoiceDelta = choice?.delta ?? choice?.message;
+    // Transport heartbeats can carry placeholder ids/models. Attribute only
+    // chunks with response evidence, before buffering or hiding reasoning.
+    const hasResponseEvidence = Boolean(
+      choice?.finish_reason ||
+      (rawChoiceDelta &&
+        (rawChoiceDelta.tool_calls?.length || hasOpenAICompletionsDeltaContent(rawChoiceDelta))) ||
+      asNonNegativeFiniteNumber(usage?.prompt_tokens) !== undefined ||
+      asNonNegativeFiniteNumber(usage?.completion_tokens) !== undefined ||
+      asNonNegativeFiniteNumber(usage?.total_tokens) !== undefined ||
+      asNonNegativeFiniteNumber(usage?.completion_tokens_details?.reasoning_tokens) !== undefined,
+    );
+    if (hasResponseEvidence) {
+      output.responseId ||= chunk.id;
+      // Preserve actual routed/alias models without reporting the requested id twice.
+      if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
+        output.responseModel ||= chunk.model;
+      }
+    }
     // llama.cpp attaches final timings to the usage-only chunk when requested.
     if (
       chunk.timings !== undefined &&
@@ -448,7 +466,6 @@ export async function processCompletionsStream(
         state: terminalUsage && completeCounts ? "available" : "unavailable",
       };
     }
-    const rawChoiceDelta = choice?.delta ?? choice?.message;
     if (!choice) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       continue;
@@ -692,10 +709,19 @@ function warnMissingStreamingUsage(model: OpenAIModeModel) {
 export function shouldEmitOpenAICompletionsReasoning(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
+  mode: "direct" | "managed" = "managed",
 ) {
+  // Effort controls generation, not the reasoning needed to replay a tool turn.
+  if (
+    model.compat?.requiresReasoningContentOnAssistantMessages ||
+    requiresReasoningContentReplay(model.id)
+  ) {
+    return true;
+  }
   if (!model.reasoning) {
     return false;
   }
-  const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
-  return Boolean(effort) && isOpenAICompletionsThinkingEnabled(effort);
+  const effort =
+    options?.reasoningEffort ?? (mode === "managed" ? (options?.reasoning ?? "high") : undefined);
+  return Boolean(effort && isOpenAICompletionsThinkingEnabled(effort));
 }

@@ -8,6 +8,8 @@ import { discoverAuthStorageFacts, discoverModelsAsync } from "./agent-model-dis
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
 import {
+  extractLiveResponseText,
+  createSingleUserPromptMessage,
   completeSimpleWithTimeout,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
@@ -38,13 +40,7 @@ async function completeReplyWithRetry(params: {
       params.model,
       {
         systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
-        messages: [
-          {
-            role: "user",
-            content: params.message,
-            timestamp: Date.now(),
-          },
-        ],
+        messages: createSingleUserPromptMessage(params.message),
       },
       {
         apiKey: params.apiKey,
@@ -53,11 +49,7 @@ async function completeReplyWithRetry(params: {
       },
       120_000,
     );
-    const text = response.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text.trim())
-      .join(" ")
-      .trim();
+    const text = extractLiveResponseText(response.content);
     return {
       text,
       errorMessage:
@@ -264,11 +256,7 @@ describeLive("openai reasoning compat live", () => {
         120_000,
       );
 
-      const text = response.content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text.trim())
-        .join(" ")
-        .trim();
+      const text = extractLiveResponseText(response.content);
       const errorMessage =
         typeof (response as { errorMessage?: unknown }).errorMessage === "string"
           ? ((response as { errorMessage?: string }).errorMessage ?? "")

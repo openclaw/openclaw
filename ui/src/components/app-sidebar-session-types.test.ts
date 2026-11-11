@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadStoredCollapsedSessionSections,
@@ -35,11 +36,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (originalLocalStorage) {
-    Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
-  } else {
-    Reflect.deleteProperty(globalThis, "localStorage");
-  }
+  restorePropertyDescriptor(globalThis, "localStorage", originalLocalStorage);
 });
 
 describe("sidebar session preferences", () => {
@@ -59,7 +56,7 @@ describe("sidebar session preferences", () => {
     storeOwner(null, true, "profile-grace");
     expect(loadOwner()).toEqual(ownerFilter("profile-bob"));
     expect(loadOwner("profile-grace")).toEqual(ownerFilter(null, true));
-    expect(loadOwner("profile-ada", "wss://two.example/ws")).toEqual(ownerFilter("profile-ada"));
+    expect(loadOwner("profile-ada", "wss://two.example/ws")).toEqual(ownerFilter(null));
   });
 
   it("stores an explicit all-owner choice and rejects malformed stored values", () => {
@@ -81,7 +78,7 @@ describe("sidebar session preferences", () => {
       throw new Error("storage disabled");
     };
 
-    expect(loadOwner()).toEqual(ownerFilter("profile-ada"));
+    expect(loadOwner()).toEqual(ownerFilter(null));
     expect(() => storeOwner(null, true)).not.toThrow();
   });
 

@@ -20,7 +20,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptStatsBatchFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionEntryWorkerInput,
@@ -154,7 +154,12 @@ async function prepareSessionMemoryEntries(
         } else {
           retainSnapshot(snapshotKey(request), snapshot);
           const entry = snapshot
-            ? await renderSessionEntrySnapshot(request.absPath, request.options, snapshot)
+            ? await renderSessionEntrySnapshot(
+                request.absPath,
+                request.options,
+                snapshot,
+                snapshot.stats.sizeBytes > MAX_SNAPSHOT_BYTES,
+              )
             : null;
           value = {
             entry,

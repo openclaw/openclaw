@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -20,6 +19,7 @@ import {
   addSessionMemberInWorker,
   removeSessionMemberInWorker,
 } from "../../config/sessions/session-sharing-store.async.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as fsSafe from "../../infra/fs-safe.js";
 import * as libraryBundle from "../../skills/library/bundle.js";
 import { seedSkillLibrarySelection } from "../../skills/library/selection.js";
@@ -34,6 +34,7 @@ import {
 } from "../../test-utils/session-state-cleanup.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import * as sessionAuthorization from "../session-sharing-authorization-async.js";
 import type { GatewayClient } from "./client-types.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
@@ -86,14 +87,12 @@ function retainedFilesHarness() {
   );
   const call = async (method: string, params: Record<string, unknown>, profileId = alice.id) => {
     const client: GatewayClient = {
-      authenticatedUserProfile: { profileId, displayName: null, hasAvatar: false, updatedAt: 1 },
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.read", "operator.write"],
-        client: { id: "test", mode: "test", platform: "test", version: "1" },
-      },
+      authenticatedUserProfile: gatewayProfile(profileId),
+      connect: gatewayConnect(["operator.read", "operator.write"], {
+        id: "test",
+        mode: "test",
+        version: "1",
+      }),
     };
     const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
     await handleGatewayRequest({
@@ -163,7 +162,7 @@ describe("skill library retained support files", () => {
     expect(admissionReached).toBe(true);
     // A later denial and cleanup must not hide an earlier successful file creation.
     expect(imageCreated).toBe(false);
-    const files = await fs.readdir(root, { recursive: true, withFileTypes: true });
+    const files = (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.dirent);
     expect(files.filter((entry) => entry.isFile() && entry.name === "pixel.png")).toEqual([]);
   });
 
@@ -188,7 +187,7 @@ describe("skill library retained support files", () => {
       .soft(result[2])
       .toMatchObject({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } });
     expect(staged).toHaveBeenCalledOnce();
-    const files = await fs.readdir(root, { recursive: true, withFileTypes: true });
+    const files = (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.dirent);
     expect(files.filter((entry) => entry.isFile() && entry.name === "pixel.png")).toEqual([]);
   });
 

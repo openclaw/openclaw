@@ -83,14 +83,24 @@ profiled promotion separate. The synchronous owner phases omit HTTP transport; u
 include it. Neither mode measures Gateway
 event-loop delay.
 
-The store encodes its fixed prefixes as UTF-8 once and copies them into a fresh
-response buffer with ASCII-formatted numbers. `scrape.bufferByteLength` records
-that transient allocation; it is not included in sampled V8 heap allocation.
-There is no rendered-series cache. After consuming a render in an owner phase,
+The store encodes fixed prefixes into private 4 KiB chunks. Oversized prefixes
+own separate allocations, so clearing them cannot leave a large chunk held by
+the prefix allocator cursor.
+Each series lazily retains its rendered bytes; removing gauges or resetting the
+store releases their blocks. Changed series use a growing scratch buffer and refill
+their block when its length is unchanged, otherwise replacing it with an exact-size
+block. Every scrape copies the blocks into a fresh response buffer.
+Family HELP/TYPE bytes share the exporter-owned prefix chunks. One header per
+metric name is reused while its winning series' help and type stay unchanged;
+clearing gauges evicts that family's header, and reset clears all headers.
+Report the additional retained blocks alongside allocation savings.
+`scrape.bufferByteLength` records the transient response allocation; it is not
+included in sampled V8 heap allocation. After consuming a render in an owner phase,
 the benchmark releases its private backing store, matching the successful HTTP
 completion lifetime. Owner CPU includes release; the render-latency timer ends
 before release. The HTTP phase releases only after Node's completion callback.
-The 1 ms event-loop monitor reports sample counts and tails for each phase;
+The scratch buffer retains only bytes, never pooled Buffer slabs or response
+storage; reset releases its capacity and the current prefix chunk. The 1 ms event-loop monitor reports sample counts and tails for each phase;
 synchronous owner loops normally have no samples.
 
 Use `--updates-per-render <count>` with `--shape` to rotate through that many
@@ -152,3 +162,22 @@ If it gates the decision, run a third pair and decide on the absolute mean; do
 not reject on a relative mean dominated by a tiny baseline. Whole-Gateway
 confirmation must additionally compare matching work/reset counts and properly
 sampled event-loop delay under the same host rules.
+
+## Prefix backing-store retention
+
+Add `--pool-churn` to interleave a disposable 8 KiB `Buffer.from`
+allocation between new series. This models series accumulating between unrelated
+Buffer traffic; compare post-GC `retained.populated` and `retained.warmed`, then
+`retained.afterReset`. It changes fixture construction only, not the timed render
+loops. Run at full capacity (omit `--shape`) and with the same observed shape on
+both sides. Report heap and ArrayBuffer deltas separately, since moving bytes
+between them is not a total-memory saving.
+
+For a separate synthetic retention-only pass, use `--render-only` with
+`--heap-snapshot <path>`.
+This captures the live store after warmup and skips the large measured render
+phases; do not compare its CPU with ordinary runs or combine it with HTTP.
+Count `ArrayBuffer` objects and native `system / JSArrayBufferData` backing
+stores in the snapshot. Use the runtime's actual pool allocation size rather
+than assuming 8 KiB: Node 26.12.1 reports `Buffer.poolSize = 65536` and a
+65,600-byte backing allocation for small pooled buffers.

@@ -7,6 +7,7 @@ import { LruCache } from "../infra/lru-cache.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { readMediaBuffer } from "../media/store.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { matchesChannelAvatarSender } from "./channel-avatar-reference.js";
@@ -45,9 +46,10 @@ async function loadChannelAvatar(
     return cached.image;
   }
   const loadKey = JSON.stringify([sessionKey, reference]);
-  let pending = channelAvatarLoads.get(loadKey);
-  if (!pending) {
-    pending = (async () => {
+  return getOrCreatePromise(
+    channelAvatarLoads,
+    loadKey,
+    async () => {
       const resolved = await resolveInboundMediaReference(reference);
       if (!resolved) {
         return undefined;
@@ -59,12 +61,9 @@ async function loadChannelAvatar(
         channelAvatarCache.set(sessionKey, { reference, image });
       }
       return image;
-    })().finally(() => {
-      channelAvatarLoads.delete(loadKey);
-    });
-    channelAvatarLoads.set(loadKey, pending);
-  }
-  return pending;
+    },
+    { evictOnSettled: true },
+  );
 }
 
 /** Serves the current channel-avatar snapshot for an owner-visible session. */

@@ -1,16 +1,23 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import type { UpdateCheckLifecycle } from "./update-check-lifecycle.js";
 import {
-  createGatewayUpdateLifecycle,
-  type UpdateCheckLifecycle,
-} from "./update-check-lifecycle.js";
-import * as autoRun from "./update-startup-auto-run.js";
-import { runGatewayUpdateCheck } from "./update-startup.js";
-import {
-  getUpdateAvailable,
-  getUpdateSchedule,
-  resetUpdateStatusState,
-} from "./update-status-state.js";
+  closeUpdateFixtureDatabases,
+  resetUpdateFixtureModules,
+} from "./update-fixture.test-support.js";
+
+let { createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js");
+let { createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js");
+let autoRun = await import("./update-startup-auto-run.js");
+let { runGatewayUpdateCheck } = await import("./update-startup.js");
+let { getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js");
+
+async function importUpdateFixtureModules() {
+  ({ createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js"));
+  ({ createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js"));
+  autoRun = await import("./update-startup-auto-run.js");
+  ({ runGatewayUpdateCheck } = await import("./update-startup.js"));
+  ({ getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js"));
+}
 
 const mocks = vi.hoisted(() => ({
   telemetry: vi.fn(async () => null),
@@ -25,18 +32,19 @@ vi.mock("../state/config-machine-state-async.js", () => ({
 }));
 
 let lifecycle: UpdateCheckLifecycle;
-beforeEach(() => {
+beforeEach(async () => {
+  await resetUpdateFixtureModules();
+  await importUpdateFixtureModules();
   vi.clearAllMocks();
   vi.spyOn(autoRun, "runAutoUpdateCommand").mockImplementation(mocks.runAutoUpdate);
   vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "");
-  resetUpdateStatusState();
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
 });
 afterEach(async () => {
   await lifecycle.stop();
   await lifecycle.scheduler.stop();
+  await closeUpdateFixtureDatabases();
   vi.restoreAllMocks();
-  resetUpdateStatusState();
   vi.unstubAllEnvs();
 });
 

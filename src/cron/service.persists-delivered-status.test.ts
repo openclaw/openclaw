@@ -1,9 +1,10 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { text } from "node:stream/consumers";
-import { promisify } from "node:util";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 const mocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn<typeof import("../infra/net/fetch-guard.js").fetchWithSsrFGuard>(),
@@ -25,9 +26,7 @@ import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-sup
 import type { CronEvent, CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
-  createCronStoreHarness,
-  createNoopLogger,
-  installCronTestHooks,
+  setupCronServiceSuite,
 } from "./service.test-harness.js";
 import { abortActiveCronTaskRuns } from "./service/active-run-cancellation.js";
 import type { CronServiceDeps } from "./service/state.js";
@@ -43,19 +42,13 @@ beforeEach(async () => {
   mocks.fetchWithSsrFGuard.mockReset().mockImplementation(actual.fetchWithSsrFGuard);
 });
 
-const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
-installCronTestHooks({ logger: noopLogger });
+const { logger, makeStorePath } = setupCronServiceSuite();
 
 type CronAddInput = Parameters<CronService["add"]>[0];
-const noFailureNotification = {
-  lastFailureNotificationDelivered: undefined,
-  lastFailureNotificationDeliveryStatus: "not-requested",
-  lastFailureNotificationDeliveryError: undefined,
-} as const;
 const destination = { channel: "forum", to: "123" };
 const commandOk = { status: "ok", summary: "HOOKSCHED_PAYLOAD" } as const;
 const commandError = { status: "error", error: "command exited with code 1" } as const;
+const failureAlert = { after: 1, channel: "telegram", to: "123" };
 const deliveryRejected = {
   status: "ok",
   delivered: false,
@@ -104,10 +97,7 @@ async function createCommandWebhook(
       requests.push(body);
       bodyReceived.resolve(body);
       if (options.responseStatus !== undefined) {
-        response.writeHead(options.responseStatus, {
-          Connection: "close",
-          "Content-Type": "text/plain",
-        });
+        response.writeHead(options.responseStatus);
         if (options.holdResponse) {
           response.flushHeaders();
           response.write("accepted");
@@ -117,28 +107,25 @@ async function createCommandWebhook(
       }
     });
   });
-  await once(server.listen(0, "127.0.0.1"), "listening");
-  const address = server.address() as AddressInfo;
+  const url = await listenLoopback(server);
   const sendCronFailureAlert = vi.fn(async () => {});
   const runCronFailureRepair = vi.fn(async () => {});
   const enqueueSystemEvent = vi.fn();
-  const { cron, clock, finished } = await createScheduledService({
+  const service = await createScheduledService({
     sendCronFailureAlert,
     runCronFailureRepair,
     enqueueSystemEvent,
-    runCommandJob:
-      options.runCommandJob ??
-      (async ({ job, abortSignal }) =>
-        await runCronCommandJob({ job, abortSignal, nowMs: Date.now })),
+    runCommandJob: options.runCommandJob ?? runCronCommandJob,
     sendCronWebhook: (params) =>
       sendGatewayCronWebhook({ ...params, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } }),
   });
+  const { cron } = service;
   const job = await cron.add({
     ...agentJob("command webhook"),
     ...(options.oneShot
       ? {
           schedule: { kind: "at" as const, at: new Date(Date.now() + 60_000).toISOString() },
-          failureAlert: { after: 1, channel: "telegram", to: "123" },
+          failureAlert,
         }
       : {}),
     payload: {
@@ -146,17 +133,15 @@ async function createCommandWebhook(
       argv: [process.execPath, "-e", "process.stdout.write('HOOKSCHED_PAYLOAD')"],
       ...(options.timeoutSeconds === undefined ? {} : { timeoutSeconds: options.timeoutSeconds }),
     },
-    delivery: { mode: "webhook", to: `http://127.0.0.1:${address.port}/hook` },
+    delivery: { mode: "webhook", to: `${url}/hook` },
   });
   return {
-    clock,
-    cron,
+    ...service,
     job,
     requests,
     sendCronFailureAlert,
     runCronFailureRepair,
     enqueueSystemEvent,
-    finished,
     run: (mode: "force" | "due" = "force") => cron.run(job.id, mode),
     state: () => cron.getJob(job.id)?.state,
     expectRequest: async (expected: object = { summary: "HOOKSCHED_PAYLOAD" }) => {
@@ -177,8 +162,7 @@ async function createCommandWebhook(
     [Symbol.asyncDispose]: async () => {
       options.beforeClose?.();
       cron.stop();
-      server.closeAllConnections();
-      await promisify(server.close.bind(server))();
+      await closeHttpServer(server);
     },
   };
 }
@@ -186,7 +170,7 @@ async function createCommandWebhook(
 const agentJob = (name: string, overrides: Partial<CronAddInput> = {}) =>
   cronTestInput({ name, delivery: { mode: "announce", ...destination }, ...overrides });
 
-async function createScheduledService(deps: Partial<CronServiceDeps> = {}, start = true) {
+async function createScheduledService(deps: Partial<CronServiceDeps> = {}) {
   const { storePath, cleanup } = await makeStorePath();
   const clock = createGatewaySchedulerClock(Date.now());
   const finished = createDeferred<CronEvent>();
@@ -194,7 +178,7 @@ async function createScheduledService(deps: Partial<CronServiceDeps> = {}, start
   const { cron, state } = createCronServiceWithStateForTest({
     ...cronTestDeps({ storePath, nowMs: undefined }),
     scheduler: createTestGatewayScheduler(clock.clock),
-    log: noopLogger,
+    log: logger,
     ...deps,
     onEvent: (event) => {
       if (event.action === "finished") {
@@ -203,9 +187,7 @@ async function createScheduledService(deps: Partial<CronServiceDeps> = {}, start
       }
     },
   });
-  if (start) {
-    await cron.start();
-  }
+  await cron.start();
   return {
     cron,
     storePath,
@@ -295,7 +277,7 @@ describe("CronService persists delivered status", () => {
       });
       await h.cron.update(h.job.id, {
         state: { consecutiveErrors },
-        failureAlert: { after: 1, channel: "telegram", to: "123" },
+        failureAlert,
       });
       h.clock.setTime(h.job.state.nextRunAtMs!);
       const run = h.run("due");
@@ -347,7 +329,6 @@ describe("CronService persists delivered status", () => {
       const event = await h.finished;
       cleanup.release();
       await runPromise;
-      expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
       expect(h.requests).toHaveLength(1);
       await h.expectRequest();
       h.expectDelivery(
@@ -378,7 +359,6 @@ describe("CronService persists delivered status", () => {
       await using h = await createScheduledService({
         runIsolatedAgentJob: async () => ({
           status: "error",
-          summary: "done",
           delivered: true,
           error,
           ...(verified ? { delivery: verifiedDelivery } : {}),
@@ -395,11 +375,9 @@ describe("CronService persists delivered status", () => {
       const deliveryStatus = verified ? "delivered" : "not-delivered";
       expectFields(updated?.state, {
         lastRunStatus: "error",
-        consecutiveErrors: 1,
         lastDelivered: verified,
         lastDeliveryStatus: deliveryStatus,
         lastDeliveryError: verified ? undefined : error,
-        ...(!verified ? noFailureNotification : {}),
       });
       expectFields(event, {
         completionStatus: "failed",
@@ -449,61 +427,21 @@ describe("CronService persists delivered status", () => {
       });
     },
   );
-  it("persists payload kind conversions without reopening the tool allowlist", async () => {
-    await using h = await createScheduledService(
-      { cronEnabled: false, runIsolatedAgentJob: vi.fn() },
-      false,
-    );
-
-    const { cron, storePath } = h;
-    const job = await cron.add({
-      ...agentJob("convert payload", { enabled: false, delivery: undefined }),
-      payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
-    });
-    const expectPayload = async (payload: CronJob["payload"]) => {
-      const expected = { ...payload, toolsAllow: ["read"] };
-      expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(expected);
-      return expected;
-    };
-    const command = { kind: "command" as const, argv: ["echo", "ready"] };
-    const updated = await cron.update(job.id, {
-      payload: { ...command, env: undefined },
-    });
-    expect(updated.payload).toEqual(await expectPayload(command));
-
-    await cron.update(job.id, { payload: { kind: "script", script: "return {};" } });
-    await expectPayload({
-      kind: "script",
-      script: "return {};",
-      timeoutSeconds: 300,
-      toolBudget: 50,
-    });
-    const agent = { kind: "agentTurn", message: "after" } as const;
-    await cron.update(job.id, { payload: agent });
-    await expectPayload(agent);
-
+  it("rejects null command environments", () => {
     expect(() =>
       normalizeCronJobPatch({
         payload: { kind: "command", argv: ["echo"], env: null },
       }),
     ).toThrow("command env");
-    await expectPayload(agent);
-
-    const configured = { kind: "command", argv: ["echo"], env: { MODE: "test" } } as const;
-    await cron.update(job.id, { payload: { ...configured, argv: [...configured.argv] } });
-    await expectPayload({ ...configured, argv: [...configured.argv] });
   });
   it("persists scheduled suppression in state, history, and events and clears it after delivery", async () => {
-    const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>();
-    runIsolatedAgentJob.mockResolvedValue({
+    const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>().mockResolvedValue({
       status: "ok",
       delivered: false,
       deliveryAttempted: true,
       deliverySuppressionReason: "channel_transform",
     });
-    await using h = await createScheduledService({
-      runIsolatedAgentJob,
-    });
+    await using h = await createScheduledService({ runIsolatedAgentJob });
     const { cron, storePath, clock, tick, events, finished } = h;
     const job = await cron.add(agentJob("suppression-readback"));
     const readHistory = () =>

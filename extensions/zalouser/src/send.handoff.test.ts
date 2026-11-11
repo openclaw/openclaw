@@ -1,5 +1,6 @@
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
 import {
   createSendHarness,
   encryptResponse,
@@ -61,15 +62,11 @@ describe("Zalouser registered send handoff", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await Promise.race([
+        await waitForEffectPreparation(
           preparation.entered.promise,
-          response.entered.promise.then(() => {
-            throw new Error("dispatched before preparation");
-          }),
-          sending.then(() => {
-            throw new Error("settled before preparation");
-          }),
-        ]);
+          response.entered.promise,
+          sending,
+        );
         expect(harness.requests).toEqual([]);
         if (retired) {
           caller.abort(new Error("caller retired during effect preparation"));

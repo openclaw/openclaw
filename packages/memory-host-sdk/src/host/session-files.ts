@@ -7,7 +7,6 @@ import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-
 import { createSubsystemLogger } from "./openclaw-runtime-io.js";
 import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
 import {
-  assertBoundIncognitoMemorySyncAccess,
   captureIncognitoMemoryReader,
   isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionPath,
@@ -15,7 +14,7 @@ import {
   isCompactionCheckpointTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
-  materializeSessionArchiveForRead,
+  readSessionArchiveText,
   parseUsageCountedSessionIdFromFileName,
   prepareSessionEntryInWorker,
   prepareSessionEntriesInWorker,
@@ -40,6 +39,7 @@ import {
   sqliteSessionFileState,
 } from "./session-entry-render.js";
 import { resolveBuildSessionSqliteIdentity } from "./session-entry-source.js";
+import { assertBoundIncognitoMemorySyncAccess } from "./session-memory-authority.js";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
   type SessionTranscriptCorpusEntry,
@@ -55,10 +55,8 @@ export {
   type SessionTranscriptCorpusEntry,
   type SessionTranscriptCorpusOptions,
 } from "./session-transcript-corpus.js";
-export {
-  readTranscriptStatsBatchReadOnlyAsync,
-  readTranscriptStatsBatchReadOnlySync,
-} from "./openclaw-runtime-session.js";
+export { readTranscriptStatsBatchReadOnlyAsync } from "./openclaw-runtime-session.js";
+export { readTranscriptStatsBatchReadOnlySync } from "./session-transcript-stats-read.js";
 
 export type SessionFileEntry = {
   path: string;
@@ -458,7 +456,7 @@ export async function buildSessionEntries(
 }
 
 /** The shared transcript worker runs the same projection as inline readers. */
-export async function buildSessionEntryInProcess(
+async function buildSessionEntryInProcess(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
   snapshot?: SessionEntrySnapshot,
@@ -536,17 +534,13 @@ async function buildSessionEntryFromSource(
         sessionKind: opts.sessionKind ?? "unknown",
       };
     }
-    const raw = (
-      await retryTransientMemoryRead(
-        () =>
-          readRegularFile({
-            filePath: isUsageCountedSessionArchiveTranscriptPath(absPath)
-              ? materializeSessionArchiveForRead(absPath)
-              : absPath,
-          }),
-        `read session transcript ${absPath}`,
-      )
-    ).buffer.toString("utf-8");
+    const raw = await retryTransientMemoryRead(
+      async () =>
+        isUsageCountedSessionArchiveTranscriptPath(absPath) && absPath.endsWith(".zst")
+          ? readSessionArchiveText(absPath)
+          : (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8"),
+      `read session transcript ${absPath}`,
+    );
     const classification =
       opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined
         ? await classifySessionTranscriptFromSessionStore(absPath)

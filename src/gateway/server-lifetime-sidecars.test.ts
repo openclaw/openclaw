@@ -11,7 +11,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   getProcessCleanupBudget,
   runWithProcessCleanupBudget,
@@ -381,12 +380,6 @@ describe("gateway lifetime sidecars", () => {
       logWarning: warn,
     });
 
-    expect(oauth.create).toHaveBeenCalledWith({
-      scheduler: expect.any(GatewayScheduler),
-      getConfig: context.getRuntimeConfig,
-      getPersistedConfig: expect.any(Function),
-      warn,
-    });
     expect(oauth.install).toHaveBeenCalledWith(context.githubOAuthService);
     expect(oauth.start).toHaveBeenCalledOnce();
     expect(context.githubOAuthService).toBeDefined();

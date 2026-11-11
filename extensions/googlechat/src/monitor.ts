@@ -26,7 +26,7 @@ import {
   updateGoogleChatMessage,
 } from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
-import { formatGoogleChatTextChunks } from "./format.js";
+import { formatGoogleChatMediaText, formatGoogleChatTextChunks } from "./format.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import {
   createGoogleChatIngressMonitor,
@@ -444,9 +444,14 @@ async function processGoogleChatEvent(
                 deliveryThreadName = deliveryTypingMessage.deliveredThreadName;
               }
 
-              if (reply.hasMedia) {
-                runtime.error?.(
-                  "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
+              let text: string;
+              try {
+                text = formatGoogleChatMediaText(reply.text, reply.mediaUrls);
+              } catch (cause) {
+                await cleanupTypingMessage();
+                throw new PlatformMessageNotDispatchedError(
+                  cause instanceof Error ? cause.message : String(cause),
+                  { cause, retryable: false },
                 );
               }
 
@@ -456,15 +461,13 @@ async function processGoogleChatEvent(
                 "googlechat",
                 account.accountId,
               );
-              const chunks = formatGoogleChatTextChunks(reply.text, chunkLimit).flatMap((chunk) =>
+              const chunks = formatGoogleChatTextChunks(text, chunkLimit).flatMap((chunk) =>
                 core.channel.text.chunkMarkdownTextWithMode(chunk, chunkLimit, chunkMode),
               );
               const rejection =
-                reply.hasMedia && !reply.hasText
-                  ? "Google Chat outbound attachments require user OAuth and no text fallback is available."
-                  : reply.hasText && !chunks.some((chunk) => chunk)
-                    ? "Google Chat reply has no visible text after formatting."
-                    : undefined;
+                text && !chunks.some((chunk) => chunk)
+                  ? "Google Chat reply has no visible text after formatting."
+                  : undefined;
               if (rejection) {
                 await cleanupTypingMessage();
                 // Permanent policy rejection before any recipient-visible send; the typed

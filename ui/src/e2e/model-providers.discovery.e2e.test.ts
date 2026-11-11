@@ -15,7 +15,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("keeps the discovery action label while the setup module loads", async () => {
+  it("names the discovery action and dialog while the setup module loads", async () => {
     await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
       const held = await holdModuleResponse(
         page,
@@ -24,11 +24,11 @@ suite.define(() => {
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}settings/model-providers?connect=1`);
       const discover = page.locator("[data-models-login-discover]");
-      const label = ((await discover.textContent()) ?? "").trim();
+      expect((await discover.textContent())?.trim()).toBe("On this Gateway");
       await discover.click();
       await held.request;
       await expect
-        .poll(() => page.getByRole("dialog", { name: label, exact: true }).isVisible())
+        .poll(() => page.getByRole("dialog", { name: "Available models", exact: true }).isVisible())
         .toBe(true);
     });
   });

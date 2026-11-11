@@ -127,6 +127,8 @@ export type UserProfileIdentity = Omit<UserProfileAuthority, "aliases" | "displa
 };
 
 export type PreparedUserProfileIdentity = {
+  /** Opaque access-fact revision, after checking the bound owner and email lifetimes; excludes aliases. */
+  readCurrentRevision(this: void, requiredEmailBindingIds?: readonly string[]): object;
   readCurrentProfile(
     this: void,
     requiredEmailBindingIds?: readonly string[],

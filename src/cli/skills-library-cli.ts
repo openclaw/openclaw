@@ -37,21 +37,6 @@ type LibraryOptions = GatewayRpcOpts & {
   session?: string;
 };
 
-function rpcOptions(command: Command): GatewayRpcOpts {
-  const opts = command.opts<GatewayRpcOpts>();
-  const value = <K extends keyof GatewayRpcOpts>(name: K): GatewayRpcOpts[K] =>
-    inheritOptionFromParent<GatewayRpcOpts[K]>(command, name) ?? opts[name];
-  return {
-    url: value("url"),
-    port: value("port"),
-    token: value("token"),
-    password: value("password"),
-    timeout: value("timeout"),
-    expectFinal: value("expectFinal"),
-    json: value("json"),
-  };
-}
-
 function receiptText(receipt: SkillsLibraryReceipt): string {
   return `${receipt.state}: ${sanitizeTerminalText(receipt.entry.slug)} (${receipt.target}, owner ${sanitizeTerminalText(receipt.entry.ownerLabel)})\nSkill ID: ${sanitizeTerminalText(receipt.entry.skillId)}\nRevision: ${sanitizeTerminalText(receipt.entry.revision)}\n${receipt.nextAction}\n`;
 }
@@ -85,7 +70,18 @@ export function registerSkillsLibraryCli(skills: Command): void {
     format: (result: T) => string,
   ) =>
     runCommandWithRuntime(defaultRuntime, async () => {
-      const opts = rpcOptions(command);
+      const commandOptions = command.opts<GatewayRpcOpts>();
+      const value = <K extends keyof GatewayRpcOpts>(name: K): GatewayRpcOpts[K] =>
+        inheritOptionFromParent<GatewayRpcOpts[K]>(command, name) ?? commandOptions[name];
+      const opts: GatewayRpcOpts = {
+        url: value("url"),
+        port: value("port"),
+        token: value("token"),
+        password: value("password"),
+        timeout: value("timeout"),
+        expectFinal: value("expectFinal"),
+        json: value("json"),
+      };
       const result = await action(opts);
       if (opts.json) {
         defaultRuntime.writeJson(result);

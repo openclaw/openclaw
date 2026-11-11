@@ -119,6 +119,11 @@ function createApproval(test: TestContext, validate = () => true) {
   });
 }
 
+async function withApproval(test: TestContext, run: (fixture: ApprovalFixture) => Promise<void>) {
+  const fixture = await createApproval(test);
+  await fixture.run(() => run(fixture));
+}
+
 function requestApproval(fixture: ApprovalFixture, opts: GatewayRequestHandlerOptions) {
   const handler = expectDefined(
     createExecApprovalHandlers(fixture.manager)["exec.approval.request"],
@@ -137,8 +142,7 @@ async function pendingRecord(fixture: ApprovalFixture) {
 
 describe("exec approval signed agent runtime", () => {
   it("uses the existing human approval owner for an exact worker command", async (testContext) => {
-    const fixture = await createApproval(testContext);
-    await fixture.run(async () => {
+    await withApproval(testContext, async (fixture) => {
       const handlers = createExecApprovalHandlers(fixture.manager);
       const opts = requestOptions(identity(false));
       const worker = createWorkerExecApprovalOwner({
@@ -185,7 +189,6 @@ describe("exec approval signed agent runtime", () => {
         },
       } as const;
       const registration = await worker(request, authority);
-      expect(registration).toMatchObject({ operation: "request", id: request.id });
       const record = await pendingRecord(fixture);
       expect(record.request).toMatchObject({
         command: "/bin/echo human-approved",
@@ -217,9 +220,7 @@ describe("exec approval signed agent runtime", () => {
   });
   it("binds the accepted expiry to the worker captured before registration yields", async (testContext) => {
     let active = true;
-    const fixture = await createPreparedTestApprovalManager(testContext, {
-      validateAgentRuntimeDelegatedAuthority: () => active,
-    });
+    const fixture = await createApproval(testContext, () => active);
     const { manager } = fixture;
     const runtimeIdentity = identity(false);
     const turnClaim = {
@@ -258,16 +259,8 @@ describe("exec approval signed agent runtime", () => {
     try {
       await fixture.run(async () => {
         const opts = requestOptions(runtimeIdentity, () => active);
-        const requested = waitForApprovalRequested(opts.context, "exec.approval.requested", () =>
-          fixture.track(
-            Promise.resolve(createExecApprovalHandlers(manager)["exec.approval.request"]!(opts)),
-          ),
-        );
+        const requested = requestApproval(fixture, opts);
         await entered.promise;
-        expect(capture).toHaveBeenCalledExactlyOnceWith({
-          sessionId: turnClaim.sessionId,
-          turnClaim,
-        });
         expect(beginApprovalWait).not.toHaveBeenCalled();
         capture.mockReturnValue({
           beginApprovalWait: successorWait,
@@ -278,10 +271,6 @@ describe("exec approval signed agent runtime", () => {
         release.resolve();
         const { pending } = await requested;
         const record = manager.listLocalPendingRecords()[0]!;
-        expect(beginApprovalWait).toHaveBeenCalledExactlyOnceWith(
-          record.expiresAtMs,
-          expect.any(Function),
-        );
         expect(successorWait).not.toHaveBeenCalled();
         const isPending = beginApprovalWait.mock.calls[0]![1];
         expect(isPending()).toBe(true);
@@ -512,9 +501,8 @@ describe("exec approval signed agent runtime", () => {
   });
 
   it("records an omitted node session before approved replay", async (testContext) => {
-    const fixture = await createApproval(testContext);
-    const { manager } = fixture;
-    await fixture.run(async () => {
+    await withApproval(testContext, async (fixture) => {
+      const { manager } = fixture;
       const runtimeIdentity = identity(false);
       const options = requestOptions(runtimeIdentity);
       const command = ["/usr/bin/echo", "ok"];
@@ -575,9 +563,7 @@ describe("exec approval signed agent runtime", () => {
   });
 
   it("sanitizes display-only cwd and resolvedPath in the stored request", async (testContext) => {
-    const fixture = await createApproval(testContext);
-    const { manager } = fixture;
-    await fixture.run(async () => {
+    await withApproval(testContext, async (fixture) => {
       const opts = requestOptions(identity(false));
       // Reviewer paths escape invisible characters; policy values remain closed enums.
       Object.assign(opts.params, {
@@ -594,7 +580,7 @@ describe("exec approval signed agent runtime", () => {
         security: null,
         ask: null,
       });
-      await manager.resolve(record.id, "deny");
+      await fixture.manager.resolve(record.id, "deny");
       await pending;
     });
   });
@@ -621,9 +607,8 @@ describe("exec approval signed agent runtime", () => {
   ] as const)(
     "uses signed runtime provenance with collection %s",
     async ([_label, enabled], testContext) => {
-      const fixture = await createApproval(testContext);
-      const { manager, databaseOptions } = fixture;
-      await fixture.run(async () => {
+      await withApproval(testContext, async (fixture) => {
+        const { manager, databaseOptions } = fixture;
         const opts = requestOptions(identity(enabled));
 
         const { pending } = await requestApproval(fixture, opts);

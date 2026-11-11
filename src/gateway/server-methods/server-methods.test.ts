@@ -9,6 +9,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { waitForFast } from "../../../test/helpers/vitest-wait.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -29,6 +30,7 @@ import * as childRuntime from "../../infra/child-runtime-viability.js";
 import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setGatewayDedupeEntry, waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dropPreSessionStartAnnouncePairs } from "../chat-display-projection.history.js";
@@ -67,13 +69,6 @@ import {
 } from "./exec-approval.test-support.js";
 import { logsHandlers } from "./logs.js";
 
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
 const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 
 // mock-isolation: Method dispatch tests use fixture status without opening session databases.
@@ -81,17 +76,6 @@ vi.mock("../../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
   prepareStatusSummary: vi.fn().mockResolvedValue({ publish: () => ({ summary: { ok: true } }) }),
 }));
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
   const call = mock.mock.calls[callIndex];

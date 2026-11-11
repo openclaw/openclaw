@@ -25,7 +25,10 @@ import {
   containsAuthoredInclude,
 } from "./include-migration-ownership.js";
 import type { InstalledPluginIdRecovery } from "./installed-plugin-id-recovery.js";
-import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
+import {
+  applyLegacyDoctorMigrations,
+  type LegacyDoctorMigrationOptions,
+} from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { applyProviderRenames, planProviderRenames } from "./provider-rename.js";
 
@@ -124,9 +127,16 @@ export async function applyRetiredConfigStep(params: {
   doctorFixCommand: string;
   sourceConfig: OpenClawConfig;
   emitChanges: (changeLines: readonly string[]) => void;
+  preflight?: {
+    heartbeatMigrationDeferred?: true;
+    cronStoreSelectionUnresolved?: true;
+  };
 }): Promise<DoctorConfigMutationState> {
   let state = params.state;
-  if (params.shouldRepair) {
+  if (params.preflight?.heartbeatMigrationDeferred) {
+    return state;
+  }
+  if (params.shouldRepair && !params.preflight?.cronStoreSelectionUnresolved) {
     const { tryProjectRetiredHeartbeatConfig } = await import("../../doctor-heartbeat-legacy.js");
     const { retireHeartbeatWithDoctor } = await import("../../doctor-heartbeat-retirement.js");
     const retiredConfig = tryProjectRetiredHeartbeatConfig(state.candidate)
@@ -260,6 +270,7 @@ export function restoreDoctorConfigEnvRefs(
   explicitSetPaths?: readonly (readonly string[])[],
   migrationOptions: {
     appliedPluginIdMigrations?: Readonly<Record<string, string>>;
+    pluginCompatibility?: LegacyDoctorMigrationOptions["pluginCompatibility"];
   } = {},
 ): OpenClawConfig {
   if (!source) {
@@ -282,6 +293,7 @@ export function restoreDoctorConfigEnvRefs(
   const options = {
     sourceConfigBeforeMigrations: source.resolved,
     context: { authoredRaw: source.parsed, resolvedRaw: source.resolved },
+    pluginCompatibility: migrationOptions.pluginCompatibility,
   };
   // Replay the resolved routing decision on authored templates before plugin cleanup.
   const providerRenames = planProviderRenames(

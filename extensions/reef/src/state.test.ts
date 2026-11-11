@@ -15,11 +15,12 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReviewRequest } from "../protocol/index.js";
-import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { openReefAuditStore } from "./audit-state.js";
 import { handleReefCommand } from "./commands.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
-import { reefKeys } from "./flow.test-helpers.js";
+import { allow, reefKeys } from "./flow.test-helpers.js";
 import { ReefFriendManager } from "./friends.js";
 import { REEF_REPLAY_TTL_MS, reefReplayStoreKey, type ReefReplayRecord } from "./replay-store.js";
 import { createReefRuntimeAuthority } from "./runtime.js";
@@ -84,11 +85,10 @@ function reviewRequest(id = receiptId, approvalDigest = "b".repeat(64)): ReviewR
     bodyHash: "a".repeat(64),
     approvalDigest,
     verdict: {
+      ...allow,
       decision: "review",
       category: "ambiguous",
       reason: "Owner review.",
-      model: "test-model",
-      policyVersion: "v1",
     },
   };
 }
@@ -115,7 +115,7 @@ function activateReviewStore(reviews: ReviewApprovalStore) {
       trust,
       reviews,
       delivered: new ReefDeliveredStore(stateRuntime),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(1)),
+      audit: openReefAuditStore(stateRuntime, new Uint8Array(32).fill(1)),
       replay: new MemoryReplayStore(),
       guard: {
         providerId: "test",
@@ -555,9 +555,9 @@ describe("Reef SQLite state", () => {
         : store;
     };
 
-    await expect(
-      (await openStores(runtime, reefKeys())).delivered.confirm(receiptId),
-    ).rejects.toThrow("Failed persisting Reef delivered marker");
+    await expect(new ReefDeliveredStore(runtime).confirm(receiptId)).rejects.toThrow(
+      "Failed persisting Reef delivered marker",
+    );
   });
 
   it("deduplicates concurrent pending reviews and evicts only completed decisions at capacity", async () => {

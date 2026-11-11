@@ -34,10 +34,20 @@ export function interceptStagedFileSync(parent: string, failure: Error, enabled 
     });
     return handle;
   });
-  const fsync = fs.fsyncSync;
-  const fsyncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+  const fsync = fs.fsync;
+  const fsyncSpy = vi.spyOn(fs, "fsync").mockImplementation((fd, callback) => {
+    try {
+      refuse(fd);
+    } catch (error) {
+      queueMicrotask(() => callback(error as NodeJS.ErrnoException));
+      return;
+    }
+    fsync(fd, callback);
+  });
+  const fsyncSync = fs.fsyncSync;
+  const fsyncSyncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
     refuse(fd);
-    fsync(fd);
+    fsyncSync(fd);
   });
   return {
     handles,
@@ -47,6 +57,7 @@ export function interceptStagedFileSync(parent: string, failure: Error, enabled 
     restore() {
       openSpy.mockRestore();
       fsyncSpy.mockRestore();
+      fsyncSyncSpy.mockRestore();
     },
   };
 }

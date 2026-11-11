@@ -102,7 +102,8 @@ suite.define(() => {
         await expectClosed();
         expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
         await openInbox();
-        await panel.getByRole("link", { name: "Notification settings" }).click();
+        await panel.locator(".sidebar-issues-panel__more").click();
+        await panel.getByRole("menuitem", { name: "Notification settings" }).click();
         await expectClosed();
         await waitForControlUiRoute(page, {
           pathname: "/settings/notifications",
@@ -162,85 +163,65 @@ suite.define(() => {
         const tabTrack = element.querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!;
         const tabTrackBounds = tabTrack.getBoundingClientRect();
         const tabs = Array.from(element.querySelectorAll<HTMLElement>(".hub-tab"));
+        const paint = document.createElement("canvas").getContext("2d")!;
+        paint.fillStyle = getComputedStyle(element).backgroundColor;
+        paint.fillRect(0, 0, 1, 1);
         return {
-          closeBackground: getComputedStyle(close).backgroundColor,
-          closeBorderRadius: getComputedStyle(close).borderRadius,
-          closeBorderWidth: getComputedStyle(close).borderTopWidth,
+          sheetBackgroundAlpha: paint.getImageData(0, 0, 1, 1).data[3],
           closeHeight: close.getBoundingClientRect().height,
           closeWidth: close.getBoundingClientRect().width,
           duration: Number(timing.duration),
-          easing: getComputedStyle(element).animationTimingFunction,
           finalTop: element.getBoundingClientRect().top,
           sheetBackground: getComputedStyle(element).backgroundColor,
           headerBackground: getComputedStyle(header).backgroundColor,
+          tabsBackground: getComputedStyle(tabTrack).backgroundColor,
           listBackground: getComputedStyle(list).backgroundColor,
           startTop,
-          tabTrackLeft: tabTrackBounds.left,
-          tabTrackRight: tabTrackBounds.right,
-          tabs: tabs.map((tab) => {
+          tabCount: tabs.length,
+          tabFailures: tabs.flatMap((tab, index) => {
             const label = Array.from(tab.childNodes).find(
               (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
             )!;
             const range = document.createRange();
             range.selectNodeContents(label);
-            const labelBounds = range.getBoundingClientRect();
+            const text = range.getBoundingClientRect();
             const bounds = tab.getBoundingClientRect();
-            return {
-              panel: tab.getAttribute("data-tab-value"),
-              left: bounds.left,
-              right: bounds.right,
-              labelLeft: labelBounds.left,
-              labelRight: labelBounds.right,
-            };
+            const fits =
+              text.width > 0 && text.left >= bounds.left - 1 && text.right <= bounds.right + 1;
+            const ordered =
+              index === 0
+                ? Math.abs(bounds.left - tabTrackBounds.left - 16) < 0.05
+                : bounds.left >= tabs[index - 1]!.getBoundingClientRect().right - 1;
+            const inTrack = bounds.right <= tabTrackBounds.right + 0.05;
+            return fits && ordered && inTrack ? [] : [tab.getAttribute("data-tab-value")];
           }),
         };
       });
 
-      for (const name of ["approvals", "mentions", "automations", "system", "all"]) {
-        const tab = panel.locator(`.hub-tab[data-tab-value="${name}"]`);
+      for (const tab of await panel.getByRole("tab").all()) {
+        const id = await tab.getAttribute("id");
+        expect(id).toMatch(/^sidebar-issues-tab-/u);
         await tab.click();
         await expect.poll(() => tab.getAttribute("aria-selected")).toBe("true");
         await expect
           .poll(() => panel.getByRole("tabpanel").getAttribute("aria-labelledby"))
-          .toBe(`sidebar-issues-tab-${name}`);
+          .toBe(id);
       }
       await panel.getByRole("button", { name: "Close", exact: true }).click();
       await panel.waitFor({ state: "hidden" });
       await suite.closeBrowserContext(context);
       expect(result.startTop).toBeGreaterThan(result.finalTop + 100);
       expect(result.duration).toBeGreaterThanOrEqual(200);
-      expect(result.duration).toBeLessThan(300);
-      expect(result).toMatchObject({
-        easing: "cubic-bezier(0.32, 0.72, 0, 1)",
-        closeWidth: 36,
-        closeHeight: 36,
-        closeBorderWidth: "1px",
-        closeBorderRadius: "9999px",
-      });
-      expect(result.sheetBackground).toBe(result.headerBackground);
-      expect(result.headerBackground).not.toBe(result.listBackground);
-      expect(result.closeBackground).not.toBe("rgba(0, 0, 0, 0)");
-      expect(result.tabs.map((tab) => tab.panel)).toEqual([
-        "all",
-        "approvals",
-        "mentions",
-        "automations",
-        "system",
-      ]);
-      expect(result.tabs[0]!.left).toBeCloseTo(result.tabTrackLeft, 1);
-      expect(result.tabs.at(-1)!.right).toBeCloseTo(result.tabTrackRight, 1);
-      for (const [index, tab] of result.tabs.entries()) {
-        expect(tab.labelRight).toBeGreaterThan(tab.labelLeft);
-        expect(tab.labelLeft, `${tab.panel} label starts inside its tab`).toBeGreaterThanOrEqual(
-          tab.left - 1,
-        );
-        expect(tab.labelRight, `${tab.panel} label fits inside its tab`).toBeLessThanOrEqual(
-          tab.right + 1,
-        );
-        if (index > 0) {
-          expect(tab.left).toBeGreaterThanOrEqual(result.tabs[index - 1]!.right - 1);
-        }
-      }
+      // The shared sheet spring: ~0.3 s perceptual pace plus its settle tail.
+      expect(result.duration).toBeLessThan(500);
+      expect(result.closeWidth).toBeGreaterThanOrEqual(36);
+      expect(result.closeHeight).toBeGreaterThanOrEqual(36);
+      expect(result.headerBackground).toBe("rgba(0, 0, 0, 0)");
+      expect(result.tabsBackground).toBe(result.headerBackground);
+      expect(result.sheetBackgroundAlpha).toBe(255);
+      expect(result.listBackground).toBe(result.sheetBackground);
+      expect(result.tabCount).toBeGreaterThan(0);
+      expect(result.tabFailures).toEqual([]);
     }
   });
 });

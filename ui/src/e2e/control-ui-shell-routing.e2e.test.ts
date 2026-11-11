@@ -115,7 +115,10 @@ suite.define(() => {
     await suite.withPage(
       {
         locale: "en-US",
-        recordVideo: { dir: suite.artifactDir, size: { height: 720, width: 1280 } },
+        recordVideo:
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? { dir: suite.artifactDir, size: { height: 720, width: 1280 } }
+            : undefined,
         serviceWorkers: "block",
         viewport: { height: 720, width: 1280 },
       },

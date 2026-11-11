@@ -3,6 +3,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.js";
 import { formatInstallOwnerMessage } from "../infra/install-owner.js";
+import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   normalizeUpdateChannel,
@@ -11,7 +12,6 @@ import {
 } from "../infra/update-channels.js";
 import {
   checkUpdateStatus,
-  compareSemverStrings,
   type UpdateCheckResult,
   type UpdateInstallIdentity,
 } from "../infra/update-check.js";

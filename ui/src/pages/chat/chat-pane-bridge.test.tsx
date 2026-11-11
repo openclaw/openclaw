@@ -1,24 +1,27 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import type { JSX } from "@solidjs/web";
-import { createSignal } from "solid-js";
+import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { adoptBootComposer, retireBootComposer } from "../../app/boot-composer.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
-import { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { createInitializationContext } from "./chat-pane.test-support.ts";
-import { ChatPaneView, type ChatPaneElement, type ChatPaneProps } from "./chat-pane.tsx";
+import type { ChatPaneProps } from "./chat-pane.tsx";
+import "./chat-pane.tsx";
+import { discardPrewarmedChatSnapshot, prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
+import * as snapshotDatabase from "./session-snapshot-database.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
+import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 function mountedFixture(
   id: string,
@@ -34,83 +37,102 @@ function mountedFixture(
     ...fixture,
     sessionKey,
     render: (props: Partial<ChatPaneProps> = {}) =>
-      mountPane(fixture.context, () => (
-        <ChatPaneView paneId={id} sessionKey={sessionKey} {...props} />
-      )),
+      mountPane(fixture.context, { paneId: id, sessionKey, ...props }),
   };
 }
 
-function mountPane(context: ApplicationContext, render: () => JSX.Element, nativeContext = true) {
-  const container = nativeContext
-    ? document.body.appendChild(createApplicationContextProvider(context))
-    : undefined;
-  onTestFinished(() => container?.remove());
-  return mountSolid(() => <ApplicationProvider value={context}>{render()}</ApplicationProvider>, {
-    container,
-  });
+function mountPane(context: ApplicationContext, props: Partial<ChatPaneProps>) {
+  const container = document.body.appendChild(createApplicationContextProvider(context));
+  const pane = Object.assign(document.createElement("openclaw-chat-pane"), props);
+  container.append(pane);
+  onTestFinished(() => container.remove());
+  return { container, pane };
 }
 
 const composerSelector = ".agent-chat__composer-combobox textarea";
+it.each([false, true])(
+  "holds DOM completion until the yielded pane mounts or retires (retire: %s)",
+  async (retire) => {
+    const bootComposer = document.createElement("textarea");
+    bootComposer.id = "openclaw-boot-composer";
+    document.documentElement.setAttribute("data-openclaw-boot-chat", "");
+    document.body.append(bootComposer);
+    adoptBootComposer(true);
+    const yielding = createDeferred();
+    vi.stubGlobal("chrome", {});
+    vi.stubGlobal("scheduler", { yield: () => yielding.promise });
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    onTestFinished(() => {
+      retireBootComposer();
+      document.documentElement.removeAttribute("data-openclaw-boot-chat");
+      document.documentElement.removeAttribute("data-openclaw-warm-frame");
+      yielding.resolve();
+      hidden.mockRestore();
+      vi.unstubAllGlobals();
+    });
+    const { pane, container } = mountedFixture("yielded-pane").render({
+      active: true,
+      presented: true,
+    });
+    await vi.dynamicImportSettled();
+    flush();
+    let completed = false;
+    const completion = pane.updateComplete.then(() => {
+      completed = true;
+    });
+    await Promise.resolve();
+    flush();
+    expect(pane.querySelector(".chat-pane__header")).toBeNull();
+    expect(pane.querySelector(".lazy-view-state--route")).not.toBeNull();
+    expect(completed).toBe(false);
 
-function stubLifecycle() {
-  vi.spyOn(ChatPaneRuntime.prototype, "start").mockImplementation(() => {});
-  vi.spyOn(ChatPaneRuntime.prototype, "dispose").mockImplementation(() => {});
+    if (retire) {
+      container.remove();
+      await completion;
+    }
+    yielding.resolve();
+    await completion;
+    await Promise.resolve();
+    flush();
+    expect(completed).toBe(true);
+    expect(pane.querySelectorAll(".chat-pane__header")).toHaveLength(retire ? 0 : 1);
+  },
+);
+
+it("mounts route handoffs immediately without a retained boot composer", async () => {
+  const yieldTask = vi.fn(() => Promise.resolve());
+  vi.stubGlobal("chrome", {});
+  vi.stubGlobal("scheduler", { yield: yieldTask });
   onTestFinished(() => {
-    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
-}
+  const { pane } = mountedFixture("immediate-pane").render({ active: true, presented: true });
+  await waitForSolid(() => expect(pane.querySelector(".chat-pane__header")).not.toBeNull());
+  await pane.updateComplete;
+  expect(yieldTask).not.toHaveBeenCalled();
+});
 
 it("applies a route draft and its focus cue to an already mounted native pane", async () => {
-  const intervals = vi.spyOn(globalThis, "setInterval");
-  const clearInterval = vi.spyOn(globalThis, "clearInterval");
-  const { sessionKey, context } = mountedFixture("bridge-draft");
-  const [props, setProps] = createSignal<Partial<ChatPaneProps>>({ active: true, presented: true });
-  const view = mountPane(context, () => (
-    <ChatPaneView paneId="bridge-draft" sessionKey={sessionKey} {...props()} />
-  ));
+  const { pane } = mountedFixture("bridge-draft").render({ active: true, presented: true });
   const textarea = await waitForSolid(() =>
-    expectDefined(
-      view.container.querySelector<HTMLTextAreaElement>(composerSelector),
-      composerSelector,
-    ),
+    expectDefined(pane.querySelector<HTMLTextAreaElement>(composerSelector), "composer"),
   );
-  const pane = expectDefined(
-    view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
-    "openclaw-chat-pane",
-  );
-  setProps((p) => ({ ...p, draft: "What can you do?", focusComposer: true }));
+  Object.assign(pane, { draft: "What can you do?", focusComposer: true });
   await pane.updateComplete;
   expect(textarea.value).toBe("What can you do?");
   expect(document.activeElement).toBe(textarea);
   expect(textarea.closest(".agent-chat__input")?.classList).toContain(
     "agent-chat__input--prefill-attention",
   );
-  const poll = intervals.mock.calls.findIndex(([, delay]) => delay === 60_000);
-  expect(poll).toBeGreaterThanOrEqual(0);
-  setProps((p) => ({ ...p, presented: false }));
-  await waitForSolid(() =>
-    expect(clearInterval).toHaveBeenCalledWith(intervals.mock.results[poll]?.value),
-  );
-  const priorIntervals = intervals.mock.calls.length;
-  setProps((p) => ({ ...p, presented: true }));
-  await pane.updateComplete;
-  const resumedPoll = intervals.mock.calls.findIndex(
-    ([, delay], index) => index >= priorIntervals && delay === 60_000,
-  );
-  expect(resumedPoll).toBeGreaterThanOrEqual(priorIntervals);
-  expect(view.container.querySelector(composerSelector)).toBe(textarea);
-  view.unmount();
-  expect(clearInterval).toHaveBeenCalledWith(intervals.mock.results[resumedPoll]?.value);
 });
 
 it("updates held Send as a mounted composer's draft changes between commands and ordinary input", async () => {
   const fixture = mountedFixture("held-send");
-  const { sessionKey } = fixture;
   const client = expectDefined(fixture.context.gateway.snapshot.client, "recovering client");
   Object.defineProperty(client, "recoveryScopeReady", { value: false });
   const container = document.body.appendChild(createApplicationContextProvider(fixture.context));
   onTestFinished(() => container.remove());
-  const pane = fixture.mount(sessionKey);
+  const pane = fixture.mount(fixture.sessionKey);
   container.appendChild(pane.element);
   await pane.updateComplete;
   const sendChat = vi.spyOn(pane.state, "handleSendChat").mockResolvedValue(undefined);
@@ -118,12 +140,9 @@ it("updates held Send as a mounted composer's draft changes between commands and
   await pane.updateComplete;
   const input = expectDefined(
     pane.querySelector<HTMLTextAreaElement>(composerSelector),
-    composerSelector,
+    "composer",
   );
-  const send = expectDefined(
-    pane.querySelector<HTMLButtonElement>(".chat-send-btn--send"),
-    ".chat-send-btn--send",
-  );
+  const send = expectDefined(pane.querySelector<HTMLButtonElement>(".chat-send-btn--send"), "send");
   const edit = async (draft: string) => {
     input.value = draft;
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -145,37 +164,6 @@ it("updates held Send as a mounted composer's draft changes between commands and
   expect(sendChat).toHaveBeenCalledOnce();
 });
 
-it("settles clean hidden reads and fences actual property changes until reveal", async () => {
-  stubLifecycle();
-  const render = vi.spyOn(ChatPaneRuntime.prototype, "render");
-  const context = createInitializationContext();
-  context.gateway.snapshot.phase = "stopped";
-  const view = mountPane(
-    context,
-    () => <ChatPaneView paneId="clean-hidden" presented={false} />,
-    false,
-  );
-  const pane = expectDefined(
-    view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
-    "openclaw-chat-pane",
-  );
-  await pane.updateComplete;
-  await expect(pane.updateComplete).resolves.toBe(true);
-  render.mockClear();
-  pane.paneLabel = "Changed while hidden";
-  let committed = false;
-  const completion = pane.updateComplete.then(() => {
-    committed = true;
-  });
-  await waitForSolid(() => {
-    expect(render).not.toHaveBeenCalled();
-    expect(committed).toBe(false);
-  });
-  pane.presented = true;
-  await completion;
-  expect(render).toHaveBeenCalledOnce();
-});
-
 it("replaces the command provider while document-hidden rendering is parked", async () => {
   let visibility: DocumentVisibilityState = "visible";
   const visibilitySpy = vi
@@ -186,11 +174,7 @@ it("replaces the command provider while document-hidden rendering is parked", as
   const first = createMockBoardProvider(sessionKey);
   const second = createMockBoardProvider(sessionKey);
   const subscribe = vi.spyOn(second.events, "subscribe");
-  const view = render({ boardProvider: first });
-  const pane = expectDefined(
-    view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
-    "openclaw-chat-pane",
-  );
+  const { pane } = render({ boardProvider: first });
   await pane.updateComplete;
   visibility = "hidden";
   document.dispatchEvent(new Event("visibilitychange"));
@@ -213,23 +197,188 @@ it("opens provider findings through the mounted pane's first rendered frame", as
     explanation: "The agent tried to modify a synthetic file outside the selected project.",
     continuationMessage: "Continue only inside the selected project.",
   };
-  const fixture = mountedFixture("bridge-provider-review", {
+  const { container, pane } = mountedFixture("bridge-provider-review", {
     agentId: "main",
     providerReview: review,
-  });
-  const view = fixture.render({ active: true });
+  }).render({ active: true });
+  const dialog = () => container.querySelector("openclaw-modal-dialog");
+  await pane.updateComplete;
+  await vi.dynamicImportSettled();
   const reviewButton = await waitForSolid(() =>
     expectDefined(
-      view.container.querySelector<HTMLButtonElement>(".chat-provider-review button"),
-      ".chat-provider-review button",
+      container.querySelector<HTMLButtonElement>(".chat-provider-review button"),
+      "provider review",
     ),
   );
-  expect(reviewButton.textContent).toContain("Review findings");
   reviewButton.click();
   await vi.dynamicImportSettled();
   await waitForSolid(() => {
-    const dialog = view.container.querySelector("openclaw-modal-dialog");
-    expect(dialog?.textContent).toContain(review.explanation);
-    expect(dialog?.querySelector("blockquote")?.textContent).toBe(review.continuationMessage);
+    expect(dialog()?.textContent).toContain(review.explanation);
+    expect(dialog()?.querySelector("blockquote")?.textContent).toBe(review.continuationMessage);
   });
+  expectDefined(
+    container.querySelector<HTMLButtonElement>("openclaw-modal-actions button"),
+    "modal action",
+  ).click();
+  await waitForSolid(() => expect(dialog()).toBeNull());
+  expect(reviewButton.isConnected).toBe(true);
+  reviewButton.click();
+  await waitForSolid(() => expect(dialog()?.textContent).toContain(review.explanation));
 });
+
+it.each([
+  "ready",
+  "holding",
+  "fallback",
+  "unavailable",
+  "unavailable-holding",
+  "unavailable-fallback",
+] as const)(
+  "admits the first pane from a pending snapshot, bounded at 100ms (%s)",
+  async (outcome) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const yielding = createDeferred();
+    const yieldTask = vi.fn(() => yielding.promise);
+    vi.stubGlobal("scheduler", { yield: yieldTask });
+    onTestFinished(() => {
+      yielding.resolve();
+      vi.unstubAllGlobals();
+    });
+    const bootComposer = document.createElement("textarea");
+    bootComposer.id = "openclaw-boot-composer";
+    bootComposer.value = "Keep the pending draft";
+    bootComposer.setAttribute("data-focused", "");
+    document.documentElement.setAttribute("data-openclaw-boot-chat", "");
+    document.body.append(bootComposer);
+    bootComposer.focus();
+    bootComposer.setSelectionRange(5, 8, "backward");
+    adoptBootComposer(true);
+    onTestFinished(() => {
+      retireBootComposer();
+      document.documentElement.removeAttribute("data-openclaw-boot-chat");
+      document.documentElement.removeAttribute("data-openclaw-warm-frame");
+    });
+    const fixture = mountedFixture("snapshot-admission");
+    const gateway = fixture.context.gateway;
+    gateway.snapshot.phase = "connecting";
+    Object.defineProperty(gateway.snapshot.client, "offlineRecoveryScope", { value: "account-a" });
+    const key = resolveChatSnapshotKey(
+      {
+        settings: gateway.connection,
+        client: gateway.snapshot.client,
+        hello: gateway.snapshot.hello,
+        agentsList: fixture.context.agents.state.agentsList,
+      },
+      { sessionKey: fixture.sessionKey },
+    );
+    const read = createDeferred<unknown>();
+    const disk = vi
+      .spyOn(snapshotDatabase, "readStoredChatSnapshotRecord")
+      .mockReturnValue(read.promise);
+    onTestFinished(async () => {
+      read.resolve(undefined);
+      discardPrewarmedChatSnapshot();
+      disk.mockRestore();
+      vi.useRealTimers();
+    });
+    const prepared = prewarmChatSnapshot(key);
+    const warmFrame = outcome.endsWith("holding")
+      ? "holding"
+      : outcome.endsWith("fallback")
+        ? "fallback"
+        : undefined;
+    if (warmFrame) {
+      document.documentElement.setAttribute("data-openclaw-warm-frame", warmFrame);
+    }
+    const view = fixture.render({
+      active: true,
+      ownsRouteComposer: true,
+      presentationId: "snapshot-active",
+      sessionSnapshotStore: new SessionSnapshotStore(),
+    });
+    const inactive = fixture.render({
+      paneId: "inactive",
+      active: false,
+      ownsRouteComposer: false,
+      presentationId: "snapshot-inactive",
+      sessionSnapshotStore: new SessionSnapshotStore(),
+    });
+    flush();
+    await vi.advanceTimersByTimeAsync(99);
+    flush();
+    expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
+    expect(view.pane.querySelector(".lazy-view-state--route")).not.toBeNull();
+    expect(inactive.pane.querySelector("textarea")).toBeNull();
+    expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
+    expect(view.pane.querySelector("textarea")).toBe(bootComposer);
+    expect(bootComposer.value).toBe("Keep the pending draft");
+    inactive.container.remove();
+    if (!outcome.startsWith("unavailable")) {
+      read.resolve({
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
+        savedAt: 1,
+        sessionKey: key,
+        sessionId: "snapshot-session",
+        snapshot: {
+          messages: [{ role: "assistant", content: "Stored conversation" }],
+          pagination: { hasMore: false, completeSnapshot: true },
+          sessionId: "snapshot-session",
+          sessionState: {
+            archived: true,
+            unarchiveAllowed: false,
+            parentSession: { key: "agent:main:parent", title: "Stored parent" },
+          },
+        },
+      });
+      await prepared;
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
+      expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
+      expect(view.pane.querySelector(".chat-pane__parent-session")?.textContent).toContain(
+        "Stored parent",
+      );
+      expect(view.pane.querySelector(".agent-chat__disabled-banner--replacement")).not.toBeNull();
+      expect(view.pane.querySelector(".agent-chat__input")).toBeNull();
+      expect(view.pane.querySelector('[data-cached-session="true"]')).not.toBeNull();
+      if (outcome === "holding") {
+        // The existing held-warm split is inside the mounted pane, not before it.
+        expect(yieldTask).toHaveBeenCalledOnce();
+        expect(view.pane.textContent).not.toContain("Stored conversation");
+        expect(view.pane.querySelector(".chat-conversation-loading")).toBeNull();
+        yielding.resolve();
+        await yielding.promise;
+        flush();
+      } else {
+        expect(yieldTask).not.toHaveBeenCalled();
+      }
+      expect(view.pane.textContent).toContain("Stored conversation");
+    } else {
+      await vi.advanceTimersByTimeAsync(1);
+      flush();
+      if (warmFrame) {
+        expect(yieldTask).not.toHaveBeenCalled();
+      } else {
+        expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
+        expect(view.pane.querySelector("textarea")).toBe(bootComposer);
+        expect(yieldTask).toHaveBeenCalledOnce();
+        yielding.resolve();
+        await yielding.promise;
+        flush();
+      }
+      expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
+      expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
+      const composer = view.pane.querySelector<HTMLTextAreaElement>(composerSelector);
+      expect(composer?.value).toBe("Keep the pending draft");
+      await view.pane.updateComplete;
+      expect([
+        composer?.selectionStart,
+        composer?.selectionEnd,
+        composer?.selectionDirection,
+      ]).toEqual([5, 8, "backward"]);
+      expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
+      read.resolve(undefined);
+      await prepared;
+    }
+  },
+);

@@ -1,8 +1,8 @@
 import { createMemo, lazy } from "solid-js";
-import { resolveCloudProfileIconData } from "../../components/provider-icon-data.ts";
+import { resolveCloudProfileIconData } from "../../components/cloud-profile-icon-data.ts";
+import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
-import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { SessionPicker } from "./picker.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
@@ -22,7 +22,7 @@ export type WhereChipProps = {
 export function WhereChip(props: WhereChipProps) {
   let picker: PopoverHandle | undefined;
   let pendingSearchFocus: Element | null | undefined;
-  const focusSearch = (search: HTMLInputElement) => {
+  const focusSearch = (search: HTMLElement) => {
     // The first chunk may arrive after native popover autofocus has finished.
     if (picker?.overlay.open && search.ownerDocument.activeElement === pendingSearchFocus) {
       search.focus({ preventScroll: true });

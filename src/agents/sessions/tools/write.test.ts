@@ -30,6 +30,11 @@ function expectApplicablePatch(details: unknown, oldContent: string, content: st
 
 describe("write tool", () => {
   let tmpDir = "";
+  let tool: ReturnType<typeof createWriteTool>;
+
+  function write(filePath: string, content: string, signal?: AbortSignal) {
+    return tool.execute("call-1", { path: filePath, content }, signal);
+  }
 
   afterEach(async () => {
     if (tmpDir) {
@@ -38,9 +43,14 @@ describe("write tool", () => {
     }
   });
 
-  async function createTempPath(name = "demo.txt") {
+  async function createTempPath(name = "demo.txt", original?: string | Buffer) {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-tool-"));
-    return path.join(tmpDir, name);
+    tool = createWriteTool(tmpDir);
+    const filePath = path.join(tmpDir, name);
+    if (original !== undefined) {
+      await fs.writeFile(filePath, original);
+    }
+    return filePath;
   }
 
   function createRecoverableOperations(writeFile: WriteOperations["writeFile"]): WriteOperations {
@@ -53,77 +63,52 @@ describe("write tool", () => {
     };
   }
 
-  it("recovers success after a post-write abort when readback matches requested content", async () => {
-    // Remote transports can report cancellation after the write landed; verify
-    // by readback before surfacing a false failure to the model.
+  it.each(["abort", "timeout"])("recovers a persisted write after %s", async (failure) => {
     const filePath = await createTempPath();
-    const expectedContent = "finished 😀\n";
+    const content = "finished 😀\n";
     const controller = new AbortController();
-    const tool = createWriteTool(tmpDir, {
-      operations: createRecoverableOperations(async (absolutePath, content) => {
-        await fs.writeFile(absolutePath, content, "utf-8");
-        controller.abort();
-        throw new Error("Operation aborted");
+    tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(async (absolutePath, requested) => {
+        await fs.writeFile(absolutePath, requested, "utf8");
+        if (failure === "abort") {
+          controller.abort();
+        }
+        throw new Error(failure === "abort" ? "Operation aborted" : "node invoke timed out");
       }),
     });
-
-    const result = await tool.execute(
-      "call-1",
-      { path: filePath, content: expectedContent },
-      controller.signal,
-    );
-
+    const result = await write(filePath, content, controller.signal);
     expect(result.content[0]).toEqual({
       type: "text",
-      text: `Successfully wrote ${Buffer.byteLength(expectedContent, "utf8")} bytes to ${filePath}`,
+      text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${filePath}`,
     });
   });
 
   it("keeps the original abort when the file already matched before execution", async () => {
     // Matching pre-existing content is not proof this call wrote successfully.
-    const filePath = await createTempPath();
-    await fs.writeFile(filePath, "finished\n", "utf-8");
+    const filePath = await createTempPath(undefined, "finished\n");
     const controller = new AbortController();
     controller.abort();
-    const tool = createWriteTool(tmpDir, {
+    tool = createWriteTool(tmpDir, {
       operations: createRecoverableOperations(async () => {
         throw new Error("Operation aborted");
       }),
     });
 
-    await expect(
-      tool.execute("call-1", { path: filePath, content: "finished\n" }, controller.signal),
-    ).rejects.toThrow("Operation aborted");
-  });
-
-  it("recovers timeout-like post-write errors when readback matches requested content", async () => {
-    const filePath = await createTempPath();
-    const tool = createWriteTool(tmpDir, {
-      operations: createRecoverableOperations(async (absolutePath, content) => {
-        await fs.writeFile(absolutePath, content, "utf-8");
-        throw new Error("node invoke timed out");
-      }),
-    });
-
-    const result = await tool.execute(
-      "call-1",
-      { path: filePath, content: "finished\n" },
-      undefined,
+    await expect(write(filePath, "finished\n", controller.signal)).rejects.toThrow(
+      "Operation aborted",
     );
-
-    expect(result.content[0]?.type).toBe("text");
   });
 
-  it("rejects a delegated write that resolves without creating the file", async () => {
-    const filePath = await createTempPath("missing.txt");
-    const tool = createWriteTool(tmpDir, {
-      operations: createRecoverableOperations(async () => {}),
-    });
-
-    await expect(
-      tool.execute("call-1", { path: filePath, content: "expected\n" }, undefined),
-    ).rejects.toThrow("Write verification failed");
-    await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+  it.each(["missing", "directory"])("rejects a delegated write to a %s target", async (target) => {
+    const filePath = await createTempPath();
+    if (target === "directory") {
+      await fs.mkdir(filePath);
+    }
+    tool = createWriteTool(tmpDir, { operations: createRecoverableOperations(async () => {}) });
+    await expect(write(filePath, "expected\n")).rejects.toThrow("Write verification failed");
+    if (target === "missing") {
+      await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+    }
   });
 
   it.each([
@@ -132,30 +117,15 @@ describe("write tool", () => {
   ])(
     "rejects a delegated write that leaves stale same-size bytes: $name",
     async ({ original, content }) => {
-      const filePath = await createTempPath("stale.txt");
-      await fs.writeFile(filePath, original);
-      const tool = createWriteTool(tmpDir, {
+      const filePath = await createTempPath("stale.txt", original);
+      tool = createWriteTool(tmpDir, {
         operations: createRecoverableOperations(async () => {}),
       });
 
-      await expect(tool.execute("call-1", { path: filePath, content }, undefined)).rejects.toThrow(
-        "Write verification failed",
-      );
+      await expect(write(filePath, content)).rejects.toThrow("Write verification failed");
       await expect(fs.readFile(filePath)).resolves.toEqual(original);
     },
   );
-
-  it("rejects a delegated write that leaves a non-file target", async () => {
-    const filePath = await createTempPath("directory");
-    await fs.mkdir(filePath);
-    const tool = createWriteTool(tmpDir, {
-      operations: createRecoverableOperations(async () => {}),
-    });
-
-    await expect(
-      tool.execute("call-1", { path: filePath, content: "expected\n" }, undefined),
-    ).rejects.toThrow("Write verification failed");
-  });
 
   it.each(["buffer", "text"] as const)(
     "verifies delegated UTF-8 bytes with %s readback",
@@ -168,11 +138,11 @@ describe("write tool", () => {
       if (readback === "text") {
         operations.readFile = (absolutePath) => fs.readFile(absolutePath, "utf8");
       }
-      const tool = createWriteTool(tmpDir, { operations });
+      tool = createWriteTool(tmpDir, { operations });
 
-      await expect(
-        tool.execute("call-1", { path: filePath, content }, undefined),
-      ).resolves.toMatchObject({ details: { changed: true, created: true } });
+      await expect(write(filePath, content)).resolves.toMatchObject({
+        details: { changed: true, created: true },
+      });
       await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
       const noOpResult = await tool.execute("call-2", { path: filePath, content }, undefined);
       expect(noOpResult).toMatchObject({ details: { changed: false } });
@@ -181,25 +151,18 @@ describe("write tool", () => {
   );
 
   it("overwrites invalid UTF-8 bytes that decode to the requested text", async () => {
-    const filePath = await createTempPath("invalid.txt");
-    await fs.writeFile(filePath, Buffer.from([0xf0, 0x90, 0x80]));
-    const tool = createWriteTool(tmpDir);
+    const filePath = await createTempPath("invalid.txt", Buffer.from([0xf0, 0x90, 0x80]));
 
-    await expect(
-      tool.execute("call-1", { path: filePath, content: "\uFFFD" }, undefined),
-    ).resolves.toMatchObject({ details: { changed: true, created: false } });
+    await expect(write(filePath, "\uFFFD")).resolves.toMatchObject({
+      details: { changed: true, created: false },
+    });
     await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from("\uFFFD", "utf8"));
   });
 
   it("writes file URL paths through the shared session path resolver", async () => {
     const filePath = await createTempPath("notes.md");
-    const tool = createWriteTool(tmpDir);
 
-    await tool.execute(
-      "call-1",
-      { path: pathToFileURL(filePath).href, content: "finished\n" },
-      undefined,
-    );
+    await write(pathToFileURL(filePath).href, "finished\n");
 
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("finished\n");
   });
@@ -208,9 +171,8 @@ describe("write tool", () => {
     const nnbspPath = await createTempPath("report 2026.md");
     const asciiPath = path.join(tmpDir, "report 2026.md");
     await fs.writeFile(asciiPath, "ascii\n", "utf-8");
-    const tool = createWriteTool(tmpDir);
 
-    await tool.execute("call-1", { path: nnbspPath, content: "nnbsp\n" }, undefined);
+    await write(nnbspPath, "nnbsp\n");
 
     await expect(fs.readFile(nnbspPath, "utf-8")).resolves.toBe("nnbsp\n");
     await expect(fs.readFile(asciiPath, "utf-8")).resolves.toBe("ascii\n");
@@ -219,11 +181,9 @@ describe("write tool", () => {
   it.each(["café 🦀\r\n日本語 e\u0301\r\n", "\uFFFD\r\n"])(
     "returns a non-terminal no-op for identical UTF-8 content: %j",
     async (content) => {
-      const filePath = await createTempPath("identical.txt");
-      await fs.writeFile(filePath, content, "utf-8");
-      const tool = createWriteTool(tmpDir);
+      const filePath = await createTempPath("identical.txt", content);
 
-      const result = await tool.execute("call-1", { path: "identical.txt", content }, undefined);
+      const result = await write("identical.txt", content);
 
       const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
       expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
@@ -236,9 +196,8 @@ describe("write tool", () => {
   it("reports a created file with its authoritative diff", async () => {
     await createTempPath("created.txt");
     const content = "first\nsecond\n";
-    const tool = createWriteTool(tmpDir);
 
-    const result = await tool.execute("call-1", { path: "created.txt", content }, undefined);
+    const result = await write("created.txt", content);
     expect(result.details).toEqual({
       changed: true,
       created: true,
@@ -249,24 +208,13 @@ describe("write tool", () => {
     expectApplicablePatch(result.details, "", content);
   });
 
-  it("keeps oversized created-file details bounded", async () => {
-    await createTempPath("large-created.txt");
-    const content = "x".repeat(1024 * 1024 + 1);
-    const tool = createWriteTool(tmpDir);
-
-    const result = await tool.execute("call-1", { path: "large-created.txt", content }, undefined);
-
-    expect(result.details).toEqual({ changed: true, created: true });
-  });
-
   it("reports an overwrite with the readable old-content diff", async () => {
     const filePath = await createTempPath("different.txt");
     const content = "new 😀\n";
     const oldContent = "old\n";
     await fs.writeFile(filePath, oldContent, "utf-8");
-    const tool = createWriteTool(tmpDir);
 
-    const result = await tool.execute("call-1", { path: "different.txt", content }, undefined);
+    const result = await write("different.txt", content);
     expect(result.content[0]).toEqual({
       type: "text",
       text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to different.txt`,
@@ -282,78 +230,51 @@ describe("write tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(content);
   });
 
-  it.each([
-    {
-      name: "insert at start",
-      oldContent: "a\nb\n",
-      content: "first\na\nb\n",
-      diff: "+1 first\n 2 a\n 3 b",
-      firstChangedLine: 1,
-    },
-    {
-      name: "delete at end",
-      oldContent: "a\nb\nlast\n",
-      content: "a\nb\n",
-      diff: " 1 a\n 2 b\n-3 last",
-      firstChangedLine: 3,
-    },
-    {
-      name: "empty overwrite",
-      oldContent: "last\n",
-      content: "",
-      diff: "-1 last",
-      firstChangedLine: 1,
-    },
-    {
-      name: "remove final newline",
-      oldContent: "last\n",
-      content: "last",
-      diff: "-1 last\n+1 last",
-      firstChangedLine: 1,
-    },
-    {
-      name: "add final newline",
-      oldContent: "last",
-      content: "last\n",
-      diff: "-1 last\n+1 last",
-      firstChangedLine: 1,
-    },
-    {
-      name: "CRLF and Unicode without final newline",
-      oldContent: "café 🦀\r\n日本語 e\u0301\r\nlast",
-      content: "café 😀\r\n日本語 é\r\nlast",
-      diff: "-1 café 🦀\r\n-2 日本語 e\u0301\r\n+1 café 😀\r\n+2 日本語 é\r\n 3 last",
-      firstChangedLine: 1,
-    },
-    ...[7, 8, 9].map((gap) => {
-      const middle = Array.from({ length: gap }, (_, i) => `context-${i}\n`).join("");
-      return {
-        name: `${gap} context lines between edits`,
-        oldContent: `before\n${middle}after\n`,
-        content: `BEFORE\n${middle}AFTER\n`,
-        diff: expect.stringContaining("- 1 before\n+ 1 BEFORE"),
-        firstChangedLine: 1,
-      };
-    }),
+  it.each<[string, string, string, number]>([
+    ["a\nb\n", "first\na\nb\n", "+1 first\n 2 a\n 3 b", 1],
+    ["a\nb\nlast\n", "a\nb\n", " 1 a\n 2 b\n-3 last", 3],
+    ["last\n", "", "-1 last", 1],
+    ["last\n", "last", "-1 last\n+1 last", 1],
+    ["last", "last\n", "-1 last\n+1 last", 1],
+    [
+      "café 🦀\r\n日本語 e\u0301\r\nlast",
+      "café 😀\r\n日本語 é\r\nlast",
+      "-1 café 🦀\r\n-2 日本語 e\u0301\r\n+1 café 😀\r\n+2 日本語 é\r\n 3 last",
+      1,
+    ],
   ])(
-    "preserves both receipt formats for $name",
-    async ({ oldContent, content, diff, firstChangedLine }) => {
-      const filePath = await createTempPath("receipt.txt");
-      await fs.writeFile(filePath, oldContent, "utf8");
-      const tool = createWriteTool(tmpDir);
-
-      const result = await tool.execute("call-1", { path: "receipt.txt", content }, undefined);
+    "preserves both receipt formats changing %j to %j",
+    async (oldContent, content, diff, firstChangedLine) => {
+      const filePath = await createTempPath("receipt.txt", oldContent);
+      const result = await write("receipt.txt", content);
       expect(result.details).toEqual({
         changed: true,
         created: false,
         diff,
-        patch: expect.stringContaining("--- receipt.txt\n+++ receipt.txt\n"),
         firstChangedLine,
+        patch: expect.stringContaining("--- receipt.txt\n+++ receipt.txt\n"),
       });
       expectApplicablePatch(result.details, oldContent, content);
       await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
     },
   );
+
+  it.each([7, 8, 9])("preserves patch hunks across %i context lines", async (gap) => {
+    const middle = Array.from({ length: gap }, (_, i) => `context-${i}\n`).join("");
+    const oldContent = `before\n${middle}after\n`;
+    const content = `BEFORE\n${middle}AFTER\n`;
+    const filePath = await createTempPath("receipt.txt", oldContent);
+    const result = await write("receipt.txt", content);
+    expect(result.details).toEqual({
+      changed: true,
+      created: false,
+      diff: expect.stringContaining("- 1 before\n+ 1 BEFORE"),
+      firstChangedLine: 1,
+      patch: expect.stringContaining("--- receipt.txt\n+++ receipt.txt\n"),
+    });
+    expectApplicablePatch(result.details, oldContent, content);
+    await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
+  });
 
   it.each([1999, 2000, 2001])(
     "preserves the overwrite receipt budget at edit distance %i",
@@ -362,9 +283,8 @@ describe("write tool", () => {
       const oldContent = "anchor\n";
       const content = oldContent + "added\n".repeat(editDistance);
       await fs.writeFile(filePath, oldContent, "utf8");
-      const tool = createWriteTool(tmpDir);
 
-      const result = await tool.execute("call-1", { path: "edit-limit.txt", content }, undefined);
+      const result = await write("edit-limit.txt", content);
 
       if (editDistance <= 2000) {
         expect(result.details).toEqual({
@@ -382,82 +302,26 @@ describe("write tool", () => {
     },
   );
 
-  it("omits the diff when the old content is not valid UTF-8 text", async () => {
-    const filePath = await createTempPath("binary.bin");
-    await fs.writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]));
-    const tool = createWriteTool(tmpDir);
-
-    const result = await tool.execute(
-      "call-1",
-      { path: "binary.bin", content: "text now\n" },
-      undefined,
-    );
-
-    expect(result.details).toEqual({ changed: true, created: false });
-  });
-
-  it("omits the diff when the rewrite's edit distance blows the budget", async () => {
-    const filePath = await createTempPath("distinct-lines.txt");
-    const oldContent = Array.from({ length: 10_000 }, (_, i) => `old-${i}`).join("\n");
-    await fs.writeFile(filePath, oldContent, "utf-8");
-    const tool = createWriteTool(tmpDir);
-
-    const result = await tool.execute(
-      "call-1",
-      {
-        path: "distinct-lines.txt",
-        content: Array.from({ length: 10_000 }, (_, i) => `new-${i}`).join("\n"),
-      },
-      undefined,
-    );
-
-    expect(result.details).toEqual({ changed: true, created: false });
-  });
-
-  it("omits the diff for created files with excessive line counts", async () => {
-    await createTempPath("many-lines-created.txt");
-    const tool = createWriteTool(tmpDir);
-
-    const result = await tool.execute(
-      "call-1",
-      { path: "many-lines-created.txt", content: "a\n".repeat(25_000) },
-      undefined,
-    );
-
-    expect(result.details).toEqual({ changed: true, created: true });
-  });
-
-  it("omits the diff when combined line counts exceed the diff budget", async () => {
-    const filePath = await createTempPath("many-lines.txt");
-    await fs.writeFile(filePath, "a\n".repeat(15_000), "utf-8");
-    const tool = createWriteTool(tmpDir);
-
-    const result = await tool.execute(
-      "call-1",
-      { path: "many-lines.txt", content: "b\n".repeat(15_000) },
-      undefined,
-    );
-
-    expect(result.details).toEqual({ changed: true, created: false });
-  });
-
-  it("omits the diff when combined old and new content exceeds the diff budget", async () => {
-    const filePath = await createTempPath("combined.txt");
-    await fs.writeFile(filePath, "a".repeat(600 * 1024), "utf-8");
-    const tool = createWriteTool(tmpDir);
-
-    const result = await tool.execute(
-      "call-1",
-      { path: "combined.txt", content: "b".repeat(600 * 1024) },
-      undefined,
-    );
-
-    expect(result.details).toEqual({ changed: true, created: false });
+  it.each<[string, string | Buffer | undefined, string]>([
+    ["binary old content", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]), "text now\n"],
+    ["large creation", undefined, "x".repeat(1024 * 1024 + 1)],
+    ["many created lines", undefined, "a\n".repeat(25_000)],
+    ["combined line count", "a\n".repeat(15_000), "b\n".repeat(15_000)],
+    ["combined byte count", "a".repeat(600 * 1024), "b".repeat(600 * 1024)],
+    ["large replacement", "old\n", "x".repeat(1024 * 1024 + 1)],
+    [
+      "distinct-line edit budget",
+      Array.from({ length: 10_000 }, (_, i) => `old-${i}`).join("\n"),
+      Array.from({ length: 10_000 }, (_, i) => `new-${i}`).join("\n"),
+    ],
+  ])("bounds receipts for %s", async (_name, original, content) => {
+    const filePath = await createTempPath(undefined, original);
+    const result = await write(filePath, content);
+    expect(result.details).toEqual({ changed: true, created: original === undefined });
   });
 
   it("reports an overwrite without a fabricated diff when the old file is too large", async () => {
-    const filePath = await createTempPath("large.txt");
-    await fs.writeFile(filePath, "x".repeat(1024 * 1024 + 1), "utf-8");
+    await createTempPath("large.txt", "x".repeat(1024 * 1024 + 1));
     let readCount = 0;
     const operations = createRecoverableOperations((absolutePath, content) =>
       fs.writeFile(absolutePath, content, "utf-8"),
@@ -466,30 +330,11 @@ describe("write tool", () => {
       readCount += 1;
       return fs.readFile(absolutePath);
     };
-    const tool = createWriteTool(tmpDir, { operations });
+    tool = createWriteTool(tmpDir, { operations });
 
-    const result = await tool.execute(
-      "call-1",
-      { path: "large.txt", content: "replacement\n" },
-      undefined,
-    );
+    const result = await write("large.txt", "replacement\n");
 
     expect(readCount).toBe(1);
-    expect(result.details).toEqual({ changed: true, created: false });
-  });
-
-  it("keeps oversized overwrite details bounded", async () => {
-    const filePath = await createTempPath("large-replacement.txt");
-    await fs.writeFile(filePath, "old\n", "utf-8");
-    const content = "x".repeat(1024 * 1024 + 1);
-    const tool = createWriteTool(tmpDir);
-
-    const result = await tool.execute(
-      "call-1",
-      { path: "large-replacement.txt", content },
-      undefined,
-    );
-
     expect(result.details).toEqual({ changed: true, created: false });
   });
 
@@ -503,10 +348,8 @@ describe("write tool", () => {
         throw new Error("remote stat unavailable");
       },
     };
-    const tool = createWriteTool(tmpDir, { operations });
+    tool = createWriteTool(tmpDir, { operations });
 
-    await expect(
-      tool.execute("call-1", { path: "unknown.txt", content: "new\n" }, undefined),
-    ).rejects.toThrow("Write verification failed");
+    await expect(write("unknown.txt", "new\n")).rejects.toThrow("Write verification failed");
   });
 });

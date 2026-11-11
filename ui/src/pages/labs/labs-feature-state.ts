@@ -8,7 +8,6 @@ export type LabFeature = {
   id: string;
   title: () => string;
   description: () => string;
-  docsUrl: string;
   /** Leaf whose value decides whether the row reads as on. */
   configPath: readonly [string, ...string[]];
   /** Explicit writes preserve gates whose on/off values are modes, not booleans. */
@@ -27,12 +26,6 @@ export type LabFeature = {
 };
 
 export type LabFeatureDefinition = Omit<LabFeature, "title" | "description">;
-
-type LabFeatureState = {
-  enabled: boolean;
-  defaultEnabled: boolean;
-  overridden: boolean;
-};
 
 export const BOOLEAN_GATE = {
   onValue: true,
@@ -102,7 +95,7 @@ export function labFeatureOverridePath(
 export function resolveLabFeatureState(
   config: Record<string, unknown> | null,
   feature: LabFeatureDefinition,
-): LabFeatureState {
+) {
   const source = config ?? {};
   const parentPath = feature.configPath.slice(0, -1);
   const key = feature.configPath.at(-1);

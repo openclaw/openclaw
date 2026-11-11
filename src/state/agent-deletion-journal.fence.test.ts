@@ -4,7 +4,6 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   beginAgentDeletionJournal as beginJournal,
-  readAgentDeletionJournal as readJournal,
   removeAgentDeletionJournal as removeJournal,
 } from "../test-utils/agent-deletion-journal.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -103,18 +102,22 @@ it("admits settlement leases while draining and fences them once retirement begi
 });
 
 it.each([
-  ["registration", "database_paths_json", "[1]"],
-  ["lease claim", "cleanup_paths_json", "[1]"],
-  ["lease drain", "database_paths_json", "[1]"],
-  ["lease drain", "cleanup_paths_json", "[1]"],
-] as const)("%s classifies changed %s=%s", (caller, column, value) => {
-  const error =
-    column === "database_paths_json"
+  ["registration", "database_paths_json", false],
+  ["lease claim", "cleanup_paths_json", false],
+  ["lease drain", "database_paths_json", false],
+  ["lease drain", "cleanup_paths_json", false],
+  ["registration", "database_paths_json", true],
+  ["lease claim", "database_paths_json", true],
+] as const)("%s classifies changed %s (deleted identity: %s)", (caller, column, deleted) => {
+  const value = "[1]";
+  const error = deleted
+    ? "while agent deleted is deleted"
+    : column === "database_paths_json"
       ? "Invalid agent deletion database path journal."
       : "Invalid agent deletion cleanup path journal.";
-  const { env, claim, begin } = fixture();
+  const { env, claim, begin } = fixture(deleted ? "deleted" : "survivor");
   let leaseId = caller === "lease drain" ? claimLease(claim) : undefined;
-  const { agentId, operationId } = begin();
+  const { agentId, operationId } = begin({ deleteFiles: !deleted });
   const writer = new DatabaseSync(stateSqlitePath(env));
   const registrations = writer.prepare("SELECT * FROM agent_databases ORDER BY agent_id, path");
   const leases = writer.prepare("SELECT * FROM agent_database_leases ORDER BY lease_id");
@@ -124,7 +127,6 @@ it.each([
     writer
       .prepare(`UPDATE agent_deletion_journal SET ${column} = ? WHERE agent_id = ?`)
       .run(value, agentId);
-    expect(readJournal(claim.agentId, { env })).toBeUndefined();
     const operate = () => {
       if (caller === "registration") {
         registerDatabase(claim);
@@ -134,7 +136,7 @@ it.each([
         assertDrained(agentId, { env });
       }
     };
-    const refuses = caller === "lease drain";
+    const refuses = deleted || caller === "lease drain";
     if (refuses) {
       expect(operate).toThrow(error);
     } else {
@@ -167,21 +169,6 @@ it.each([
     removeJournal(agentId, operationId, { env });
   }
 });
-
-it.each(["registration", "lease claim"])(
-  "preserves a recorded deletion identity during %s with unreadable path history",
-  (caller) => {
-    const { env, claim, begin } = fixture("deleted");
-    begin({ deleteFiles: false });
-    using writer = new DatabaseSync(stateSqlitePath(env));
-    writer.exec("UPDATE agent_deletion_journal SET database_paths_json = '[1]'");
-    expect(() => (caller === "registration" ? registerDatabase(claim) : claimLease(claim))).toThrow(
-      "while agent deleted is deleted",
-    );
-    expect(writer.prepare("SELECT * FROM agent_databases").all()).toEqual([]);
-    expect(writer.prepare("SELECT * FROM agent_database_leases").all()).toEqual([]);
-  },
-);
 
 function phaseFixture(input: Partial<Parameters<typeof beginInDatabase>[1]>) {
   const result = fixture("delete-me", {
@@ -229,7 +216,7 @@ it.each(["draining", "legacy-null"] as const)(
   },
 );
 
-it.each([false, true])("preserves Claw cleanup custody: gateway=%s", (gatewayOwned) => {
+it.each([false, true])("preserves Template cleanup custody: gateway=%s", (gatewayOwned) => {
   const { input, open, write } = phaseFixture({
     agentId: "claw-worker",
     operationId: "interrupted",
@@ -240,7 +227,7 @@ it.each([false, true])("preserves Claw cleanup custody: gateway=%s", (gatewayOwn
   expect(pending(database).entries).toHaveLength(1);
   database.db
     .prepare(
-      `INSERT INTO claw_workspace_files
+      `INSERT INTO template_workspace_files
           (agent_id, target_path, schema_version, workspace, source_path,
            content_digest, status, created_at_ms, updated_at_ms)
          VALUES (?, ?, '1', ?, 'AGENTS.md', 'sha256:fixture', 'modified', 1, 1)`,
@@ -248,14 +235,14 @@ it.each([false, true])("preserves Claw cleanup custody: gateway=%s", (gatewayOwn
     .run(input.agentId, path.join(input.workspaceDir, "AGENTS.md"), input.workspaceDir);
   expect(pending(database)).toMatchObject({
     entries: gatewayOwned ? [expect.objectContaining({ agentId: input.agentId })] : [],
-    manualClawAgentIds: gatewayOwned ? [] : [input.agentId],
+    manualTemplateAgentIds: gatewayOwned ? [] : [input.agentId],
   });
   const facts = readRetainedAgentDeletionsFromDatabase(database.db, database.path);
   expect(facts).toMatchObject({
     status: "present",
     entries: [{ agentId: input.agentId, cleanupCompleted: false }],
   });
-  expect(facts.status === "present" && facts.entries[0]?.manualClawRemoval).toBe(
+  expect(facts.status === "present" && facts.entries[0]?.manualTemplateRemoval).toBe(
     gatewayOwned ? undefined : true,
   );
   const recover = (operationId: string) =>
@@ -266,7 +253,7 @@ it.each([false, true])("preserves Claw cleanup custody: gateway=%s", (gatewayOwn
   if (gatewayOwned) {
     expect(recover(input.operationId).entry.phase).toBe("draining");
   } else {
-    expect(() => recover(input.operationId)).toThrow("Claw removal owner");
+    expect(() => recover(input.operationId)).toThrow("Template removal owner");
     expect(read(database, input.agentId)?.operationId).toBe(input.operationId);
   }
 });

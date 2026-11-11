@@ -1,4 +1,5 @@
 // Codex tests cover native hook relay plugin behavior.
+import { setImmediate as flushDiagnosticEvents } from "node:timers/promises";
 import type { NativeHookRelayRegistrationHandle } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   onInternalDiagnosticEvent,
@@ -20,6 +21,7 @@ import {
   createClient,
   createRuntime,
   directSpawnItem,
+  itemNotification,
   notifyChildStarted,
   successfulSendInputOutput,
   turnStartedNotification,
@@ -31,12 +33,6 @@ import {
 import { isJsonObject } from "./protocol.js";
 
 afterEach(() => resetDiagnosticEventsForTest());
-
-function flushDiagnosticEvents(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 function expectedCommandHook(event: string, timeout = 10, commandTimeout = 9_000) {
   return [
@@ -94,14 +90,9 @@ describe("Codex native hook relay managed policy", () => {
       });
       original.bindTurn("parent-a");
       await notifyChildStarted(client);
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-a",
-          item: directSpawnItem("v2", "parent-thread", "child-thread"),
-        },
-      });
+      await client.notify(
+        itemNotification(directSpawnItem("v2", "parent-thread", "child-thread"), "parent-a"),
+      );
       await client.notify(turnStartedNotification("child-a"));
       await client.notify(
         childTurnCompletedNotification({
@@ -421,14 +412,9 @@ describe("Codex native hook relay managed policy", () => {
       });
       first.bindTurn("parent-a", mappingA);
       await notifyChildStarted(client);
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-a",
-          item: directSpawnItem("v1", "parent-thread", "child-thread"),
-        },
-      });
+      await client.notify(
+        itemNotification(directSpawnItem("v1", "parent-thread", "child-thread"), "parent-a"),
+      );
       await client.notify(turnStartedNotification("child-a"));
       const original = await monitor.captureModelSource({
         threadId: "child-thread",

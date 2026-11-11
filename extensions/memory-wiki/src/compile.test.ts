@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
-import { renderWikiMarkdown, toWikiPageSummary } from "./markdown.js";
+import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault: createTestVault } = createMemoryWikiTestHarness();
@@ -16,7 +16,7 @@ describe("compileMemoryWikiVault", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("keeps changed imports compile-required when auto-compile is disabled", async () => {
-    const { rootDir, config } = await createVault({
+    const { rootDir, config, read } = await createVault({
       ingest: { autoCompile: false },
       render: { createBacklinks: false, createDashboards: false },
     });
@@ -29,7 +29,7 @@ describe("compileMemoryWikiVault", () => {
     await fs.writeFile(sourcePath, renderSource("before"), "utf8");
     await compileMemoryWikiVault(config);
     const snapshotBefore = await loadMemoryWikiCompiledCache(config);
-    const indexBefore = await fs.readFile(path.join(rootDir, "index.md"), "utf8");
+    const indexBefore = await read("index.md");
 
     await fs.writeFile(sourcePath, renderSource("after"), "utf8");
     const refresh = await refreshMemoryWikiIndexesAfterImport({
@@ -45,24 +45,23 @@ describe("compileMemoryWikiVault", () => {
     await expect(readMemoryWikiDashboardState(config)).resolves.toEqual({
       state: "compile-required",
     });
-    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toBe(indexBefore);
+    await expect(read("index.md")).resolves.toBe(indexBefore);
   });
 
   it("preserves source page bytes while rebuilding derived artifacts", async () => {
-    const { rootDir, config } = await createVault({ render: { createDashboards: false } });
+    const { rootDir, config, read } = await createVault({ render: { createDashboards: false } });
     const sourcePath = path.join(rootDir, "sources", "preserved.md");
+    const notesLine = "- 中文 🦀 \uFFFD tail";
     const source = renderWikiMarkdown({
       frontmatter: { pageType: "source", id: "source.preserved", title: "Preserved" },
-      body: "# Preserved\n",
+      body: `# Preserved\n\n## Human Notes\n\n${notesLine}\n`,
     });
     await fs.writeFile(sourcePath, source, "utf8");
 
     const preserved = await compileMemoryWikiVault(config, { sourcePageWrites: "preserve" });
 
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
-    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
-      "[Preserved](sources/preserved.md)",
-    );
+    await expect(read("index.md")).resolves.toContain("[Preserved](sources/preserved.md)");
     expect(preserved.updatedFiles).not.toContain(sourcePath);
     expect(
       expectDefined(await loadMemoryWikiCompiledCache(config), "compiled cache").digest.pages.map(
@@ -75,6 +74,7 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain(
       "<!-- openclaw:wiki:related:start -->",
     );
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain(notesLine);
   });
 
   it("rejects directory-index syntax-error frontmatter without changing its bytes", async () => {
@@ -185,27 +185,11 @@ describe("compileMemoryWikiVault", () => {
   });
 
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {
-    const { rootDir, config, page: writePage, read } = await createVault();
-    const relationships = [
-      {
-        targetId: "entity.alice",
-        targetTitle: "Alice",
-        kind: "collaborates-with",
-        weight: 0.7,
-        confidence: 0.6,
-        evidenceKind: "discrawl-stat",
-        privacyTier: "local-private",
-      },
-    ];
-    const evidence = [
-      {
-        kind: "maintainer-whois",
-        sourceId: "source.maintainers",
-        confidence: 0.8,
-        privacyTier: "local-private",
-      },
-    ];
-    const metadata = {
+    const { config, page: writePage, read } = await createVault();
+    await writePage("entities/brad.md", {
+      pageType: "entity",
+      id: "entity.brad",
+      title: "Brad Groux",
       entityType: "person",
       canonicalId: "maintainer.brad-groux",
       aliases: ["brad", "bgroux"],
@@ -213,13 +197,17 @@ describe("compileMemoryWikiVault", () => {
       bestUsedFor: ["Microsoft ecosystem routing"],
       notEnoughFor: ["legal approval"],
       lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-      relationships,
-    };
-    await writePage("entities/brad.md", {
-      ...metadata,
-      pageType: "entity",
-      id: "entity.brad",
-      title: "Brad Groux",
+      relationships: [
+        {
+          targetId: "entity.alice",
+          targetTitle: "Alice",
+          kind: "collaborates-with",
+          weight: 0.7,
+          confidence: 0.6,
+          evidenceKind: "discrawl-stat",
+          privacyTier: "local-private",
+        },
+      ],
       personCard: {
         handles: ["@bgroux"],
         email: "brad@example.com",
@@ -234,37 +222,28 @@ describe("compileMemoryWikiVault", () => {
           text: "Brad is useful for Microsoft Teams routing.",
           status: "supported",
           confidence: 0.9,
-          evidence,
+          evidence: [
+            {
+              kind: "maintainer-whois",
+              sourceId: "source.maintainers",
+              confidence: 0.8,
+              privacyTier: "local-private",
+            },
+          ],
         },
       ],
     });
 
     await compileMemoryWikiVault(config);
 
-    const summary = toWikiPageSummary({
-      absolutePath: path.join(rootDir, "entities/brad.md"),
-      relativePath: "entities/brad.md",
-      raw: await read("entities/brad.md"),
-    });
-    expect(summary).toMatchObject({
-      ...metadata,
-      personCard: {
-        handles: ["@bgroux"],
-        emails: ["brad@example.com"],
-        lane: "Microsoft Teams",
-        privacyTier: "confirm-before-use",
-      },
-    });
-    expect(summary?.relationships).toEqual(relationships);
-    expect(summary?.claims[0]?.id).toBe("claim.brad.teams");
-    expect(summary?.claims[0]?.evidence).toEqual(evidence);
-
-    const expectReport = async (name: string, content: string) =>
-      expect(read(`reports/${name}.md`)).resolves.toContain(content);
-    await expectReport("person-agent-directory", "[Brad Groux](../entities/brad.md)");
-    await expectReport("relationship-graph", "[Brad Groux](../entities/brad.md) -> Alice");
-    await expectReport("provenance-coverage", "maintainer-whois: 1");
-    await expectReport("privacy-review", "[Brad Groux](../entities/brad.md)");
+    for (const [name, content] of [
+      ["person-agent-directory", "[Brad Groux](../entities/brad.md)"],
+      ["relationship-graph", "[Brad Groux](../entities/brad.md) -> Alice"],
+      ["provenance-coverage", "maintainer-whois: 1"],
+      ["privacy-review", "[Brad Groux](../entities/brad.md)"],
+    ]) {
+      await expect(read(`reports/${name}.md`)).resolves.toContain(content);
+    }
 
     const { digest: agentDigest, claims } = expectDefined(
       await loadMemoryWikiCompiledCache(config),
@@ -277,7 +256,11 @@ describe("compileMemoryWikiVault", () => {
     expect(bradPage).toMatchObject({
       canonicalId: "maintainer.brad-groux",
       aliases: ["brad", "bgroux"],
-      personCard: { lane: "Microsoft Teams" },
+      personCard: {
+        lane: "Microsoft Teams",
+        emails: ["brad@example.com"],
+        privacyTier: "confirm-before-use",
+      },
       relationshipCount: 1,
     });
     expect(claims.flatMap((claim) => claim.evidenceKinds ?? [])).toContain("maintainer-whois");
@@ -306,20 +289,4 @@ describe("compileMemoryWikiVault", () => {
       expect(await fs.readFile(pagePath)).toEqual(malformed);
     },
   );
-
-  it("compiles valid non-ASCII pages including a literal replacement character", async () => {
-    const { config, page, read } = await createVault();
-    const notesLine = "- 中文 🦀 \uFFFD tail";
-    await page(
-      "entities/router.md",
-      { pageType: "entity", id: "entity.router", title: "Router" },
-      `# Router\n\n## Human Notes\n\n${notesLine}\n`,
-    );
-
-    await compileMemoryWikiVault(config);
-
-    const after = await read("entities/router.md");
-    expect(after).toContain(notesLine);
-    expect(after).toContain("<!-- openclaw:wiki:related:start -->");
-  });
 });

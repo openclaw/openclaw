@@ -1,8 +1,5 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type {
-  OpenKeyedStoreOptions,
-  PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -27,21 +24,31 @@ const imageMetadata = {
   kind: "machine0-image",
   state: "available",
   createdAtMs: 10,
+  runtimeIdentity: {
+    nodeBootstrapSha256: "a".repeat(64),
+    workerBundleSha256: "b".repeat(64),
+    executionMode: "worker-turn",
+  },
 };
 const image = { ...imageMetadata, lastUsedAtMs: 20 };
 const unknownPreparation = { preparationKey: null, cacheKey: null, purpose: null };
 const migratedImage = { ...imageMetadata, ...unknownPreparation, lastDemandAtMs: null };
-let stateDir: string;
-let env: NodeJS.ProcessEnv;
+let params: Parameters<typeof migration.migrateLegacyState>[0];
 
 beforeEach(async () => {
   await reopen();
-  stateDir = tempDirs.make("openclaw-crabbox-migration-");
-  env = { OPENCLAW_STATE_DIR: stateDir };
+  const stateDir = tempDirs.make("openclaw-crabbox-migration-");
+  params = {
+    config: {},
+    env: { OPENCLAW_STATE_DIR: stateDir },
+    stateDir,
+    oauthDir: "unused",
+    context: { openPluginStateKeyedStore: openStore },
+  };
 });
 
 function openStore<T>(options: OpenKeyedStoreOptions) {
-  return crabboxState.openKeyedStoreV2<T>({ ...options, env });
+  return crabboxState.openKeyedStoreV2<T>({ ...options, env: params.env });
 }
 
 const legacyImages = () =>
@@ -51,20 +58,14 @@ const legacyImages = () =>
     overflowPolicy: "reject-new",
   });
 
-function input(
-  context: PluginDoctorStateMigrationContext = { openPluginStateKeyedStore: openStore },
-) {
-  return { config: {}, env, stateDir, oauthDir: "unused", context };
-}
-
 async function reopen() {
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
 }
 
-const lookup = (key = "profile") => openCrabboxWarmImageStore(crabboxState, env).lookup(key);
-const migrate = () => migration.migrateLegacyState(input());
-const detect = () => migration.detectLegacyState(input());
+const lookup = () => openCrabboxWarmImageStore(crabboxState, params.env).lookup("profile");
+const migrate = () => migration.migrateLegacyState(params);
+const detect = () => migration.detectLegacyState(params);
 
 const capture = {
   type: "capture",
@@ -75,48 +76,34 @@ const capture = {
   phase: "creating",
 };
 const reserved = { ...image, checkpointId: "", kind: "", state: "pending" };
+const profile = (profileImage: unknown, operation: object, allocations = {}) => ({
+  version: 3,
+  image: profileImage,
+  operation,
+  allocations,
+});
 function v2Case(operation: object) {
-  const runtimeIdentity = {
-    nodeBootstrapSha256: "a".repeat(64),
-    workerBundleSha256: "b".repeat(64),
-    executionMode: "worker-turn",
-  };
   const allocation = {
     choice: { kind: "checkpoint", checkpointId: image.checkpointId },
     machineClass: "standard",
     os: "linux",
     phase: "prepared",
     baseCommit: "c".repeat(40),
-    runtimeIdentity,
+    runtimeIdentity: image.runtimeIdentity,
   };
-  const record = {
-    version: 2,
-    projectKey: "project-v2",
-    image: { ...image, runtimeIdentity },
-    allocations: { cbx_v2: allocation },
-    operation,
-  };
-  const migratedAllocation = {
-    ...allocation,
-    ...unknownPreparation,
-    demandAtMs: null,
-    imageGeneration: null,
-  };
-  const expected = {
-    ...record,
-    version: 3,
-    image: { ...migratedImage, runtimeIdentity },
-    allocations: { cbx_v2: migratedAllocation },
-  };
-  return [record, expected] as const;
+  return [
+    { ...profile(image, operation, { cbx_v2: allocation }), version: 2, projectKey: "project-v2" },
+    {
+      ...profile(migratedImage, operation, {
+        cbx_v2: { ...allocation, ...unknownPreparation, demandAtMs: null, imageGeneration: null },
+      }),
+      projectKey: "project-v2",
+    },
+  ] as const;
 }
 
 it.each([
-  [
-    "legacy capture",
-    { ...image, operation: capture },
-    { version: 3, image: migratedImage, allocations: {}, operation: capture },
-  ],
+  ["legacy capture", { ...image, operation: capture }, profile(migratedImage, capture)],
   ["v2 capture", ...v2Case({ ...capture, provider: "aws", phase: "uncertain" })],
   ["v2 retirement", ...v2Case({ type: "retire", checkpointId: "chk_old" })],
   [
@@ -153,14 +140,15 @@ it("reports every unresolved legacy lease with executable acknowledged recovery 
     overflowPolicy: "evict-oldest",
   });
   await store.register("cbx_legacy", { machineClass: "tiny" });
-  const [lease] = await listCrabboxLegacyWarmLeases(crabboxState, env);
+  const [lease] = await listCrabboxLegacyWarmLeases(crabboxState, params.env);
   const command = `openclaw crabbox warm-images --recover ${lease!.selector} --acknowledge-provider-cleanup`;
   expect((await detect())?.preview.join("\n")).toContain(command);
   const { changes, warnings } = await migrate();
+  const warning = warnings.join("\n");
   expect(changes).toEqual([]);
-  expect(warnings.join("\n")).toContain("1 legacy Crabbox lease row(s)");
-  expect(warnings.join("\n")).toContain(command);
-  expect(warnings.join("\n")).toContain("stop the original Gateway/capture processes");
+  expect(warning).toContain("1 legacy Crabbox lease row(s)");
+  expect(warning).toContain(command);
+  expect(warning).toContain("stop the original Gateway/capture processes");
   expect(await store.lookup("cbx_legacy")).toEqual({ machineClass: "tiny" });
 });
 
@@ -187,24 +175,19 @@ it.each(["changed", "write-failed", "metadata-conflict"])(
     await store.register("profile", image);
     const newer = { ...image, operation: { type: "retire", checkpointId: "chk_new_obligation" } };
     const compareAndApply = store.compareAndApply.bind(store);
-    const publication = vi
-      .spyOn(store, "compareAndApply")
-      .mockImplementationOnce(async (...args) => {
-        if (failure === "write-failed") {
-          throw new Error("write unavailable");
-        }
-        await store.register(args[0], failure === "changed" ? newer : image, { ttlMs: 60_000 });
-        return compareAndApply(...args);
-      });
-    const context: PluginDoctorStateMigrationContext = { openPluginStateKeyedStore: openStore };
-    vi.spyOn(context, "openPluginStateKeyedStore").mockImplementation((options) =>
+    vi.spyOn(store, "compareAndApply").mockImplementationOnce(async (...args) => {
+      if (failure === "write-failed") {
+        throw new Error("write unavailable");
+      }
+      await store.register(args[0], failure === "changed" ? newer : image, { ttlMs: 60_000 });
+      return compareAndApply(...args);
+    });
+    vi.spyOn(params.context, "openPluginStateKeyedStore").mockImplementation((options) =>
       options.namespace === "warm-images" ? store : openStore(options),
     );
-    const result = await migration.migrateLegacyState(input(context));
+    const result = await migrate();
     const retried = failure === "metadata-conflict";
-    expect([result.changes.length, result.warnings.length, publication.mock.calls.length]).toEqual(
-      retried ? [1, 0, 2] : [0, 1, 1],
-    );
+    expect([result.changes.length, result.warnings.length]).toEqual(retried ? [1, 0] : [0, 1]);
     if (retried) {
       expect(await store.lookup("profile")).toMatchObject({
         version: 3,

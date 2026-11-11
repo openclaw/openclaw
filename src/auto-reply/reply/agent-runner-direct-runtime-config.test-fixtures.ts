@@ -4,7 +4,7 @@ import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
 import { createReplyParams } from "./test-helpers.js";
 
-export const staleCfg = {
+const staleCfg = {
   runtimeFresh: false,
   skills: {
     entries: {

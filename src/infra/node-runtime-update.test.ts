@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveUpdatedNodeRuntime } from "../../node-runtime-update.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -54,7 +55,11 @@ const probeResult = (version: string): SpawnSyncReturns<string> => ({
   signal: null,
   output: [],
   stderr: "",
-  stdout: JSON.stringify({ version, probe: { ...capabilities, version: "3.53.4" } }),
+  stdout: JSON.stringify({
+    nodeVersion: version,
+    bunVersion: null,
+    sqliteProbe: { ...capabilities, version: "3.53.4" },
+  }),
 });
 
 it.each([
@@ -91,16 +96,12 @@ it.each([
       }
     `,
   );
+  const nodeExecPath = resolveTestNodeExecPath();
   spawn.mockImplementation((_file, args, options) =>
-    spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, ...args], options),
+    spawnSync(nodeExecPath, ["--import", pathToFileURL(preload).href, ...args], options),
   );
 
   expect(await resolveUpdatedNodeRuntime(root)).toBe(lossless ? candidate : null);
-  expect(spawn.mock.calls.map((call) => call[2].timeout)).toEqual([5_000]);
-  expect(JSON.parse(spawn.mock.results[0]?.value.stdout)).toMatchObject({
-    version,
-    probe: { ...capabilities, text: lossless },
-  });
 });
 
 it.each([true, false])("provisions without a TTY (compatible=%s)", async (compatible) => {

@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  validateDiagnosticsCpuProfileParams,
   validateDiagnosticsHeapProfileParams,
   validateDiagnosticsHeapSnapshotParams,
 } from "../../../packages/gateway-protocol/src/schema/diagnostics.js";
@@ -27,7 +28,7 @@ function profileHandler<P>(
   return async ({ req, client, signal, context, respond, hasCurrentClientAuthority }) => {
     const params = req.params === undefined ? {} : req.params;
     if (!validate(params)) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, invalidParamsMessage));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, invalidParamsMessage);
       return;
     }
     const lifetime = AbortSignal.any(
@@ -49,13 +50,9 @@ function profileHandler<P>(
         outcome.reason === "tracing-active"
           ? `${label} unavailable: stop active Node tracing, including non-CPU categories, before requesting a profile`
           : `${label} unavailable: ${outcome.reason}`;
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, message, {
-          details: { reason: outcome.reason, cleanupFailed: outcome.cleanupFailed },
-        }),
-      );
+      respondError(respond, ErrorCodes.UNAVAILABLE, message, {
+        details: { reason: outcome.reason, cleanupFailed: outcome.cleanupFailed },
+      });
     }
   };
 }
@@ -63,13 +60,10 @@ function profileHandler<P>(
 export const diagnosticsHandlers: GatewayRequestHandlers = {
   "diagnostics.capabilities": ({ params, respond }) => {
     if (params !== undefined && (!isRecord(params) || Object.keys(params).length !== 0)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "diagnostics.capabilities accepts only empty params",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "diagnostics.capabilities accepts only empty params",
       );
       return;
     }
@@ -77,13 +71,12 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
   },
   "diagnostics.cpuProfile": profileHandler(
     "CPU profile",
-    (params): params is Record<string, unknown> =>
-      isRecord(params) && Object.keys(params).length === 0,
-    "diagnostics.cpuProfile accepts only empty params",
-    async (_params, authority) => {
+    validateDiagnosticsCpuProfileParams,
+    "diagnostics.cpuProfile accepts only integer windows (1–30) and windowMs (100–5000)",
+    async (params, authority) => {
       const { captureDiagnosticCpuProfile } =
         await import("../../logging/diagnostic-cpu-profile.js");
-      return captureDiagnosticCpuProfile(authority);
+      return captureDiagnosticCpuProfile({ ...params, ...authority });
     },
   ),
   "diagnostics.heapProfile": profileHandler(

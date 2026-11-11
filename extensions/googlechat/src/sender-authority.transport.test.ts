@@ -1,3 +1,4 @@
+import { lookup } from "node:dns/promises";
 import type { ServerResponse } from "node:http";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -5,10 +6,12 @@ import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { withDurableGoogleChatTransport } from "./durable-transport.test-support.js";
+import { resolveGoogleChatOutboundSessionRoute } from "./targets.js";
 
 const transport = vi.hoisted(() => ({
   baseUrl: "",
   token: vi.fn<(account: ResolvedGoogleChatAccount) => Promise<string>>(),
+  beforeLookup: undefined as (() => Promise<void>) | undefined,
 }));
 
 vi.mock("./auth.js", async (importOriginal) => ({
@@ -29,6 +32,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
         ...params,
         url: params.url.replace("https://chat.googleapis.com", transport.baseUrl),
         policy: { allowPrivateNetwork: true },
+        lookupFn: async (hostname, options) => {
+          await transport.beforeLookup?.();
+          return await lookup(hostname, options);
+        },
       });
     },
   };
@@ -136,29 +143,48 @@ function respondWithMessage(request: ObservedRequest, response: ServerResponse) 
 describe("Google Chat sender authority through real guarded HTTP", () => {
   beforeEach(() => {
     transport.baseUrl = "";
+    transport.beforeLookup = undefined;
     transport.token.mockReset().mockImplementation(async ({ accountId }) => `test-${accountId}`);
   });
 
-  it.each(["preferred", "generic"] as const)(
-    "%s send blocks the DM lookup after revocation during token acquisition",
-    async (route) => {
+  it.each(
+    (["preferred", "generic", "user-session", "space-session"] as const).flatMap((route) =>
+      (["token", "DNS"] as const).map((stage) => ({ route, stage })),
+    ),
+  )(
+    "$route blocks metadata requests after revocation during $stage preparation",
+    async ({ route, stage }) => {
       const authority = createAuthority();
-      const tokenStarted = createDeferred<void>();
-      const token = createDeferred<string>();
-      transport.token.mockImplementationOnce(() => {
-        tokenStarted.resolve();
-        return token.promise;
-      });
+      const preparationStarted = createDeferred<void>();
+      const resume = createDeferred<void>();
+      const pause = () => {
+        preparationStarted.resolve();
+        return resume.promise;
+      };
+      if (stage === "token") {
+        transport.token.mockImplementationOnce(async () => {
+          await pause();
+          return "test-default";
+        });
+      } else {
+        transport.beforeLookup = pause;
+      }
       await withChatServer(respondWithMessage, async (requests) => {
-        const sending = send(
-          route,
-          { assertDirectAdapterHandoff: authority.assert },
-          "users/alice@example.test",
+        const hooks = { assertDirectAdapterHandoff: authority.assert };
+        const sending = (
+          route === "preferred" || route === "generic"
+            ? send(route, hooks, "users/alice@example.test")
+            : resolveGoogleChatOutboundSessionRoute({
+                cfg,
+                agentId: "main",
+                target: route === "user-session" ? "users/alice@example.test" : "spaces/AAA",
+                ...hooks,
+              })
         ).catch((error: unknown) => error);
-        await tokenStarted.promise;
+        await preparationStarted.promise;
         authority.revoke();
-        token.resolve("test-default");
-        expect(await sending).toBe(authority.error);
+        resume.resolve();
+        expect(await sending).toBe(route === "space-session" ? null : authority.error);
         expect(requests).toEqual([]);
       });
     },
@@ -166,12 +192,12 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
 
   it("preferred send stops after an awaited DM lookup without marking preparation as dispatch", async () => {
     const authority = createAuthority();
-    const lookup = createDeferred<ServerResponse>();
+    const dmLookup = createDeferred<ServerResponse>();
     const dispatch = vi.fn(async () => {});
     await withChatServer(
       (request, response) => {
         if (request.method === "GET") {
-          lookup.resolve(response);
+          dmLookup.resolve(response);
         } else {
           respondWithMessage(request, response);
         }
@@ -182,7 +208,7 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
           { assertDirectAdapterHandoff: authority.assert, onPlatformSendDispatch: dispatch },
           "users/alice@example.test",
         ).catch((error: unknown) => error);
-        const response = await lookup.promise;
+        const response = await dmLookup.promise;
         expect(dispatch).not.toHaveBeenCalled();
         authority.revoke();
         response.end(JSON.stringify({ name: "spaces/AAA" }));

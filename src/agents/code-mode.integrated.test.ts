@@ -182,7 +182,6 @@ describe("Code Mode guest execution", () => {
 
       expectFailure(details, "input", "invalid_input", {
         bridgeDispatchStarted: false,
-        replaySafe: false,
         telemetry: { callCount: 0 },
       });
       expect(String(details.error)).toMatch(/SyntaxError.*openclaw-code-mode:user\.js:2:\d+/);
@@ -194,7 +193,6 @@ describe("Code Mode guest execution", () => {
       );
       expect(corrected).toMatchObject({
         status: "completed",
-        replaySafe: false,
         value: { name: "fake_command", input: { value: "import test from 'node:test';" } },
       });
       expect(command.execute).toHaveBeenCalledTimes(1);

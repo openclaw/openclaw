@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
-  type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -140,17 +139,14 @@ export type IrcIngressMonitor = ReturnType<typeof createIrcIngressMonitor>;
 
 export function createIrcIngressMonitor(options: {
   accountId: string;
-  queue?: ChannelIngressQueue<IrcIngressPayload>;
   dispatch: IrcIngressDispatch;
   runtime: Pick<RuntimeEnv, "error" | "log">;
 }) {
   const monitor = createChannelIngressMonitor<IrcIngressRaw, IrcIngressBody, IrcIngressPayload>({
-    queue:
-      options.queue ??
-      (() =>
-        getIrcRuntime().state.openChannelIngressQueue<IrcIngressPayload>({
-          accountId: options.accountId,
-        })),
+    queue: () =>
+      getIrcRuntime().state.openChannelIngressQueue<IrcIngressPayload>({
+        accountId: options.accountId,
+      }),
     inspect: (raw, context) => inspectIrcIngress(raw, context.phase),
     payload: {
       version: IRC_INGRESS_PAYLOAD_VERSION,

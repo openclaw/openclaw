@@ -99,6 +99,7 @@ const installRunEmbeddedMocks = () => {
     return {
       ...actual,
       createEmbeddedRunAuthController: () => ({
+        close: vi.fn(),
         advanceAuthProfile: vi.fn(async () => false),
         initializeAuthProfile: vi.fn(async () => undefined),
         maybeRefreshRuntimeAuthForAuthError: vi.fn(async (_errorText: string, runtimeAuthRetry) => {

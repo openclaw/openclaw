@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   isRegularFile,
@@ -10,6 +9,7 @@ import {
   resolveExecutablePathCandidate,
 } from "../infra/executable-path.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
+import { resolveRuntimeDependencyEntrypointUrlFromDirectory } from "../infra/runtime-process-dependency-url.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
@@ -18,20 +18,24 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
   if (process.platform !== "win32" || argv.length === 0) {
     return null;
   }
-  const basename = normalizeLowercaseStringOrEmpty(
-    path.basename(expectDefined(argv[0], "argv entry at 0")),
-  ).replace(/\.(cmd|exe|bat)$/, "");
-  const cliName = basename === "npx" ? "npx-cli.js" : basename === "npm" ? "npm-cli.js" : null;
-  if (!cliName) {
+  const command = argv[0] ?? "";
+  // Only bare aliases opt into bundled npm; explicit paths and native executables keep their identity.
+  const basename = normalizeLowercaseStringOrEmpty(command).replace(/\.(cmd|bat)$/, "");
+  const entryName = basename === "npx" ? "npx" : basename === "npm" ? "npm" : null;
+  if (!entryName) {
     return null;
   }
-  const cliPath = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", cliName);
+  const cliPath = fileURLToPath(
+    resolveRuntimeDependencyEntrypointUrlFromDirectory(
+      entryName,
+      path.join(path.dirname(process.execPath), "node_modules", "npm", "bin"),
+    ),
+  );
   if (fs.existsSync(cliPath)) {
     return [process.execPath, cliPath, ...argv.slice(1)];
   }
   // Bun-based runs don't ship npm-cli.js next to process.execPath. The .cmd
   // fallback remains inside the trusted cmd.exe wrapper below.
-  const command = argv[0] ?? "";
   const extension = normalizeLowercaseStringOrEmpty(path.extname(command));
   return [extension ? command : `${command}.cmd`, ...argv.slice(1)];
 }

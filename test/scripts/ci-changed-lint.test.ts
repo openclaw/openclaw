@@ -68,6 +68,33 @@ vi.mock("../../scripts/test-projects.test-support.mts", async (importOriginal) =
 });
 
 describe("CI changed lint", () => {
+  it("keeps root-test config discovery on the central row", () => {
+    const { cwd, write } = fixture("ci-lint-row-owner-");
+    write(rootTestConfig, "{ invalid config");
+    const location = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    try {
+      const changed = detectChangedLanes(["src/utils.ts", "test/scripts/ci-changed-lint.test.ts"]);
+      const selection = {
+        files: ["src/utils.ts"],
+        rootTestFiles: ["test/scripts/ci-changed-lint.test.ts"],
+        coreStripes: [1],
+        extensionStripes: [],
+        groups: [],
+        central: false,
+      };
+      const plan = createChangedCheckPlan(changed, { lintOnly: true, lintSelection: selection });
+      expect(plan.commands.map(({ name }) => name)).toEqual(["lint core file stripe 1"]);
+      expect(() =>
+        createChangedCheckPlan(changed, {
+          lintOnly: true,
+          lintSelection: { ...selection, central: true },
+        }),
+      ).toThrow(/Invalid TypeScript config/);
+    } finally {
+      location.mockRestore();
+    }
+  });
+
   it("includes transitive and aliased type consumers without widening to their packages", async () => {
     const { cwd, write } = fixture("ci-file-lint-");
     write("pnpm-workspace.yaml", "packages:\n  - .\n  - ui\n  - packages/*\n  - extensions/*\n");
@@ -201,7 +228,7 @@ describe("CI changed lint", () => {
     copyOxlintConfigFixture(cwd);
     copyFileSync(coreConfig, path.join(cwd, coreConfig));
     symlinkSync(path.resolve("node_modules"), path.join(cwd, "node_modules"), "junction");
-    mkdirSync(path.join(cwd, "scripts"));
+    mkdirSync(path.join(cwd, "scripts"), { recursive: true });
     symlinkSync(path.resolve("scripts/lib"), path.join(cwd, "scripts/lib"), "junction");
     for (const file of [
       "run-oxlint.mjs",
@@ -303,12 +330,17 @@ describe("CI changed lint", () => {
   it.each(["hybrid", "github", "blacksmith"])(
     "keeps complete selected-file lint with the existing %s owners",
     async (runnerProfile) => {
-      const paths = [
+      const lintPaths = [
         "src/utils.ts",
         "ui/src/app-navigation.ts",
         "extensions/telegram/src/send.ts",
         "scripts/lib/arg-utils.mts",
         "test/scripts/ci-check-plan.test.ts",
+      ];
+      const paths = [
+        ...lintPaths,
+        "docs/ci/scope-and-routing/selection.md",
+        "config/test-lines-allocations/ci-budget-selected-lint.txt",
       ];
       const result = detectChangedLanes(paths);
       const plan = await createChangedCiLintPlan(result, { runnerProfile });
@@ -329,6 +361,14 @@ describe("CI changed lint", () => {
       ]);
       expect(central.some(({ args }) => args[0] === "lint:ui:i18n")).toBe(true);
       expect(central.some(({ args }) => args[0] === "check:control-ui-controllers")).toBe(true);
+      expect(
+        central.some(({ args }) =>
+          ["lint", "lint:core", "lint:extensions", "lint:scripts"].includes(args[0] ?? ""),
+        ),
+      ).toBe(false);
+      expect(central.map(({ args }) => args[0])).toEqual(
+        expect.arrayContaining(["lint:docker-e2e", "lint:tmp:no-raw-http2-imports"]),
+      );
       const rootLint = central.find(
         ({ args }) => args[0] === "scripts/run-oxlint.mjs" && args.includes(rootTestConfig),
       );
@@ -341,7 +381,9 @@ describe("CI changed lint", () => {
         ),
       ];
       const selectedFiles = selections.flatMap(({ files }) => files).toSorted();
-      expect(selectedFiles).toEqual(paths.filter((file) => !file.startsWith("test/")).toSorted());
+      expect(selectedFiles).toEqual(
+        lintPaths.filter((file) => !file.startsWith("test/")).toSorted(),
+      );
       const expected = [
         `${coreConfig}:src/utils.ts`,
         `${coreConfig}:ui/src/app-navigation.ts`,
@@ -419,9 +461,12 @@ describe("CI changed lint", () => {
     "unowned/source.ts",
   ])("retains the original full lint layout for %s", async (file) =>
     expect(
-      await createChangedCiLintPlan(detectChangedLanes([file]), {
-        runnerProfile: "hybrid",
-      }),
+      await createChangedCiLintPlan(
+        detectChangedLanes([file, "config/test-lines-allocations/ci-budget-selected-lint.txt"]),
+        {
+          runnerProfile: "hybrid",
+        },
+      ),
     ).toBeNull(),
   );
 

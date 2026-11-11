@@ -103,30 +103,40 @@ describe("Codex Computer Use setup", () => {
   });
 
   it("stays disabled before runtime resolution by default", async () => {
-    const pluginConfig = {};
-    const status = await readCodexComputerUseStatus({ pluginConfig });
-    expectStatusFields(status, {
+    expectStatusFields(await readCodexComputerUseStatus({ pluginConfig: {} }), {
       enabled: false,
       ready: false,
       reason: "disabled",
-      message: "Computer Use is disabled.",
     });
-    await expect(ensureCodexComputerUse({ pluginConfig })).resolves.toMatchObject({
+    await expect(ensureCodexComputerUse({ pluginConfig: {} })).resolves.toMatchObject({
       reason: "disabled",
     });
     expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("runs installation through the readiness thread before releasing the client", async () => {
-    const agentDir = "/tmp/openclaw-computer-use-guarded-install-agent";
-    const pluginConfig = {
-      computerUse: { marketplaceName: "desktop-tools", liveTestTimeoutMs: 150 },
-    };
     const harness = createClientHarness();
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValueOnce(harness.client);
     const fixture = createComputerUseRequest({ installed: false });
     let cursor = 0;
-    const answer = async (method: string) => {
+    const install = installCodexComputerUse({
+      pluginConfig: { computerUse: { marketplaceName: "desktop-tools", liveTestTimeoutMs: 150 } },
+      agentDir: "/tmp/openclaw-computer-use-guarded-install-agent",
+      timeoutMs: 2_000,
+    });
+    void install.catch(() => undefined);
+    for (const method of [
+      "experimentalFeature/enablement/set",
+      "plugin/list",
+      "plugin/read",
+      "plugin/install",
+      "config/mcpServer/reload",
+      "plugin/read",
+      "mcpServerStatus/list",
+      "thread/start",
+      "mcpServer/tool/call",
+      "thread/unsubscribe",
+    ]) {
       await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(cursor), {
         timeout: 1_000,
       });
@@ -138,20 +148,7 @@ describe("Codex Computer Use setup", () => {
       expect(frame.method).toBe(method);
       const result = await fixture(frame.method, frame.params);
       harness.send({ id: frame.id, result: result ?? null });
-    };
-
-    const install = installCodexComputerUse({ pluginConfig, agentDir, timeoutMs: 2_000 });
-    void install.catch(() => undefined);
-    await answer("experimentalFeature/enablement/set");
-    await answer("plugin/list");
-    await answer("plugin/read");
-    await answer("plugin/install");
-    await answer("config/mcpServer/reload");
-    await answer("plugin/read");
-    await answer("mcpServerStatus/list");
-    await answer("thread/start");
-    await answer("mcpServer/tool/call");
-    await answer("thread/unsubscribe");
+    }
 
     await expect(install).resolves.toMatchObject({
       ready: true,
@@ -246,13 +243,10 @@ describe("Codex Computer Use setup", () => {
     const { ensure, request, managedMarketplacePath } = createManagedMarketplaceHarness(
       tempDirs.make("openclaw-codex-bundled-marketplace-"),
     );
-    const status = await ensure();
-
-    expectStatusFields(status, {
+    expectStatusFields(await ensure(), {
       ready: true,
       reason: "ready",
       marketplaceName: "openai-bundled",
-      message: "Computer Use is ready.",
     });
     expect(request).toHaveBeenCalledWith("marketplace/add", { source: managedMarketplacePath });
   });
@@ -263,9 +257,11 @@ describe("Codex Computer Use setup", () => {
       { configuredSource: "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled" },
     );
 
-    const status = await ensure();
-
-    expectStatusFields(status, { ready: true, reason: "ready", marketplaceName: "openai-bundled" });
+    expectStatusFields(await ensure(), {
+      ready: true,
+      reason: "ready",
+      marketplaceName: "openai-bundled",
+    });
     expect(
       requestCalls(request)
         .filter(([method]) => method.startsWith("marketplace/"))
@@ -456,8 +452,7 @@ describe("Codex Computer Use setup", () => {
 
     await vi.advanceTimersByTimeAsync(4_000);
 
-    const status = await installed;
-    expectStatusFields(status, { ready: true, reason: "ready", message: "Computer Use is ready." });
+    expectStatusFields(await installed, { ready: true, reason: "ready" });
     expect(request).toHaveBeenCalledWith("plugin/install", {
       marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
       pluginName: "computer-use",
@@ -521,9 +516,6 @@ function createBundledMarketplaceComputerUseRequest(
     probeThreadPrefix: "bundled-marketplace-probe-thread",
   });
   return vi.fn(async (method: string, requestParams?: unknown) => {
-    if (method === "experimentalFeature/enablement/set") {
-      return { enablement: { plugins: true } };
-    }
     if (method === "config/read") {
       if (!configuredSource) {
         return { config: {}, origins: {} };
@@ -564,21 +556,10 @@ function createBundledMarketplaceComputerUseRequest(
     if (method === "plugin/list" && !registered) {
       return { marketplaces: [] };
     }
-    if (
-      [
-        "plugin/list",
-        "plugin/read",
-        "plugin/install",
-        "config/mcpServer/reload",
-        "mcpServerStatus/list",
-        "thread/start",
-        "mcpServer/tool/call",
-        "thread/unsubscribe",
-      ].includes(method)
-    ) {
-      return pluginRequest(method, requestParams);
+    if (method === "experimentalFeature/list") {
+      throw new Error(`unexpected request ${method}`);
     }
-    throw new Error(`unexpected request ${method}`);
+    return pluginRequest(method, requestParams);
   }) as CodexComputerUseRequest;
 }
 

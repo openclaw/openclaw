@@ -127,6 +127,41 @@ describe("AgentRuntimePlan", () => {
     expect(first.transport.extraParams).toEqual({ temperature: 0.1, owner: "first" });
   });
 
+  it.each(["openclaw", "codex"])(
+    "resolves Access defaults for existing sessions in %s",
+    (runtime) => {
+      const config = (accessPrograms?: Record<string, unknown>) => ({
+        agents: { defaults: { params: accessPrograms === undefined ? {} : { accessPrograms } } },
+      });
+      const build = (accessPrograms?: Record<string, unknown>) =>
+        buildPlan({
+          config: config(accessPrograms),
+          harnessId: runtime,
+          harnessRuntime: runtime,
+          model: apiModel,
+          modelRoute: {
+            provider: "openai",
+            modelId: "gpt-5.4",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            authRequirement: "api-key",
+            requestTransportOverrides: "none",
+          },
+        });
+      expect(build().transport.resolveExtraParams().accessPrograms).toEqual({ cyber: "standard" });
+      const configured = build({ cyber: "daybreak_blue" });
+      expect(configured.transport.resolveExtraParams().accessPrograms).toEqual({
+        cyber: "daybreak_blue",
+      });
+      expect(
+        configured.transport.resolveExtraParams({
+          extraParamsOverride: { accessPrograms: { cyber: "daybreak_red" } },
+        }).accessPrograms,
+      ).toEqual({ cyber: "daybreak_red" });
+      expect(build({}).transport.resolveExtraParams().accessPrograms).toEqual({});
+    },
+  );
+
   it("records auth and observability and resolves transport and prompt policy", () => {
     const plan = buildPlan({
       harnessId: "codex",

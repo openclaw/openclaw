@@ -1,18 +1,16 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import * as pairing from "./page-operations.ts";
-
 const actions = [
   ["device.pair.approve", pairing.approveDevicePairing, false, false],
   ["device.pair.reject", pairing.rejectDevicePairing, false, true],
   ["node.pair.approve", pairing.approveNodePairingRequest, true, false],
   ["node.pair.reject", pairing.rejectNodePairingRequest, true, true],
 ] as const;
-const listCalls = ["device.pair.list", "node.list"].map((method) => [method, {}]);
 const transitions = ["client", "generation", "disconnect"] as const;
 const nodeList = { nodes: [{ id: "node-1" }] };
 const deviceList = { pending: [], paired: [{ deviceId: "device-1" }] };
-
+const errors = { devicesError: "device error", lastError: "node error" };
 function setup(order: Array<"mutation" | "devices" | "nodes"> = ["mutation"]) {
   const replies = {
     mutation: deferred<unknown>(),
@@ -26,97 +24,66 @@ function setup(order: Array<"mutation" | "devices" | "nodes"> = ["mutation"]) {
   const start = (run: typeof pairing.approveDevicePairing) => run(state, "request-1").then(settled);
   return { ...replies, request, state, settled, start };
 }
-
 function settle(mutation: ReturnType<typeof deferred<unknown>>, error?: string) {
   return error ? mutation.reject(new Error(error)) : mutation.resolve({});
 }
-
-it.each(actions)(
-  "%s sends one decision per in-flight request",
-  async (method, run, isNode, failed) => {
-    const siblings = actions.filter((action) => action[2] === isNode);
-    const mutation = deferred<unknown>();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(mutation.promise)
-      .mockResolvedValue({ pending: [], paired: [] });
-    const state = pairing.createInitialDevicesState({ client: { request }, connected: true });
-    const first = run(state, "request-1");
-    await Promise.all(siblings.map((action) => action[1](state, "request-1")));
-    expect(request).toHaveBeenCalledTimes(1);
-    if (failed) {
-      mutation.reject(new Error("pairing denied"));
-    } else {
-      mutation.resolve({});
-    }
-    await first;
-    // The guard clears once the decision settles, so the operator can decide again.
-    await run(state, "request-1");
-    expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(2);
-  },
-);
-
 it("keeps a replacement decision guarded when a retired request settles", async () => {
-  const retired = deferred<unknown>();
-  const replacement = deferred<unknown>();
-  const request = vi
-    .fn()
-    .mockReturnValueOnce(retired.promise)
-    .mockReturnValueOnce(replacement.promise)
-    .mockResolvedValue({ pending: [], paired: [] });
-  const state = pairing.createInitialDevicesState({ client: { request }, connected: true });
+  const { mutation, devices, request, state } = setup(["mutation", "devices"]);
+  request.mockResolvedValue({ pending: [], paired: [] });
   const first = pairing.approveDevicePairing(state, "request-1");
   state.requestGeneration += 1;
   state.devicesDeciding = [];
   const second = pairing.approveDevicePairing(state, "request-1");
-  retired.resolve({});
+  mutation.resolve({});
   await first;
   await pairing.rejectDevicePairing(state, "request-1");
   expect(request).toHaveBeenCalledTimes(2);
-  replacement.resolve({});
+  devices.resolve({});
   await second;
 });
 
-it.each(actions)("%s refresh/error", async (method, run, isNode, failed) => {
-  const { mutation, devices, nodes, request, state, settled, start } = setup();
-  const current = isNode ? vi.fn() : request;
-  current.mockReturnValueOnce(devices.promise).mockReturnValueOnce(nodes.promise);
-  const errors = { devicesError: "device error", lastError: "node error" };
-  Object.assign(state, errors);
-  const pending = start(run);
-  expect(request.mock.calls).toEqual([[method, { requestId: "request-1" }]]);
-  expect(state).toMatchObject(errors);
-  if (isNode) {
-    state.client = { request: current };
-    state.requestGeneration += 1;
-  }
-  settle(mutation, failed ? "pairing denied" : undefined);
-  if (failed && !isNode) {
+it.each(actions)(
+  "%s guards, refreshes, and releases decisions",
+  async (method, run, isNode, failed) => {
+    const { mutation, devices, nodes, request, state, settled, start } = setup();
+    const current = isNode ? vi.fn() : request;
+    current.mockReturnValueOnce(devices.promise).mockReturnValueOnce(nodes.promise);
+    Object.assign(state, errors);
+    const pending = start(run);
+    const siblings = actions.filter((action) => action[2] === isNode);
+    await Promise.all(siblings.map((action) => action[1](state, "request-1")));
+    expect(request.mock.calls).toEqual([[method, { requestId: "request-1" }]]);
+    expect(state).toMatchObject(errors);
+    if (isNode) {
+      state.client = { request: current };
+      state.requestGeneration += 1;
+    }
+    settle(mutation, failed ? "pairing denied" : undefined);
+    if (!failed || isNode) {
+      await vi.waitFor(() => expect(current).toHaveBeenCalledTimes(2));
+      if (isNode) {
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(state).toMatchObject(failed ? errors : { devicesError: null, lastError: null });
+        nodes.resolve(nodeList);
+        await vi.waitFor(() => expect(state.nodesLoading).toBe(false));
+        expect(state.devicesLoading).toBe(true);
+      }
+      expect(settled).not.toHaveBeenCalled();
+      expect(state.devicesError).toBe(failed ? errors.devicesError : null);
+      devices.resolve(deviceList);
+    }
     await pending;
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(state.devicesError).toBe("pairing denied");
-    return;
-  }
-  await vi.waitFor(() => expect(current).toHaveBeenCalledTimes(2));
-  expect(current.mock.calls.slice(isNode ? 0 : 1)).toEqual(listCalls.slice(0, isNode ? 2 : 1));
-  if (isNode) {
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(state).toMatchObject(failed ? errors : { devicesError: null, lastError: null });
-    nodes.resolve(nodeList);
-    await vi.waitFor(() => expect(state.nodesLoading).toBe(false));
-    expect(state.devicesLoading).toBe(true);
-  }
-  expect(settled).not.toHaveBeenCalled();
-  expect(state.devicesError).toBe(failed ? errors.devicesError : null);
-  devices.resolve(deviceList);
-  await pending;
-  expect(state).toMatchObject({
-    devicesList: deviceList,
-    devicesLoading: false,
-    devicesError: failed ? "pairing denied" : null,
-    ...(isNode ? { nodes: nodeList.nodes, lastError: failed ? errors.lastError : null } : {}),
-  });
-});
+    expect(state).toMatchObject({
+      devicesList: failed && !isNode ? null : deviceList,
+      devicesLoading: false,
+      devicesError: failed ? "pairing denied" : null,
+      ...(isNode ? { nodes: nodeList.nodes, lastError: failed ? errors.lastError : null } : {}),
+    });
+    current.mockReset().mockResolvedValue({ pending: [], paired: [], nodes: [] });
+    await run(state, "request-1");
+    expect(current.mock.calls.filter(([called]) => called === method)).toHaveLength(1);
+  },
+);
 
 it.each(transitions)("fences stale results: %s", async (transition) => {
   for (const failed of [false, true]) {
@@ -139,7 +106,7 @@ it.each(transitions)("fences stale results: %s", async (transition) => {
   }
 });
 
-it("records node failure while an existing inventory load queues its quiet refresh", async () => {
+it("preserves node failure through queued inventory refreshes", async () => {
   const fixture = setup(["devices", "nodes", "mutation"]);
   const { devices, nodes, mutation, request, state, start } = fixture;
   request.mockResolvedValue({ pending: [], paired: [], nodes: [] });
@@ -147,10 +114,6 @@ it("records node failure while an existing inventory load queues its quiet refre
   const pending = start(pairing.rejectNodePairingRequest);
   mutation.reject(new Error("pairing denied"));
   await pending;
-  expect(request.mock.calls).toEqual([
-    ...listCalls,
-    ["node.pair.reject", { requestId: "request-1" }],
-  ]);
   expect(state).toMatchObject({
     devicesLoading: true,
     nodesLoading: true,

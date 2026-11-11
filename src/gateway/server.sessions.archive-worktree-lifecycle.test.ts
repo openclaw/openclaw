@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -691,7 +690,8 @@ test("automatic archive snapshots the checkout and restores its conversation", a
   const transcript = await fixture.transcript();
   await fixture.write("draft.txt", "automatic archive keeps work\n");
 
-  const reads = observeMainThreadReads();
+  const readSql: string[] = [];
+  const reads = observeMainThreadReads((sql) => readSql.push(sql));
   const worktreeReads: string[] = [];
   let grants = 0;
   using _ = probe.admission(workerAdmission, (request, grant, admit) => {
@@ -712,12 +712,13 @@ test("automatic archive snapshots the checkout and restores its conversation", a
     }
     grants += 1;
     reads.clear();
+    readSql.length = 0;
     try {
       admit(request, grant);
     } finally {
-      for (const statement of reads.calls.flatMap((call) => call.mock.contexts)) {
-        if (statement instanceof StatementSync && /\bworktrees\b/u.test(statement.sourceSQL)) {
-          worktreeReads.push(statement.sourceSQL);
+      for (const sql of readSql) {
+        if (/\bworktrees\b/u.test(sql)) {
+          worktreeReads.push(sql);
         }
       }
     }

@@ -10,7 +10,10 @@ import * as authProfileStore from "./auth-profiles/store-runtime.js";
 import { createEmptyAgentDiscoveryStores } from "./embedded-agent-runner/model.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { appendLiveModelCandidates } from "./test-helpers/live-model-dynamic-candidates.js";
-import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+import {
+  makeConfiguredModel,
+  makeProviderModelFixture,
+} from "./test-helpers/provider-model-fixture.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture({
   plugins: ["deepseek", "xai"].map((id) => {
@@ -181,15 +184,11 @@ describe("explicit live model candidates", () => {
         api: "openai-completions",
         baseUrl: "https://api.x.ai/v1",
         models: [
-          {
+          makeConfiguredModel({
             id: "grok-4.20-multi-agent-0309",
             name: "Suppressed model",
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128_000,
             maxTokens: 4_096,
-          },
+          }),
         ],
       });
       const result = await appendLiveModelCandidates({

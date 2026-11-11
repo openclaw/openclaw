@@ -17,17 +17,30 @@ export type SubagentRoster = {
   subagentSessions?: readonly GatewaySessionRow[];
   /** True once the pane's own child query answered; seeded rows can be partial. */
   subagentSessionsHydrated?: boolean;
+  /** The optional child read settled unsuccessfully; live parent facts still apply. */
+  subagentSessionsUnavailable?: boolean;
   /** A newly named child is still awaiting a covering read before the wait can count it. */
   subagentSessionsPending?: boolean;
-  /**
-   * True once the pane's own child query answered at least once. Seeded rows
-   * take ancestry from the broad list, which outlives the child-link retention.
-   */
-  subagentSessionsRead?: boolean;
 };
 
+/** A child query can be hydrated before it observes its own parent. */
+export function hasLoadedDetailsSubagents(
+  details: SubagentRoster & { selectedSession?: GatewaySessionRow },
+) {
+  return (
+    details.subagentSessionsHydrated &&
+    !details.subagentSessionsPending &&
+    details.subagentSessions?.some((row) =>
+      areUiSessionKeysEquivalent(row.key, details.selectedSession?.key),
+    )
+  );
+}
+
 /** What a launch row needs to show its subagent's session and open it. */
-export type SubagentRowContext = Pick<SubagentRoster, "subagentSessions" | "subagentParentKey"> & {
+export type SubagentRowContext = Pick<
+  SubagentRoster,
+  "subagentSessions" | "subagentParentKey" | "subagentSessionsHydrated" | "subagentSessionsPending"
+> & {
   /** Shows a subagent the Subagents panel lists. */
   onOpenSubagent?: (sessionKey: string) => void;
   /** Opens a session; any other subagent opens this way. */
@@ -54,30 +67,9 @@ function readLaunch(card: LaunchCard) {
   return {
     label: text(args?.label),
     childKey,
-    result,
-    groupId: text(result?.groupId) ?? text(args?.groupId),
     ownSession:
       args?.visible === true || (childKey !== undefined && isDashboardSessionKey(childKey)),
   };
-}
-
-/** An accepted result is durable provenance; a label or a finished tool call is not. */
-export function readAcceptedSubagentLaunch(card: LaunchCard) {
-  const launch = readLaunch(card);
-  const runId = text(launch?.result?.runId);
-  return launch &&
-    !launch.ownSession &&
-    launch.result?.status === "accepted" &&
-    launch.childKey &&
-    runId
-    ? {
-        runId,
-        childSessionKey: launch.childKey,
-        label: launch.label,
-        groupId: launch.groupId,
-        status: "accepted" as const,
-      }
-    : undefined;
 }
 
 /** The calls among `cards` that a count of subagents must leave out. */

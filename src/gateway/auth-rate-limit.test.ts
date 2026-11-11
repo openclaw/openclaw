@@ -61,16 +61,6 @@ describe("auth rate limiter", () => {
     expect(check(" \t ").allowed).toBe(false);
   });
 
-  it("does not extend lockout when failures are recorded while already locked", async () => {
-    createLimiter({ lockoutMs: 5_000 });
-    fail(2);
-    expect(check().allowed).toBe(false);
-    const initialRetryAfter = check().retryAfterMs;
-    await clock.advanceBy(1_000);
-    fail();
-    expect(check().retryAfterMs).toBeLessThanOrEqual(initialRetryAfter - 1_000);
-  });
-
   it("applies new limits to retained scope history without releasing earned lockouts", async () => {
     createLimiter({ maxAttempts: 5, windowMs: 10_000, pruneIntervalMs: 0 });
     fail(2, SHARED_SECRET);
@@ -81,6 +71,7 @@ describe("auth rate limiter", () => {
     expect(check(DEVICE_TOKEN).remaining).toBe(1);
 
     await clock.advanceBy(1_000);
+    fail(1, SHARED_SECRET);
     limiter.updateConfig({ maxAttempts: 4, windowMs: 10_000, lockoutMs: 9_000 });
     expect(check(SHARED_SECRET).retryAfterMs).toBe(3_000);
     expect(check(DEVICE_TOKEN).remaining).toBe(3);

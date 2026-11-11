@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deferred, storageArea } from "./browser.test-support.js";
+import { storageArea } from "./browser.test-support.js";
 import { OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 import { createTabAccessPolicy, type TabAccessMode } from "./tab-access.js";
 import { tabEligibility } from "./tab-eligibility.js";
@@ -115,7 +115,7 @@ describe("tab access policy", () => {
 
   it("blocks new authority before the asynchronous pause lookup completes", async () => {
     const h = await initialized({ tabs: [makeTab(-1)] }, "all");
-    const lookup = deferred<ReturnType<typeof makeTab>>();
+    const lookup = Promise.withResolvers<ReturnType<typeof makeTab>>();
     h.chromeApi.tabs.get.mockReturnValueOnce(lookup.promise);
 
     const pausing = h.policy.pause(1);
@@ -191,7 +191,7 @@ describe("tab access policy", () => {
   });
 
   it("restarts an in-flight discovery when an OpenClaw group becomes eligible", async () => {
-    const firstSelection = deferred<{ id: number; title: string }>();
+    const firstSelection = Promise.withResolvers<{ id: number; title: string }>();
     const { policy, chromeApi } = await initialized();
     const getGroup = chromeApi.tabGroups.get
       .mockImplementationOnce(async () => await firstSelection.promise)
@@ -207,7 +207,7 @@ describe("tab access policy", () => {
   });
 
   it("rejects an epoch revoked during the final selected-group lookup", async () => {
-    const finalLookup = deferred<{ id: number; title: string }>();
+    const finalLookup = Promise.withResolvers<{ id: number; title: string }>();
     const { policy, chromeApi } = await initialized();
     const getGroup = chromeApi.tabGroups.get
       .mockResolvedValueOnce({ id: 7, title: OPENCLAW_TAB_GROUP_TITLE })

@@ -1,6 +1,4 @@
 import { quickJsWorkerTestEntrypoint } from "../../extensions/code-mode-quickjs/src/worker-entrypoint.test-support.ts";
-import { codexCatalogPageWorkerEntrypoint } from "../../extensions/codex/catalog-page-worker-entrypoint.ts";
-import { codexHistoryWorkerEntrypoint } from "../../extensions/codex/session-history-worker-entrypoint.ts";
 import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryForgetFaultEntrypoint } from "../../extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts";
@@ -30,13 +28,14 @@ import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-co
 import { agentProcessTestEntrypoints } from "../../src/agents/process-runtime.test-support.ts";
 import { sdkStateOwnerFixtureEntrypoint } from "../../src/agents/sandbox/sdk-state-owner-runtime.test-support.ts";
 import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
-import { clawProjectBuildEntrypoint } from "../../src/claws/project-runtime.test-support.ts";
 import {
   adminStateOwnerFixtureEntrypoint,
   cliMessageExitEntrypoints,
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
   localStateOwnerFixtureEntrypoint,
+  logsConsoleEntrypoints,
+  oneShotExitProbeEntrypoints,
   updateExecutorEntrypoints,
   stateDirGatewayFixtureEntrypoint,
   updateCandidateExitEntrypoints,
@@ -101,6 +100,8 @@ import {
   stateLeaseRetentionRuntimeEntrypoint,
 } from "../../src/state/openclaw-state-lease-runtime.test-support.ts";
 import { groqSetupSdkEntrypoints } from "../../src/system-agent/setup-inference-groq-sdk.test-support.ts";
+import { clientVoiceEntryRuntimeEntrypoint } from "../../src/talk/client-voice-session-runtime.test-support.ts";
+import { templateProjectBuildEntrypoint } from "../../src/templates/project-runtime.test-support.ts";
 import { tempDirEntrypoint } from "../../src/test-helpers/temp-dir-runtime.test-support.ts";
 import { transcriptLibraryTimezoneEntrypoint } from "../../src/transcripts/library-timezone-runtime.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
@@ -204,6 +205,7 @@ export const preservedModuleBuildSources = [
   "src/agents/agent-bundle-mcp-manager.ts",
   "src/agents/agent-bundle-mcp-manager-api.ts",
   "src/agents/mcp-auth-profile.integration.test-support.ts",
+  "src/agents/mcp-auth-profile-authorization.ts",
   "src/agents/mcp-auth-profile.ts",
   "src/agents/mcp-auth-profile.runtime.ts",
   "src/agents/auth-profiles/oauth.ts",
@@ -224,6 +226,7 @@ export const preservedModuleBuildSources = [
   "src/cli/update-finalization-output.test-support.ts",
   "src/cli/program/register.maintenance.ts",
   "src/cli/one-shot-exit.ts",
+  "src/cli/cron-cli.ts",
   "src/cli/runtime-cleanup-scope.ts",
   "src/cli/runtime-cleanup.ts",
   "src/state/openclaw-state-db-cache.ts",
@@ -261,6 +264,7 @@ export const preservedModuleBuildSources = [
 
 // Source-relative script readers retain their exact input bytes in the prepared layout.
 export const preservedModuleBuildAssets = [
+  "scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt",
   "test/fixtures/acp/owner-agent.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/agents.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-discord.json",
@@ -281,12 +285,15 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/lib/upgrade-survivor/config-recipe/tools-tool-search.json",
   "scripts/e2e/parallels/parallels-exec.py",
   ".github/workflows/plugin-npm-release.yml",
+  "scripts/plugin-npm-release-admission.py",
   "scripts/lib/vitest-worker-bootstrap.mts",
   "scripts/lib/vitest-worker-descriptor.mts",
 ];
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
+  "plugins/test-helpers/installed-plugin-index":
+    "src/plugins/test-helpers/installed-plugin-index.ts",
   "legacy-config-binding-repair.runtime":
     "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts",
   ...createRuntimeProcessBuildEntries([
@@ -305,7 +312,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(proxyCaptureNativeProcessEntrypoints),
     ...Object.values(serviceProcessEnvEntrypoints),
     workerBundleArchiveEntrypoint,
-    clawProjectBuildEntrypoint,
+    templateProjectBuildEntrypoint,
     tempDirEntrypoint,
     ...Object.values(deliveryQueueProcessEntrypoints),
     ...Object.values(externalProxyTestEntrypoints),
@@ -317,8 +324,6 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(discordAudioTestEntrypoints),
     ...Object.values(realtimeAudioTestEntrypoints),
     quickJsWorkerTestEntrypoint,
-    codexCatalogPageWorkerEntrypoint,
-    codexHistoryWorkerEntrypoint,
     nativeWorkerTestEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
@@ -361,6 +366,8 @@ export const vitestWorkerBuildEntries = {
     ...groqSetupSdkEntrypoints,
     ...Object.values(cliRecoveryEntrypoints),
     ...Object.values(cliMessageExitEntrypoints),
+    ...Object.values(logsConsoleEntrypoints),
+    ...Object.values(oneShotExitProbeEntrypoints),
     windowsProcessOwnershipEntrypoint,
     windowsProcessJobRetentionEntrypoint,
     ...Object.values(updateCandidateExitEntrypoints),
@@ -394,6 +401,7 @@ export const vitestWorkerBuildEntries = {
     workboardSqliteBackendEntrypoint,
     ...Object.values(agentDatabaseModuleIdentityEntrypoints),
     agentDeletionRecoveryHoldPostgresRuntimeEntrypoint,
+    clientVoiceEntryRuntimeEntrypoint,
     cronOwnerInspectionPostgresRuntimeEntrypoint,
     stateLeasePostgresRuntimeEntrypoint,
     stateLeaseProcessExitRuntimeEntrypoint,

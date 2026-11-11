@@ -1,157 +1,91 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { resolveFirstBoundAccountId } from "./bound-account-read.js";
 
 type Match = AgentRouteBinding["match"];
-function binding(accountId: string, match: Omit<Match, "accountId">): Match {
-  return { accountId, ...match };
-}
-
-function resolveBoundAccount(
-  matches: Match[],
-  params: Omit<
-    Parameters<typeof resolveFirstBoundAccountId>[0],
-    "cfg" | "agentId" | "channelId"
-  > & {
-    channelId?: string;
-  } = {},
-) {
+type Scope = Omit<
+  Parameters<typeof resolveFirstBoundAccountId>[0],
+  "cfg" | "agentId" | "channelId"
+>;
+const binding = (accountId: string, match: Partial<Match> = {}): Match => ({
+  channel: "qa-channel",
+  accountId,
+  ...match,
+});
+const peer = (accountId: string, kind: NonNullable<Match["peer"]>["kind"], id = "*") =>
+  binding(accountId, { peer: { kind, id } });
+function resolve(matches: Match[], scope: Scope = {}, channelId = "qa-channel") {
   return resolveFirstBoundAccountId({
     agentId: "bot-alpha",
-    channelId: "matrix",
-    ...params,
+    channelId,
+    ...scope,
     cfg: { bindings: matches.map((match) => ({ type: "route", agentId: "bot-alpha", match })) },
   });
 }
 
-describe("resolveFirstBoundAccountId", () => {
-  it("preserves first-match binding order for peerless callers", () => {
-    expect(
-      resolveBoundAccount([
-        binding("bot-alpha-wildcard", { channel: "matrix", peer: { kind: "channel", id: "*" } }),
-        binding("bot-alpha-default", { channel: "matrix" }),
-      ]),
-    ).toBe("bot-alpha-wildcard");
-  });
+it("preserves first-match binding order for peerless callers", () => {
+  expect(resolve([peer("wildcard", "channel"), binding("default")])).toBe("wildcard");
+});
 
-  it("filters bindings by peer kind when caller supplies peerKind", () => {
-    const matches = [
-      binding("bot-alpha-dm", { channel: "matrix", peer: { kind: "direct", id: "*" } }),
-      binding("bot-alpha-room", { channel: "matrix", peer: { kind: "channel", id: "*" } }),
-    ];
-    expect(resolveBoundAccount(matches, { peerId: "!room:example.org", peerKind: "channel" })).toBe(
-      "bot-alpha-room",
-    );
-    expect(resolveBoundAccount(matches, { peerId: "@user:example.org", peerKind: "direct" })).toBe(
-      "bot-alpha-dm",
-    );
-  });
+it.each([
+  ["channel", "room"],
+  ["direct", "dm"],
+  ["group", "room"],
+  [undefined, "default"],
+] as const)("selects wildcard bindings compatible with caller kind %s", (peerKind, expected) => {
+  const matches = [peer("dm", "direct"), peer("room", "channel"), binding("default")];
+  expect(resolve(matches, { peerId: "room-or-user", peerKind })).toBe(expected);
+});
 
-  it("treats group and channel peer kinds as equivalent (matches resolve-route semantics)", () => {
-    expect(
-      resolveBoundAccount(
-        [binding("bot-alpha-group", { channel: "line", peer: { kind: "group", id: "*" } })],
-        { channelId: "line", peerId: "!roomA:example.org", peerKind: "channel" },
-      ),
-    ).toBe("bot-alpha-group");
-    expect(
-      resolveBoundAccount(
-        [binding("bot-alpha-channel", { channel: "line", peer: { kind: "channel", id: "*" } })],
-        { channelId: "line", peerId: "groupA", peerKind: "group" },
-      ),
-    ).toBe("bot-alpha-channel");
-  });
+it("accepts group bindings for channel peers", () => {
+  expect(resolve([peer("group", "group")], { peerId: "room", peerKind: "channel" })).toBe("group");
+});
 
-  it("skips wildcard peer bindings when the caller's peerKind is unknown", () => {
-    expect(
-      resolveBoundAccount(
-        [
-          binding("bot-alpha-dm", { channel: "matrix", peer: { kind: "direct", id: "*" } }),
-          binding("bot-alpha-default", { channel: "matrix" }),
-        ],
-        { peerId: "!room:example.org" },
-      ),
-    ).toBe("bot-alpha-default");
-  });
+it("matches exact canonical peer aliases before falling back to wildcard bindings", () => {
+  expect(
+    resolve(
+      [peer("wildcard", "channel"), peer("conversation", "channel", "channel:conversation-a")],
+      {
+        peerId: "conversation-a",
+        exactPeerIdAliases: ["channel:conversation-a"],
+        peerKind: "channel",
+      },
+    ),
+  ).toBe("conversation");
+});
 
-  it("matches exact canonical peer aliases before falling back to wildcard bindings", () => {
-    expect(
-      resolveBoundAccount(
-        [
-          binding("bot-alpha-wildcard", {
-            channel: "qa-channel",
-            peer: { kind: "channel", id: "*" },
-          }),
-          binding("bot-alpha-conversation", {
-            channel: "qa-channel",
-            peer: { kind: "channel", id: "channel:conversation-a" },
-          }),
-        ],
-        {
-          channelId: "qa-channel",
-          peerId: "conversation-a",
-          exactPeerIdAliases: ["channel:conversation-a"],
-          peerKind: "channel",
-        },
-      ),
-    ).toBe("bot-alpha-conversation");
-  });
+it("skips peer-specific bindings whose kind does not match the caller's peerKind", () => {
+  expect(
+    resolve([peer("wrong-kind", "direct", "!room:example.org"), binding("default")], {
+      peerId: "!room:example.org",
+      peerKind: "channel",
+    }),
+  ).toBe("default");
+});
 
-  it("skips peer-specific bindings whose kind does not match the caller's peerKind", () => {
-    expect(
-      resolveBoundAccount(
-        [
-          binding("bot-alpha-wrong-kind", {
-            channel: "matrix",
-            peer: { kind: "direct", id: "!room:example.org" },
-          }),
-          binding("bot-alpha-default", { channel: "matrix" }),
-        ],
-        { peerId: "!room:example.org", peerKind: "channel" },
-      ),
-    ).toBe("bot-alpha-default");
-  });
+it("skips scoped bindings when the caller has no matching group space", () => {
+  expect(
+    resolve([binding("other-guild", { guildId: "guild-other" }), binding("default")], {
+      groupSpace: "guild-current",
+    }),
+  ).toBe("default");
+});
 
-  it("skips scoped bindings when the caller has no matching group space", () => {
-    expect(
-      resolveBoundAccount(
-        [
-          binding("bot-alpha-other-guild", { channel: "discord", guildId: "guild-other" }),
-          binding("bot-alpha-default", { channel: "discord" }),
-        ],
-        { channelId: "discord", groupSpace: "guild-current" },
-      ),
-    ).toBe("bot-alpha-default");
-  });
+it("matches scoped guild and team bindings against caller group space", () => {
+  const matches = [
+    binding("guild", { channel: "discord", guildId: "guild-current" }),
+    binding("team", { channel: "slack", teamId: "team-current" }),
+  ];
+  expect(resolve(matches, { groupSpace: "guild-current" }, "discord")).toBe("guild");
+  expect(resolve(matches, { groupSpace: "team-current" }, "slack")).toBe("team");
+});
 
-  it("matches scoped guild and team bindings against caller group space", () => {
-    const matches = [
-      binding("bot-alpha-guild", { channel: "discord", guildId: "guild-current" }),
-      binding("bot-alpha-team", { channel: "slack", teamId: "team-current" }),
-    ];
-    expect(
-      resolveBoundAccount(matches, { channelId: "discord", groupSpace: "guild-current" }),
-    ).toBe("bot-alpha-guild");
-    expect(resolveBoundAccount(matches, { channelId: "slack", groupSpace: "team-current" })).toBe(
-      "bot-alpha-team",
-    );
-  });
-
-  it("requires caller roles before selecting role-scoped bindings", () => {
-    const matches = [
-      binding("bot-alpha-admin", {
-        channel: "discord",
-        guildId: "guild-current",
-        roles: ["admin"],
-      }),
-      binding("bot-alpha-default", { channel: "discord" }),
-    ];
-    const scope = { channelId: "discord", groupSpace: "guild-current" };
-    expect(resolveBoundAccount(matches, { ...scope, memberRoleIds: ["member"] })).toBe(
-      "bot-alpha-default",
-    );
-    expect(resolveBoundAccount(matches, { ...scope, memberRoleIds: ["admin"] })).toBe(
-      "bot-alpha-admin",
-    );
-  });
+it("requires caller roles before selecting role-scoped bindings", () => {
+  const matches = [
+    binding("admin", { guildId: "guild-current", roles: ["admin"] }),
+    binding("default"),
+  ];
+  const scope = { groupSpace: "guild-current" };
+  expect(resolve(matches, { ...scope, memberRoleIds: ["member"] })).toBe("default");
+  expect(resolve(matches, { ...scope, memberRoleIds: ["admin"] })).toBe("admin");
 });

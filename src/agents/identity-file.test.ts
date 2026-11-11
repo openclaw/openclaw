@@ -38,16 +38,7 @@ describe("parseIdentityMarkdown", () => {
       "\n# IDENTITY.md - Who Am I?\n\n- **Name:** *(pick something you like)*\n- **Creature:** *(AI? robot? familiar? ghost in the machine? something weirder?)*\n- **Vibe:** *(how do you come across? sharp? warm? chaotic? calm?)*\n- **Emoji:** *(your signature - pick one that feels right)*\n- **Avatar:** *(workspace-relative path, http(s) URL, or data URI)*\n    ",
       null,
     ],
-    [
-      "\n- **Name:** Samantha\n- **Creature:** Robot\n- **Vibe:** Warm\n- **Emoji:** :robot:\n- **Avatar:** avatars/openclaw.png\n",
-      {
-        name: "Samantha",
-        creature: "Robot",
-        vibe: "Warm",
-        emoji: ":robot:",
-        avatar: "avatars/openclaw.png",
-      },
-    ],
+    ["- **Vibe:** Warm", { vibe: "Warm" }],
     [
       "- **Name:** `Samantha`\n- `Creature`: Robot\n- **`Avatar`**: `avatars/openclaw.png`",
       { name: "Samantha", creature: "Robot", avatar: "avatars/openclaw.png" },
@@ -90,24 +81,6 @@ describe("loadAgentIdentityFromWorkspace", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([false, true])(
-    "loads workspace and explicit identity files (symlink: %s)",
-    async (symlink) => {
-      if (symlink && process.platform === "win32") {
-        return;
-      }
-      const identityPath = path.join(tempDir, "IDENTITY.md");
-      const targetPath = symlink ? path.join(tempDir, "REAL_IDENTITY.md") : identityPath;
-      const expected = { name: symlink ? "Linked Agent" : "Test Agent", emoji: "🤖" };
-      fs.writeFileSync(targetPath, `- **Name:** ${expected.name}\n- **Emoji:** 🤖`);
-      if (symlink) {
-        fs.symlinkSync(targetPath, identityPath);
-      }
-      expect(loadAgentIdentityFromWorkspace(tempDir)).toEqual(expected);
-      await expect(loadAgentIdentityFromFile(identityPath)).resolves.toEqual(expected);
-    },
-  );
-
   it.each(["missing", "oversized", "invalid-encoding"])(
     "classifies %s identity reads without matching error text",
     async (kind) => {
@@ -117,22 +90,19 @@ describe("loadAgentIdentityFromWorkspace", () => {
       );
       if (kind === "missing") {
         await expect(loadAgentIdentityFromFile(identityPath)).resolves.toBeNull();
-      } else if (kind === "oversized") {
-        fs.writeFileSync(identityPath, "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1));
-        expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
-        expect(await load()).toBeNull();
-        await expect(loadAgentIdentityFromFile(identityPath)).rejects.toThrow(
-          `exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
-        );
       } else {
         fs.writeFileSync(
           identityPath,
-          Buffer.from([0x2d, 0x20, 0x4e, 0x61, 0x6d, 0x65, 0x3a, 0x20, 0xff]),
+          kind === "oversized"
+            ? "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1)
+            : Buffer.from([0x2d, 0x20, 0x4e, 0x61, 0x6d, 0x65, 0x3a, 0x20, 0xff]),
         );
         expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
         expect(await load()).toBeNull();
         await expect(loadAgentIdentityFromFile(identityPath)).rejects.toThrow(
-          "must be valid UTF-8",
+          kind === "oversized"
+            ? `exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`
+            : "must be valid UTF-8",
         );
       }
     },
@@ -174,14 +144,17 @@ describe("loadAgentIdentityFromWorkspace", () => {
       const filePath = path.join(tempDir, "IDENTITY.md");
       const firstPath = symlink ? path.join(tempDir, "FIRST.md") : filePath;
       const modified = new Date("2024-01-01T00:00:00Z");
-      fs.writeFileSync(firstPath, "- Name: First\n");
+      const initial = "- Name: First\n- Emoji: 🤖\n";
+      fs.writeFileSync(firstPath, initial);
       fs.utimesSync(firstPath, modified, modified);
       if (symlink) {
         fs.symlinkSync(firstPath, filePath);
       }
       const first = await load();
-      expect(first).toEqual({ name: "First" });
-      fs.writeFileSync(`${filePath}.next`, "- Name: Other\n");
+      expect(first).toEqual({ name: "First", emoji: "🤖" });
+      expect(loadAgentIdentityFromWorkspace(tempDir)).toEqual(first);
+      await expect(loadAgentIdentityFromFile(filePath)).resolves.toEqual(first);
+      fs.writeFileSync(`${filePath}.next`, "- Name: Other\n- Emoji: 🤖\n");
       fs.utimesSync(`${filePath}.next`, modified, modified);
       if (symlink) {
         fs.unlinkSync(filePath);
@@ -189,10 +162,10 @@ describe("loadAgentIdentityFromWorkspace", () => {
       } else {
         fs.renameSync(`${filePath}.next`, filePath);
       }
-      expect(await load()).toEqual({ name: "Other" });
+      expect(await load()).toEqual({ name: "Other", emoji: "🤖" });
       fs.unlinkSync(filePath);
       expect(await load()).toBeNull();
-      fs.writeFileSync(filePath, "- Name: First\n");
+      fs.writeFileSync(filePath, initial);
       const recreated = await load();
       expect(recreated).toEqual(first);
       expect(recreated).not.toBe(first);

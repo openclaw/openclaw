@@ -4,6 +4,7 @@ import type { WorkerProvider } from "../../plugins/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { providerService } from "./provider-lifecycle.test-support.js";
 import * as support from "./service.test-support.js";
+import { testState } from "./service.test-support.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import { fakeRunner, PWD_COMMAND, startTestTunnel, success } from "./tunnel.test-support.js";
 
@@ -13,22 +14,16 @@ it("returns reclaim after local cleanup and acceptance, retaining physical destr
   signal,
 }) => {
   const environmentId = "reclaim-accepted";
-  await support.seedReady(environmentId);
-  const attached = await support.testState.store.transition({
-    environmentId,
-    from: "ready",
-    to: "attached",
-    patch: { ...support.attachedPatch(environmentId, "session-reclaim"), sharedHost: false },
-  });
+  const { ownerEpoch } = await support.seedAttachedIdentity(environmentId, "session-reclaim");
   const cleanupStarted = createDeferred();
   const cleanupFinished = createDeferred();
   const releaseFinished = createDeferred();
   const fake = fakeRunner(() => success());
   const tunnelManager = createWorkerTunnelManager({ runner: fake.runner });
-  const handle = await startTestTunnel(tunnelManager, environmentId, attached.ownerEpoch);
+  const handle = await startTestTunnel(tunnelManager, environmentId, ownerEpoch);
   const destroy = vi.fn<WorkerProvider["destroy"]>(async (lease) => {
     expect(tunnelManager.status(environmentId)).toBe("stopped");
-    expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+    expect(testState.store.getCredential(environmentId)).toBeUndefined();
     await expect(handle.runWorkspaceCommand(PWD_COMMAND)).rejects.toThrow(
       "Worker tunnel owner is no longer connected",
     );
@@ -51,20 +46,17 @@ it("returns reclaim after local cleanup and acceptance, retaining physical destr
     expect(destroy).not.toHaveBeenCalled();
     cleanupFinished.resolve();
     await expect(withinTest(reclaim, signal)).resolves.toMatchObject({ state: "destroying" });
-    expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
-    expect(support.testState.store.get(environmentId)).toMatchObject({
+    expect(testState.store.getCredential(environmentId)).toBeUndefined();
+    expect(testState.store.get(environmentId)).toMatchObject({
       state: "destroying",
       leaseId: `lease:${environmentId}`,
-      destroyRequestedAtMs: support.testState.nowMs,
+      destroyRequestedAtMs: testState.nowMs,
     });
 
-    let confirmed = false;
-    const confirmation = service.destroy(environmentId).then((result) => {
-      confirmed = true;
-      return result;
-    });
+    const confirmed = vi.fn();
+    const confirmation = service.destroy(environmentId).finally(confirmed);
     await Promise.resolve();
-    expect(confirmed).toBe(false);
+    expect(confirmed).not.toHaveBeenCalled();
     releaseFinished.resolve();
     await expect(confirmation).resolves.toMatchObject({ state: "destroyed" });
     expect(destroy).toHaveBeenCalledOnce();
@@ -80,6 +72,7 @@ it("records late cleanup failure after reclaim and retries through reconciliatio
   signal,
 }) => {
   const environmentId = "reclaim-retry";
+  const failure = "provider release confirmation failed";
   await support.seedReady(environmentId);
   const releaseFinished = createDeferred();
   const cleanupFailed = createDeferred();
@@ -88,16 +81,13 @@ it("records late cleanup failure after reclaim and retries through reconciliatio
     .mockImplementationOnce(async (lease) => {
       lease.onCleanupAccepted?.();
       await releaseFinished.promise;
-      throw new Error("provider release confirmation failed");
+      throw new Error(failure);
     })
     .mockResolvedValue(undefined);
   const service = providerService({ destroy, supportsCleanupAcceptance: true });
   onTestFinished(
     sessionChanges.subscribe(() => {
-      if (
-        support.testState.store.get(environmentId)?.lastError ===
-        "provider release confirmation failed"
-      ) {
+      if (testState.store.get(environmentId)?.lastError === failure) {
         cleanupFailed.resolve();
       }
     }),
@@ -108,15 +98,15 @@ it("records late cleanup failure after reclaim and retries through reconciliatio
     });
     releaseFinished.resolve();
     await withinTest(cleanupFailed.promise, signal);
-    expect(support.testState.store.get(environmentId)).toMatchObject({
+    expect(testState.store.get(environmentId)).toMatchObject({
       state: "destroying",
       leaseId: `lease:${environmentId}`,
-      destroyRequestedAtMs: support.testState.nowMs,
-      lastError: "provider release confirmation failed",
+      destroyRequestedAtMs: testState.nowMs,
+      lastError: failure,
     });
 
     await service.reconcileOnce();
-    expect(support.testState.store.get(environmentId)).toMatchObject({ state: "destroyed" });
+    expect(testState.store.get(environmentId)).toMatchObject({ state: "destroyed" });
     expect(destroy).toHaveBeenCalledTimes(2);
   } finally {
     releaseFinished.resolve();
@@ -136,15 +126,12 @@ it("keeps reclaim blocking when a provider does not acknowledge cleanup acceptan
       await releaseFinished.promise;
     },
   });
-  let reclaimed = false;
-  const reclaim = service.reclaim(environmentId).then((result) => {
-    reclaimed = true;
-    return result;
-  });
+  const reclaimed = vi.fn();
+  const reclaim = service.reclaim(environmentId).finally(reclaimed);
   try {
     await withinTest(releaseStarted.promise, signal);
-    expect(reclaimed).toBe(false);
-    expect(support.testState.store.get(environmentId)?.state).toBe("destroying");
+    expect(reclaimed).not.toHaveBeenCalled();
+    expect(testState.store.get(environmentId)?.state).toBe("destroying");
     releaseFinished.resolve();
     await expect(reclaim).resolves.toMatchObject({ state: "destroyed" });
   } finally {

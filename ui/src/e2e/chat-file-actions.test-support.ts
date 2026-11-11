@@ -1,6 +1,6 @@
 import type { Locator } from "playwright";
 
-export async function openFileActions(panel: Locator): Promise<Locator> {
+async function openFileActions(panel: Locator): Promise<Locator> {
   const trigger = panel
     .getByRole("button", { name: /^(More file actions|File actions)$/ })
     .filter({ visible: true });

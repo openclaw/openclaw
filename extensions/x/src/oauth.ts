@@ -10,7 +10,7 @@ import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { fetchXService } from "./fetch.js";
 
 export type XTokenState = "idle" | "refreshing" | "ready" | "error";
-export type XRefreshClaim = {
+type XRefreshClaim = {
   refreshToken: string;
   commit: (refreshToken: string) => Promise<void>;
   restore: () => Promise<void>;

@@ -22,7 +22,6 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { TabFocus } from "../../../lib/tabs.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { createLinkFaviconReader } from "../link-favicon-cache.ts";
 import {
   sidebarActivePanel,
   sidebarSidePanels,
@@ -32,6 +31,7 @@ import {
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import { ChatPanelHeaderActions } from "./chat-header-panel-actions.tsx";
+import { HostedPanelIcon, PanelIcon } from "./chat-panel-icon.tsx";
 import { DesktopFrameControls } from "./chat-sidebar-desktop-frame-controls.tsx";
 import type {
   SidebarPanelDefinition,
@@ -72,6 +72,7 @@ type RegionTab = SolidPanelTabStripTab & {
   hostedTab?: PanelHostedTab;
   conversationAvatar?: AgentIdentity;
   iconName?: IconName;
+  iconSvg?: string;
 };
 
 export function readRegionHostedTabs(host: RegionElement, panel: SidebarPanel) {
@@ -90,7 +91,7 @@ export function PanelTypeOption(props: { type: SidebarPanelDefinition }) {
   return (
     <>
       <span class="side-panel-type-option__icon" aria-hidden="true">
-        <Icon name={props.type.icon} />
+        <PanelIcon icon={props.type.icon} iconSvg={props.type.iconSvg} />
       </span>
       <span
         ref={createTextOverflow(() => props.type.label)}
@@ -116,6 +117,7 @@ export function SidebarPanelLauncher(props: {
   const quickSlots: SidebarSlotId[] = ["companion", "workspace", "browser"];
   const exploreSlots: SidebarSlotId[] = [
     "detail",
+    "context",
     "link-reader",
     "dashboard",
     "subagents",
@@ -213,7 +215,13 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
             return current().label;
           },
           class: "side-panel-type-menu__item session-menu__item",
-          icon: <Icon name={current().icon} class="side-panel-type-option__icon" />,
+          icon: (
+            <PanelIcon
+              icon={current().icon}
+              iconSvg={current().iconSvg}
+              class="side-panel-type-option__icon"
+            />
+          ),
           labelClass: "side-panel-type-option__label",
           content: (
             <span
@@ -242,7 +250,7 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       id={`side-panel-type-${id}`}
       class="side-panel-type-menu"
       panelClass="side-panel-type-menu__panel"
-      triggerClass="rail-header__action side-panel-type-menu__trigger"
+      triggerClass="oc-icon-button oc-icon-button--28 rail-header__action side-panel-type-menu__trigger"
       triggerAttributes={{ title: t("chat.sidePanel.addTab") }}
       placement="bottom-start"
       label={t("chat.sidePanel.addTab")}
@@ -266,32 +274,6 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
         }
       }}
     />
-  );
-}
-function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
-  const favicons = createLinkFaviconReader(() => props.refreshHostedTabs());
-  onSettled(() => () => favicons.dispose());
-  const favicon = () => {
-    props.hostedRevision();
-    if (props.tab.favicon) {
-      return props.tab.favicon;
-    }
-    const hostname = props.tab.url ? URL.parse(props.tab.url)?.hostname : "";
-    return hostname && props.fetchFavicon ? favicons.read(hostname, props.fetchFavicon) : null;
-  };
-  return (
-    <Show when={favicon()} fallback={props.tab.icon}>
-      {(src) => (
-        <img
-          class="tabstrip-tab__favicon"
-          src={src()}
-          width="16"
-          height="16"
-          decoding="async"
-          alt=""
-        />
-      )}
-    </Show>
   );
 }
 
@@ -388,7 +370,14 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
           onActivate:
             canRestore && tab.id === hosted.element.activeHostedTabId
               ? () => props.callbacks?.togglePanelExpanded(panel.id)
-              : undefined,
+              : tab.onActivate
+                ? () => {
+                    if (column?.activePanelId !== panel.id) {
+                      props.callbacks?.activatePanel(panel.id);
+                    }
+                    tab.onActivate?.();
+                  }
+                : undefined,
         }));
       }
       const type = sidebarPanelType(props.panelDefinitions, panel.slot);
@@ -419,6 +408,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             : undefined,
           conversationAvatar: conversation?.avatar,
           iconName: conversation ? undefined : type.icon,
+          iconSvg: conversation ? undefined : type.iconSvg,
           closeLabel: t("chat.sidebarColumns.close", { panel: type.label }),
           closable: !(desktop() && panel.slot === "conversation"),
           draggable: !(desktop() && panel.slot === "conversation"),
@@ -551,7 +541,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
       }
       props.callbacks?.newTab?.finishCloseAll();
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     } finally {
       if (activeClose === view) {
         activeClose = undefined;
@@ -603,25 +593,29 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
               fallback={
                 <Show
                   when={tab().conversationAvatar}
-                  fallback={<Show when={tab().iconName}>{(name) => <Icon name={name()} />}</Show>}
+                  fallback={
+                    <Show when={tab().iconName}>
+                      {(name) => <PanelIcon icon={name()} iconSvg={tab().iconSvg} />}
+                    </Show>
+                  }
                 >
                   {(agent) => <AgentIdentityAvatar agent={agent()} />}
                 </Show>
               }
             >
-              {(hosted) => <HostedIcon {...props} tab={hosted()} />}
+              {(hosted) => <HostedPanelIcon {...props} tab={hosted()} />}
             </Show>
           )}
           tabs={state().tabs}
           activeId={state().activeId}
           ariaControls={(tab) => tab.contentId}
-          onSelect={(id) => {
+          onSelect={(id, event) => {
             const hosted = state().resolveHostedTab(id);
             if (hosted) {
               if (state().column?.activePanelId !== hosted.panel.id) {
                 props.callbacks?.activatePanel(hosted.panel.id);
               }
-              hosted.element.selectHostedTab(hosted.tabId);
+              hosted.element.selectHostedTab(hosted.tabId, event);
             } else {
               props.callbacks?.activatePanel(id);
             }
@@ -656,7 +650,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             <Show when={state().tabs.length > 0 && props.callbacks?.newTab}>
               <button
                 type="button"
-                class="rail-header__action tabstrip-new"
+                class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
                 title={t("browser.newTab")}
                 aria-label={t("browser.newTab")}
                 disabled={closing()}
@@ -675,7 +669,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             <Show when={props.onOpenMobileLauncher} fallback={<TypeMenu {...props} />}>
               <button
                 type="button"
-                class="rail-header__action tabstrip-new"
+                class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
                 title={t("browser.newTab")}
                 aria-label={t("browser.newTab")}
                 onClick={() => props.onOpenMobileLauncher?.()}

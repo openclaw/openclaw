@@ -70,7 +70,25 @@ export class LobsterLedgeTraffic {
     this.bottle = null;
     if (this.connected && this.hooks.visitsEnabled()) {
       this.schedulePasser(seed);
-      this.scheduleBottle(seed);
+      const plan = planLobsterBottle(seed);
+      if (!plan) {
+        return;
+      }
+      this.timers.schedule("bottleTimer", plan.atMs, () => {
+        if (!this.connected || !this.hooks.visitsEnabled()) {
+          return;
+        }
+        this.bottle = {
+          spotPct: plan.spotPct,
+          opened: false,
+          fortune: expectDefined(
+            LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex],
+            "lobster bottle fortune",
+          ),
+        };
+        this.notify();
+        this.armBottleEbb(300_000);
+      });
     }
   }
 
@@ -159,28 +177,6 @@ export class LobsterLedgeTraffic {
         this.notify();
         this.hooks.onPasserDone();
       });
-    });
-  }
-
-  private scheduleBottle(seed: number) {
-    const plan = planLobsterBottle(seed);
-    if (!plan) {
-      return;
-    }
-    this.timers.schedule("bottleTimer", plan.atMs, () => {
-      if (!this.connected || !this.hooks.visitsEnabled()) {
-        return;
-      }
-      this.bottle = {
-        spotPct: plan.spotPct,
-        opened: false,
-        fortune: expectDefined(
-          LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex],
-          "lobster bottle fortune",
-        ),
-      };
-      this.notify();
-      this.armBottleEbb(300_000);
     });
   }
 

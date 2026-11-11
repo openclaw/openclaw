@@ -7,6 +7,7 @@ import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metada
 import {
   listAgentEntries,
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
@@ -18,7 +19,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { resolveSandboxRuntimeSettings } from "../agents/sandbox/config.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { resolveConfiguredPrimaryModelForAgent } from "../agents/utility-model.js";
@@ -118,7 +119,7 @@ export function prepareDeletedAgentSessionCheck(params: {
   params.assertCurrent?.();
   return readAcpSessionMetaForEntries({
     cfg: params.cfg,
-    entries: [...keys].map((sessionKey) => ({
+    entries: Array.from(keys, (sessionKey) => ({
       sessionKey,
       agentId:
         parseAgentSessionKey(sessionKey)?.agentId ??
@@ -428,12 +429,14 @@ export async function listAgentsForGateway(
   );
   const agents = roster.map((entry) => {
     const { id } = entry;
-    const execDefaults = resolveExecDefaults({ cfg, agentId: id, execApprovals });
+    const agentConfig = resolveAgentConfig(cfg, id);
+    const newSessionPermissionMode = agentConfig?.newSessionPermissionMode;
     // This label must never overstate permissiveness. When sandbox policy can vary
     // by session, the effective policy is unknowable at agent scope: omit the label.
     const defaultPermissionMode =
-      resolveSandboxConfigForAgent(cfg, id).mode === "off"
-        ? resolvedPermissionLabel(execDefaults)
+      resolveSandboxRuntimeSettings(cfg.agents?.defaults?.sandbox, agentConfig?.sandbox).mode ===
+      "off"
+        ? resolvedPermissionLabel(resolveExecDefaults({ cfg, agentId: id, execApprovals }))
         : undefined;
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
@@ -497,6 +500,7 @@ export async function listAgentsForGateway(
       { model },
       utility ? { utilityModel: `${utility.provider}/${utility.model}` } : {},
       defaultPermissionMode ? { defaultPermissionMode } : {},
+      newSessionPermissionMode ? { newSessionPermissionMode } : {},
     );
     const provenance = provenanceById.get(id);
     return provenance

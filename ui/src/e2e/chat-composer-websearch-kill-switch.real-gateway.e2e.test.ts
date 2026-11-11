@@ -190,12 +190,12 @@ suite.define(() => {
         const item = await openMenu(page, ".agent-chat__input");
         await expect.poll(() => item.getAttribute("aria-checked")).toBe("false");
         expect(await item.isDisabled()).toBe(false);
-        expect(await tooltipTitleText(item)).toContain("clear");
+        expect(await tooltipTitleText(item)).toContain("Remove");
         await item.click();
         await expect.poll(readOverrides).toEqual(siblings);
         await expect.poll(() => item.isDisabled()).toBe(true);
         expect(await item.getAttribute("aria-checked")).toBe("false");
-        expect(await tooltipTitleText(item)).toContain("tools.web.search.enabled");
+        await expect.poll(() => tooltipTitleText(item)).toContain("tools.web.search.enabled");
         await item.evaluate((node) =>
           node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
         );

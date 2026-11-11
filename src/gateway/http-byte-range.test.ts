@@ -19,8 +19,6 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 const FILE = { size: 10, mtimeMs: 1_752_000_000_123.5 };
 const IMMUTABLE_FILE = { file: FILE, validators: createImmutableFileValidators(FILE) };
 const LAST_MODIFIED = new Date(FILE.mtimeMs).toUTCString();
-const FULL = { kind: "full", statusCode: 200 };
-const NOT_MODIFIED = { kind: "not-modified", statusCode: 304 };
 const ETAG = IMMUTABLE_FILE.validators.etag;
 
 async function openMedia(body: string | Buffer) {
@@ -58,85 +56,48 @@ function resolveImmutableResponse(
   });
 }
 
-describe("resolveByteResponse", () => {
-  it.each([
-    { header: "bytes=4-", start: 4, end: 9, contentLength: 6 },
-    { header: "bytes=-3", start: 7, end: 9, contentLength: 3 },
-  ])("resolves range $header", ({ header, start, end, contentLength }) => {
-    const plan = resolveImmutableResponse({ range: header });
-    expect(plan).toMatchObject({
-      kind: "partial",
-      statusCode: 206,
-      contentLength,
-      range: { start, end },
+const full = { kind: "full", statusCode: 200, contentLength: 10 };
+const unchanged = { kind: "not-modified", statusCode: 304 };
+const partial = (start: number, end: number) => ({
+  kind: "partial",
+  statusCode: 206,
+  contentLength: end - start + 1,
+  range: { start, end },
+});
+const ranged = { "if-range": ETAG, "if-none-match": '"stale"' };
+const since = { "if-modified-since": LAST_MODIFIED };
+type ResponseCase = [Record<string, string | string[]>, { statusCode: number }, string?];
+it.each([
+  [{ ...ranged, range: "bytes=4-" }, partial(4, 9)],
+  [{ ...ranged, range: "bytes=-3" }, partial(7, 9)],
+  [{ range: "bytes=broken" }, full],
+  [{ range: "bytes=0-1,4-5" }, full],
+  [{ ...since, "if-none-match": "" }, full],
+  [{ ...since, "if-none-match": '"different"' }, full],
+  [{ "if-none-match": "*" }, unchanged],
+  [{ "if-none-match": `"other", ${ETAG}` }, unchanged],
+  [{ "if-none-match": ['"other"', `W/${ETAG}`] }, unchanged],
+  [{ "if-none-match": 'W/"opaque,tag"' }, unchanged, '"opaque,tag"'],
+  [{ "if-none-match": '"opaque,tag"' }, unchanged, 'W/"opaque,tag"'],
+] satisfies ResponseCase[])(
+  "resolves conditional byte response %j",
+  (headers, expected, etag = ETAG) => {
+    const plan = resolveImmutableResponse(headers, {
+      validators: { ...IMMUTABLE_FILE.validators, etag },
     });
+    expect(plan).toMatchObject({ ...expected, etag, lastModified: LAST_MODIFIED });
     const { res, setHeader } = makeMockHttpResponse();
     writeByteHeaders(res, plan);
-    expect(res.statusCode).toBe(206);
-    expect(setHeader).toHaveBeenCalledWith("Last-Modified", LAST_MODIFIED);
-  });
-
-  it.each(["bytes=broken", "items=0-1", "bytes=0-1,4-5"])(
-    "falls back to a full response for malformed or multipart range %s",
-    (rangeHeader) => {
-      expect(resolveImmutableResponse({ range: rangeHeader })).toMatchObject({
-        ...FULL,
-        contentLength: 10,
-      });
-    },
-  );
-
-  it.each(["", '"different"'])(
-    "ignores If-Modified-Since whenever any If-None-Match field is present (%j)",
-    (ifNoneMatch) => {
-      expect(
-        resolveImmutableResponse({
-          "if-none-match": ifNoneMatch,
-          "if-modified-since": LAST_MODIFIED,
-        }),
-      ).toMatchObject(FULL);
-    },
-  );
-
-  it.each([
-    { etag: '"opaque,tag"', header: 'W/"opaque,tag"' },
-    { etag: 'W/"opaque,tag"', header: '"opaque,tag"' },
-  ])("weakly compares complete $header against $etag", ({ etag, header }) => {
-    expect(
-      resolveImmutableResponse(
-        { "if-none-match": header },
-        { validators: { ...IMMUTABLE_FILE.validators, etag } },
-      ),
-    ).toMatchObject(NOT_MODIFIED);
-  });
-
-  it.each([
-    { label: "wildcard", header: "*" },
-    { label: "list", header: `"other", ${ETAG}` },
-    { label: "multiple headers", header: ['"other"', `W/${ETAG}`] },
-  ])("returns 304 for a matching $label If-None-Match validator", ({ header }) => {
-    const plan = resolveImmutableResponse({ "if-none-match": header });
-    expect(plan).toEqual({ ...NOT_MODIFIED, etag: ETAG, lastModified: LAST_MODIFIED });
-    const { res, setHeader } = makeMockHttpResponse();
-    writeByteHeaders(res, plan);
-    expect(res.statusCode).toBe(304);
+    expect(res.statusCode).toBe(expected.statusCode);
     expect(Object.fromEntries(setHeader.mock.calls)).toMatchObject({
-      ETag: ETAG,
+      ETag: etag,
       "Last-Modified": LAST_MODIFIED,
     });
-    expect(setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
-  });
-
-  it("keeps the requested range when If-None-Match does not match", () => {
-    expect(
-      resolveImmutableResponse({
-        range: "bytes=1-2",
-        "if-range": ETAG,
-        "if-none-match": '"stale"',
-      }),
-    ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
-  });
-});
+    if (plan.kind === "not-modified") {
+      expect(setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+    }
+  },
+);
 
 describe("Gateway byte response descriptor lifecycle", () => {
   it.each(["client disconnect", "read revocation"] as const)(

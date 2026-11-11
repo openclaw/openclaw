@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
+import { emitNodeSecurityWarning } from "../../../node-version.mjs";
 import * as runtimePaths from "../../daemon/runtime-paths.js";
 import * as daemonService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
@@ -16,6 +17,7 @@ import { runtimeFixture } from "./update-command-fixtures.test-support.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
 import * as packageUpdate from "./update-command-package.js";
+import * as commandRun from "./update-command-run.js";
 import {
   expectedRuntimeRecoverySteps,
   stubNodeRuntime,
@@ -35,6 +37,61 @@ function expectUnstaged() {
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
 });
+it("does not repeat the startup certificate warning during update preparation", async () => {
+  const runtime = stubNodeRuntime();
+  Object.defineProperty(runtime.versions, "node", { value: "24.21.0" });
+  const warningKey = Symbol.for("openclaw.nodeSecurityWarningPrinted");
+  const globals = globalThis as unknown as Record<symbol, unknown>;
+  const prior = globals[warningKey];
+  delete globals[warningKey];
+  try {
+    emitNodeSecurityWarning(runtime.versions.node, defaultRuntime.error);
+    vi.mocked(commandRun.prepareUpdateCommand).mockRestore();
+    vi.spyOn(shared, "resolveUpdateRoot").mockRejectedValue(new Error("after runtime admission"));
+    await expect(commandRun.prepareUpdateCommand({ dryRun: true, json: true })).rejects.toThrow(
+      "after runtime admission",
+    );
+    const warnings = vi
+      .mocked(defaultRuntime.error)
+      .mock.calls.filter(([message]) => String(message).includes("SECURITY WARNING"));
+    expect(warnings).toHaveLength(1);
+    expectUnstaged();
+  } finally {
+    if (prior === undefined) {
+      delete globals[warningKey];
+    } else {
+      globals[warningKey] = prior;
+    }
+  }
+});
+
+it.each([
+  ["24.16.0", true],
+  ["26.1.0", false],
+] as const)(
+  "warns without refusing an update preview under compatible service Node %s",
+  async (version, json) => {
+    stubNodeRuntime();
+    fixture.managedServiceNodeRunner = process.execPath;
+    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue(
+      runtimeFixture(version, "3.53.0"),
+    );
+    vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
+      ...targetMetadata,
+      nodeEngine: ">=24.16.0 <25 || >=26.1.0",
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await updateCommand({ tag: targetMetadata.version, yes: true, dryRun: true, json });
+
+    const output = json ? JSON.stringify(lastJson()) : log.mock.calls.flat().join("\n");
+    expect(output).toContain("SECURITY WARNING");
+    expect(output).toContain(`Node.js ${version}`);
+    expect(output).not.toContain("Would refuse update");
+    expectUnstaged();
+  },
+);
+
 it.each([
   { name: "no restart", restart: false, debugCapture: true },
   { name: "replacement" },

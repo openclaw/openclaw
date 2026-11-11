@@ -1,7 +1,7 @@
-import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { getSessionControllerSourceIdentity } from "../../sessions/session-controller.identity.js";
 import {
   getRpcSourceForGateway,
   getRpcSourceIdentity,
@@ -12,7 +12,8 @@ import {
   stopSession,
   type SessionStopHookContext,
 } from "../../sessions/session-controller.stop.js";
-import { abortChatRunById, type ChatAbortOps } from "../chat-abort.js";
+import { notifySessionRunStopped } from "../../sessions/session-run-stopped.js";
+import { abortChatRunById, createChatAbortSignalReason, type ChatAbortOps } from "../chat-abort.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
 
 type ExactClientRunStopResult = {
@@ -20,6 +21,22 @@ type ExactClientRunStopResult = {
   descendants?: Awaited<ReturnType<typeof abortControlledSubagents>>;
   failure?: { error: unknown };
 };
+
+/** Retain the physical source across asynchronous Stop metadata preparation. */
+export function captureSourceAssertion(input: RpcSourceRef["input"], assertCurrent?: () => void) {
+  const selected = getSessionControllerSourceIdentity(input);
+  return () => {
+    assertCurrent?.();
+    const current = getSessionControllerSourceIdentity(input);
+    if (
+      current.sessionKey !== selected.sessionKey ||
+      current.sessionId !== selected.sessionId ||
+      current.agentId !== selected.agentId
+    ) {
+      throw new Error("Run changed before cancellation; retry Stop.");
+    }
+  };
+}
 
 /**
  * Stops one exact Gateway RPC run through Stop source `client-run`: its source
@@ -30,12 +47,20 @@ export async function stopExactClientRun(params: {
   cfg: OpenClawConfig;
   runId: string;
   active: RpcSourceRef;
+  userInitiated?: boolean;
+  lifecycleRevision?: string;
   assertCurrent?: () => void;
   hookContext: Omit<SessionStopHookContext, "sessionKey" | "sessionId">;
   /** Runs once the parent cancellation result is known. */
   afterParent?: () => void;
   /** Runs after the chat abort is prepared, before it commits. */
   onAbortPrepared?: () => (() => void) | void;
+  /**
+   * Explicit authorized chat Stop: announce the stopped run right before its cancellation
+   * commits. Absent for non-chat callers such as realtime talk, which keep their own Stop
+   * contract.
+   */
+  stoppedSession?: { agentId?: string; sessionKey: string };
   /** Records only this captured run's committed cancellation. */
   onAborted?: () => void;
 }): Promise<ExactClientRunStopResult> {
@@ -44,6 +69,7 @@ export async function stopExactClientRun(params: {
   const capture = captureSessionControllerStop({ inputs: [active.input] });
   const { sessionKey, sessionId, agentId } = getRpcSourceIdentity(active);
   const result: ExactClientRunStopResult = { aborted: false };
+  const assertSource = captureSourceAssertion(active.input, params.assertCurrent);
   const markAborted = () => {
     if (!result.aborted) {
       result.aborted = true;
@@ -51,18 +77,10 @@ export async function stopExactClientRun(params: {
     }
   };
   const assertCurrent = () => {
-    params.assertCurrent?.();
+    assertSource();
     const replacement = getRpcSourceForGateway(runId, getGatewayContextResolver(active.input));
-    if (replacement) {
-      const identity = getRpcSourceIdentity(replacement);
-      if (
-        replacement !== active ||
-        identity.sessionKey !== sessionKey ||
-        identity.sessionId !== sessionId ||
-        identity.agentId !== agentId
-      ) {
-        throw new Error("Run changed before cancellation; retry Stop.");
-      }
+    if (replacement && replacement !== active) {
+      throw new Error("Run changed before cancellation; retry Stop.");
     }
   };
   try {
@@ -70,7 +88,7 @@ export async function stopExactClientRun(params: {
       source: "client-run",
       capture,
       assertCurrent,
-      reason: createAgentRunDirectAbortError(),
+      reason: createChatAbortSignalReason("rpc", params.userInitiated),
       hookContext: { ...params.hookContext, sessionKey, sessionId },
       afterParent: params.afterParent,
       continueChildStop: () => result.aborted,
@@ -87,7 +105,18 @@ export async function stopExactClientRun(params: {
           cancel,
           assertCurrent,
           stopReason: "rpc",
-          onAbortPrepared: params.onAbortPrepared,
+          onAbortPrepared: () => {
+            // Announce before the run commits cancellation, so consumers act before its own
+            // completion arrives. The notification never fails Stop.
+            if (params.stoppedSession) {
+              notifySessionRunStopped({
+                source: "client-run",
+                sessions: [params.stoppedSession],
+                runIds: [runId],
+              });
+            }
+            return params.onAbortPrepared?.();
+          },
           onAbortCommitted: markAborted,
         }).aborted,
       stopChildren: async (applyParentStop) => {
@@ -97,6 +126,7 @@ export async function stopExactClientRun(params: {
           agentId,
           requesterTurnRunId: runId,
           sessionId,
+          lifecycleRevision: params.lifecycleRevision,
           assertCurrent,
           beforeKill: applyParentStop,
           parentStopAccepted: () => result.aborted,

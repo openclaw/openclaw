@@ -18,7 +18,7 @@ import { repairCanonicalSessionEntries } from "./doctor-session-delivery-state.j
  * never use a dashboard key, so they cannot match. Rows from before dashboard
  * roots were grouped under main lack the parent link and stay unstamped.
  */
-export function isUnstampedDashboardRoot(
+function isUnstampedDashboardRoot(
   entry: SessionEntry,
   sessionKey: string,
   cfg: OpenClawConfig,
@@ -41,7 +41,7 @@ export function isUnstampedDashboardRoot(
 }
 
 /** Record dashboard roots created before creation-time stamping as direct chats. */
-export function repairLegacyDashboardChatTypes(params: {
+export async function repairLegacyDashboardChatTypes(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -49,7 +49,7 @@ export function repairLegacyDashboardChatTypes(params: {
   integrityCheck?: "quick" | "full";
 }) {
   const sessionKeys: string[] = [];
-  const report = repairCanonicalSessionEntries({
+  const report = await repairCanonicalSessionEntries({
     ...params,
     updateDeliveryProjection: false,
     transform(entry, sessionKey, phase) {

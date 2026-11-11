@@ -39,9 +39,9 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
-import type { GatewayClient } from "./client.js";
+import type { GatewayClient, GatewayClientOptions } from "./client.js";
 import { GatewayStartupCleanupError } from "./server-shutdown.js";
-import { startGatewayServer, type GatewayServerOptions } from "./server.js";
+import { startGatewayServer, type GatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { reserveGatewayTestListener, startClaimedGateway } from "./test-helpers.listener.js";
 
@@ -69,6 +69,7 @@ export async function connectGatewayClient(params: {
   deviceIdentity?: DeviceIdentity;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
   onHelloOk?: (hello: HelloOk) => void;
+  onClose?: GatewayClientOptions["onClose"];
   connectChallengeTimeoutMs?: number;
   preauthHandshakeTimeoutMs?: number;
   requestTimeoutMs?: number;
@@ -136,6 +137,7 @@ export async function connectGatewayClient(params: {
       deviceIdentity,
       onEvent: params.onEvent,
       onHelloOk: params.onHelloOk,
+      onClose: params.onClose,
     },
     {
       // The Gateway answers or closes an unfinished handshake at its preauth deadline.
@@ -311,6 +313,8 @@ export async function startGatewayWithClient(
     clientDisplayName?: string;
     scopes?: string[];
     onEvent?: (evt: { event?: string; payload?: unknown }) => void;
+    beforeConnect?: (server: GatewayServer) => void | Promise<void>;
+    sidecarStartup?: GatewayServerOptions["sidecarStartup"];
     hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
     channelAutostartSuppression?: GatewayServerOptions["channelAutostartSuppression"];
     tryRecoverChannelAutostartSuppression?: GatewayServerOptions["tryRecoverChannelAutostartSuppression"];
@@ -343,6 +347,7 @@ export async function startGatewayWithClient(
         bind: "loopback",
         auth: params.auth ?? { mode: "token", token: params.token },
         controlUiEnabled: false,
+        sidecarStartup: params.sidecarStartup,
         hotReloadRecovery: params.hotReloadRecovery,
         channelAutostartSuppression: params.channelAutostartSuppression,
         tryRecoverChannelAutostartSuppression: params.tryRecoverChannelAutostartSuppression,
@@ -351,6 +356,7 @@ export async function startGatewayWithClient(
       ? await startClaimedGateway(secureClaim, start)
       : await listener!.start(start);
     server = startedServer;
+    await params.beforeConnect?.(startedServer);
     const client = await connectGatewayClient({
       url: `${params.secure ? "wss" : "ws"}://127.0.0.1:${port}`,
       token: params.token,

@@ -5,26 +5,6 @@ import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
-type CodexUsageResponse = {
-  rate_limit?: {
-    limit_reached?: boolean;
-    primary_window?: {
-      limit_window_seconds?: number;
-      used_percent?: number;
-      reset_at?: number;
-      reset_after_seconds?: number;
-    };
-    secondary_window?: {
-      limit_window_seconds?: number;
-      used_percent?: number;
-      reset_at?: number;
-      reset_after_seconds?: number;
-    };
-  };
-  plan_type?: string;
-  credits?: { balance?: number | string | null };
-};
-
 const WEEKLY_RESET_GAP_SECONDS = 3 * 24 * 60 * 60;
 
 export async function fetchCodexUsage(
@@ -64,7 +44,25 @@ export async function fetchCodexUsage(
   if (!parsed.ok) {
     return parsed.snapshot;
   }
-  const data = parsed.data as CodexUsageResponse;
+  const data = parsed.data as {
+    rate_limit?: {
+      limit_reached?: boolean;
+      primary_window?: {
+        limit_window_seconds?: number;
+        used_percent?: number;
+        reset_at?: number;
+        reset_after_seconds?: number;
+      };
+      secondary_window?: {
+        limit_window_seconds?: number;
+        used_percent?: number;
+        reset_at?: number;
+        reset_after_seconds?: number;
+      };
+    };
+    plan_type?: string;
+    credits?: { balance?: number | string | null };
+  };
   const windows: UsageWindow[] = [];
 
   for (const kind of ["primary_window", "secondary_window"] as const) {

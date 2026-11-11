@@ -1,6 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import { projectAgentActivityDelegation } from "../agents/agent-activity-delegation.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 export const NESTED_TOOL_ACTIVITY_CUSTOM_TYPE = "openclaw.nested-tool.v1";
@@ -49,6 +48,15 @@ export function readNestedToolActivity(value: unknown): NestedToolActivity | und
   return parsed.success ? parsed.data : undefined;
 }
 
+/**
+ * Reads the run's own activity even after a hidden turn (for example child coordination)
+ * cleared its display flag. Display readers keep using readNestedToolActivity.
+ */
+export function readOwnNestedToolActivity(value: unknown): NestedToolActivity | undefined {
+  const record = asOptionalRecord(value);
+  return readNestedToolActivity(record?.display === false ? { ...record, display: true } : value);
+}
+
 /** Keep each terminal activity bounded independently of provider context. */
 export function createNestedToolActivity(
   details: Omit<NestedToolActivity["details"], "result"> & { result: unknown },
@@ -56,12 +64,10 @@ export function createNestedToolActivity(
   const input = boundedJsonUtf8Bytes(details.input, 8_192).complete
     ? structuredClone(details.input)
     : "[Nested tool input omitted: exceeds display limit]";
-  const delegation = projectAgentActivityDelegation(details.toolName, details.result);
   const result = boundedJsonUtf8Bytes(details.result, 32_768).complete
     ? details.result
     : {
         content: [{ type: "text", text: "[Nested tool output omitted: exceeds display limit]" }],
-        ...(delegation ? { details: { delegation } } : {}),
       };
   return getActivitySchema().parse({
     role: "custom",

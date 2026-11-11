@@ -250,6 +250,13 @@ payload carrying an `error` key is always reported as `kind: "error"` with the
 raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
 
+Structured results share a 20,000-character budget for URLs and sanitized prose,
+excluding external-content envelopes. URLs are reserved first. Prose is allocated
+from shorter to longer sanitized rows without changing provider result order, so
+long early snippets cannot consume the entire budget before later rows receive a
+share. Sanitization expansion counts toward the budget; truncated output sets
+`truncated: true`.
+
 Perplexity, Tavily, and xAI HTTP errors retain the status code and bounded
 diagnostics, with reflected request credentials redacted. Review diagnostics
 before sharing them; redaction does not remove every kind of sensitive content.
@@ -283,7 +290,7 @@ API-backed providers first:
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 10. **Parallel** -- paid Parallel Search API via `PARALLEL_API_KEY` or `plugins.entries.parallel.config.webSearch.apiKey`; optional `plugins.entries.parallel.config.webSearch.baseUrl` overrides the endpoint (order 75)
 
-11. **DeepSeek** -- `DEEPSEEK_API_KEY`, `plugins.entries.deepseek.config.webSearch.apiKey`, or `models.providers.deepseek.apiKey` (order 80; install the official DeepSeek plugin first)
+11. **DeepSeek** -- `DEEPSEEK_API_KEY`, `plugins.entries.deepseek.config.webSearch.apiKey`, or `models.providers.deepseek.apiKey` while that provider and its models use `https://api.deepseek.com` (order 80; install the official DeepSeek plugin first)
 
 Configured endpoint providers after that:
 
@@ -622,10 +629,13 @@ active for the turn that actually calls it.
 
 ### x_search config
 
-With `enabled` omitted, `x_search` is exposed only when the active model's
-provider is `xai` and xAI credentials resolve. For an active model with a known
-non-xAI provider, set `plugins.entries.xai.config.xSearch.enabled` to `true` to
-opt in to cross-provider use. If the active model provider is missing or
+With `enabled` omitted, `x_search` is exposed when the active model's provider
+is `xai` and xAI credentials resolve. It is also exposed for a known non-xAI
+model provider when you signed in with Grok OAuth: those searches use only the
+OAuth credential, which draws on your SuperGrok or X Premium subscription, and
+never fall back to an API key. To use an xAI API key with a non-xAI model, set
+`plugins.entries.xai.config.xSearch.enabled` to `true` to opt in to
+cross-provider API billing. If the active model provider is missing or
 unresolved, the tool stays hidden. Set `enabled` to `false` to disable it for
 every provider. xAI credentials are always required.
 
@@ -636,7 +646,7 @@ every provider. xAI credentials are always required.
       xai: {
         config: {
           xSearch: {
-            enabled: true, // required for a known non-xAI model provider
+            enabled: true, // API-key billing with a non-xAI model; Grok OAuth needs no opt-in
             model: "grok-4.3",
             baseUrl: "https://api.x.ai/v1", // optional, overrides webSearch.baseUrl
             inlineCitations: false,
@@ -678,6 +688,10 @@ expiry.
 | `enable_video_understanding` | Let xAI inspect videos attached to matching posts      |
 
 `allowed_x_handles` and `excluded_x_handles` are mutually exclusive.
+
+Date bounds are inclusive UTC calendar days. OpenClaw sends the following UTC day
+as xAI's exclusive `to_date` bound; the date reported in the tool result remains
+the date you supplied.
 
 ### x_search example
 

@@ -13,6 +13,8 @@ import {
 } from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   DocsLink,
   SettingsEmpty,
@@ -27,7 +29,7 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
@@ -492,10 +494,20 @@ export function CloudWorkersPage() {
             title={t("cloudWorkersPage.fields.operatingSystem")}
             description={t("cloudWorkersPage.fields.operatingSystemHelp")}
             control={
-              <select
-                class="settings-select"
+              <SettingsSelect
                 aria-label={t("cloudWorkersPage.fields.operatingSystem")}
                 value={view.draft.target}
+                options={[
+                  { value: "", label: t("cloudWorkersPage.fields.providerDefault") },
+                  ...systems().map((system) => ({
+                    value: system.id,
+                    label: `${system.label}${system.disabledReason ? ` — ${system.disabledReason}` : ""}`,
+                    disabled: Boolean(system.disabledReason),
+                  })),
+                  ...(unadvertised()
+                    ? [{ value: view.draft.target, label: view.draft.target }]
+                    : []),
+                ]}
                 disabled={saving()}
                 onChange={(event) => {
                   const target = event.currentTarget.value;
@@ -503,28 +515,7 @@ export function CloudWorkersPage() {
                     patchDraft({ target });
                   }
                 }}
-              >
-                <option value="" selected={!view.draft.target}>
-                  {t("cloudWorkersPage.fields.providerDefault")}
-                </option>
-                <For each={systems()}>
-                  {(system) => (
-                    <option
-                      value={system.id}
-                      selected={view.draft.target === system.id}
-                      disabled={Boolean(system.disabledReason)}
-                    >
-                      {system.label}
-                      {system.disabledReason ? ` — ${system.disabledReason}` : ""}
-                    </option>
-                  )}
-                </For>
-                <Show when={unadvertised()}>
-                  <option value={view.draft.target} selected>
-                    {view.draft.target}
-                  </option>
-                </Show>
-              </select>
+              />
             }
           />
         </Show>
@@ -619,23 +610,36 @@ export function CloudWorkersPage() {
           machines={() => (
             <>
               <Show when={!hasManageAccess()}>
-                <div class="callout warning" role="note">
-                  {t("cloudWorkersPage.adminRequired")}
-                </div>
+                <InlineAlert tone="warning" role="note">
+                  {t(
+                    !gateway.connected
+                      ? "cloudWorkersPage.reconnectRequired"
+                      : canPresentGatewayMethod(
+                            gateway.snapshot,
+                            "config.patch",
+                            "operator.admin",
+                            {
+                              requireAdvertisement: false,
+                            },
+                          )
+                        ? "cloudWorkersPage.unavailableAccess"
+                        : "cloudWorkersPage.adminRequired",
+                  )}
+                </InlineAlert>
               </Show>
               <Errored
                 fallback={(error) => (
-                  <div class="callout warning" role="status">
+                  <InlineAlert tone="warning" role="status">
                     {t("cloudWorkersPage.catalogFailed", { error: formatUiError(error()) })}
-                  </div>
+                  </InlineAlert>
                 )}
               >
                 <Loading on={catalogLoad()}>{catalogCompletion()}</Loading>
               </Errored>
               <Show when={saveState().error && !view.editor}>
-                <div class="callout warning" role="alert">
+                <InlineAlert tone="warning" role="alert">
                   {saveState().error}
-                </div>
+                </InlineAlert>
               </Show>
               <Show when={saveState().notice}>
                 <div class="callout" role="status">

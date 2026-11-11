@@ -8,6 +8,7 @@ import {
   projectAgentToolActivity,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import { peekAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { extractLiveExecOutput } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -93,6 +94,7 @@ export function handleToolExecutionUpdate(
   }
   const explicitHideFromChannelProgress =
     evt.hideFromChannelProgress === true || startData?.hideFromChannelProgress === true;
+  const routineAutomation = readAutomationDisplayState(ctx.params.runId) !== "ordinary";
   const partial = evt.partialResult;
   const isExecTool = isExecToolName(toolName);
   const toolMeta = ctx.state.toolMetaById.get(toolCallId);
@@ -101,12 +103,14 @@ export function handleToolExecutionUpdate(
         name: toolName,
         meta: toolMeta?.meta,
         commandBearing: toolMeta?.commandBearing,
-        hideFromChannelProgress: explicitHideFromChannelProgress,
+        hideFromChannelProgress: explicitHideFromChannelProgress || routineAutomation,
       })
     : undefined;
   const execUpdate = execProgress?.update;
   const liveResult = isExecTool ? execUpdate?.result : sanitizeToolResult(partial);
   const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
+  const hideFromChannelProgress =
+    explicitHideFromChannelProgress || (routineAutomation && !toolProgress);
   const itemData = {
     ...projectAgentToolActivity({
       toolCallId,
@@ -114,7 +118,7 @@ export function handleToolExecutionUpdate(
       phase: "update",
       args,
       meta: toolMeta?.meta,
-      hideFromChannelProgress: explicitHideFromChannelProgress,
+      hideFromChannelProgress,
     }),
     commandBearing: toolMeta?.commandBearing,
     ...(toolProgress ? { progressText: toolProgress, meta: undefined } : {}),
@@ -125,7 +129,7 @@ export function handleToolExecutionUpdate(
     toolCallId,
     ...(parentToolCallId ? { parentToolCallId } : {}),
     ...(includeResult ? { partialResult: liveResult } : {}),
-    ...(explicitHideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
   });
   // Typed progress already has a sanitized path; suppress duplicate raw previews.
   const emitDetailedLiveUpdate = !toolProgress && (!isExecTool || execUpdate !== undefined);

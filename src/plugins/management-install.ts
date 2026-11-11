@@ -5,8 +5,11 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  buildNpmResolutionFields,
+  parseRegistryNpmSpec,
+  type NpmSpecResolution,
+} from "../infra/npm-registry-spec.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveCompatibilityHostVersion, VERSION } from "../version.js";
@@ -57,7 +60,7 @@ import {
 import type { PluginLifecycleRuntimeApply } from "./lifecycle.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import { getOfficialExternalPluginCatalogEntryForPackage } from "./official-external-plugin-catalog.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 
 export type ManagedPluginSourceInstallRequest =
   | {
@@ -185,7 +188,7 @@ async function resolveOfficialManagedInstallSpec(params: {
   if (request.source === "npm" && updateChannel !== "beta" && updateChannel !== "extended-stable") {
     return null;
   }
-  const specs =
+  const clawhub =
     request.source === "clawhub"
       ? resolveClawHubInstallSpecsForUpdateChannel({
           spec: request.recordSpec ?? request.spec,
@@ -194,17 +197,21 @@ async function resolveOfficialManagedInstallSpec(params: {
           coreVersion: resolveCompatibilityHostVersion(),
           preferCoreVersion: true,
         })
-      : await resolveNpmInstallSpecsForUpdateChannel({
-          spec: request.spec,
-          updateChannel,
-          officialPackageName: packageName,
-          coreVersion: VERSION,
-        });
+      : undefined;
+  const specs =
+    clawhub ??
+    (await resolveNpmInstallSpecsForUpdateChannel({
+      spec: request.spec,
+      updateChannel,
+      officialPackageName: packageName,
+      coreVersion: VERSION,
+    }));
   return specs.installSpec === request.spec || specs.installSpec === request.recordSpec
     ? null
     : {
         ...specs,
-        fallbackSpec: updateChannel === "stable" && specs.fallbackSpec ? request.spec : undefined,
+        fallbackSpec:
+          updateChannel === "stable" && clawhub?.fallbackSpec ? request.spec : undefined,
       };
 }
 
@@ -241,8 +248,8 @@ export type ManagedPluginInstallOptions = Omit<
   | "requireCapabilityConsent"
   | "requireClawHubTrust"
 > & {
-  /** The enclosing Claw coordinator owns its package lease and adoption record. */
-  clawManaged?: boolean;
+  /** The enclosing Template coordinator owns its package lease and adoption record. */
+  templateManaged?: boolean;
   snapshot?: ConfigSnapshotForInstallPersist;
   signal?: AbortSignal;
   confirmInstall?: (warning?: string) => Promise<boolean>;
@@ -258,12 +265,20 @@ export async function installManagedPluginSource(
           clawhubUrl: resolveClawHubBaseUrl(input.request.clawhubUrl, input.env),
         }
       : input.request;
-  return await withPluginLifecycleLease({ env: input.env }, async (lease) => {
-    const assertOwned = lease.assertOwned;
+  return await withPluginLifecycleLeaseAsync({ env: input.env }, async (lease) => {
+    const assertCurrent = lease.assertCurrent;
+    const prepareSettlement = () => lease.assertOwned();
     const params = {
       ...input,
       request,
-      beforePersistentApply: composeConfigWriteAssertions(input.beforePersistentApply, assertOwned),
+      beforePersistentApply: composeConfigWriteAssertions(
+        input.beforePersistentApply,
+        assertCurrent,
+      ),
+      beforePersistentEffect: async () => {
+        await input.beforePersistentEffect?.();
+        await lease.assertOwned();
+      },
     };
     if (request.source === "official") {
       const { attempt: installAttempt, source: installedSource } = await installWithSourceFallback({
@@ -295,7 +310,11 @@ export async function installManagedPluginSource(
         : { ...installAttempt, installSource: installedSource };
     }
     if (request.source !== "npm" && request.source !== "clawhub") {
-      return await installResolvedManagedPluginSource({ ...params, request }, assertOwned);
+      return await installResolvedManagedPluginSource(
+        { ...params, request },
+        assertCurrent,
+        prepareSettlement,
+      );
     }
     let specs: Awaited<ReturnType<typeof resolveOfficialManagedInstallSpec>>;
     try {
@@ -310,28 +329,37 @@ export async function installManagedPluginSource(
       return { ok: false, error: error.message, code: error.code };
     }
     if (!specs) {
-      return await installResolvedManagedPluginSource({ ...params, request }, assertOwned);
+      return await installResolvedManagedPluginSource(
+        { ...params, request },
+        assertCurrent,
+        prepareSettlement,
+      );
     }
     const isUnavailableTarget =
       request.source === "clawhub" ? isUnavailableClawHubTarget : isUnavailableNpmTarget;
-    const result = await installWithChannelFallback({
-      ...specs,
-      install: (spec) =>
-        installResolvedManagedPluginSource(
-          {
-            ...params,
-            request: {
-              ...request,
-              spec,
-              recordSpec: request.recordSpec ?? request.spec,
-              expectedIntegrity: spec === request.spec ? request.expectedIntegrity : undefined,
-            },
+    const install = (spec: string) =>
+      installResolvedManagedPluginSource(
+        {
+          ...params,
+          request: {
+            ...request,
+            spec,
+            recordSpec: request.recordSpec ?? request.spec,
+            expectedIntegrity: spec === request.spec ? request.expectedIntegrity : undefined,
           },
-          assertOwned,
-        ),
-      isRetryable: (attempt) => !attempt.ok && isUnavailableTarget(attempt),
-      onFallback: (message) => params.logger?.warn?.(message),
-    });
+        },
+        assertCurrent,
+        prepareSettlement,
+      );
+    const result =
+      request.source === "npm"
+        ? await install(specs.installSpec)
+        : await installWithChannelFallback({
+            ...specs,
+            install,
+            isRetryable: (attempt) => !attempt.ok && isUnavailableClawHubTarget(attempt),
+            onFallback: (message) => params.logger?.warn?.(message),
+          });
     if (result.ok || !isUnavailableTarget(result)) {
       return result;
     }
@@ -349,6 +377,7 @@ async function installResolvedManagedPluginSource(
     request: Exclude<ManagedPluginSourceInstallRequest, { source: "official" }>;
   },
   assertOwned: () => void,
+  prepareSettlement: () => void | Promise<void>,
 ): Promise<ManagedPluginSourceInstallResult> {
   const { request } = params;
   const env = params.env ?? process.env;
@@ -425,6 +454,7 @@ async function installResolvedManagedPluginSource(
     },
     undefined,
     assertOwned,
+    prepareSettlement,
   );
   const complete = async <T extends SourceInstallerResult>(
     installResult: Promise<T>,

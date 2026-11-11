@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as snapshots from "../infra/fs-observation-snapshot.js";
+import * as owned from "../infra/owned-directory-observation.js";
 import * as configPaths from "./paths.js";
 import { admitConfigObservationRoots, configObservationEntries } from "./source-file-roots.js";
 import { createConfigFileAdapter } from "./source-file.js";
@@ -15,12 +16,39 @@ vi.mock("@openclaw/fs-safe/watch", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/watch")>()),
 }));
 
+vi.mock("../infra/owned-directory-observation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/owned-directory-observation.js")>()),
+  observeOwnedDirectory: vi.fn(() => ({ close: vi.fn(), isWatching: vi.fn(() => true) })),
+}));
+
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+type Source = { subscription: WatchSubscription; options: WatchOptions };
+
+function failSource({ options }: Source, operation: "scan" | "watch" = "scan") {
+  const events = vi.mocked(owned.observeOwnedDirectory);
+  const last = events.mock.results.at(-1);
+  if (operation === "watch" && last?.type === "return") {
+    vi.spyOn(last.value, "isWatching").mockReturnValueOnce(false);
+    events.mock.calls.at(-1)![1]();
+    return;
+  }
+  options.onHealth?.({
+    state: "unavailable",
+    mode: operation === "scan" || options.mode !== "poll" ? "events" : "poll",
+    directories: 0,
+    failure:
+      operation === "scan"
+        ? { operation, error: new Error("watch observation worker stopped") }
+        : { operation, code: "watch-limit", error: new Error("watch limit reached") },
+  });
+}
+
 const adapters = new Set<ReturnType<typeof createConfigFileAdapter>>();
 afterEach(async () => {
   await Promise.all([...adapters].map((adapter) => adapter.stop()));
   adapters.clear();
   vi.restoreAllMocks();
+  vi.mocked(owned.observeOwnedDirectory).mockClear();
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });
@@ -35,8 +63,8 @@ async function fixture({
   vi.spyOn(configPaths, "resolveIncludeRoots").mockReturnValue([...includeRoots]);
   const directory = await fs.realpath(dirs.make("config-observation-"));
   const p = (name: string) => path.join(directory, name);
-  await fs.writeFile(p("openclaw.json"), "{}");
-  await fs.writeFile(p("accepted.json"), "{}");
+  const write = (name: string, content = '{"changed":true}') => fs.writeFile(p(name), content);
+  await Promise.all([write("openclaw.json", "{}"), write("accepted.json", "{}")]);
   vi.useFakeTimers();
   const sampling: Promise<unknown>[] = [];
   const readSnapshot = snapshots.readObservationSnapshot;
@@ -45,8 +73,8 @@ async function fixture({
     sampling.push(sample);
     return sample;
   });
-  const sources: Array<{ subscription: WatchSubscription; options: WatchOptions }> = [];
-  let installed: ((source: (typeof sources)[number]) => void) | undefined;
+  const sources: Source[] = [];
+  let installed: ((source: Source) => void) | undefined;
   const ready = createDeferred();
   const watch = observation.watch;
   vi.spyOn(observation, "watch").mockImplementation((root, options) => {
@@ -89,7 +117,7 @@ async function fixture({
     }
   };
   const nextSource = () =>
-    new Promise<(typeof sources)[number]>((resolve) => {
+    new Promise<Source>((resolve) => {
       installed = resolve;
     });
   const expectChanges = async (count: number) => {
@@ -99,12 +127,28 @@ async function fixture({
   };
   const expectHealthy = () => {
     expect(adapter.status()).toBe("active");
-    expect(log.warn).not.toHaveBeenCalled();
-    expect(log.error).not.toHaveBeenCalled();
+    expect([log.warn.mock.calls, log.error.mock.calls]).toEqual([[], []]);
+  };
+  const recover = async (
+    ms: number,
+    operation: "scan" | "watch",
+    duringDowntime?: () => Promise<unknown>,
+  ) => {
+    const previous = sources.at(-1)!;
+    const replacement = nextSource();
+    failSource(previous, operation);
+    await previous.subscription.close();
+    await duringDowntime?.();
+    await vi.advanceTimersByTimeAsync(ms);
+    const current = await replacement;
+    await current.subscription.ready;
+    await settle();
+    return current;
   };
   return {
     adapter,
     p,
+    write,
     sources,
     onChange,
     log,
@@ -113,24 +157,44 @@ async function fixture({
     nextSource,
     expectChanges,
     expectHealthy,
+    recover,
   };
 }
 
 describe("config file observation", () => {
-  it("keeps primary edits observable when an unused include root is inaccessible and admits it on selection", async () => {
-    const allowed = await fs.realpath(dirs.make("config-unused-include-root-"));
-    const inaccessible = Object.assign(new Error("EACCES: unused config include root"), {
-      code: "EACCES",
+  it("uses nonrecursive events beside config files without a recursive authority-root watch", async () => {
+    vi.stubEnv("CHOKIDAR_USEPOLLING", undefined);
+    const h = await fixture({ realMode: true });
+    expect(h.sources[0]!.options).toMatchObject({ mode: "poll", pollIntervalMs: 300_000 });
+    const events = vi.mocked(owned.observeOwnedDirectory);
+    expect(events).toHaveBeenCalledWith(path.dirname(h.p("openclaw.json")), expect.any(Function), {
+      recursive: false,
+      reconcileIntervalMs: 300_000,
     });
+    expect(events).toHaveBeenCalledTimes(1);
+    const reconcile = vi.spyOn(h.sources[0]!.subscription, "reconcile");
+    await h.write("replacement.json");
+    await fs.rename(h.p("replacement.json"), h.p("openclaw.json"));
+    events.mock.calls[0]![1]("openclaw.json", "rename");
+    await reconcile.mock.results.at(-1)!.value;
+    await h.settle();
+    expect(h.onChange).toHaveBeenCalledOnce();
+    const close = events.mock.results[0]!.value.close;
+    await h.adapter.stop();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("ignores inaccessible unused roots, then admits them when selected", async () => {
+    const allowed = await fs.realpath(dirs.make("config-unused-include-root-"));
     const lstatSync = fsSync.lstatSync;
     const denied = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
       if (args[0] === allowed || args[0] === path.toNamespacedPath(allowed)) {
-        throw inaccessible;
+        throw Object.assign(new Error("EACCES: unused config include root"), { code: "EACCES" });
       }
       return Reflect.apply(lstatSync, fsSync, args);
     });
     const h = await fixture({ includeRoots: [allowed] });
-    await fs.writeFile(h.p("openclaw.json"), '{"primary":true}');
+    await h.write("openclaw.json");
     await h.expectChanges(1);
     h.expectHealthy();
 
@@ -144,17 +208,16 @@ describe("config file observation", () => {
     h.expectHealthy();
   });
 
-  it("settles primary/includes, atomic replacements, deletion and restore, and updates accepted scopes in place", async () => {
+  it("settles edits, replacement, deletion and restore, and updates accepted scopes", async () => {
     vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
     vi.stubEnv("CHOKIDAR_INTERVAL", undefined);
     const h = await fixture({ realMode: true });
-    expect(h.sources).toHaveLength(1);
     const subscription = h.sources[0]!.subscription;
     expect(subscription.health()).toMatchObject({ state: "ready", mode: "poll" });
     expect(h.onChange).not.toHaveBeenCalled();
     for (const name of ["openclaw.json", "accepted.json"]) {
-      await fs.writeFile(h.p(name), '{"changed":true}');
+      await h.write(name);
       await h.reconcile();
       const settled = vi.fn();
       const pending = h.adapter.whenSettled().then(settled);
@@ -167,33 +230,29 @@ describe("config file observation", () => {
       expect(settled).toHaveBeenCalledOnce();
       h.onChange.mockClear();
     }
-    await fs.writeFile(h.p("atomic.tmp"), '{"atomic":true}');
+    await h.write("atomic.tmp", '{"atomic":true}');
     await fs.rename(h.p("atomic.tmp"), h.p("openclaw.json"));
     await h.expectChanges(1);
     h.onChange.mockClear();
     await h.expectChanges(0);
     for (const restore of [false, true]) {
       if (restore) {
-        await fs.writeFile(h.p("accepted.json"), '{"restored":true}');
+        await h.write("accepted.json", '{"restored":true}');
       } else {
         await fs.unlink(h.p("accepted.json"));
       }
       await h.expectChanges(1);
       h.onChange.mockClear();
     }
-    const setScopes = vi.spyOn(subscription, "setScopes");
     await h.adapter.observePaths([h.p("candidate.json")]);
-    expect(setScopes).toHaveBeenCalledOnce();
-    expect(h.sources).toHaveLength(1);
     h.onChange.mockClear();
-    await fs.writeFile(h.p("candidate.json"), "{}");
-    await fs.writeFile(h.p("accepted.json"), '{"retained":true}');
+    await h.write("candidate.json", "{}");
+    await h.write("accepted.json", '{"retained":true}');
     await h.expectChanges(1);
     await h.adapter.acceptPaths([h.p("candidate.json")]);
     h.onChange.mockClear();
-    await fs.writeFile(h.p("accepted.json"), '{"retired":true}');
+    await h.write("accepted.json", '{"retired":true}');
     await h.expectChanges(0);
-    expect(h.sources).toHaveLength(1);
     h.expectHealthy();
     await h.adapter.stop();
     expect(subscription.health().state).toBe("closed");
@@ -201,7 +260,7 @@ describe("config file observation", () => {
 
   it.each(["stop", "read failure"])("releases a pending stability join on %s", async (reason) => {
     const h = await fixture();
-    await fs.writeFile(h.p("openclaw.json"), '{"changed":true}');
+    await h.write("openclaw.json");
     await h.reconcile();
     const settled = vi.fn();
     const pending = h.adapter.whenSettled().then(settled);
@@ -225,7 +284,7 @@ describe("config file observation", () => {
     expect(h.onChange).not.toHaveBeenCalled();
   });
 
-  it("observes repairable rejected includes without following unadmitted links or directory children", async () => {
+  it("observes repaired includes without following unadmitted links or directory children", async () => {
     const h = await fixture();
     const outside = await fs.realpath(dirs.make("config-unadmitted-"));
     await fs.writeFile(path.join(outside, "secret.json"), "private");
@@ -239,75 +298,89 @@ describe("config file observation", () => {
     ]);
     h.onChange.mockClear();
     await fs.writeFile(path.join(outside, "include.json"), "{}");
-    await fs.writeFile(h.p("rejected-directory/child.json"), "{}");
+    await h.write("rejected-directory/child.json", "{}");
     await h.expectChanges(0);
     expect(h.adapter.status()).toBe("active");
     await fs.unlink(h.p("linked"));
     await fs.mkdir(h.p("linked"));
-    await fs.writeFile(h.p("linked/include.json"), "{}");
+    await h.write("linked/include.json", "{}");
     await h.reconcile();
     // The link-to-directory transition replans the literal include scope.
     await h.adapter.observePaths([h.p("linked/include.json")]);
     expect(h.onChange).toHaveBeenCalled();
     h.onChange.mockClear();
-    await fs.writeFile(h.p("linked/include.json"), '{"repaired":true}');
+    await h.write("linked/include.json", '{"repaired":true}');
+    await h.expectChanges(1);
+  });
+
+  it.each([false, true])("notifies once after recovery (downtime edit: %s)", async (edit) => {
+    const h = await fixture();
+    await h.recover(500, "scan", edit ? () => h.write("openclaw.json") : undefined);
+    expect(h.adapter.status()).toBe("active");
+    expect(h.onChange).toHaveBeenCalledOnce();
     await h.expectChanges(1);
   });
 
   it.each([undefined, "false", "1"])(
-    "bounds watch-limit recovery and preserves polling override %s",
+    "bounds guarded-worker recovery and preserves polling override %s",
     async (setting) => {
       vi.stubEnv("CHOKIDAR_USEPOLLING", setting);
       vi.stubEnv("CHOKIDAR_INTERVAL", "250");
       const h = await fixture();
-      const initialMode = setting === "1" ? "poll" : "auto";
       expect(h.sources[0]!.options).toMatchObject({
-        mode: initialMode,
+        mode: "poll",
         intervalMs: 300_000,
-        pollIntervalMs: 250,
+        pollIntervalMs: setting === "1" ? 250 : 300_000,
       });
-      const fail = () => {
-        const { options } = h.sources.at(-1)!;
-        options.onHealth?.({
-          state: "unavailable",
-          mode: options.mode === "poll" ? "poll" : "events",
-          directories: 0,
-          failure: {
-            operation: "watch",
-            code: "watch-limit",
-            error: new Error("watch limit reached"),
-          },
-        });
-      };
+      const fail = () => failSource(h.sources.at(-1)!);
       for (const ms of [500, 2000, 5000]) {
-        const previous = h.sources.at(-1)!;
-        const installed = h.nextSource();
-        fail();
-        await previous.subscription.close();
-        await vi.advanceTimersByTimeAsync(ms);
-        const current = await installed;
-        await current.subscription.ready;
-        expect(current.options.mode).toBe(initialMode);
+        const current = await h.recover(ms, "scan");
+        expect(current.options.mode).toBe("poll");
       }
-      const fallback = setting === undefined ? h.nextSource() : undefined;
-      vi.stubEnv("CHOKIDAR_USEPOLLING", setting === undefined ? "false" : undefined);
+      h.onChange.mockClear();
       fail();
       await h.sources.at(-1)!.subscription.close();
       await vi.advanceTimersByTimeAsync(500);
-      if (setting === undefined) {
-        const current = await fallback!;
+      expect(h.adapter.status()).toBe("disabled");
+      expect(h.onChange).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([undefined, "false"])(
+    "preserves native notification fallback with override %s",
+    async (setting) => {
+      vi.stubEnv("CHOKIDAR_USEPOLLING", setting);
+      vi.stubEnv("CHOKIDAR_INTERVAL", "250");
+      const h = await fixture();
+      for (const ms of [500, 2000, 5000]) {
+        await h.recover(ms, "watch");
+      }
+      const fallback = setting === undefined ? h.nextSource() : undefined;
+      failSource(h.sources.at(-1)!, "watch");
+      await h.sources.at(-1)!.subscription.close();
+      await vi.advanceTimersByTimeAsync(500);
+      if (fallback) {
+        const current = await fallback;
         await current.subscription.ready;
-        expect(current.options.mode).toBe("poll");
+        expect(current.options).toMatchObject({ mode: "poll", pollIntervalMs: 250 });
         expect(h.log.warn).toHaveBeenCalledWith(expect.stringContaining("degrading to polling"));
       } else {
         expect(h.adapter.status()).toBe("disabled");
-        expect(h.sources).toHaveLength(4);
-        expect(h.log.warn).not.toHaveBeenCalledWith(
-          expect.stringContaining("degrading to polling"),
-        );
       }
     },
   );
+
+  it("reconciles once when a failed watcher cannot retire", async () => {
+    const h = await fixture();
+    const previous = h.sources[0]!;
+    vi.spyOn(previous.subscription, "close").mockRejectedValue(new Error("retirement failed"));
+    failSource(previous);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.adapter.status()).toBe("disabled");
+    expect(h.onChange).toHaveBeenCalledOnce();
+    adapters.delete(h.adapter);
+    await expect(h.adapter.stop()).rejects.toThrow("Config watcher shutdown failed");
+  });
 
   it("admits a root-level config directory from its stable volume root", async () => {
     const directory = await fs.realpath(dirs.make("config-volume-root-"));

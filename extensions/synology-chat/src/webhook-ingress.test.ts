@@ -170,10 +170,7 @@ describe("Synology Chat durable ingress", () => {
 
   it("waits for active delivery before stop returns and leaves shutdown retryable", async () => {
     await withQueue(async (queue, start) => {
-      let releaseDelivery = () => {};
-      const deliveryGate = new Promise<void>((resolve) => {
-        releaseDelivery = resolve;
-      });
+      const { promise: deliveryGate, resolve: releaseDelivery } = Promise.withResolvers<void>();
       const dispatch = vi.fn(async () => {
         await deliveryGate;
       });

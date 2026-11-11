@@ -29,6 +29,7 @@ import {
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import type { AcceptedWorkerInferenceSessionDrain } from "./inference-control-internal.js";
 import {
   createWorkerInferenceStore,
@@ -51,24 +52,18 @@ const REQUEST: WorkerInferenceStartParams = {
   context: { messages: [] },
   options: {},
 };
-const IDENTITY: WorkerConnectionIdentity = {
-  environmentId: ENVIRONMENT_ID,
+const TURN_CLAIM: NonNullable<WorkerConnectionIdentity["turnClaim"]> = {
+  sessionId: REQUEST.sessionId,
+  claimId: "claim-store",
+  runId: REQUEST.runId,
+  placementGeneration: 4,
+  owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: REQUEST.runEpoch },
+};
+const IDENTITY: WorkerConnectionIdentity = createWorkerConnectionIdentity(TURN_CLAIM, {
   credentialHash: ["fixture", "digest"].join("-"),
   bundleHash: ["fixture", "bundle", "digest"].join("-"),
-  sessionId: REQUEST.sessionId,
-  runId: REQUEST.runId,
-  turnClaim: {
-    sessionId: REQUEST.sessionId,
-    claimId: "claim-store",
-    runId: REQUEST.runId,
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: REQUEST.runEpoch },
-  },
-  ownerEpoch: REQUEST.runEpoch,
-  rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
-  credentialExpiresAtMs: 10_000,
-};
+});
 const PROVIDER_ERROR: WorkerInferenceTerminalOutcome = {
   type: "error",
   reason: "provider-error",

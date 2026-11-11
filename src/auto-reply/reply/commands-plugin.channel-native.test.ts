@@ -8,12 +8,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as EmbeddedAgent from "../../agents/embedded-agent.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { prepareSubagentRunsByRunIds } from "../../agents/subagents/registry/subagent-registry.js";
 import {
-  enqueueSwarmRun,
+  closeSwarmScheduler,
   isSwarmRunActive,
   listSwarmRunReservationIds,
   releaseSwarmRun,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -25,12 +27,18 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
+import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
+import { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -49,6 +57,7 @@ import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { dispatchInboundMessage } from "../dispatch.js";
 import type { ReplyPayload } from "../types.js";
+import { createReplyAgentDefaults } from "./get-reply-config.test-support.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
@@ -56,8 +65,7 @@ vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof EmbeddedAgent>()),
   runEmbeddedAgent: vi.fn(),
 }));
-// Native children need a model choice; this isolated state has no provider catalog. Children
-// never launch here, so the stubbed choice is not the behavior under test.
+// Children never launch; the isolated fixture has no provider catalog.
 const modelChoice = vi.hoisted(() => ({ stub: false }));
 vi.mock("../../agents/model-runtime-choice.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/model-runtime-choice.js")>();
@@ -77,48 +85,39 @@ type Sender = {
   senderId?: string;
   verified?: boolean;
   commandAuthorized?: boolean;
-  /** Another linked operator's authority, supplied by a caller instead of this ingress. */
   foreignOperatorAuthority?: true;
 };
 
-/** Committed changes to the sender's operator authority, each through its production owner. */
 type AuthorityChange = "demotion" | "role removal" | "identity unlink";
 
 type Fixture = {
   handler: ReturnType<typeof vi.fn<Handler>>;
   probe: (ctx: PluginCommandContext) => Promise<Probe>;
-  /** Sends text through the real channel ingress, dispatch, reply resolver and command owner. */
   send: (body: string, sender?: Sender) => Promise<(string | undefined)[]>;
   userInputs: () => Promise<unknown[]>;
   userInputKeys: () => Promise<string[]>;
   demoteAdmin: () => void;
-  /** Applies and publishes a change as the users.setRole and identity Gateway methods do. */
   changeAuthority: (change: AuthorityChange) => Promise<void>;
-  /** Narrows the admin role in committed config without publishing a policy change. */
   narrowAdminRoleUnannounced: () => void;
-  /** Another linked administrator, unrelated to the sender's authority. */
   otherAdminProfileId: string;
-  /** Fills the command turn's native lane before its first spawn reserves a slot. */
   holdChildCapacity: () => { release: () => void; expectQueued: (runId: string) => void };
 };
 
-// A third-party plugin loaded from disk. Its handler is the only test-owned code on the
-// path: ingress authority, command dispatch, transcript commitment and native policy all
-// use their production owners. Nothing injects a run id, recorder or request scope.
+// Only the disk-loaded plugin handler is test-owned; ingress, persistence and policy are real.
 async function withChannelCommandPlugin(
   run: (fixture: Fixture) => Promise<void>,
   options: {
     commandsAllowFrom?: string[];
     channelId?: "discord" | "slack";
     authority?: "role" | "identity-grant";
-    /** Binds the Gateway services a native child needs to be accepted and queued. */
     nativeChildren?: true;
   } = {},
 ) {
   const channelId = options.channelId ?? "discord";
   await withAdminIngress(
-    async ({ cfg, state, admins, context, gateway }) => {
+    async ({ cfg, state, admins, context, gateway, resolveGatewayContext }) => {
       const bridge = Symbol.for(`openclaw.channel-command-native-test.${randomUUID()}`);
+      gateway.resolveGatewayContext = resolveGatewayContext;
       const storePath = path.join(state.sessionsDir("main"), "sessions.json");
       const sessionKey = `agent:main:${channelId}:channel:maintainers`;
       const messages = async (role: "user" | "assistant") => {
@@ -136,7 +135,6 @@ async function withChannelCommandPlugin(
         });
       };
       const userInputs = async () => (await messages("user")).map((message) => message.content);
-      // Distinguishes the source-keyed turn the native gate commits from the reply mirror's.
       const userInputKeys = async () =>
         (await messages("user")).map((message) =>
           String(message.idempotencyKey).replace(/^(channel-user:v1:|command-input:).*$/u, "$1"),
@@ -186,12 +184,7 @@ async function withChannelCommandPlugin(
       const nextConfig: OpenClawConfig = {
         ...cfg,
         agents: {
-          defaults: {
-            workspace: state.workspaceDir,
-            skipBootstrap: true,
-            model: { primary: "mock-openai/gpt-5.6-luna" },
-            models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-          },
+          defaults: createReplyAgentDefaults(state.workspaceDir),
         },
         commands: {
           ...cfg.commands,
@@ -206,7 +199,7 @@ async function withChannelCommandPlugin(
           load: { paths: [pluginFile] },
           entries: { [pluginId]: { enabled: true } },
         },
-        // Every reservation re-applies the configured limit; one slot keeps holds deterministic.
+        // One slot keeps capacity holds deterministic.
         ...(options.nativeChildren ? { tools: { swarm: { maxConcurrent: 1 } } } : {}),
       };
       Object.assign(cfg, nextConfig);
@@ -216,7 +209,7 @@ async function withChannelCommandPlugin(
           gateway,
           createDirectChatContext({
             getRuntimeConfig: () => cfg,
-            resolveGatewayContext: () => gateway,
+            resolveGatewayContext,
             validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
             getGatewayMethodRegistry: () => createRequestGatewayMethodRegistry(),
             trackExecution: trackAsyncWork,
@@ -229,8 +222,25 @@ async function withChannelCommandPlugin(
       );
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
+      await using gatewayResources = new AsyncDisposableStack();
+      if (options.nativeChildren) {
+        const runtime = createGatewayInstanceRuntime({
+          getContext: () => gateway,
+          getMethodRegistry: () => createRequestGatewayMethodRegistry(),
+          isDispatchAvailable: () => true,
+        });
+        gateway.lifecycleRuntime = runtime.lifecycle;
+        gatewayResources.defer(() => runtime.close());
+      }
+      const scheduler = new GatewayScheduler();
+      gatewayResources.defer(() => scheduler.stop());
+      const sdkHost = new LegacyPluginSdkResourceHost();
+      gatewayResources.defer(() => sdkHost.close());
+      sdkHost.bindScheduler(scheduler);
+      bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkHost);
       let registry: PluginRegistry | undefined;
       const blockers: string[] = [];
+      const previousSubagentRuns = new Set(subagentRuns.keys());
       try {
         registry = loadOpenClawPlugins({
           config: cfg,
@@ -265,10 +275,9 @@ async function withChannelCommandPlugin(
               replies.push(payload);
             },
           });
-          // Channel accounts run inside their Gateway context resolver, without a
-          // request-local client or context (server-channels startChannel).
+          // Match startChannel's resolver without inheriting a request-local client.
           await withPluginRuntimeGatewayContextResolver(
-            () => gateway,
+            resolveGatewayContext,
             () =>
               withReplyDispatcher({
                 dispatcher,
@@ -353,6 +362,29 @@ async function withChannelCommandPlugin(
           },
         });
       } finally {
+        const revokedChildren = [...subagentRuns.values()].filter(
+          (entry) =>
+            !previousSubagentRuns.has(entry.runId) &&
+            entry.requesterSessionKey === sessionKey &&
+            entry.collectorLaunchCleanupPending &&
+            entry.execution.outcome?.error ===
+              "Channel operator authority changed; send a new request.",
+        );
+        // Revocation cleanup dispatches through the still-live Gateway lifecycle.
+        await closeSwarmScheduler(resolveGatewayContext);
+        for (const child of revokedChildren) {
+          expect
+            .soft(
+              loadSessionEntry({
+                agentId: child.childAgentId ?? "main",
+                sessionKey: child.childSessionKey,
+                storePath,
+              }),
+              "revoked native child session is physically deleted before fixture retirement",
+            )
+            .toBeUndefined();
+          expect.soft(subagentRuns.get(child.runId)?.collectorLaunchCleanupPending).toBe(false);
+        }
         for (const blocker of blockers.splice(0)) {
           releaseSwarmRun(blocker);
         }
@@ -398,24 +430,20 @@ describe("plugin command native capabilities through channel ingress", () => {
               ctx.runtimeContext?.subagents,
               "channel command capability",
             );
-            // The facade is operational under the channel requester, not merely present.
             listed = await expectDefined(native.list, "native list")({});
             return { text: JSON.stringify(await probe(ctx)) };
           });
           expect(readProbe(await send("/review-panel"))).toEqual({
             subagents: true,
             scheduledTurns: false,
-            // Committed before the handler runs, as on Gateway ingress.
             userInputs: ["/review-panel"],
           });
           expect(listed).toEqual([]);
-          // Scheduled turns follow the command's own declaration.
           expect(readProbe(await send("/review-schedule"))).toEqual({
             subagents: true,
             scheduledTurns: true,
             userInputs: ["/review-panel", "/review-schedule"],
           });
-          // The committed input is the channel's redacted command form.
           expect(readProbe(await send("/review-panel login code: 482913"))).toMatchObject({
             subagents: true,
             userInputs: [
@@ -424,7 +452,6 @@ describe("plugin command native capabilities through channel ingress", () => {
               "/review-panel login code: [login code redacted]",
             ],
           });
-          // Each message has one source-keyed input; the reply mirror adds only replies.
           expect(await userInputKeys()).toEqual([
             "channel-user:v1:",
             "channel-user:v1:",
@@ -445,7 +472,7 @@ describe("plugin command native capabilities through channel ingress", () => {
           subagents: true,
           userInputs: ["/review-panel"],
         });
-        return { continueAgent: true };
+        return { continueAgent: true, suppressReply: true };
       });
       let continuation:
         | { runId?: string; receiptSessionId?: string; inputsAtRun: unknown[] }
@@ -460,8 +487,6 @@ describe("plugin command native capabilities through channel ingress", () => {
       });
       expect(await send("/review-panel")).toEqual(["Continued."]);
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-      // The continuing agent's source-keyed input joins the committed command turn; a
-      // differently keyed commitment would append a second input or fail restart recovery.
       expect(continuation).toEqual({
         runId: expect.any(String),
         receiptSessionId: "channel-parent",
@@ -484,8 +509,6 @@ describe("plugin command native capabilities through channel ingress", () => {
         );
         return { text: "demoted" };
       });
-      // As on Gateway ingress, revocation also ends the requester's own turn: the command's
-      // reply is not delivered.
       expect(await send("/review-panel")).toEqual([]);
       expect(failure).toEqual(new Error("Channel operator authority changed; send a new request."));
     });
@@ -497,7 +520,6 @@ describe("plugin command native capabilities through channel ingress", () => {
         expect.stringMatching(/requires authorization/u),
       ]);
       expect(handler).not.toHaveBeenCalled();
-      // Only the existing delivered-command mirror; no native turn was committed.
       expect(await userInputKeys()).toEqual(["command-input:"]);
     });
   });
@@ -505,26 +527,22 @@ describe("plugin command native capabilities through channel ingress", () => {
   it("withholds the capability from authorized senders without operator authority", async () => {
     await withChannelCommandPlugin(
       async ({ handler, send, demoteAdmin, userInputKeys }) => {
-        // Nothing is committed before the handler; earlier lines are earlier messages' mirrors.
         const mirrored = [{ type: "text", text: "/review-schedule" }];
         const withheld = (earlier: number) => ({
           subagents: false,
           scheduledTurns: false,
           userInputs: Array.from({ length: earlier }, () => mirrored),
         });
-        // The channel lets anyone run the command; native authority still needs a link.
         expect(readProbe(await send("/review-schedule", { senderId: "unlinked-sender" }))).toEqual(
           withheld(0),
         );
         expect(readProbe(await send("/review-schedule", { verified: false }))).toEqual(withheld(1));
-        // A caller cannot lend this message another person's operator authority.
         expect(
           readProbe(await send("/review-schedule", { foreignOperatorAuthority: true })),
         ).toEqual(withheld(2));
         demoteAdmin();
         expect(readProbe(await send("/review-schedule"))).toEqual(withheld(3));
         expect(handler).toHaveBeenCalledTimes(4);
-        // Only the existing delivered-command mirror recorded these inputs.
         expect(await userInputKeys()).toEqual([
           "command-input:",
           "command-input:",
@@ -540,7 +558,6 @@ describe("plugin command native capabilities through channel ingress", () => {
 describe("channel requester revocation of native children", () => {
   const revocation = new Error("Channel operator authority changed; send a new request.");
 
-  /** A linked operator's command accepts one child; the full lane keeps it queued. */
   async function queueChild(fixture: Fixture) {
     const capacity = fixture.holdChildCapacity();
     let accepted: { runId: string; childSessionKey: string } | undefined;
@@ -562,19 +579,22 @@ describe("channel requester revocation of native children", () => {
 
   async function expectRefused(child: { runId: string; childSessionKey: string }) {
     await vi.waitFor(
-      () => expect(subagentRuns.get(child.runId)?.execution.status).toBe("terminal"),
+      () => {
+        expect(subagentRuns.get(child.runId)?.execution.status).toBe("terminal");
+        expect(listSwarmRunReservationIds()).not.toContain(child.runId);
+      },
       { timeout: 10_000 },
     );
-    expect(subagentRuns.get(child.runId)?.execution.outcome).toMatchObject({
-      status: "error",
-      error: revocation.message,
-    });
-    expect(listSwarmRunReservationIds()).not.toContain(child.runId);
-    // Visible to the native list/collect owners and the subagent registry readers.
-    expect(subagentRuns.get(child.runId)).toMatchObject({
-      endedReason: "subagent-error",
-      completion: { resultText: revocation.message },
-      collectorCompletion: { status: "failed" },
+    // Completed cleanup can evict resident payloads; the public reader retains the result.
+    const prepared = await prepareSubagentRunsByRunIds([child.runId]);
+    expect(prepared.consume((runs) => runs.get(child.runId))).toMatchObject({
+      ready: true,
+      value: {
+        execution: { outcome: { status: "error", error: revocation.message } },
+        endedReason: "subagent-error",
+        completion: { resultText: revocation.message },
+        collectorCompletion: { status: "failed" },
+      },
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   }

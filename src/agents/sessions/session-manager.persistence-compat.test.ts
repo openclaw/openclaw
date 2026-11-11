@@ -17,7 +17,6 @@ import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/se
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import { parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import {
@@ -26,14 +25,12 @@ import {
 } from "./session-manager-fixtures.test-support.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { text } from "./session-message-fixtures.test-support.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 
 const tempDirs = createTempDirTracker();
 const replayLimits = { maxBytes: 100_000, maxEvents: 100 };
 afterEach(async () => {
-  for (const stateDir of tempDirs.dirs) {
-    await cleanupSessionStateForTest({ stateDir });
-  }
-  tempDirs.cleanup();
+  await cleanupTrackedSessionState(tempDirs.dirs, tempDirs.cleanup);
 });
 
 function createScope(sessionId: string) {
@@ -293,36 +290,36 @@ function expectSingleUser(events: unknown[], key: string) {
 }
 
 describe("SessionManager user idempotency", () => {
-  it.each([
-    { kind: "subagent-completion-direct", adopts: true },
-    { kind: "channel-final", adopts: false },
-    { kind: undefined, adopts: false },
-  ] as const)("keyed replay behind a $kind mirror (adopts: $adopts)", async ({ kind, adopts }) => {
-    const { dir, scope, user, persist } = await userSession();
-    await persist("wake-user", user);
-    expect(
-      await appendAssistantMessageToSessionTranscript({
-        ...scope,
-        text: "Synthetic child result",
-        idempotencyKey: "announce:child:text-direct",
-        ...(kind ? { deliveryMirror: { kind } } : {}),
-      }),
-    ).toMatchObject({ ok: true });
-    const manager = await SessionManager.openBoundedAsync(scope, { cwd: dir, ...replayLimits });
-    if (adopts) {
-      expect(await manager.appendMessageAsync(user)).toBe("wake-user");
-      expect(manager.appendMessage(user)).toBe("wake-user");
-    } else {
-      // Unmarked historical mirrors and ordinary final replies still close turns.
-      await expect(manager.appendMessageAsync(user)).rejects.toThrow(
-        "Session transcript keyed user is outside the current turn",
+  it.each(["subagent-completion-direct", "channel-final", undefined] as const)(
+    "acknowledges keyed replay behind a %s mirror without changing the turn",
+    async (kind) => {
+      const { dir, scope, user, persist } = await userSession();
+      await persist("wake-user", user);
+      expect(
+        await appendAssistantMessageToSessionTranscript({
+          ...scope,
+          text: "Synthetic child result",
+          idempotencyKey: "announce:child:text-direct",
+          ...(kind ? { deliveryMirror: { kind } } : {}),
+        }),
+      ).toMatchObject({ ok: true });
+      const manager = await SessionManager.openBoundedAsync(scope, { cwd: dir, ...replayLimits });
+      const tail = manager.getAppendParentId();
+      expect(await manager.appendMessageWithTranscriptAnchorAsync(user)).toMatchObject({
+        entryId: "wake-user",
+        appended: false,
+      });
+      expect(manager.appendMessageWithTranscriptAnchor(user)).toMatchObject({
+        entryId: "wake-user",
+        appended: false,
+      });
+      expect(() => manager.appendMessage({ ...user, content: "Different input" })).toThrow(
+        "conflicts with the admitted message",
       );
-      expect(() => manager.appendMessage(user)).toThrow(
-        "Session transcript keyed user is outside the current turn",
-      );
-    }
-    expectSingleUser(await loadTranscriptEvents(scope), user.idempotencyKey);
-  });
+      expect(manager.getAppendParentId()).toBe(tail);
+      expectSingleUser(await loadTranscriptEvents(scope), user.idempotencyKey);
+    },
+  );
 
   it("allows an explicitly caller-checked keyed user append", () => {
     const manager = SessionManager.inMemory();
@@ -334,7 +331,7 @@ describe("SessionManager user idempotency", () => {
     expect(manager.appendMessage(message, { idempotencyLookup: "caller-checked" })).not.toBe(first);
   });
 
-  it("rejects a keyed user collision behind an excluded assistant", async () => {
+  it("acknowledges a keyed user replay behind an excluded assistant", async () => {
     const { dir, scope, user, persist } = await userSession();
     const excluded = { ...user, excludeFromContext: true };
     await persist("pre-persisted-user", excluded);
@@ -344,9 +341,10 @@ describe("SessionManager user idempotency", () => {
       "pre-persisted-user",
     );
     const manager = SessionManager.openBounded(scope, { cwd: dir, ...replayLimits });
-    expect(() => manager.appendMessage(excluded)).toThrow(
-      "Session transcript keyed user is outside the current turn",
-    );
+    expect(manager.appendMessageWithTranscriptAnchor(excluded)).toMatchObject({
+      entryId: "pre-persisted-user",
+      appended: false,
+    });
     expect(manager.getAppendParentId()).toBe("persisted-assistant");
     expect(manager.resolveCurrentTurnEntryId(() => true)).toBe("persisted-assistant");
     expectSingleUser(await loadTranscriptEvents(scope), user.idempotencyKey);

@@ -15,6 +15,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { POLICY_CHECK_IDS } from "./doctor/check-ids.js";
 import { evaluatePolicy, toAttestedFinding } from "./doctor/evaluation.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
@@ -94,19 +95,51 @@ export function registerPolicyCli(program: Command): void {
     .action(async (options: PolicyWatchOptions) => {
       process.exitCode = await runPolicyCommand(options, async () => {
         const intervalMs = normalizeWatchIntervalMs(options.intervalMs);
+        const controller = new AbortController();
+        let exitCode = 0;
+        const stop = (code: number) => {
+          if (!controller.signal.aborted) {
+            exitCode = code;
+            controller.abort();
+          }
+        };
+        const onSigint = () => stop(130);
+        const onSigterm = () => stop(143);
+        // Retain signal custody until an already-admitted evaluation has settled.
+        process.on("SIGINT", onSigint);
+        process.on("SIGTERM", onSigterm);
         let previousKey: string | undefined;
-        for (;;) {
-          const report = await buildPolicyCheckReport(options, "policy watch");
-          const status = policyWatchStatus(report);
-          const key = `${status}:${report.attestation?.attestationHash ?? ""}:${report.exitCode}`;
-          if (previousKey !== key || options.once === true) {
-            writePolicyWatchReport(report, status, options);
-            previousKey = key;
+        try {
+          while (!controller.signal.aborted) {
+            const report = await buildPolicyCheckReport(options, "policy watch");
+            if (controller.signal.aborted) {
+              break;
+            }
+            const status = policyWatchStatus(report);
+            const key = `${status}:${report.attestation?.attestationHash ?? ""}:${report.exitCode}`;
+            if (previousKey !== key || options.once === true) {
+              writePolicyWatchReport(report, status, options);
+              previousKey = key;
+            }
+            if (options.once === true) {
+              return status === "stale" ? 1 : report.exitCode;
+            }
+            try {
+              await sleep(intervalMs, undefined, { signal: controller.signal });
+            } catch (error) {
+              if (
+                !controller.signal.aborted ||
+                !(error instanceof Error) ||
+                error.name !== "AbortError"
+              ) {
+                throw error;
+              }
+            }
           }
-          if (options.once === true) {
-            return status === "stale" ? 1 : report.exitCode;
-          }
-          await sleep(intervalMs);
+          return exitCode;
+        } finally {
+          process.off("SIGINT", onSigint);
+          process.off("SIGTERM", onSigterm);
         }
       });
     });
@@ -124,7 +157,7 @@ async function runPolicyCommand(
       // Watch may have emitted reports already; keep its terminal error on one NDJSON line.
       cliRuntime.writeJson({ ok: false, error: { type: "cli_error", message } }, 0);
     }
-    cliRuntime.error(message);
+    cliRuntime.error(terminalText`${message}`);
     return 2;
   }
 }
@@ -168,10 +201,10 @@ async function buildPolicyCheckReport(
     mode: "lint",
     runtime: {
       log(value) {
-        process.stdout.write(`${String(value)}\n`);
+        process.stdout.write(terminalText`${String(value)}\n`);
       },
       error(value) {
-        cliRuntime.error(String(value));
+        cliRuntime.error(terminalText`${String(value)}`);
       },
       exit(code) {
         process.exitCode = code;
@@ -257,7 +290,7 @@ function resolvePolicyCommandAgentId(
 
 async function policyCompareCandidatePath(options: PolicyCompareOptions): Promise<string> {
   if (options.policy !== undefined && options.policy.trim() !== "") {
-    return options.policy.trim();
+    return options.policy;
   }
   const snapshot = await readConfigFileSnapshot({ observe: false });
   if (!snapshot.valid) {
@@ -296,15 +329,15 @@ function writePolicyCheckReport(report: PolicyCheckReport, options: PolicyCheckO
     const policyHash = report.attestation?.policy?.hash ?? "missing";
     const evidenceHash = report.attestation?.workspace.hash ?? "unavailable";
     process.stdout.write(
-      `policy check: no findings (policy ${policyHash}, evidence ${evidenceHash})\n`,
+      terminalText`policy check: no findings (policy ${policyHash}, evidence ${evidenceHash})\n`,
     );
   } else {
-    process.stdout.write(`policy check: ${report.findings.length} finding(s)\n`);
+    process.stdout.write(terminalText`policy check: ${report.findings.length} finding(s)\n`);
     for (const finding of report.findings) {
       const where = finding.path !== undefined ? ` ${finding.path}` : "";
       const line = finding.line !== undefined ? `:${finding.line}` : "";
       process.stdout.write(
-        `  [${finding.severity}] ${finding.checkId}${where}${line} - ${finding.message}\n`,
+        terminalText`  [${finding.severity}] ${finding.checkId}${where}${line} - ${finding.message}\n`,
       );
     }
   }
@@ -320,15 +353,17 @@ function writePolicyConformanceReport(
   }
   if (report.findings.length === 0) {
     process.stdout.write(
-      `policy compare: no findings (${report.policyPath} is at least as strict as ${report.baselinePath}; ${report.rulesChecked} rule(s) checked)\n`,
+      terminalText`policy compare: no findings (${report.policyPath} is at least as strict as ${report.baselinePath}; ${report.rulesChecked} rule(s) checked)\n`,
     );
     return;
   }
   process.stdout.write(
-    `policy compare: ${report.findings.length} finding(s) (${report.rulesChecked} rule(s) checked)\n`,
+    terminalText`policy compare: ${report.findings.length} finding(s) (${report.rulesChecked} rule(s) checked)\n`,
   );
   for (const finding of report.findings) {
-    process.stdout.write(`  [${finding.severity}] ${finding.checkId} - ${finding.message}\n`);
+    process.stdout.write(
+      terminalText`  [${finding.severity}] ${finding.checkId} - ${finding.message}\n`,
+    );
   }
 }
 
@@ -351,18 +386,18 @@ function writePolicyWatchReport(
   }
   if (status === "stale") {
     process.stdout.write(
-      `policy watch: accepted attestation is stale (current ${report.attestation?.attestationHash}, expected ${report.expectedAttestationHash}). Review policy check output, then update the supervisor/gateway accepted attestation.\n`,
+      terminalText`policy watch: accepted attestation is stale (current ${report.attestation?.attestationHash}, expected ${report.expectedAttestationHash}). Review policy check output, then update the supervisor/gateway accepted attestation.\n`,
     );
     return;
   }
   if (status === "findings") {
     process.stdout.write(
-      `policy watch: ${report.findings.length} finding(s); accepted attestation cannot be updated until policy check is clean.\n`,
+      terminalText`policy watch: ${report.findings.length} finding(s); accepted attestation cannot be updated until policy check is clean.\n`,
     );
     return;
   }
   process.stdout.write(
-    `policy watch: clean (attestation ${report.attestation?.attestationHash}, evidence ${report.attestation?.workspace.hash})\n`,
+    terminalText`policy watch: clean (attestation ${report.attestation?.attestationHash}, evidence ${report.attestation?.workspace.hash})\n`,
   );
 }
 

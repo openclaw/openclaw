@@ -16,12 +16,11 @@ import { createApplicationContextProvider } from "../../../test-helpers/applicat
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
-  activePlacementSession,
   createInitializationContext,
   createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-  createTestChatPane,
-} from "../chat-pane.test-support.ts";
+} from "../chat-application-context.test-support.ts";
+import { activePlacementSession, createTestChatPane } from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
   buildCachedChatItems,
@@ -32,6 +31,7 @@ import {
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import {
   render,
   renderChatThread,
@@ -104,7 +104,7 @@ describe("chat transcript invalidation", () => {
 
   it.each(["ready", "delayed"])(
     "updates settled avatars when only the theme hat changes with a %s palette",
-    (palette) => {
+    async (palette) => {
       const branding = resolveThemeBranding({ mascot: "claw", critters: [], avatarHat: "fedora" });
       const agentId = Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
         resolveAvatarHat(id, branding),
@@ -120,7 +120,7 @@ describe("chat transcript invalidation", () => {
       try {
         setCurrentThemeBranding(props.branding);
         rerender();
-        expect(find(container, ".identity-avatar--agent")).not.toBeNull();
+        await waitForSolid(() => expect(find(container, ".identity-avatar--agent")).not.toBeNull());
         expect(find(container, ".identity-avatar__hat")).toBeNull();
         props.branding = branding;
         setCurrentThemeBranding(branding);
@@ -209,8 +209,9 @@ describe("chat transcript invalidation", () => {
         }
 
         toggleTranscriptSearch(paneId);
-        flush();
-        const input = expectDefined(searchContainer.querySelector("input"), "search input");
+        const input = await waitForSolid(() =>
+          expectDefined(searchContainer.querySelector("input"), "search input"),
+        );
         input.value = ownMessage.content;
         input.dispatchEvent(new Event("input", { bubbles: true }));
         await flushDeferredRowPrune();
@@ -337,7 +338,7 @@ describe("chat transcript invalidation", () => {
     );
   });
 
-  it("keeps explicit destinations stable as history, catalog rows, and sessions change", () => {
+  it("keeps explicit destinations stable as history, catalog rows, and sessions change", async () => {
     const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
     const original = {
       role: "assistant",
@@ -355,7 +356,7 @@ describe("chat transcript invalidation", () => {
       "https://github.com/other/project/issues/126",
     ];
     rerender();
-    expect(links()).toEqual(expected);
+    await waitForSolid(() => expect(links()).toEqual(expected));
     for (const type of ["toolResult", "toolCall", "reasoning"] as const) {
       const catalogMessage = pane.catalogItemMessage({
         id: type,
@@ -378,7 +379,7 @@ describe("chat transcript invalidation", () => {
     props.sessionKey = "agent:main:another-checkout";
     props.messages = [original];
     rerender();
-    expect(links()).toEqual(expected);
+    await waitForSolid(() => expect(links()).toEqual(expected));
   });
 
   it("does not renormalize projected historical messages", () => {
@@ -498,6 +499,7 @@ describe("chat transcript invalidation", () => {
   });
 
   it("keeps message rows prepared and refreshes failure actions when a retained transcript returns", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
     const owner = new EventTarget();
     let visible = true;
     const props = {
@@ -519,6 +521,7 @@ describe("chat transcript invalidation", () => {
       rerender();
       transcript.start();
       await flushDeferredRowPrune();
+      await waitForSolid(() => expect(find(container, ".chat-run-failure__retry")).not.toBeNull());
       const bubble = required(container, ".chat-bubble");
       expect(prepare).toHaveBeenCalled();
       prepare.mockClear();
@@ -600,15 +603,23 @@ describe("chat transcript invalidation", () => {
         await session.load;
       }
       const { transcript, container, rerender } = updatingThread(props);
+      const project = () =>
+        transcript.renderSession(props.sessionKey, (session) =>
+          projectChatTranscript({ ...props }, session),
+        );
       try {
         rerender();
         transcript.start();
         await flushDeferredRowPrune();
         expect(required(container, ".chat-question-summary button").textContent).toBe("Answer");
 
+        const previous = project();
         resetTranscriptSession(props.paneId, container);
         presentQuestions();
-        rerender();
+        const current = project();
+        render(previous.renderRows(), container);
+        flush();
+        render(current.renderRows(), container);
         await flushDeferredRowPrune();
         click(container, ".chat-question-summary button");
 
@@ -641,13 +652,15 @@ describe("chat transcript invalidation", () => {
       rerender();
       transcript.start();
       await flushDeferredRowPrune();
-      expect(container.textContent).toContain("Received · waiting for worker setup");
+      await waitForSolid(() =>
+        expect(container.textContent).toContain("Received · setting up device"),
+      );
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
       expect(buildSpy).toHaveBeenCalledOnce();
 
       rerender();
       expect(buildSpy).toHaveBeenCalledOnce();
-      expect(container.textContent).toContain("Received · waiting for worker setup");
+      expect(container.textContent).toContain("Received · setting up device");
 
       props.selectedSession = {
         ...props.selectedSession,
@@ -658,7 +671,7 @@ describe("chat transcript invalidation", () => {
       };
       rerender();
       expect(buildSpy).toHaveBeenCalledTimes(2);
-      expect(container.textContent).not.toContain("Received · waiting for worker setup");
+      expect(container.textContent).not.toContain("Received · setting up device");
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
     } finally {
       transcript.dispose();
@@ -675,6 +688,7 @@ describe("chat transcript invalidation", () => {
     const { container, rerender } = threadFixture(props);
     const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
     rerender();
+    await flushDeferredRowPrune();
     const userRow = required(container, ".chat-group.user");
     expect(userRow.querySelector(".chat-avatar")).toBeNull();
     expect(prepareFrame.mock.calls.some(([group]) => group.role === "user")).toBe(true);
@@ -767,9 +781,7 @@ describe("chat transcript invalidation", () => {
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const transcript = createTestTranscript();
     const container = transcriptContainer();
-    const client = {
-      request: vi.fn(async () => null),
-    } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
+    const client = createGatewayBrowserClientFixture({ request: vi.fn(async () => null) });
     const sessions = createSessionCapabilityFixture();
     const { pane, state } = createTestChatPane({ client, sessions });
     const applyToken = (deviceToken: string) =>
@@ -785,25 +797,27 @@ describe("chat transcript invalidation", () => {
     applyToken("test-auth-token");
     const messages = [msg("assistant", [{ type: "image", url: source }])];
     const mediaOwner = {};
-    const view = mountSolid(
-      () => {
-        const gateway = projectOwner(
-          pane.context.gateway,
-          (owner) => owner.snapshot.hello,
-          Object.is,
-        );
-        return createComponent(ChatThread, {
-          get props() {
-            return {
-              ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
-              assistantAttachmentAuthToken: resolveControlUiAuthToken({ hello: gateway.read() }),
-              mediaOwner,
-            };
-          },
-          transcript,
-        });
-      },
-      { container },
+    const view = settleChatMount(() =>
+      mountSolid(
+        () => {
+          const gateway = projectOwner(
+            pane.context.gateway,
+            (owner) => owner.snapshot.hello,
+            Object.is,
+          );
+          return createComponent(ChatThread, {
+            get props() {
+              return {
+                ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
+                assistantAttachmentAuthToken: resolveControlUiAuthToken({ hello: gateway.read() }),
+                mediaOwner,
+              };
+            },
+            transcript,
+          });
+        },
+        { container },
+      ),
     );
     onTestFinished(view.unmount);
     transcript.start();
@@ -915,7 +929,10 @@ describe("chat transcript invalidation", () => {
     };
     const controller = createTestTranscript();
     const retainedPane = transcriptContainer();
+    controller.start();
     render(renderChatThread(props, controller), retainedPane);
+    controller.update();
+    await flushDeferredRowPrune();
     await settleToolBridges(retainedPane);
     const staleTools = getExpandedToolCards(sessionKey);
     const staleUsers = getExpandedUserMessages(sessionKey);

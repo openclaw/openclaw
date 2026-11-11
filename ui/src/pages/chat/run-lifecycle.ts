@@ -9,18 +9,15 @@ import { registerChatQuestionsEnglish } from "../../i18n/locales/en-chat-questio
 import { redactToolDetail } from "../../lib/browser-redact.ts";
 import type { ChatQueueItem, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
-import {
-  reconcileSessionRunTerminal,
-  scopedAgentParamsForSession,
-  type SessionCapability,
-  type SessionRunTerminal,
-} from "../../lib/sessions/index.ts";
+import type { SessionCapability, SessionRunTerminal } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import {
   normalizeDefaultMainSessionAliasForUi,
   resolveUiSelectedSessionAgentId,
   resolveUiConversationIdentity,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { reconcileSessionRunTerminal } from "../../lib/sessions/session-run-terminal.ts";
 import {
   chatAbortTargetSession,
   currentChatAbortIntent,
@@ -31,6 +28,7 @@ import {
   type PendingChatAbort,
 } from "./chat-abort-request.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { setChatQueuePaused } from "./chat-queue-pause.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -203,20 +201,34 @@ export function adoptStartedChatRun(
   }
 }
 
+type ChatRunErrorHost = {
+  chatRunError?: ChatRunError | null;
+  chatDismissedRunErrorId?: string | null;
+};
+
 export function setChatRunError(
-  state: { chatRunError?: ChatRunError | null },
+  state: ChatRunErrorHost,
   summary: string,
   runId?: string,
   kind?: ChatRunError["kind"],
 ) {
   chatRunPresentation(state).batch(() => {
     setChatRunOwner(state, runId);
+    if (runId && runId === state.chatDismissedRunErrorId) {
+      return;
+    }
     state.chatRunError = {
       ...(kind ? { kind } : {}),
       summary: redactToolDetail(summary.trim()),
       ...(runId ? { runId } : {}),
     };
   });
+}
+
+/** Hides the current run failure until a different run fails. */
+export function dismissChatRunError(state: ChatRunErrorHost) {
+  state.chatDismissedRunErrorId = state.chatRunError?.runId ?? null;
+  state.chatRunError = null;
 }
 
 type SessionRunHost = {
@@ -315,7 +327,7 @@ async function abortChatRun(state: ChatAbortRunState, intent?: ChatAbortIntent, 
   const captured = intent ?? currentChatAbortIntent(state, client);
   // Session cancellation still answers to the run that owned the Stop action.
   const target = scope ? currentChatAbortIntent(state, client, scope) : captured;
-  const result = await requestChatAbort(client, target);
+  const result = await requestChatAbort(client, { ...target, userInitiated: true });
   return settleChatAbortResponse(state, captured, result);
 }
 
@@ -375,10 +387,12 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions): Promise<void> {
-  chatOutboxOwner(host).admissions.cancelRequests(
-    host,
-    resolveUiConversationIdentity(host, host.sessionKey),
-  );
+  const scope = resolveUiConversationIdentity(host, host.sessionKey);
+  chatOutboxOwner(host).admissions.cancelRequests(host, scope);
+  // Park before the request: the aborted terminal event can beat its response and
+  // would otherwise send the next queued row. A failed Stop leaves the rows parked
+  // behind a visible Resume, which is the recoverable side to err on.
+  setChatQueuePaused(host, true, scope);
   const disconnectedIntent =
     !host.connected && host.client ? currentChatAbortIntent(host, host.client) : null;
   const pendingAbort =

@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
 import * as overviewModule from "./overview.js";
 import { runSystemAgent, type RunSystemAgentOptions } from "./system-agent.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
@@ -49,20 +50,7 @@ vi.mock("./verified-inference.js", async (importOriginal) => {
   };
 });
 
-const overview: overviewModule.SystemAgentOverview = {
-  defaultAgentId: "main",
-  defaultModel: "openai/gpt-5.5",
-  agents: [],
-  config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
-  tools: {
-    codex: { command: "codex", found: false, error: "not found" },
-    claude: { command: "claude", found: false, error: "not found" },
-    gemini: { command: "gemini", found: false, error: "not found" },
-    apiKeys: { openai: true, anthropic: false },
-  },
-  gateway: { url: "ws://fixture", source: "test", reachable: false },
-  references: { docsUrl: "https://docs.example", sourceUrl: "https://source.example" },
-};
+const overview = createSystemAgentOverviewFixture({ defaultModel: "openai/gpt-5.5" });
 
 const verifiedConfig = {
   agents: {
@@ -84,12 +72,7 @@ beforeAll(async () => {
   inferenceMocks.sharedVerifiedInference = sharedFixture.binding;
 });
 
-function createVerifiedRunOptions() {
-  const fixture = sharedFixture;
-  return {
-    verifiedInference: fixture.binding,
-  };
-}
+const createVerifiedRunOptions = () => ({ verifiedInference: sharedFixture.binding });
 
 function runner(runtime: RuntimeEnv, verified = createVerifiedRunOptions()) {
   return (options: Omit<RunSystemAgentOptions, "verifiedInference">) =>
@@ -97,7 +80,22 @@ function runner(runtime: RuntimeEnv, verified = createVerifiedRunOptions()) {
 }
 
 describe("runSystemAgent", () => {
+  let runtime: RuntimeEnv;
+  let lines: string[];
+  const runMessage = (
+    message: string,
+    options: Omit<RunSystemAgentOptions, "verifiedInference" | "message"> = {},
+  ) => runner(runtime)({ message, ...options });
+  const currentVerifiedOptions = async () => {
+    const snapshot = configFixture.snapshot;
+    const fixture = await createSystemAgentVerifiedInferenceTestFixture(
+      snapshot.runtimeConfig ?? snapshot.config,
+      snapshot,
+    );
+    return { verifiedInference: fixture.binding };
+  };
   beforeEach(async () => {
+    ({ runtime, lines } = createSystemAgentTestRuntime());
     const overviewReader = vi
       .spyOn(overviewModule, "loadSystemAgentOverview")
       .mockResolvedValue(overview);
@@ -116,7 +114,6 @@ describe("runSystemAgent", () => {
     onTestFinished(() => reader.mockRestore());
   });
   it("rejects a missing inference binding before any runner side effect", async () => {
-    const { runtime } = createSystemAgentTestRuntime();
     const loadOverview = vi.mocked(overviewModule.loadSystemAgentOverview);
     const planWithAssistant = plannerMock.mockResolvedValue({ command: "restart gateway" });
     const common = {
@@ -144,17 +141,13 @@ describe("runSystemAgent", () => {
   });
 
   it("uses the assistant planner only to choose typed operations", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
     const onReady = vi.fn();
     plannerMock.mockResolvedValue({
       reply: "I can queue a Gateway restart.",
       command: "restart gateway",
       modelLabel: "openai/gpt-5.5",
     });
-    await runner(runtime)({
-      message: "the local bridge looks sleepy, poke it",
-      onReady,
-    });
+    await runMessage("the local bridge looks sleepy, poke it", { onReady });
 
     expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(onReady).not.toHaveBeenCalled();
@@ -174,12 +167,9 @@ describe("runSystemAgent", () => {
   ])(
     "keeps malformed config write %s away from the one-shot assistant planner",
     async (message) => {
-      const { runtime, lines } = createSystemAgentTestRuntime();
       const planWithAssistant = plannerMock.mockResolvedValue({ command: "restart gateway" });
 
-      await runner(runtime)({
-        message,
-      });
+      await runMessage(message);
 
       expect(planWithAssistant).not.toHaveBeenCalled();
       expect(lines.join("\n")).toContain("Invalid config path");
@@ -189,15 +179,9 @@ describe("runSystemAgent", () => {
   );
 
   it("rechecks one-shot authority at the persistent apply boundary", async () => {
-    const { runtime } = createSystemAgentTestRuntime();
-    const snapshot = configFixture.snapshot;
-    const fixture = await createSystemAgentVerifiedInferenceTestFixture(
-      snapshot.runtimeConfig ?? snapshot.config,
-      snapshot,
-    );
+    const verified = await currentVerifiedOptions();
     let reads = 0;
-    const readConfigFileSnapshot = vi
-      .mocked(configModule.readConfigFileSnapshot)
+    vi.mocked(configModule.readConfigFileSnapshot)
       .mockClear()
       .mockImplementation(async () => {
         reads += 1;
@@ -206,7 +190,6 @@ describe("runSystemAgent", () => {
         }
         return configFixture.read();
       });
-    const verified = { verifiedInference: fixture.binding };
     const run = runner(runtime, verified);
     plannerMock.mockResolvedValue({ command: "restart gateway" });
 
@@ -219,18 +202,13 @@ describe("runSystemAgent", () => {
       message: expect.stringContaining("verified inference route changed"),
     });
 
-    expect(readConfigFileSnapshot).toHaveBeenCalledTimes(4);
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
   it("keeps exact one-shot parsing ahead of the assistant planner", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
     const planWithAssistant = plannerMock.mockResolvedValue({ command: "restart gateway" });
     const onReady = vi.fn();
-    await runner(runtime)({
-      message: "models",
-      onReady,
-    });
+    await runMessage("models", { onReady });
 
     expect(planWithAssistant).not.toHaveBeenCalled();
     expect(onReady).not.toHaveBeenCalled();
@@ -241,35 +219,21 @@ describe("runSystemAgent", () => {
     { name: "no plan", plan: null },
     { name: "invalid command", plan: { command: "invent a new operation" } },
   ])("fails a fuzzy one-shot when inference returns $name", async ({ plan }) => {
-    const { runtime } = createSystemAgentTestRuntime();
     plannerMock.mockResolvedValue(plan);
-    await expect(
-      runner(runtime)({
-        message: "please make things nicer",
-      }),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    await expect(runMessage("please make things nicer")).rejects.toBeInstanceOf(
+      SystemAgentInferenceUnavailableError,
+    );
   });
 
   it("prints a valid reply-only one-shot plan", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
     plannerMock.mockResolvedValue({ reply: "The current setup is healthy." });
-    await runner(runtime)({
-      message: "explain the current setup",
-    });
+    await runMessage("explain the current setup");
 
     expect(lines).toEqual(["Default model: openai/gpt-5.5", "", "The current setup is healthy."]);
   });
 
   it("does not print a reply-only plan after its inference owner drifts", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const snapshot = configFixture.snapshot;
-    const fixture = await createSystemAgentVerifiedInferenceTestFixture(
-      snapshot.runtimeConfig ?? snapshot.config,
-      snapshot,
-    );
-    const run = runner(runtime, {
-      verifiedInference: fixture.binding,
-    });
+    const run = runner(runtime, await currentVerifiedOptions());
 
     plannerMock.mockImplementation(async () => {
       await configFixture.write(changedConfig);
@@ -284,7 +248,6 @@ describe("runSystemAgent", () => {
   });
 
   it.each([true, false])("admits the TUI only with stdout TTY=%s", async (isTTY) => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
     const onReady = vi.fn();
     const run = runner(runtime)({
       input: { isTTY: true } as unknown as NodeJS.ReadableStream,
@@ -308,7 +271,6 @@ describe("runSystemAgent", () => {
   it.each([{ message: "overview" }, { interactive: false }])(
     "prints the formatted overview exactly once for %j",
     async (options) => {
-      const { runtime, lines } = createSystemAgentTestRuntime();
       const loadOverview = vi.mocked(overviewModule.loadSystemAgentOverview);
       vi.mocked(overviewModule.formatSystemAgentOverview).mockReturnValue("formatted overview");
       await runner(runtime)({

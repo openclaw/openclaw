@@ -75,46 +75,38 @@ export class HelperClient {
     bundle = "com.apple.FaceTime",
     processId = 1234,
     buildId = TEST_HELPER_BUILD_ID,
+    expectRejection = buildId !== TEST_HELPER_BUILD_ID,
   ): Promise<boolean> {
     const started = 1_700_000_000_000;
     const nonce = "c".repeat(64);
-    writeFrame(
-      this.socket,
-      {
-        event: "client-hello",
-        bundle_identifier: bundle,
-        build_id: buildId,
-        process_id: processId,
-        process_started_at_ms: started,
-        client_nonce: nonce,
-        proof: hmac(
-          TEST_HELPER_AUTH_TOKEN,
-          `client-hello\n${bundle}\n${buildId}\n${processId}\n${started}\n${nonce}`,
-        ),
-      },
-      this.lineEnding,
-    );
-    if (buildId !== TEST_HELPER_BUILD_ID) {
+    const identity = `${bundle}\n${buildId}\n${processId}\n${started}\n${nonce}`;
+    const write = (payload: Payload) => writeFrame(this.socket, payload, this.lineEnding);
+    write({
+      event: "client-hello",
+      bundle_identifier: bundle,
+      build_id: buildId,
+      process_id: processId,
+      process_started_at_ms: started,
+      client_nonce: nonce,
+      proof: hmac(TEST_HELPER_AUTH_TOKEN, `client-hello\n${identity}`),
+    });
+    if (expectRejection) {
       return false;
     }
     const hello = await this.readFrame();
     this.epoch = String(hello.connection_epoch);
-    const context = `${bundle}\n${buildId}\n${processId}\n${started}\n${nonce}\n${String(hello.server_nonce)}\n${this.epoch}`;
+    const context = `${identity}\n${String(hello.server_nonce)}\n${this.epoch}`;
     expect(hello).toMatchObject({
       event: "server-hello",
       client_nonce: nonce,
       proof: hmac(TEST_HELPER_AUTH_TOKEN, `server-hello\n${context}`),
     });
     this.key = hmac(TEST_HELPER_AUTH_TOKEN, `session\n${context}`);
-    writeFrame(
-      this.socket,
-      {
-        event: "client-finish",
-        connection_epoch: this.epoch,
-        proof: hmac(this.key, `client-finish\n${this.epoch}`),
-      },
-      this.lineEnding,
-    );
+    write({
+      event: "client-finish",
+      connection_epoch: this.epoch,
+      proof: hmac(this.key, `client-finish\n${this.epoch}`),
+    });
     await expect(this.read()).resolves.toEqual({ event: "session-ready" });
     beforeAck();
     this.send({ event: "session-ready-ack" });

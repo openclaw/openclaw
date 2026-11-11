@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForTerminalSession } from "../../app-route-paths.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -114,7 +115,7 @@ export async function submitDraftInTerminal(options: {
     }
   } catch (error) {
     if (submission.isCurrent()) {
-      flow.setError(error instanceof Error ? error.message : String(error));
+      flow.setError(formatUiError(error));
     }
   } finally {
     if (submission.isRequestCurrent()) {

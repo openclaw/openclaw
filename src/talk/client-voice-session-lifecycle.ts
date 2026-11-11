@@ -3,11 +3,13 @@ import {
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
+import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
 import {
   captureSqliteWorkerStateContext,
   runWithSqliteWorkerStateContext,
 } from "../infra/sqlite-worker-state-context.js";
+import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
 import { GatewayRetainedWorkScope, type AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerOpenClawStatePathAsyncResource } from "../state/openclaw-state-db-cache.js";
@@ -22,7 +24,18 @@ const current = new AsyncLocalStorage<{
 const lifetimes = new Map<string, ReturnType<typeof createLifetime>>();
 
 function createLifetime({ admission }: OpenClawStateWorkerContext) {
-  const work = new GatewayRetainedWorkScope();
+  const work = new GatewayRetainedWorkScope(undefined, {
+    abortPendingAfterMs: () => {
+      const budget = getProcessCleanupBudget();
+      const remainingMs = budget
+        ? Math.max(0, budget.deadline - performance.now())
+        : GATEWAY_SHUTDOWN_TIMEOUT_MS;
+      // Embedded close and store retirement use this grace plus abort settlement;
+      // process exit applies its shorter outer prelude deadline.
+      return Math.min(30_000, Math.floor(remainingMs / 4));
+    },
+    reason: "[talk] voice session persistence shutdown grace expired; abort requested",
+  });
   const owner = {
     matchesDatabase(context: OpenClawStateWorkerContext) {
       const identity = context.admission.identity;

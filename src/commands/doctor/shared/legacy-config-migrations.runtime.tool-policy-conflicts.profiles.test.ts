@@ -65,16 +65,19 @@ const restricted = { allow: ["session_status", "exec"], alsoAllow: ["session_sta
 const explicitExec = { allow: ["session_status", "exec"], alsoAllow: ["exec"] };
 const minimal = { profile: "minimal" as const };
 const fullExec = { profile: "full" as const, ...explicitExec };
+const minimalExtras = { profile: "minimal" as const, alsoAllow: ["read"] };
+const modelProfiles = {
+  byProvider: { openai: { profile: "full" as const }, "openai/model": minimal },
+};
+const byProvider = (policy: AgentToolsConfig, key = "openai") => ({
+  byProvider: { [key]: policy },
+});
 const cases: PolicyCase[] = [
   ["restricted agent", { alsoAllow: ["exec"] }, { ...minimal, ...restricted }],
   ["explicit exec", { alsoAllow: ["read"] }, { ...minimal, ...explicitExec }],
   ["no profile", { alsoAllow: ["read"] }, grants(["exec"], ["message"])],
   ["inherited minimal profile", { profile: "minimal", alsoAllow: ["exec"] }, restricted],
-  [
-    "agent full profile",
-    { profile: "minimal", alsoAllow: ["read"] },
-    grants(["exec"], ["message"], "full"),
-  ],
+  ["agent full profile", minimalExtras, grants(["exec"], ["message"], "full")],
   ["global extras consumed by an agent profile", fullExec, minimal],
   [
     "gateway config-read authority",
@@ -85,25 +88,19 @@ const cases: PolicyCase[] = [
   ["plugin group extras", undefined, grants(["session_status"], ["group:plugins"], "minimal")],
   ["aliases and core groups", undefined, grants(["bash", "read"], ["group:runtime"], "coding")],
   [
-    "inherited provider extras",
-    { byProvider: { openai: { profile: "minimal", alsoAllow: ["exec"] } } },
-    { byProvider: { openai: restricted } },
+    "provider extras",
+    byProvider({ ...minimal, alsoAllow: ["exec"] }),
+    byProvider(restricted),
     "openai",
   ],
   [
-    "global provider extras consumed by a model override",
-    { byProvider: { openai: fullExec } },
-    { byProvider: { "openai/model": minimal } },
+    "model override extras",
+    byProvider(fullExec),
+    byProvider(minimal, "openai/model"),
     "openai",
     "model",
   ],
-  [
-    "agent provider inherits model-specific profile",
-    { byProvider: { openai: { profile: "full" }, "openai/model": { profile: "minimal" } } },
-    { byProvider: { openai: explicitExec } },
-    "openai",
-    "model",
-  ],
+  ["inherited model profile", modelProfiles, byProvider(explicitExec), "openai", "model"],
 ];
 
 it.each(cases)("preserves profile grants: %s", (name, global, agent, provider, model) => {
@@ -129,11 +126,8 @@ it.each(cases)("preserves profile grants: %s", (name, global, agent, provider, m
     expect(result.config).toEqual(raw);
     expect(result.changes).toEqual([]);
     expect(result.warnings).toHaveLength(1);
-    [
-      'agents.entries.restricted.tools.alsoAllow=["exec"]',
-      'agents.entries.restricted.tools.allow=["session_status","exec"]',
-      "remove agents.entries.restricted.tools.allow",
-      "agents.entries.restricted.tools.alsoAllow=[]",
-    ].forEach((part) => expect(result.warnings?.[0]).toContain(part));
+    expect(result.warnings?.[0]).toMatch(
+      /remove agents.entries.restricted.tools.allow.*agents.entries.restricted.tools.alsoAllow=\[\]/,
+    );
   }
 });

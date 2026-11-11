@@ -50,6 +50,13 @@ export type NextcloudTalkInboundAttachment = {
   hideDownload: boolean;
 };
 
+export type NextcloudTalkInboundQuote = {
+  id: string;
+  senderId: string;
+  senderName: string;
+  body: string;
+};
+
 export type NextcloudTalkInboundMessage = {
   messageId: string;
   roomToken: string;
@@ -64,6 +71,7 @@ export type NextcloudTalkInboundMessage = {
   isGroupChat: boolean;
   attachment?: NextcloudTalkInboundAttachment;
   attachmentIssue?: "media_missing_metadata";
+  quote?: NextcloudTalkInboundQuote;
 };
 
 export type NextcloudTalkWebhookHeaders = {

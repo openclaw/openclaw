@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -31,6 +32,12 @@ async function geometry(page: Page) {
 
 type DetailsMotionFrame = {
   open: boolean;
+  detailsLeft: number;
+  detailsWidth: number;
+  detailsHeight: number;
+  detailsDisplay: string;
+  detailsPadding: string;
+  detailsBackground: string;
   frameRight: number;
   threadRight: number;
   threadWidth: number;
@@ -50,11 +57,13 @@ async function captureDetailsMotion(
   page: Page,
   input: "pointer" | "reversed" | "keyboard" = "pointer",
 ) {
+  await waitForChatScrollIdle(page);
   await page.evaluate(() => {
     const thread = document.querySelector<HTMLElement>(".chat-thread")!;
     const frame = document.querySelector<HTMLElement>(".chat-main__conversation-frame")!;
     const column = document.querySelector<HTMLElement>(".chat-thread-inner")!;
     const composer = document.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+    const details = document.querySelector<HTMLElement>(".chat-details")!;
     const trigger = document.querySelector<HTMLButtonElement>(".chat-details-toggle")!;
     const threadBounds = thread.getBoundingClientRect();
     const anchor = [...thread.querySelectorAll<HTMLElement>(".chat-group")].find((group) => {
@@ -67,8 +76,16 @@ async function captureDetailsMotion(
     const sample = () => {
       const columnBox = column.getBoundingClientRect();
       const composerBox = composer.getBoundingClientRect();
+      const detailsBox = details.getBoundingClientRect();
+      const detailsStyle = getComputedStyle(details);
       probe.frames.push({
         open: trigger.getAttribute("aria-expanded") === "true",
+        detailsLeft: detailsBox.left,
+        detailsWidth: detailsBox.width,
+        detailsHeight: detailsBox.height,
+        detailsDisplay: detailsStyle.display,
+        detailsPadding: detailsStyle.padding,
+        detailsBackground: detailsStyle.backgroundColor,
         frameRight: frame.getBoundingClientRect().right,
         threadRight: thread.getBoundingClientRect().right,
         threadWidth: thread.getBoundingClientRect().width,
@@ -89,13 +106,11 @@ async function captureDetailsMotion(
     await trigger.click();
   }
   if (input === "reversed") {
-    // Reverse a moving column, rather than sleeping for an assumed animation duration.
+    // Reverse a moving surface, including floating Details without a reserved column.
     await page.evaluate(async () => {
       const frames = window.detailsMotionProbe!.frames;
       for (let attempt = 0; attempt < 120; attempt += 1) {
-        if (
-          frames.some((frame) => Math.abs(frame.composerCenter - frames[0]!.composerCenter) > 1)
-        ) {
+        if (frames.some((frame) => Math.abs(frame.detailsLeft - frames[0]!.detailsLeft) > 1)) {
           return;
         }
         await new Promise(requestAnimationFrame);
@@ -123,10 +138,24 @@ async function captureDetailsMotion(
 
 function expectSteadyDetailsMotion(frames: DetailsMotionFrame[]) {
   expect(frames.length).toBeGreaterThan(1);
-  for (const key of ["threadWidth", "anchorTop", "scrollTop"] as const) {
-    const values = frames.map((frame) => frame[key]);
-    expect(Math.max(...values) - Math.min(...values)).toBeLessThan(1);
+  const painted = frames.filter((frame) => frame.detailsDisplay !== "none");
+  expect(painted.length).toBeGreaterThan(0);
+  for (const key of ["detailsWidth", "detailsHeight"] as const) {
+    const values = painted.map((frame) => frame[key]);
+    expect(Math.max(...values) - Math.min(...values), key).toBeLessThan(1);
   }
+  for (const frame of painted) {
+    expect(frame.detailsPadding).toBe(painted[0]!.detailsPadding);
+    expect(frame.detailsBackground).toBe(painted[0]!.detailsBackground);
+  }
+  const last = frames.at(-1)!;
+  expect(last.detailsDisplay === "none").toBe(!last.open);
+  const widths = frames.map((frame) => frame.threadWidth);
+  expect(Math.max(...widths) - Math.min(...widths), "threadWidth").toBeLessThan(1);
+  // Offscreen measurements may compensate scrollTop while preserving this visible anchor.
+  // Match the anchor owner's inclusive one-pixel settling tolerance.
+  const anchors = frames.map((frame) => frame.anchorTop);
+  expect(Math.max(...anchors) - Math.min(...anchors), "anchorTop").toBeLessThanOrEqual(1);
   for (const [left, right] of [
     ["threadRight", "frameRight"],
     ["columnCenter", "composerCenter"],
@@ -276,6 +305,23 @@ suite.define(() => {
             return Math.abs(boxes.thread.right - boxes.frame.right);
           })
           .toBeLessThan(1);
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await openChatDetails(page);
+        expect(
+          await page
+            .locator(".chat-details")
+            .evaluate((panel) => panel.classList.contains("chat-details--docked")),
+        ).toBe(false);
+        for (const reducedMotion of ["no-preference", "reduce"] as const) {
+          await page.emulateMedia({ reducedMotion });
+          const inputs =
+            reducedMotion === "reduce"
+              ? (["pointer", "pointer"] as const)
+              : (["pointer", "pointer", "reversed"] as const);
+          for (const input of inputs) {
+            expectSteadyDetailsMotion(await captureDetailsMotion(page, input));
+          }
+        }
         const side = await page.locator('[data-region="side"]:visible').boundingBox();
         expect((await geometry(page)).thread.right).toBeLessThanOrEqual(side!.x);
         await composer.click();

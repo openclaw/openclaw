@@ -4,7 +4,7 @@ import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
+import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI automation condition-trigger authoring",
@@ -42,14 +42,7 @@ function cronMethodResponses(jobs: CronJob[]) {
       { match: { lastRunStatus: "error" }, response: listResponse([]) },
       { response: listResponse(jobs) },
     ]),
-    "cron.runs": {
-      entries: [],
-      total: 0,
-      offset: 0,
-      limit: 50,
-      hasMore: false,
-      nextOffset: null,
-    },
+    "cron.runs": cronRuns([]),
     "cron.status": { enabled: true, triggersEnabled: true, jobs: jobs.length, nextWakeAtMs: null },
   };
 }
@@ -140,7 +133,7 @@ suite.define(() => {
       const message = "Condition script is invalid";
       await gateway.rejectDeferred("cron.add", { code: "INVALID_REQUEST", message });
 
-      const errorBanner = page.locator(".cron-error-banner");
+      const errorBanner = page.locator(".callout.danger");
       await errorBanner.waitFor({ state: "visible" });
       expect(await errorBanner.textContent()).toContain(message);
       expect(await triggerScript.inputValue()).toBe("const x = ;");

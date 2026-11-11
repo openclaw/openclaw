@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
@@ -76,7 +77,11 @@ export async function removeCronRunContinuationSessionIfIdle(
       },
     );
   const original = await readEntry();
-  if (!original || !canRemoveCronRunContinuation(original.cronRunContinuation)) {
+  if (
+    !original ||
+    (original.pinnedAt !== undefined && isPinnableSessionEntry(sessionKey, original)) ||
+    !canRemoveCronRunContinuation(original.cronRunContinuation)
+  ) {
     return;
   }
   await runSessionMutation({

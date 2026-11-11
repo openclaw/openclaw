@@ -26,6 +26,7 @@ export {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
   extractBatchErrorMessage,
+  extractEmbeddingUsage,
   formatBatchErrorDetail,
   formatEmbeddingModelInput,
   formatEmbeddingTaskText,
@@ -69,10 +70,12 @@ export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,
   MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderAdapter,
   MemoryEmbeddingProviderCallOptions,
-  MemoryEmbeddingProviderCreateOptions,
-  MemoryEmbeddingProviderCreateResult,
   MemoryEmbeddingProviderIndexIdentity,
   MemoryEmbeddingProviderRuntime,
 } from "../plugins/memory-embedding-providers.js";
+export type {
+  MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCreateOptions,
+  MemoryEmbeddingProviderCreateResult,
+} from "../plugins/registry-contribution-types.js";

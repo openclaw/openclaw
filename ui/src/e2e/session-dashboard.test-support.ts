@@ -2,15 +2,6 @@ import { board } from "./chat-layout-fixtures.test-support.ts";
 
 export const sessionKey = "agent:main:dashboard";
 const emptyBoard = board(sessionKey);
-export const emptyCronList = (snapshotRevision: string) => ({
-  jobs: [],
-  snapshotRevision,
-  offset: 0,
-  limit: 50,
-  total: 0,
-  hasMore: false,
-  nextOffset: null,
-});
 export function dashboardWidget<T extends object>(name: string, title: string, overrides: T) {
   return {
     name,

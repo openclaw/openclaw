@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 
 export { maybeLoadShellEnvForGenerationProviders } from "openclaw/plugin-sdk/test-live-auth";
@@ -14,4 +16,22 @@ export function createReferencePng(
     }
   }
   return encodePngRgba(buffer, width, height);
+}
+
+export function withPluginsEnabled(cfg: OpenClawConfig): OpenClawConfig {
+  return { ...cfg, plugins: { ...cfg.plugins, enabled: true } };
+}
+
+export function hasTrustedFfmpegForLiveVoiceNote(provider: string): boolean {
+  try {
+    resolveFfmpegBin();
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("ffmpeg not found in trusted system directories")) {
+      console.warn(`[${provider}:live] skip voice-note transcode: ffmpeg unavailable`);
+      return false;
+    }
+    throw error;
+  }
 }

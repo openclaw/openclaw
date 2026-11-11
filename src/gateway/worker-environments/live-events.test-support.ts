@@ -12,6 +12,7 @@ import { captureSessionTranscriptTargetBinding } from "../../config/sessions/tra
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { prepareWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 
 export const SID = "session-worker-live";
@@ -22,26 +23,18 @@ export const LOCAL = { agentId: "main", sessionId: SID, sessionKey: KEY };
 function connectionIdentity(n?: number): Identity {
   const suffix = n === undefined ? "worker-live" : `farm-${n}`;
   const environmentId = n === undefined ? "environment-live" : `environment-${suffix}`;
-  const sessionId = n === undefined ? SID : `session-${suffix}`;
-  const runId = n === undefined ? RUN : `run-${suffix}`;
-  return {
-    environmentId,
+  const turnClaim: NonNullable<Identity["turnClaim"]> = {
+    sessionId: `session-${suffix}`,
+    claimId: `claim-${suffix}`,
+    runId: `run-${suffix}`,
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId, ownerEpoch: EPOCH },
+  };
+  return createWorkerConnectionIdentity(turnClaim, {
     credentialHash: ["credential", "hash", "live"].join("-"),
     bundleHash: "b".repeat(64),
-    sessionId,
-    runId,
-    turnClaim: {
-      sessionId,
-      claimId: `claim-${suffix}`,
-      runId,
-      placementGeneration: 4,
-      owner: { kind: "worker", environmentId, ownerEpoch: EPOCH },
-    },
-    ownerEpoch: EPOCH,
-    rpcSetVersion: 1,
     protocolFeatures: ["worker-live-event-v1"],
-    credentialExpiresAtMs: 10_000,
-  };
+  });
 }
 export const ID = connectionIdentity();
 export const farmIdentity = (n: number) => connectionIdentity(n);

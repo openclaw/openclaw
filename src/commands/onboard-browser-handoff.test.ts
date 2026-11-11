@@ -8,6 +8,7 @@ import * as gatewayCall from "../gateway/call.js";
 import * as uiLinks from "../gateway/control-ui-links.js";
 import * as browserHandoff from "../infra/browser-handoff.js";
 import * as browserOpen from "../infra/browser-open.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import * as handoff from "./control-ui-handoff.js";
 import { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
 
@@ -40,7 +41,7 @@ beforeEach(async () => {
   sharedMocks = createMocks();
   prompter = createWizardPrompter();
   await Promise.all([import("../agents/utility-model.js"), import("./onboard-agent-target.js")]);
-  vi.useFakeTimers({ now: 0, toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({ now: 0, toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   for (const name of [
     "OPENCLAW_GATEWAY_TOKEN",
     "OPENCLAW_GATEWAY_PASSWORD",
@@ -72,23 +73,16 @@ afterEach(() => {
 });
 
 function displayedNotes() {
-  return vi
-    .mocked(prompter.note)
-    .mock.calls.map(([message]) => message)
-    .join("\n");
+  const notes = vi.mocked(prompter.note).mock.calls;
+  return notes.map(([text]) => text).join("\n");
 }
 
 async function runHandoff(
   params: Partial<Parameters<typeof runBrowserHatchHandoff>[0]> = {},
   advanceMs = 0,
 ) {
-  const result = runBrowserHatchHandoff({
-    config: {},
-    prompter,
-    ...params,
-  });
-  await vi.advanceTimersByTimeAsync(advanceMs);
-  return await result;
+  const result = runBrowserHatchHandoff({ config: {}, prompter, ...params });
+  return (await Promise.all([result, vi.advanceTimersByTimeAsync(advanceMs)]))[0];
 }
 
 it("opens utility-only setup on the custodian route", async () => {
@@ -120,8 +114,7 @@ it.each(["heartbeat", "disconnect", "new-tab"] as const)(
           ...(change === "new-tab" ? { instanceId: "new-tab" } : {}),
         },
       ]);
-    const result = await runHandoff({}, change === "new-tab" ? 0 : 60_000);
-    expect(result).toBe(change === "new-tab");
+    expect(await runHandoff({}, change === "new-tab" ? 0 : 60_000)).toBe(change === "new-tab");
     expect(Date.now()).toBe(change === "new-tab" ? 0 : 60_000);
     if (change !== "new-tab") {
       expect(prompter.note).not.toHaveBeenCalledWith(
@@ -132,22 +125,21 @@ it.each(["heartbeat", "disconnect", "new-tab"] as const)(
   },
 );
 
-it("preserves the coordinator target in the headless browser handoff", async () => {
-  expect(await runHandoff({ agentId: "coordinator" })).toBe(true);
-  expect(displayedNotes()).toContain("?session=agent%3Acoordinator%3Amain#");
-});
-
-it("prints an HTTPS tunnel destination for a headless loopback TLS Gateway", async () => {
-  await runHandoff({
-    config: {
-      gateway: {
-        bind: "loopback",
-        controlUi: { basePath: "/control" },
-        tls: { enabled: true },
+it("prints the coordinator's HTTPS tunnel destination for a headless loopback TLS Gateway", async () => {
+  expect(
+    await runHandoff({
+      agentId: "coordinator",
+      config: {
+        gateway: {
+          bind: "loopback",
+          controlUi: { basePath: "/control" },
+          tls: { enabled: true },
+        },
       },
-    },
-  });
+    }),
+  ).toBe(true);
   const displayed = displayedNotes();
+  expect(displayed).toContain("?session=agent%3Acoordinator%3Amain#");
   expect(displayed).toContain("https://localhost:18789/control/");
   expect(displayed).not.toContain("http://localhost:18789/control/");
   expect(displayed).toContain("#bootstrapToken=one-time-bootstrap");
@@ -222,22 +214,24 @@ it("keeps resolved password SecretRefs inside the Gateway presence request", asy
       },
     },
   });
-  expect(sharedMocks.callGateway).toHaveBeenCalledTimes(2);
-  for (const [options] of sharedMocks.callGateway.mock.calls) {
-    expect(options.password).toBe(gatewayPassword);
-  }
+  const passwords = sharedMocks.callGateway.mock.calls.map(([options]) => options.password);
+  expect(passwords).toEqual([gatewayPassword, gatewayPassword]);
   expect(displayedNotes()).not.toContain(gatewayPassword);
   expect(displayedNotes()).toContain("#bootstrapToken=one-time-bootstrap");
   expect(sharedMocks.issueControlUiBrowserHandoff).toHaveBeenCalledWith(links);
 });
 
-it.each(["suppressed", "disabled", "document", "presence", "bootstrap"] as const)(
+it.each(["suppressed", "disabled", "document", "abort", "presence", "bootstrap"] as const)(
   "does not open browser credentials after a %s gate failure",
   async (reason) => {
-    if (reason === "document") {
-      sharedMocks.waitForControlUiDocument.mockResolvedValue({
-        ready: false,
-        reason: "Control UI build failed.",
+    const scope = new AsyncWorkScope();
+    if (reason === "document" || reason === "abort") {
+      sharedMocks.waitForControlUiDocument.mockImplementation(async ({ onPending }) => {
+        onPending?.();
+        if (reason === "abort") {
+          scope.beginClose();
+        }
+        return { ready: false, reason: "Control UI build failed." };
       });
     } else if (reason === "presence") {
       sharedMocks.callGateway.mockReset().mockRejectedValue(new Error("gateway unavailable"));
@@ -245,18 +239,23 @@ it.each(["suppressed", "disabled", "document", "presence", "bootstrap"] as const
       sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
       sharedMocks.issueControlUiBrowserHandoff.mockRejectedValue(new Error("state unavailable"));
     }
-    const result = await runHandoff({
-      config: reason === "disabled" ? { gateway: { controlUi: { enabled: false } } } : {},
-      suppressTokenOutput: reason === "suppressed",
-    });
-    expect(result).toBe(false);
+    const run = () =>
+      runHandoff({
+        config: reason === "disabled" ? { gateway: { controlUi: { enabled: false } } } : {},
+        suppressTokenOutput: reason === "suppressed",
+      });
+    await (reason === "abort"
+      ? expect(scope.run(run)).rejects.toThrow()
+      : expect(run()).resolves.toBe(false));
     expect(sharedMocks.openUrlPrivately).not.toHaveBeenCalled();
     if (reason === "suppressed" || reason === "disabled") {
       expect(sharedMocks.detectBrowserOpenSupport).not.toHaveBeenCalled();
       expect(sharedMocks.waitForControlUiDocument).not.toHaveBeenCalled();
     }
-    if (reason === "document") {
+    if (reason === "document" || reason === "abort") {
       expect(sharedMocks.callGateway).not.toHaveBeenCalled();
+      expect(prompter.progress).toHaveBeenCalledWith("Preparing the Control UI…");
+      expect(vi.mocked(prompter.progress).mock.results[0]?.value.stop).toHaveBeenCalledOnce();
     }
     if (reason === "bootstrap") {
       expect(prompter.note).not.toHaveBeenCalled();
@@ -265,13 +264,3 @@ it.each(["suppressed", "disabled", "document", "presence", "bootstrap"] as const
     }
   },
 );
-
-it("starts and stops preparation progress only when the document reports pending", async () => {
-  sharedMocks.waitForControlUiDocument.mockImplementation(async ({ onPending }) => {
-    onPending?.();
-    return { ready: true };
-  });
-  await runHandoff();
-  expect(prompter.progress).toHaveBeenCalledWith("Preparing the Control UI…");
-  expect(vi.mocked(prompter.progress).mock.results[0]?.value.stop).toHaveBeenCalledOnce();
-});

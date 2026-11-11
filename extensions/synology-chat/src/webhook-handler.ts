@@ -1,5 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { writeJsonWithoutCharset as respondJson } from "openclaw/plugin-sdk/http-response-runtime";
 import {
@@ -37,6 +41,19 @@ const PREAUTH_BODY_TIMEOUT_MS = 5_000;
 const PREAUTH_MAX_REQUESTS_PER_MINUTE = 10;
 const INVALID_TOKEN_WINDOW_MS = 60_000;
 const INVALID_TOKEN_MAX_TRACKED_KEYS = 5_000;
+
+type SynologyInboundMessage = {
+  resolveChannelIngress: (
+    contextBinding: ChannelIngressContextBinding,
+  ) => Promise<ResolvedChannelMessageIngress>;
+  messageId: string;
+  body: string;
+  from: string;
+  senderName: string;
+  chatType: string;
+  commandAuthorized: boolean;
+  chatUserId?: string;
+};
 
 type InvalidTokenRateLimitState = {
   count: number;
@@ -97,19 +114,6 @@ function pickAlias(record: Record<string, unknown>, aliases: string[]): string |
   return undefined;
 }
 
-function parseQueryParams(req: IncomingMessage): Record<string, unknown> {
-  try {
-    const url = new URL(req.url ?? "", "http://localhost");
-    const out: Record<string, unknown> = {};
-    for (const [key, value] of url.searchParams.entries()) {
-      out[key] = value;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
 function parseJsonBody(body: string): Record<string, unknown> {
   if (!body.trim()) {
     return {};
@@ -140,40 +144,6 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
     return bearerMatch[1].trim();
   }
   return auth;
-}
-
-// Token precedence is body, query, then headers.
-function parseRawEvent(
-  req: IncomingMessage,
-  body: string,
-): {
-  rawEvent: SynologyWebhookRawEvent;
-  token: string | undefined;
-} {
-  const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
-
-  let bodyFields: Record<string, unknown>;
-  if (contentType.includes("application/json")) {
-    bodyFields = parseJsonBody(body);
-  } else if (contentType.includes("application/x-www-form-urlencoded")) {
-    bodyFields = querystring.parse(body);
-  } else {
-    // Fallback for clients with missing/incorrect content-type.
-    // Try JSON first, then form-urlencoded.
-    try {
-      bodyFields = parseJsonBody(body);
-    } catch {
-      bodyFields = querystring.parse(body);
-    }
-  }
-
-  const queryFields = parseQueryParams(req);
-  const headerToken = extractTokenFromHeaders(req);
-
-  return {
-    rawEvent: { bodyFields, queryFields },
-    token: pickAlias(bodyFields, ["token"]) ?? pickAlias(queryFields, ["token"]) ?? headerToken,
-  };
 }
 
 function parsePayload(
@@ -222,10 +192,7 @@ export interface WebhookHandlerDeps {
 
 export async function processSynologyWebhookIngressEvent(params: {
   account: ResolvedSynologyChatAccount;
-  deliver: (
-    msg: import("./inbound-context.js").SynologyInboundMessage,
-    lifecycle: SynologyIngressLifecycle,
-  ) => Promise<unknown>;
+  deliver: (msg: SynologyInboundMessage, lifecycle: SynologyIngressLifecycle) => Promise<unknown>;
   log?: WebhookHandlerDeps["log"];
   rawEvent: SynologyWebhookRawEvent;
   lifecycle: SynologyIngressLifecycle;
@@ -237,9 +204,7 @@ export async function processSynologyWebhookIngressEvent(params: {
       "Synology Chat claimed webhook cannot be normalized.",
     );
   }
-  const resolveChannelIngress = async (
-    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
-  ) => {
+  const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) => {
     const auth = await authorizeUserForDmWithIngress({
       accountId: params.account.accountId,
       userId: payload.user_id,
@@ -371,15 +336,48 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         return;
       }
 
-      let raw: ReturnType<typeof parseRawEvent>;
+      let parsedRawEvent: SynologyWebhookRawEvent;
+      let parsedToken: string | undefined;
       try {
-        raw = parseRawEvent(req, body);
+        // Token precedence is body, query, then headers.
+        const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
+
+        let bodyFields: Record<string, unknown>;
+        if (contentType.includes("application/json")) {
+          bodyFields = parseJsonBody(body);
+        } else if (contentType.includes("application/x-www-form-urlencoded")) {
+          bodyFields = querystring.parse(body);
+        } else {
+          // Fallback for clients with missing/incorrect content-type.
+          // Try JSON first, then form-urlencoded.
+          try {
+            bodyFields = parseJsonBody(body);
+          } catch {
+            bodyFields = querystring.parse(body);
+          }
+        }
+
+        let queryFields: Record<string, unknown>;
+        try {
+          const url = new URL(req.url ?? "", "http://localhost");
+          queryFields = {};
+          for (const [key, value] of url.searchParams.entries()) {
+            queryFields[key] = value;
+          }
+        } catch {
+          queryFields = {};
+        }
+        const headerToken = extractTokenFromHeaders(req);
+
+        parsedRawEvent = { bodyFields, queryFields };
+        parsedToken =
+          pickAlias(bodyFields, ["token"]) ?? pickAlias(queryFields, ["token"]) ?? headerToken;
       } catch (err) {
         log?.warn("Failed to parse webhook payload", err);
         respondJson(res, 400, { error: "Invalid request body" });
         return;
       }
-      const payload = parsePayload(raw.rawEvent, raw.token);
+      const payload = parsePayload(parsedRawEvent, parsedToken);
       if (!payload) {
         respondJson(res, 400, { error: "Missing required fields (token, user_id, text)" });
         return;
@@ -437,7 +435,7 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         respondJson(res, 429, { error: "Rate limit exceeded" });
         return;
       }
-      rawEvent = raw.rawEvent;
+      rawEvent = parsedRawEvent;
     } finally {
       // Only bound the pre-auth request pipeline; async reply delivery is outside webhook ingress.
       requestLifecycle.release();

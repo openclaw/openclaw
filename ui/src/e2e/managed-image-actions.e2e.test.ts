@@ -1,15 +1,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import {
-  captureUiProofEnabled,
-  createChatFlowE2eSuite,
-  expectDefined,
-  installMockGateway,
-} from "./chat-flow.test-support.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
+import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { fulfillWithControlUiCsp } from "./control-ui-csp.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -17,9 +12,6 @@ const controlUiBasePath = "/rosita";
 
 suite.define(() => {
   it.each([0, 2])("reuses full image bytes after %i failed download attempts", async (failures) => {
-    const proofDir = captureUiProofEnabled
-      ? createControlUiE2eArtifactDir("managed-image-actions")
-      : undefined;
     const filenamePrefix = "a".repeat(119);
     const imageTitle = `${filenamePrefix}📊`;
     const context = await suite.newBrowserContext({
@@ -29,26 +21,8 @@ suite.define(() => {
       isMobile: failures === 0,
     });
     const page = await context.newPage();
-    const screenshot = async (filename: string, fullPage = false) => {
-      if (proofDir) {
-        await page.screenshot({
-          path: path.join(proofDir, filename),
-          ...(fullPage ? {} : { animations: "disabled" }),
-          fullPage,
-        });
-      }
-    };
     await page.clock.install();
-    await page.route(`**${controlUiBasePath}/chat`, async (route) => {
-      const response = await route.fetch();
-      await route.fulfill({
-        response,
-        headers: {
-          ...response.headers(),
-          "content-security-policy": buildControlUiCspHeader(),
-        },
-      });
-    });
+    await page.route(`**${controlUiBasePath}/chat`, (route) => fulfillWithControlUiCsp(route));
     const attachmentId = crypto.randomUUID();
     const artifactId = `artifact_managed_image_${attachmentId}`;
     const imageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
@@ -120,7 +94,6 @@ suite.define(() => {
         )
         .toBe(1280);
       expect(requestedVariants).toEqual(["thumbnail"]);
-      await screenshot("ticketed-generated-image-subpath.png", true);
 
       const imageFrame = page.locator(".chat-image-frame--managed").filter({ has: image });
       const imageActions = imageFrame.locator(".chat-image-actions");
@@ -128,7 +101,6 @@ suite.define(() => {
       let downloadButton;
       if (failures === 0) {
         expect(await imageActions.isVisible()).toBe(false);
-        await screenshot("image-actions-overlay.png");
         await openImage.tap();
         const lightbox = page.getByRole("dialog", { name: `Image preview: ${imageTitle}` });
         await lightbox.waitFor({ state: "visible" });
@@ -153,7 +125,6 @@ suite.define(() => {
         expect(actionsBox!.y + actionsBox!.height).toBeLessThanOrEqual(
           imageBox!.y + imageBox!.height,
         );
-        await screenshot("image-actions-overlay.png");
         await page.mouse.move(0, 0);
         await downloadButton.focus();
         expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe(
@@ -168,11 +139,12 @@ suite.define(() => {
       }
       for (let attempt = 0; attempt < failures; attempt += 1) {
         await downloadButton.click();
-        const error = page.getByText("Could not download this image. Try again.", {
+        const error = page.getByText("Couldn’t download this image. Try again.", {
           exact: true,
         });
         await error.waitFor({ state: "visible" });
-        await page.clock.runFor(6_000);
+        // Errors stay 10 s, then fade out.
+        await page.clock.runFor(10_200);
         await error.waitFor({ state: "hidden" });
         expect(requestedVariants.filter((variant) => variant === "full")).toHaveLength(attempt + 1);
       }
@@ -182,11 +154,7 @@ suite.define(() => {
         return download;
       };
       expect((await downloadImage()).suggestedFilename()).toBe(`${filenamePrefix}.png`);
-      const downloadedPath = expectDefined(
-        await (await downloadImage()).path(),
-        "downloaded image path",
-      );
-      expect(await readFile(downloadedPath)).toEqual(imageBytes);
+      expect(await readControlUiE2eDownload(await downloadImage())).toEqual(imageBytes);
 
       if (failures > 0) {
         await openImage.click();
@@ -194,7 +162,6 @@ suite.define(() => {
       await page
         .getByRole("dialog", { name: `Image preview: ${imageTitle}` })
         .waitFor({ state: "visible" });
-      await screenshot("image-fullscreen.png");
       await page
         .locator("openclaw-image-lightbox openclaw-modal-dialog > dialog")
         .evaluate(finishElementAnimations);

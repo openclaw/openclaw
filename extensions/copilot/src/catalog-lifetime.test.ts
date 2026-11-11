@@ -16,6 +16,7 @@ import {
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../test-support/message-fixtures.test-support.js";
 import { createCopilotAgentHarness } from "../harness.js";
 import { makeCopilotModel, makeUserTurnRecorder } from "./attempt.test-support.js";
 import { createCopilotFaultPeer } from "./catalog-lifetime.test-support.js";
@@ -62,11 +63,10 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     sessionKey,
     storePath: path.join(state.sessionsDir(), "sessions.json"),
   };
-  const userMessage = {
-    role: "user" as const,
-    content: "Exercise the deterministic catalog lifetime fixture.",
-    timestamp: Date.now(),
-  };
+  const userMessage = makeUserMessage(
+    "Exercise the deterministic catalog lifetime fixture.",
+    Date.now(),
+  );
   const config = { tools: { codeMode: { enabled: true } } };
   const host = await createAdmittedHostCapabilityTestFixture({
     config,

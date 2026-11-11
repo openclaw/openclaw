@@ -1,6 +1,7 @@
 import { vi } from "vitest";
+import type { SessionTranscriptWorkerReply } from "../../src/config/sessions/session-transcript-worker.types.js";
 
-export type ObservedTranscriptHydration = {
+type ObservedTranscriptHydration = {
   kind: string;
   events: number;
   totalEvents: number | undefined;
@@ -26,16 +27,12 @@ export async function observeTranscriptHydrations() {
     }, options).then((reply) => {
       if (request?.kind === "transcript-hydration") {
         const value = unwrapSessionTranscriptWorkerReply(
-          reply as Parameters<typeof unwrapSessionTranscriptWorkerReply>[0],
-        ) as {
-          kind: string;
-          eventCount?: number;
-          snapshot?: { events: unknown[]; totalEvents: number };
-        };
+          reply as SessionTranscriptWorkerReply<"transcript-hydration">,
+        );
         hydrations.push({
           kind: value.kind,
-          events: value.snapshot?.events.length ?? value.eventCount ?? 0,
-          totalEvents: value.snapshot?.totalEvents,
+          events: value.kind === "bounded" ? value.snapshot.events.length : value.eventCount,
+          totalEvents: value.kind === "full" ? undefined : value.snapshot.totalEvents,
         });
       }
       return reply;

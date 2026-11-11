@@ -5,6 +5,8 @@ import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import * as iconLoader from "../plugins/icon-loader.ts";
 import { createChatToolIcons } from "./chat-tool-icon-controller.ts";
 
@@ -58,17 +60,13 @@ function setup() {
     }
     throw new Error(`Unexpected request: ${method}`);
   });
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+    hello: gatewayHelloForMethods(["plugins.list", "tools.effective"]),
+  });
   const context = {
     resourceBasePath: "",
     gateway: {
@@ -127,6 +125,135 @@ afterEach(() => {
 });
 
 describe("chat tool icon ownership", () => {
+  it("keeps fallback icons without broad read access and retires artwork when access changes", async () => {
+    const { icon, context, update, request, fetch } = setup();
+    const setScopes = (scopes: string[]) => {
+      context.gateway.snapshot.hello = gatewayHelloForMethods(
+        ["plugins.list", "tools.effective"],
+        scopes,
+      );
+      update();
+    };
+    setScopes(["operator.sessions.read"]);
+    for (const name of ["meeting_status", "meeting_list", "other"]) {
+      expect(icon(name)).toBeUndefined();
+      await Promise.resolve();
+    }
+    expect(request).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    setScopes(["operator.read"]);
+    await vi.waitFor(() => expect(icon("meeting_status")?.url).toBe("blob:plugin-icon"));
+    setScopes(["operator.sessions.read"]);
+    expect(icon("meeting_status")).toBeUndefined();
+    const calls = request.mock.calls.length;
+    icon("new_tool");
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(calls);
+    setScopes(["operator.read"]);
+    await vi.waitFor(() => expect(icon("meeting_status")?.url).toBe("blob:plugin-icon"));
+  });
+
+  it("uses third-party logos only for plugin-owned tools and falls back through activity artwork", async () => {
+    const { icon, request, fetch } = setup();
+    const logo = vi.spyOn(iconLoader, "fetchPluginIconBlobUrl").mockResolvedValue("blob:brand");
+    request.mockImplementation(async (method) =>
+      method === "plugins.list"
+        ? {
+            ...plugins,
+            plugins: plugins.plugins.map((plugin) =>
+              Object.assign({}, plugin, { hasToolBrandIcon: true }),
+            ),
+          }
+        : {
+            ...catalog,
+            groups: [
+              {
+                ...catalog.groups[0]!,
+                tools: [
+                  ...catalog.groups[0]!.tools.map((tool) =>
+                    tool.id === "meeting_list" ? Object.assign({}, tool, { source: "mcp" }) : tool,
+                  ),
+                  { ...catalog.groups[0]!.tools[0]!, id: "web_search", source: "core" },
+                ],
+              },
+            ],
+          },
+    );
+    icon("meeting_status");
+    icon("meeting_list");
+    icon("web_search");
+    await vi.waitFor(() => expect(icon("meeting_status")?.url).toBe("blob:brand"));
+    expect(icon("meeting_list")?.url).toBe("blob:brand");
+    expect(icon("web_search")).toBeUndefined();
+    expect(logo).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+    icon("meeting_status")?.onError();
+    flush();
+    await vi.waitFor(() => expect(icon("meeting_status")?.url).toBe("blob:plugin-icon"));
+    expect(icon("meeting_list")?.url).toBe("blob:plugin-icon");
+    expect(fetch).toHaveBeenCalledOnce();
+    icon("meeting_status")?.onError();
+    flush();
+    expect(icon("meeting_status")).toBeUndefined();
+    expect(icon("meeting_list")).toBeUndefined();
+  });
+
+  it("keeps activity SVGs for canonical tools even when plugin-owned, without treating namespaced tools as core", async () => {
+    const { icon, request, fetch } = setup();
+    const logo = vi.spyOn(iconLoader, "fetchPluginIconBlobUrl").mockResolvedValue("blob:brand");
+    request.mockImplementation(async (method) =>
+      method === "plugins.list"
+        ? {
+            ...plugins,
+            plugins: plugins.plugins.map((plugin) =>
+              Object.assign({}, plugin, { hasToolBrandIcon: true }),
+            ),
+          }
+        : {
+            ...catalog,
+            groups: [
+              {
+                ...catalog.groups[0]!,
+                tools: [
+                  "browser",
+                  "canvas",
+                  "web_search",
+                  "mcp__notes__browser",
+                  "search",
+                  "structured_output",
+                ].map((id) => Object.assign({}, catalog.groups[0]!.tools[0]!, { id })),
+              },
+            ],
+          },
+    );
+    for (const name of ["browser", "canvas", "web_search"]) {
+      await vi.waitFor(() => expect(icon(name)?.url).toBe("blob:plugin-icon"));
+      expect(icon(name)?.branding).toBe(false);
+    }
+    for (const name of ["mcp__notes__browser", "search", "structured_output"]) {
+      await vi.waitFor(() => expect(icon(name)?.url).toBe("blob:brand"));
+    }
+    expect(logo).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("uses activity artwork when a third-party logo cannot be fetched", async () => {
+    const { icon, request, fetch } = setup();
+    vi.spyOn(iconLoader, "fetchPluginIconBlobUrl").mockResolvedValue(null);
+    request.mockImplementation(async (method) =>
+      method === "plugins.list"
+        ? {
+            ...plugins,
+            plugins: plugins.plugins.map((plugin) =>
+              Object.assign({}, plugin, { hasToolBrandIcon: true }),
+            ),
+          }
+        : catalog,
+    );
+    await vi.waitFor(() => expect(icon("meeting_status")?.url).toBe("blob:plugin-icon"));
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("invalidates rendered fallbacks when the session identity first becomes available", async () => {
     const { icon, update, setSession } = setup();
     setSession(undefined);

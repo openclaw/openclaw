@@ -26,6 +26,7 @@ import {
   normalizeCodexContextFilePath,
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
+import type { CodexAgentsMdSnapshot, CodexNativeModelContext } from "./client-workspace-state.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -157,6 +158,8 @@ export function buildCodexSystemPromptReport(params: {
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
   sourceTools?: readonly AnyAgentTool[];
+  /** What Codex recorded after the turn; absent before the first turn or off-host. */
+  nativeModelContext?: CodexNativeModelContext;
 }): CodexSystemPromptReport {
   const tools = flattenCodexDynamicToolFunctions(params.tools);
   const sources = new Map((params.sourceTools ?? []).map((tool) => [tool.name, tool]));
@@ -179,6 +182,11 @@ export function buildCodexSystemPromptReport(params: {
   const skillsPrompt = params.skillsPrompt.trim();
   const bootstrapMaxChars = params.attempt.config?.agents?.defaults?.bootstrapMaxChars;
   const bootstrapTotalMaxChars = params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars;
+  // Codex sends its base instructions and native AGENTS.md fragment beside OpenClaw's
+  // developer instructions, so the reported system prompt covers all three.
+  const baseInstructionsChars = params.nativeModelContext?.baseInstructions?.length ?? 0;
+  const agentsMdChars = renderedCodexAgentsMdChars(params.nativeModelContext?.agentsMd);
+  const nonProjectContextChars = params.developerInstructions.length + baseInstructionsChars;
   return {
     source: "run",
     generatedAt: Date.now(),
@@ -190,9 +198,12 @@ export function buildCodexSystemPromptReport(params: {
     ...(bootstrapMaxChars ? { bootstrapMaxChars } : {}),
     ...(bootstrapTotalMaxChars ? { bootstrapTotalMaxChars } : {}),
     systemPrompt: {
-      chars: params.developerInstructions.length,
-      projectContextChars: 0,
-      nonProjectContextChars: params.developerInstructions.length,
+      chars: nonProjectContextChars + agentsMdChars,
+      projectContextChars: agentsMdChars,
+      nonProjectContextChars,
+      ...(params.nativeModelContext?.baseInstructionsEstimated && baseInstructionsChars
+        ? { estimatedChars: baseInstructionsChars }
+        : {}),
       hash: sha256Text(params.developerInstructions),
     },
     injectedWorkspaceFiles: buildCodexBootstrapInjectionStats(params),
@@ -213,6 +224,16 @@ export function buildCodexSystemPromptReport(params: {
   };
 }
 
+/** Codex renders AGENTS.md as one user fragment (codex-rs/core/src/context/user_instructions.rs). */
+function renderedCodexAgentsMdChars(agentsMd: CodexAgentsMdSnapshot | undefined): number {
+  if (agentsMd?.text == null) {
+    return 0;
+  }
+  const directory = agentsMd.directory ? ` for ${agentsMd.directory}` : "";
+  return `# AGENTS.md instructions${directory}\n\n<INSTRUCTIONS>\n${agentsMd.text}\n</INSTRUCTIONS>`
+    .length;
+}
+
 function buildCodexSkillReportEntries(
   skillsPrompt: string,
 ): CodexSystemPromptReport["skills"]["entries"] {
@@ -225,17 +246,30 @@ function buildCodexSkillReportEntries(
   }));
 }
 
+// Each Codex definition retains only its latest JSON schema revision. The JSON
+// already needed for schemaChars detects nested edits without a freezing contract.
+const toolReportSchemaHashes = new WeakMap<
+  CodexDynamicToolFunctionSpec,
+  { json: string; hash: string }
+>();
+
 function buildCodexToolReportEntry(
   tool: CodexDynamicToolFunctionSpec,
   sourceTool?: AnyAgentTool,
 ): CodexToolReportEntry {
   const summary = tool.description.trim();
   const schema = tool.inputSchema;
-  let schemaChars: number;
+  let schemaJson: string | undefined;
   try {
-    schemaChars = JSON.stringify(schema).length;
+    schemaJson = JSON.stringify(schema);
   } catch {
-    schemaChars = 0;
+    // Preserve reporting for schemas whose raw JSON serialization fails.
+  }
+  const cached = toolReportSchemaHashes.get(tool);
+  const schemaHash =
+    schemaJson !== undefined && cached?.json === schemaJson ? cached.hash : stableJsonHash(schema);
+  if (schemaJson !== undefined && cached?.json !== schemaJson) {
+    toolReportSchemaHashes.set(tool, { json: schemaJson, hash: schemaHash });
   }
   const { source, sourceName, mcp } = classifyAgentToolSource(sourceTool ?? tool);
   const properties =
@@ -247,8 +281,8 @@ function buildCodexToolReportEntry(
     ...(mcp ? { serverName: mcp.serverName } : {}),
     summaryChars: summary.length,
     summaryHash: sha256Text(summary),
-    schemaChars,
-    schemaHash: stableJsonHash(schema),
+    schemaChars: schemaJson?.length ?? 0,
+    schemaHash,
     propertiesCount: properties ? Object.keys(properties).length : null,
   };
 }
@@ -277,7 +311,8 @@ function buildCodexBootstrapInjectionStats(
     const pathValue = readNonEmptyString(file.path) ?? fileName ?? "";
     const displayName = (fileName ?? getCodexContextFileDisplayBasename(pathValue)) || pathValue;
     const baseName = getCodexContextFileBasename(pathValue || fileName || "");
-    const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
+    const content = file.missing ? "" : (file.content ?? "").trimEnd();
+    const rawChars = content.length;
     const memoryToolRoutedFile =
       baseName === CODEX_MEMORY_CONTEXT_BASENAME &&
       context.memoryToolRouted === true &&
@@ -290,6 +325,21 @@ function buildCodexBootstrapInjectionStats(
       injected === undefined &&
       CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)
     ) {
+      // Codex's recorded AGENTS.md state confirms native injection; anything else
+      // (changed, truncated, or not yet recorded content) stays unverified.
+      const nativeText = params.nativeModelContext?.agentsMd?.text;
+      if (nativeText === null || (nativeText && content && nativeText.includes(content))) {
+        const injectedChars = nativeText ? rawChars : 0;
+        return {
+          name: displayName,
+          path: pathValue,
+          origin: file.origin,
+          missing: false,
+          rawChars,
+          injectedChars,
+          truncated: false,
+        };
+      }
       return {
         name: displayName,
         path: pathValue,

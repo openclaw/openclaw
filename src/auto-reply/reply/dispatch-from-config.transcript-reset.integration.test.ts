@@ -1,4 +1,3 @@
-import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
@@ -16,7 +15,6 @@ import {
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
-import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
@@ -31,6 +29,7 @@ describe("accepted dispatch reply transcript custody", () => {
 
   it.for([false, true])("records the accepted reply before reset=%s", async (reset, { signal }) => {
     const storePath = fixture.storePath();
+    const target = { agentId: "main", sessionKey, sessionId, storePath };
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -41,49 +40,23 @@ describe("accepted dispatch reply transcript custody", () => {
       plugins: { enabled: false },
       messages: { visibleReplies: "automatic" },
     };
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      {
-        sessionId,
-        updatedAt: Date.now(),
-        lifecycleRevision: "before-reset",
-        activeWriterRunId: "proof-run",
-      },
-    );
+    await replaceSessionEntry(target, {
+      sessionId,
+      updatedAt: Date.now(),
+      lifecycleRevision: "before-reset",
+      activeWriterRunId: "proof-run",
+    });
     const accepted = createDeferred();
     const releaseReceipt = createDeferred();
     const mutationPrepared = createDeferred();
     const requests: string[] = [];
     const order: string[] = [];
-    const receiver = await reserveTestPortListener({
-      offsets: [0],
-      createListener: () =>
-        createServer((request, response) => {
-          void (async () => {
-            const chunks: Buffer[] = [];
-            for await (const chunk of request) {
-              chunks.push(Buffer.from(chunk));
-            }
-            requests.push(Buffer.concat(chunks).toString("utf8"));
-            order.push("transport-accepted");
-            accepted.resolve();
-            await releaseReceipt.promise;
-            response.writeHead(200, { "content-type": "application/json" });
-            response.end(JSON.stringify({ messageId: "receipt-134498" }));
-          })().catch((error: unknown) => {
-            accepted.reject(error);
-            response.destroy(error instanceof Error ? error : new Error(String(error)));
-          });
-        }),
-    });
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
-        const response = await fetch(`http://127.0.0.1:${receiver.claim.port}/reply`, {
-          method: "POST",
-          body: payload.text,
-        });
-        expect(response.status).toBe(200);
-        expect(await response.json()).toEqual({ messageId: "receipt-134498" });
+        requests.push(payload.text ?? "");
+        order.push("transport-accepted");
+        accepted.resolve();
+        await releaseReceipt.promise;
         order.push("transport-receipt");
         return { visibleReplySent: true };
       },
@@ -113,8 +86,8 @@ describe("accepted dispatch reply transcript custody", () => {
               { text },
               {
                 sourceReplyTranscriptMirror: {
+                  agentId: target.agentId,
                   sessionKey,
-                  agentId: "main",
                   expectedSessionId: sessionId,
                   idempotencyKey: "proof-accepted-reply",
                   text,
@@ -149,8 +122,7 @@ describe("accepted dispatch reply transcript custody", () => {
           run: async () => {
             order.push("reset-entered");
             await resetSessionEntryLifecycle({
-              agentId: "main",
-              storePath,
+              ...target,
               target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
               resetBoundary: { context: "clear", reason: "new", cwd: path.dirname(storePath) },
               archivePreviousTranscript: false,
@@ -175,12 +147,7 @@ describe("accepted dispatch reply transcript custody", () => {
       releaseReceipt.resolve();
       await dispatch;
       await mutation;
-      const events = await loadTranscriptEvents({
-        agentId: "main",
-        sessionKey,
-        sessionId,
-        storePath,
-      });
+      const events = await loadTranscriptEvents(target);
       const replies = events.filter((event) => JSON.stringify(event).includes(text));
       expect(requests).toEqual([text]);
       expect(replies).toHaveLength(1);
@@ -188,7 +155,7 @@ describe("accepted dispatch reply transcript custody", () => {
         const replyIndex = events.indexOf(replies[0]);
         const resetIndex = events.findIndex((event) => isRecord(event) && event.type === "reset");
         expect(resetIndex).toBeGreaterThan(replyIndex);
-        expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+        expect(loadSessionEntry(target)).toMatchObject({
           sessionId,
           lifecycleRevision: "after-reset",
         });
@@ -202,8 +169,6 @@ describe("accepted dispatch reply transcript custody", () => {
     } finally {
       releaseReceipt.resolve();
       await Promise.allSettled([dispatch, mutation]);
-      await receiver.releaseListener();
-      await receiver.claim.release();
     }
   });
 });

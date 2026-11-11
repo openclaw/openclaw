@@ -29,22 +29,18 @@ import {
   preflightPluginGitInstallPolicy,
   type InstallSafetyOverrides,
 } from "./install-security-scan.js";
-import { ensureInstallTargetAvailableForMode, loadPluginInstallRuntime } from "./install-shared.js";
+import {
+  ensureInstallTargetAvailableForMode,
+  loadPluginInstallRuntime,
+  reportBlockedPluginInstall,
+} from "./install-shared.js";
 import {
   attachPluginInstallTransaction,
   resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler, PluginInstallLogger } from "./install-types.js";
-import {
-  installPluginFromInstalledPackageDir,
-  PLUGIN_INSTALL_ERROR_CODE,
-  type InstallPluginResult,
-} from "./install.js";
-import {
-  emitPluginAuditSecurityEvent,
-  emitPluginInstallSecurityEvent,
-  pluginAuditOutcomeForReason,
-} from "./security-events.js";
+import { installPluginFromInstalledPackageDir, type InstallPluginResult } from "./install.js";
+import { emitPluginInstallSecurityEvent } from "./security-events.js";
 
 const GIT_SPEC_PREFIX = "git:";
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
@@ -92,12 +88,44 @@ function splitGitSpecRef(input: string): { base: string; ref?: string } {
   ) {
     const base = input.slice(0, atIndex);
     const ref = normalizeOptionalString(input.slice(atIndex + 1));
-    if (ref && isGitSpecBase(base)) {
+    // An @ at the start of a local path component belongs to that ancestor.
+    if (
+      process.platform === "win32" &&
+      (isLocalGitPath(base) || /^file:\/\//i.test(base)) &&
+      /[\\/]$/.test(base)
+    ) {
+      continue;
+    }
+    // Preserve the legacy full-path interpretation of absolute .git repositories.
+    // An explicit ref on a .git repository still splits after that suffix.
+    if (
+      process.platform === "win32" &&
+      path.isAbsolute(input) &&
+      input.endsWith(".git") &&
+      !base.endsWith(".git")
+    ) {
+      continue;
+    }
+    // A native path ancestor is not a ref: Git refs cannot contain backslashes.
+    if (ref && isGitSpecBase(base) && !(process.platform === "win32" && ref.includes("\\"))) {
       return { base, ref };
     }
   }
 
   return { base: input };
+}
+
+function isLocalGitPath(value: string): boolean {
+  return (
+    value.startsWith("./") ||
+    value.startsWith("../") ||
+    value.startsWith("~/") ||
+    (process.platform === "win32" &&
+      (value.startsWith(".\\") ||
+        value.startsWith("..\\") ||
+        value.startsWith("~\\") ||
+        path.isAbsolute(value)))
+  );
 }
 
 function isGitSpecBase(value: string): boolean {
@@ -107,9 +135,7 @@ function isGitSpecBase(value: string): boolean {
     looksLikeUrlGitSpecBase(value) ||
     looksLikeScpGitUrl(value) ||
     value.endsWith(".git") ||
-    value.startsWith("./") ||
-    value.startsWith("../") ||
-    value.startsWith("~/")
+    isLocalGitPath(value)
   );
 }
 
@@ -182,7 +208,7 @@ export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
     return null;
   }
 
-  const localPath = base.startsWith("./") || base.startsWith("../") || base.startsWith("~/");
+  const localPath = isLocalGitPath(base);
   let normalized: { url: string; label: string };
   if (looksLikeGitHubRepoShorthand(base) || looksLikeGitHubHostPath(base)) {
     const repo = stripGitSuffix(base.replace(/^github\.com\//i, ""));
@@ -193,11 +219,13 @@ export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
   } else {
     return null;
   }
+  // A normalized absolute Windows path can otherwise make a .git-ending ref look like a repository.
+  const refSeparator = localPath && process.platform === "win32" ? "#" : "@";
   return {
     input: trimmed,
     ...normalized,
     ref: split.ref,
-    normalizedSpec: `${GIT_SPEC_PREFIX}${normalized.url}${split.ref ? `@${split.ref}` : ""}`,
+    normalizedSpec: `${GIT_SPEC_PREFIX}${normalized.url}${split.ref ? `${refSeparator}${split.ref}` : ""}`,
   };
 }
 
@@ -300,26 +328,12 @@ export async function installPluginFromGitSpec(
       sourcePath: repoDir,
     });
     if (preflight?.blocked) {
-      const reason =
-        preflight.blocked.code === "security_scan_failed"
-          ? "security_scan_failed"
-          : "security_scan_blocked";
-      emitPluginAuditSecurityEvent({
-        outcome: pluginAuditOutcomeForReason(reason),
-        reason,
+      return reportBlockedPluginInstall({
+        blocked: { reason: preflight.blocked.reason, code: preflight.blocked.code },
         pluginId: params.expectedPluginId,
         mode: effectiveMode,
         sourceFamily: "git",
       });
-      return {
-        ok: false,
-        error: preflight.blocked.reason,
-        ...(preflight.blocked.code === "security_scan_failed"
-          ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED }
-          : preflight.blocked.code === "security_scan_blocked"
-            ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED }
-            : {}),
-      };
     }
 
     if (!params.dryRun) {
@@ -411,7 +425,11 @@ export async function installPluginFromGitSpec(
   };
   const published = await installPackageDir(
     transactionRequest
-      ? requestDeferredPackageDirInstall(installParams, transactionRequest.assertOwned)
+      ? requestDeferredPackageDirInstall(
+          installParams,
+          transactionRequest.assertOwned,
+          transactionRequest.prepareSettlement,
+        )
       : installParams,
   ).catch((error: unknown) => ({
     ok: false as const,

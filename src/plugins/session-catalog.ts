@@ -62,6 +62,8 @@ export type SessionCatalogContinueProviderParams = Omit<
   allowProcessHomeFallback?: boolean;
   /** Caller's gateway scopes so providers can gate high-authority continues up front. */
   clientScopes?: readonly string[];
+  /** Host-bound source authority, retained only for this continuation request. */
+  assertCurrent?: () => void;
 };
 export type SessionCatalogArchiveProviderParams = Omit<
   SessionsCatalogArchiveParams,
@@ -204,13 +206,38 @@ export type SessionCatalogProvider = {
   };
   /** Items are newest-first by source order; nextCursor continues to older items. */
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
+  /** Read-only discovery of an existing receiver-owned logical conversation. Never creates or binds. */
+  resolveGatewayConversation?: (params: SessionCatalogContinueProviderParams) => Promise<
+    | {
+        id: string;
+        sessionKey: string;
+        agentId: string;
+        assertCurrent: () => void;
+        release: () => void;
+      }
+    | undefined
+  >;
   continueSession?: (
     params: SessionCatalogContinueProviderParams,
   ) => Promise<SessionCatalogContinueProviderResult>;
   /** Copy catalog history into a new ordinary Gateway-owned session. */
-  copyToGatewaySession?: (
-    params: SessionCatalogContinueProviderParams,
-  ) => Promise<{ displayName?: string; preferredModel?: string }>;
+  copyToGatewaySession?: (params: SessionCatalogContinueProviderParams) => Promise<{
+    displayName?: string;
+    preferredModel?: string;
+    /** Receiver-owned logical identity. Reuse never imports history a second time. */
+    continuation?: {
+      id: string;
+      sessionKey: string;
+      agentId: string;
+      reservedNow: boolean;
+      assertCurrent: () => void;
+      release: () => void;
+      beginCreate: (assertDestinationCurrent: () => void) => Promise<boolean>;
+      rollback: () => Promise<void>;
+      complete: (assertDestinationCurrent: () => void) => Promise<void>;
+      read: SessionCatalogProvider["read"];
+    };
+  }>;
   checkUpstreamActivity?: (
     probes: SessionUpstreamProbe[],
     policy?: { allowProcessHomeFallback?: boolean },
@@ -236,13 +263,7 @@ export function listSessionCatalogEntries(params: {
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): SessionCatalogAgentEntry[] {
   const requiresExplicitOwner = params.config.agents?.ownership === "explicit";
-  const requestedAgentId =
-    params.agentId || requiresExplicitOwner
-      ? resolveSessionAgentIds({
-          config: params.config,
-          agentId: params.agentId,
-        }).sessionAgentId
-      : undefined;
+  const requestedAgentId = resolveCatalogAgentId(params);
   const requestEntries = params.sessionEntries?.entriesForCatalog?.();
   if (requestEntries) {
     // Keep the shipped SDK helper as the compatibility entry point while the
@@ -262,9 +283,19 @@ export function listSessionCatalogEntries(params: {
   return agentIds.flatMap((agentId) => {
     const entries = params.sessionEntries
       ? params.sessionEntries.entriesForAgent(agentId)
-      : params.runtime.agent.session.listSessionEntries({ agentId, readOnly: true });
+      : params.runtime.agent.session.listSessionEntries({
+          agentId,
+          readOnly: true,
+          projection: "list",
+        });
     return entries.map((entry) => Object.assign({}, entry, { agentId }));
   });
+}
+
+function resolveCatalogAgentId(params: { agentId?: string; config: OpenClawConfig }) {
+  return params.agentId || params.config.agents?.ownership === "explicit"
+    ? resolveSessionAgentIds({ config: params.config, agentId: params.agentId }).sessionAgentId
+    : undefined;
 }
 
 export function sessionCatalogAdoptedSourceKey(hostId: string, threadId: string): string {
@@ -284,9 +315,22 @@ export function listAdoptedSessionCatalogSessions(params: {
   sourceFromEntry: (entry: SessionEntry) => { hostId: string; threadId: string } | undefined;
 }): Map<string, string> {
   const adopted = new Map<string, string>();
-  for (const { sessionKey, entry } of listSessionCatalogEntries(params)) {
+  const requestedAgentId = resolveCatalogAgentId(params);
+  const requiresExplicitOwner = params.config.agents?.ownership === "explicit";
+  // Avoid both an agent-wide filtered copy and iterator allocations on the frozen snapshot.
+  const entries = params.sessionEntries?.entriesForCatalog?.() ?? listSessionCatalogEntries(params);
+  // oxlint-disable-next-line typescript/prefer-for-of -- Frozen-array iterators allocate per row.
+  for (let index = 0; index < entries.length; index++) {
+    const { sessionKey, entry, agentId } = entries[index]!;
+    if (
+      (requiresExplicitOwner && agentId !== requestedAgentId) ||
+      entry.pluginOwnerId !== params.pluginId ||
+      entry.initializationPending === true
+    ) {
+      continue;
+    }
     const source = params.sourceFromEntry(entry);
-    if (source && entry.pluginOwnerId === params.pluginId && entry.initializationPending !== true) {
+    if (source) {
       adopted.set(sessionCatalogAdoptedSourceKey(source.hostId, source.threadId), sessionKey);
     }
   }

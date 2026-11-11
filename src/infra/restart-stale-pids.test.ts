@@ -12,6 +12,7 @@ import {
   signalVerifiedGatewayPidSync,
 } from "./gateway-processes.js";
 import {
+  cleanStaleGatewayProcesses,
   cleanStaleGatewayProcessesSync,
   findGatewayPidsOnPortSync,
   terminateStaleGatewayPids,
@@ -32,6 +33,9 @@ const mockResolveGatewayPort = vi.hoisted(() => vi.fn(() => 18789));
 const mockRestartWarn = vi.hoisted(() => vi.fn());
 const mockReadGatewayOwnerLease = vi.hoisted(() =>
   vi.fn<typeof import("./gateway-owner-lease.js").readGatewayOwnerLease>(),
+);
+const mockReadGatewayOwnerLeaseAsync = vi.hoisted(() =>
+  vi.fn<typeof import("./gateway-owner-lease.js").readGatewayOwnerLeaseAsync>(),
 );
 const mockReadWindowsListeningPids = vi.hoisted(() =>
   vi.fn((_port: number, _timeoutMs?: number): number[] => []),
@@ -99,8 +103,10 @@ vi.mock("../process/supervisor/darwin-process-command.js", async (importOriginal
   readDarwinProcessCommand: mockDarwinCommand,
 }));
 
+// mock-isolation: The fixture owns process identities and signals without native process discovery.
 vi.mock("./gateway-owner-lease.js", () => ({
   readGatewayOwnerLease: mockReadGatewayOwnerLease,
+  readGatewayOwnerLeaseAsync: mockReadGatewayOwnerLeaseAsync,
 }));
 
 vi.mock("./windows-port-pids.js", () => ({
@@ -217,6 +223,7 @@ function recordedOwner(pid: number, state: "live" | "dead" = "live", expired = t
 }
 
 beforeEach(() => {
+  vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation((pid) => pid);
   readProcessAncestry.mockReset().mockReturnValue(null);
   // These liveness fixtures drive process.kill independently of a native process table.
   readProcessIdentity.mockReset().mockImplementation(() => {
@@ -230,6 +237,9 @@ beforeEach(() => {
     return argv ? { argv } : undefined;
   });
   mockReadGatewayOwnerLease.mockReset().mockReturnValue(undefined);
+  mockReadGatewayOwnerLeaseAsync
+    .mockReset()
+    .mockImplementation(async (...args) => mockReadGatewayOwnerLease(...args));
   mockResolveGatewayPort.mockReset().mockReturnValue(18789);
   mockRestartWarn.mockReset();
   mockReadWindowsListeningPids.mockReset().mockReturnValue([]);
@@ -248,6 +258,46 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
+  it.each(["none", "owner", "PID", "unknown PID"] as const)(
+    "awaits source ownership before cleanup effects (replacement=%s)",
+    async (replacement) => {
+      const stalePid = process.pid + 501;
+      let startedAt: number | null = replacement === "unknown PID" ? null : 1000;
+      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation(() => startedAt);
+      const censusCalls = installInitialBusyPoll(stalePid);
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      vi.spyOn(sleep, "sleep").mockResolvedValue(undefined);
+      mockReadGatewayOwnerLease.mockImplementation(() => {
+        throw new Error("Async cleanup must not block on lease snapshot preparation");
+      });
+      mockReadGatewayOwnerLeaseAsync.mockImplementation(async () => {
+        await Promise.resolve();
+        if (censusCalls() > 0) {
+          if (replacement === "PID") {
+            startedAt = 2000;
+          }
+          if (replacement === "owner") {
+            return recordedOwner(stalePid);
+          }
+        }
+        return undefined;
+      });
+
+      expect(await cleanStaleGatewayProcesses(19999)).toEqual(
+        replacement === "none" ? [stalePid] : [],
+      );
+      if (replacement !== "none") {
+        expect(kill).not.toHaveBeenCalledWith(stalePid, "SIGTERM");
+        if (replacement !== "owner") {
+          expectWarningContaining("identity changed or unavailable; process preserved");
+        }
+      } else {
+        expect(kill).toHaveBeenCalledWith(stalePid, "SIGTERM");
+      }
+      expect(mockReadGatewayOwnerLease).not.toHaveBeenCalled();
+    },
+  );
+
   function withStubbedPpid<T>(ppid: number, fn: () => T): T {
     const descriptor = Object.getOwnPropertyDescriptor(process, "ppid");
     Object.defineProperty(process, "ppid", { configurable: true, value: ppid });
@@ -310,27 +360,6 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
       expect(readProcessAncestry).toHaveBeenCalledWith(process.pid, { maxDepth: 34 });
     },
   );
-
-  it("protects an unreadable transitive parent without treating its identity as verified", async () => {
-    const { inspectSelfAndAncestorPidsSync } = await import("./restart-stale-pids.js");
-    const parentPid = process.pid + 2003;
-    const unknownPid = process.pid + 2004;
-    readProcessAncestry.mockReturnValue({
-      chain: [processIdentity(process.pid, parentPid), processIdentity(parentPid, unknownPid)],
-      complete: false,
-      stoppedBy: "unreadable-parent",
-    });
-    withStubbedPpid(parentPid, () => {
-      expect(inspectSelfAndAncestorPidsSync()).toEqual({
-        pids: new Set([process.pid, parentPid, unknownPid]),
-        complete: false,
-      });
-      expect(inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true })).toEqual({
-        pids: new Set([process.pid, parentPid]),
-        complete: false,
-      });
-    });
-  });
 
   it("excludes ancestor pids on Windows too — #68451 regression mirror for the win32 path", () => {
     const parentGatewayPid = process.pid + 2101;

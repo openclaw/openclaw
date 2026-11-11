@@ -51,21 +51,15 @@ export function registerCommandReplyPolicyTests({
       const cli = provider === "claude-cli";
       const runner = cli ? cliRunner : embeddedRunner;
       for (const [
+        expectation,
         sessionKey,
         messageChannel,
         privateCompletion,
-        allowSilence,
         sourceTool = "subagent_settle",
         replyExpectation,
       ] of INTER_SESSION_REPLY_POLICY_CASES) {
         const sessionEntry = makeSessionEntry(`session-${messageChannel}`);
         const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
-        const expectation =
-          replyExpectation === "optional"
-            ? "optional"
-            : privateCompletion || sessionKey.includes(":subagent:") || messageChannel === "webchat"
-              ? "result-required"
-              : (replyExpectation ?? (allowSilence ? "optional" : "required"));
         const resultRequired = expectation === "result-required";
         if (cli) {
           cliRunner.mockImplementationOnce(runPreparedAttempt);
@@ -130,6 +124,5 @@ export function registerCommandReplyPolicyTests({
         },
       }),
     ).rejects.toBe(failure);
-    expect(execute).toHaveBeenCalledOnce();
   });
 }

@@ -86,11 +86,11 @@ async function prepareHistoryRead(
         }));
     }
     case "transcript-latest-assistant": {
-      const { readLatestAssistantTextFromDatabase } =
-        await import("./session-accessor.sqlite-transcript-metadata-read.js");
+      const { readLatestSessionTranscriptAssistantInWorker } =
+        await import("./session-cold-storage-read.worker.js");
       const read = await prepareDatabaseRead(
         { ...request.database, env: request.scope.env },
-        (database) => readLatestAssistantTextFromDatabase(database, request.resolved),
+        (database) => readLatestSessionTranscriptAssistantInWorker(database, request.resolved),
         () => undefined,
         { snapshot: true, admission: request.admission },
       );
@@ -106,6 +106,17 @@ async function prepareHistoryRead(
         { snapshot: true, admission: request.admission },
       );
       return () => ({ kind: request.kind, result: read() });
+    }
+    case "transcript-replay-groups": {
+      const { readSessionTranscriptReplayGroupsCore } =
+        await import("./session-transcript-replay.kernel.js");
+      return () =>
+        runWithSessionTranscriptReadFence(request.admission, () => ({
+          kind: request.kind,
+          result: readSessionTranscriptReplayGroupsCore(request.scope, request.selection, {
+            resolvedScope: request.resolved,
+          }),
+        }));
     }
     case "transcript-visible-delta": {
       const { readSessionTranscriptVisibleMessageDeltaCore } =
@@ -182,24 +193,6 @@ async function prepareHistoryRead(
         return { kind: request.kind, facts: read() };
       };
     }
-    case "session-harness-completion-source": {
-      const [{ assertCapturedSessionEntryReadSource }, { readHarnessCompletionSourceInDatabase }] =
-        await Promise.all([
-          import("./session-entry-read-source.js"),
-          import("./session-harness-completion-source.kernel.js"),
-        ]);
-      const read = await prepareDatabaseRead(
-        { ...request.database, env: request.env },
-        (database) => {
-          assertCapturedSessionEntryReadSource(request.source, database);
-          return runWithSessionTranscriptReadFence(request.admission, () =>
-            readHarnessCompletionSourceInDatabase(database, request.claim, request.mode),
-          );
-        },
-        () => ({ validInput: false }),
-      );
-      return () => ({ kind: request.kind, snapshot: read() });
-    }
     case "session-pending-input-source": {
       const [{ assertCapturedSessionEntryReadSource }, { readPendingInputSourceInDatabase }] =
         await Promise.all([
@@ -217,20 +210,20 @@ async function prepareHistoryRead(
       return () => ({ kind: request.kind, snapshot: read() });
     }
     case "transcript-match": {
-      const [{ findTranscriptEventMatchingInDatabase }, { withOpenClawAgentDatabaseReadOnly }] =
+      const [{ findSessionTranscriptEventInWorker }, { withOpenClawAgentDatabaseReadOnly }] =
         await Promise.all([
-          import("./session-transcript-match-read.js"),
+          import("./session-cold-storage-read.worker.js"),
           import("../../state/openclaw-agent-db-readonly.js"),
         ]);
       return () => {
         if (retainedDatabase) {
           return {
             kind: request.kind,
-            result: findTranscriptEventMatchingInDatabase(retainedDatabase, request.request),
+            result: findSessionTranscriptEventInWorker(retainedDatabase, request.request),
           };
         }
         const opened = withOpenClawAgentDatabaseReadOnly(
-          (database) => findTranscriptEventMatchingInDatabase(database, request.request),
+          (database) => findSessionTranscriptEventInWorker(database, request.request),
           {
             ...request.database,
             env: cloneEnvWithPlatformSemantics(request.request.target.env ?? process.env),
@@ -342,14 +335,23 @@ async function prepareHistoryRead(
       return () => ({ kind: request.kind, stats: read() });
     }
     case "transcript-message-presence": {
-      const { hasSessionTranscriptMessageInDatabase } =
-        await import("./session-accessor.sqlite-transcript-metadata-read.js");
+      const { readSessionTranscriptMessagePresenceInWorker } =
+        await import("./session-cold-storage-read.worker.js");
       const read = await prepareDatabaseRead(
         { ...request.database, env: request.scope.env },
-        (database) => hasSessionTranscriptMessageInDatabase(database, request.scope.sessionId),
+        (database) =>
+          readSessionTranscriptMessagePresenceInWorker(database, request.scope.sessionId),
         () => false,
       );
       return () => ({ kind: request.kind, present: read() });
+    }
+    case "session-pending-input-orphans": {
+      const { readOrphanedSessionPendingInputTargetsInWorker } =
+        await import("./session-pending-input-withdrawal.worker.js");
+      return () => ({
+        kind: request.kind,
+        targets: readOrphanedSessionPendingInputTargetsInWorker(request),
+      });
     }
     case "session-pending-input-receipts": {
       const { listSessionPendingInputReceipts } =

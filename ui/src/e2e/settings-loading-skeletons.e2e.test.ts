@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -6,12 +8,16 @@ import {
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
+import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
   configSnapshot,
   pageRunner,
   settingsPageOptions,
 } from "./config-composer-fixtures.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI settings loading skeletons mocked Gateway E2E",
@@ -36,19 +42,43 @@ const withPage = (run: (page: import("playwright").Page) => Promise<void>) =>
   runPage(({ page }) => run(page));
 
 suite.define(() => {
+  it.each([
+    ["approvals", "Recent exec, plugin, and system-agent approvals."],
+    [
+      "labs",
+      "Labs contains experimental capabilities that may change, break, or disappear between releases.",
+    ],
+  ])("renders the %s subtitle before the lazy sidebar", async (id, subtitle) => {
+    await suite.withPage(
+      { viewport: { width: 820, height: 1000 }, locale: "en-US" },
+      async ({ page }) => {
+        const sidebar = await holdModuleResponse(
+          page,
+          new RegExp("/src/components/settings-sidebar-shell[.]tsx"),
+        );
+        await installMockGateway(page);
+        try {
+          await page.goto(`${suite.server.baseUrl}settings/${id}`);
+          await sidebar.request;
+          const header = page.locator(`openclaw-${id}-page .content-header`);
+          await header.locator(".page-title").waitFor();
+          await header.locator(".page-subtitle").waitFor();
+          expect(await header.locator(".page-subtitle").textContent()).toBe(
+            `${subtitle} Learn more`,
+          );
+          expect(sidebar.requests()).toBe(1);
+        } finally {
+          sidebar.release();
+        }
+      },
+    );
+  });
+
   it("renders the Models initial load as a skeleton", async () => {
     await withPage(async (page) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "reviewer", name: "Reviewer" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main", reviewer: "Reviewer" }, "main", "agent"),
           "config.get": configSnapshot({}, "settings-loading-models"),
           "models.list": { models: [] },
           "models.authStatus": { providers: [], ts: Date.now() },
@@ -68,7 +98,7 @@ suite.define(() => {
       await gateway.deferNext("models.authStatus");
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
+      await agentPicker.getByRole("option", { name: "Reviewer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");
@@ -151,14 +181,11 @@ suite.define(() => {
         agents: { entries: { main: { tools: { profile: "full" } } } },
       };
       const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "tools.catalog", "tools.effective"],
         heldMethods: ["tools.catalog", "tools.effective"],
+        operatorScopes: ["operator.read"],
         methodResponses: {
-          "agents.list": {
-            agents: [{ id: "main", name: "Main agent" }],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "config.get": {
             ...configSnapshot(config, "settings-loading-tools"),
             sourceConfig: config,
@@ -223,12 +250,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         heldMethods: ["config.schema"],
         methodResponses: {
-          "channels.pairing.list": {
-            accounts: [],
-            requests: [],
-            commandOwnerConfigured: true,
-            limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-          },
+          "channels.pairing.list": emptyPairingSnapshot(),
           "channels.status": {
             ts: Date.now(),
             channelOrder: ["whatsapp"],
@@ -313,10 +335,7 @@ suite.define(() => {
 
   it("renders the lazy Settings sidebar as navigation skeletons", async () => {
     await withPage(async (page) => {
-      let releaseSidebar: (() => void) | undefined;
-      const sidebarRelease = new Promise<void>((resolve) => {
-        releaseSidebar = resolve;
-      });
+      const { promise: sidebarRelease, resolve: releaseSidebar } = createDeferred();
       await page.route("**/src/components/settings-sidebar.ts*", async (route) => {
         await sidebarRelease;
         await route.continue();

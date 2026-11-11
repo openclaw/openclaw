@@ -29,6 +29,17 @@ import {
 } from "./thread-bindings-shared.js";
 import { createMatrixThreadBindingManager } from "./thread-bindings.js";
 
+const classifyBindingTarget = vi.hoisted(() =>
+  vi.fn<
+    typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime").resolveThreadBindingTargetKind
+  >(),
+);
+// Matrix has no ACP cleanup-reader consumer; isolate only its public classification operation.
+vi.mock("openclaw/plugin-sdk/thread-bindings-session-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime")>()),
+  resolveThreadBindingTargetKind: classifyBindingTarget,
+}));
+
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (_to: string, _message: string, opts?: { threadId?: string }) => ({
     messageId: opts?.threadId ? "$reply" : "$root",
@@ -186,6 +197,10 @@ describe("matrix thread bindings", () => {
   }
 
   beforeEach(async () => {
+    const bindings = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime")
+    >("openclaw/plugin-sdk/thread-bindings-session-runtime");
+    classifyBindingTarget.mockReset().mockImplementation(bindings.resolveThreadBindingTargetKind);
     stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "matrix-thread-bindings-"));
     await resetThreadBindingAdapters();
     resetPluginStateStoreForTests();
@@ -212,6 +227,187 @@ describe("matrix thread bindings", () => {
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("keeps approved opaque plugin metadata through refresh and persistent reload", async () => {
+    const { createInteractiveConversationBindingHelpers } =
+      await import("openclaw/plugin-sdk/plugin-runtime");
+    const { resolvePluginConversationBindingApproval } =
+      await import("openclaw/plugin-sdk/conversation-runtime");
+    const cfg = { agents: { entries: { alpha: {}, beta: {} } } };
+    let manager = await createBindingManager({ cfg });
+    const conversation = currentThreadConversation();
+    const owner = { pluginId: "fixture-runtime", pluginRoot: "/plugins/fixture-runtime" };
+    const helpers = createInteractiveConversationBindingHelpers({
+      registration: owner,
+      senderId: "user-1",
+      conversation,
+    });
+    const requested = await helpers.requestConversationBinding({ data: { externalThread: "17" } });
+    expect(requested.status).toBe("pending");
+    if (requested.status !== "pending") {
+      throw new Error("Expected plugin binding approval");
+    }
+    await expect(
+      resolvePluginConversationBindingApproval({
+        approvalId: requested.approvalId,
+        decision: "allow-once",
+        senderId: "user-1",
+      }),
+    ).resolves.toMatchObject({ status: "approved", binding: owner });
+    expect(manager.listBindings()[0]).toMatchObject({
+      targetKind: "session",
+      targetSessionKey: expect.stringMatching(/^plugin-binding:fixture-runtime:/),
+    });
+    const record = await getSessionBindingService().resolveByConversationAsync(conversation);
+    expect(record?.metadata?.agentId).toBeUndefined();
+    if (!record) {
+      throw new Error("Expected approved plugin binding");
+    }
+    await expect(
+      getSessionBindingService().bind({
+        conversation,
+        targetSessionKey: record.targetSessionKey,
+        targetKind: "session",
+        metadata: { label: "updated" },
+      }),
+    ).resolves.toMatchObject({
+      metadata: {
+        pluginBindingOwner: "plugin",
+        ...owner,
+        label: "updated",
+        data: { externalThread: "17" },
+      },
+    });
+    await expect(
+      getSessionBindingService().bind({
+        conversation,
+        targetSessionKey: "plugin-binding:fixture-runtime:replacement",
+        targetKind: "session",
+        metadata: { label: "replacement" },
+      }),
+    ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+    await expect(
+      helpers.requestConversationBinding({ data: { externalThread: "17" } }),
+    ).resolves.toMatchObject({ status: "bound", binding: owner });
+    await manager.stop();
+    manager = await createBindingManager({ cfg });
+    await expect(helpers.getCurrentConversationBinding()).resolves.toMatchObject({
+      ...owner,
+      data: { externalThread: "17" },
+    });
+    expect(manager.listBindings()[0]?.agentId).toBeUndefined();
+    await expect(helpers.detachConversationBinding()).resolves.toEqual({ removed: true });
+    expect(manager.listBindings()).toEqual([]);
+    const subagentKey = "agent:alpha:subagent:kind-change";
+    await getSessionBindingService().bind({
+      conversation,
+      targetSessionKey: subagentKey,
+      targetKind: "session",
+      metadata: { pluginBindingOwner: "plugin", ...owner },
+    });
+    const changedKind = await getSessionBindingService().bind({
+      conversation,
+      targetSessionKey: subagentKey,
+      targetKind: "subagent",
+      metadata: { label: "new kind" },
+    });
+    expect(changedKind.targetKind).toBe("subagent");
+    expect(changedKind.metadata?.pluginBindingOwner).toBeUndefined();
+    await expect(helpers.getCurrentConversationBinding()).resolves.toBeNull();
+    await getSessionBindingService().unbind({
+      bindingId: changedKind.bindingId,
+      scope: conversation,
+      reason: "manual",
+    });
+  });
+
+  it.each([
+    ["agent:ops:fork:ordinary", "session"],
+    ["agent:ops:matrix:room:acp:ordinary", "session"],
+    ["agent:codex:acp:binding:matrix:ops:configured", "acp"],
+    ["global", "acp"],
+    ["agent:ops:subagent:child", "subagent"],
+  ] as const)(
+    "preserves classified %s through native child creation and reload",
+    async (targetSessionKey, targetKind) => {
+      const manager = await createBindingManager();
+      const service = getSessionBindingService();
+      classifyBindingTarget.mockResolvedValueOnce(targetKind);
+      const binding = await service.bind({
+        targetSessionKey,
+        targetKind: targetKind === "subagent" ? "subagent" : "session",
+        conversation: currentThreadConversation({ conversationId: "!room:example" }),
+        placement: "child",
+        metadata: { agentId: "ops" },
+      });
+      expect(classifyBindingTarget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {},
+          targetSessionKey,
+          targetKind: targetKind === "subagent" ? "subagent" : "session",
+          metadata: { agentId: "ops" },
+          agentId: "ops",
+          channel: "Matrix",
+          assertCurrent: expect.any(Function),
+        }),
+      );
+      expect(binding.conversation).toMatchObject({
+        conversationId: "$root",
+        parentConversationId: "!room:example",
+      });
+      expect(manager.listBindings()[0]?.targetKind).toBe(targetKind);
+      await manager.stop();
+      const reloaded = await createBindingManager();
+      expect(reloaded.listBindings()[0]?.targetKind).toBe(targetKind);
+      expect(await service.resolveByConversationAsync(binding.conversation)).toMatchObject({
+        targetSessionKey,
+      });
+      await service.unbind({
+        bindingId: binding.bindingId,
+        scope: binding.conversation,
+        reason: "manual",
+      });
+      await reloaded.stop();
+      expect((await createBindingManager()).listBindings()).toEqual([]);
+    },
+  );
+
+  it("forwards classification facts/current authority and refuses native creation on failure", async () => {
+    const manager = await createBindingManager();
+    const assertCurrent = vi.fn();
+    let forwardedAuthorityCalls = 0;
+    const metadata = { agentId: "ops", label: "classify this target" };
+    classifyBindingTarget.mockImplementationOnce(async (input) => {
+      const calls = assertCurrent.mock.calls.length;
+      input.assertCurrent();
+      forwardedAuthorityCalls = assertCurrent.mock.calls.length - calls;
+      throw new Error("Classification refused");
+    });
+    await expect(
+      getSessionBindingService().bind({
+        targetSessionKey: "global",
+        targetKind: "session",
+        conversation: currentThreadConversation(),
+        placement: "child",
+        metadata,
+        assertCurrent,
+      }),
+    ).rejects.toThrow("Classification refused");
+    expect(classifyBindingTarget).toHaveBeenCalledOnce();
+    expect(classifyBindingTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        targetSessionKey: "global",
+        targetKind: "session",
+        metadata,
+        agentId: "ops",
+        channel: "Matrix",
+      }),
+    );
+    expect(forwardedAuthorityCalls).toBe(1);
+    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+    expect(manager.listBindings()).toEqual([]);
   });
 
   it("loads and updates thread bindings written by the July SQLite store", async () => {
@@ -322,12 +518,7 @@ describe("matrix thread bindings", () => {
       accountId: "ops",
       threadId: "$thread",
     });
-    const resolved = getSessionBindingService().resolveByConversation({
-      channel: "matrix",
-      accountId: "ops",
-      conversationId: "$thread",
-      parentConversationId: "!room:example",
-    });
+    const resolved = getSessionBindingService().resolveByConversation(currentThreadConversation());
     expect(resolved?.bindingId).toBe(binding.bindingId);
     expect(resolved?.targetSessionKey).toBe("agent:molty:subagent:child");
     expect(binding.metadata?.agentId).toBe("molty");
@@ -346,23 +537,13 @@ describe("matrix thread bindings", () => {
       await getSessionBindingService().bind({
         targetSessionKey: "agent:ops:subagent:first",
         targetKind: "subagent",
-        conversation: {
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$thread-1",
-          parentConversationId: "!room:example",
-        },
+        conversation: currentThreadConversation({ conversationId: "$thread-1" }),
         placement: "current",
       });
       await getSessionBindingService().bind({
         targetSessionKey: "agent:ops:subagent:second",
         targetKind: "subagent",
-        conversation: {
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$thread-2",
-          parentConversationId: "!room:example",
-        },
+        conversation: currentThreadConversation({ conversationId: "$thread-2" }),
         placement: "current",
       });
 
@@ -425,12 +606,7 @@ describe("matrix thread bindings", () => {
     await createBindingManager({ auth: rotatedAuth });
 
     expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
+      getSessionBindingService().resolveByConversation(currentThreadConversation()),
     ).toBeNull();
 
     const initialBindingsPath = path.join(initialStoragePaths.rootDir, "thread-bindings.json");
@@ -478,12 +654,8 @@ describe("matrix thread bindings", () => {
     await createBindingManager({ auth: rotatedAuth });
 
     expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      })?.targetSessionKey,
+      getSessionBindingService().resolveByConversation(currentThreadConversation())
+        ?.targetSessionKey,
     ).toBe("agent:ops:subagent:child");
 
     const rotatedBindingsPath = path.join(
@@ -517,12 +689,7 @@ describe("matrix thread bindings", () => {
     expect(replacementManager).not.toBe(initialManager);
     expect(replacementManager.listBindings()).toStrictEqual([]);
     expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
+      getSessionBindingService().resolveByConversation(currentThreadConversation()),
     ).toBeNull();
 
     await bindCurrentThread({

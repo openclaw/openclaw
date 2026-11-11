@@ -2,10 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { failSessionActorMemoryPublication } from "../config/sessions/session-actor-memory-publication.test-support.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { BoardValidationError } from "./board-layout.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";

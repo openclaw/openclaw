@@ -9,7 +9,6 @@ import { Icon } from "../solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuItem } from "../solid/menu.tsx";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import type { DesktopPanelState, DesktopSizingMode } from "./desktop-panel-state.ts";
-import "../../styles/session-panel-rail.css";
 
 registerEnglishCatalog(registerDesktopEnglish);
 
@@ -520,7 +519,7 @@ export function DesktopSizing(
       when={props.presentation === "menu"}
       fallback={
         <select
-          class="desktop-sizing"
+          class="settings-select desktop-sizing"
           aria-label={t("desktop.sizing")}
           title={t("desktop.matchRequirement")}
           onChange={(event) => {

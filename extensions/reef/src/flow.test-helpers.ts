@@ -22,7 +22,7 @@ import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
 import { createRuntime } from "./state.test-support.js";
 import type { ReefTransportClient } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
-import type { ReefKeys } from "./types.js";
+import type { InboxEntry, ReefKeys } from "./types.js";
 
 const model = "mock-2026-07-12";
 const stateDirs: string[] = [];
@@ -193,4 +193,15 @@ export async function envelope(
     senderSigningSecretKey: sender.signing.secretKey,
     recipientEncryptionPublicKey: recipient.encryption.publicKey,
   });
+}
+
+export function inbox(message: NonNullable<InboxEntry["envelope"]>, seq = 1): InboxEntry {
+  return {
+    seq,
+    peer: "alice",
+    id: message.id,
+    kind: "message",
+    envelope: message,
+    ts: Math.floor(Date.now() / 1_000),
+  };
 }

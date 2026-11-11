@@ -46,6 +46,7 @@ import {
   createTestRuntimeSecretsActivator,
   makePreparedSecretsSnapshot,
 } from "./server-startup-config.test-support.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -127,13 +128,7 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
       connectionSignal: connection.signal,
       sharedGatewaySessionGeneration: resolveGeneration(initialConfig),
       authenticatedUserId: identity,
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        avatarRevision: "1",
-        updatedAt: 1,
-      },
+      authenticatedUserProfile: dispatchProfile(profile.id),
       authPolicy: captureGatewayAuthPolicy(initialConfig, {
         role: "operator",
         authMethod: "trusted-proxy",

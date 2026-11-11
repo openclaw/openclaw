@@ -11,8 +11,9 @@ export function respondError(
   respond: RespondFn,
   code: Parameters<typeof errorShape>[0],
   message: string,
+  options?: Parameters<typeof errorShape>[2],
 ): void {
-  respond(false, undefined, errorShape(code, message));
+  respond(false, undefined, errorShape(code, message, options));
 }
 
 export function respondUnavailable(respond: RespondFn, err: unknown): void {

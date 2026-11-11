@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import * as timers from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as snapshots from "../../infra/sqlite-snapshot-source.js";
 import { waitForUpdateCandidateReadiness } from "../../infra/update-candidate-canary-readiness.js";
@@ -69,12 +70,12 @@ it("avoids redundant recovery snapshots while readiness waits without warnings",
   f.guard.assertCurrent();
   expect(snapshot).not.toHaveBeenCalled();
   expect(await f.readiness()).toBeUndefined();
-  expect(fs.readFileSync(f.database)).toEqual(before);
+  expectBytesEqual(fs.readFileSync(f.database), before, "readiness database");
   expect(fetch).toHaveBeenCalledTimes(4);
   expect(snapshot).not.toHaveBeenCalled();
   withArtifactPreservingStateReads(() => f.guard.assertCurrent());
   expect(snapshot).toHaveBeenCalledOnce();
-  expect(fs.readFileSync(f.database)).toEqual(before);
+  expectBytesEqual(fs.readFileSync(f.database), before, "artifact-preserving database");
 });
 
 it("refuses recovery committed while the readiness probe is awaiting its reply", async () => {

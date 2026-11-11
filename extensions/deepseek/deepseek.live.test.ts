@@ -8,6 +8,10 @@ import {
 } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
 
@@ -104,11 +108,7 @@ describeLive("deepseek plugin live", () => {
     const toolCallId = "call_deepseek_live_replay_1";
     const context: Context = {
       messages: [
-        {
-          role: "user",
-          content: "Use the noop tool.",
-          timestamp: Date.now() - 3,
-        },
+        makeUserMessage("Use the noop tool.", Date.now() - 3),
         {
           role: "assistant",
           api: "openai-completions",
@@ -119,19 +119,8 @@ describeLive("deepseek plugin live", () => {
           stopReason: "toolUse",
           timestamp: Date.now() - 2,
         },
-        {
-          role: "toolResult",
-          toolCallId,
-          toolName: "noop",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: Date.now() - 1,
-        },
-        {
-          role: "user",
-          content: "Reply with exactly: ok",
-          timestamp: Date.now(),
-        },
+        makeTextToolResult(toolCallId, "noop", "ok", false, Date.now() - 1),
+        makeUserMessage("Reply with exactly: ok", Date.now()),
       ],
       tools: [
         {
@@ -174,11 +163,7 @@ describeLive("deepseek plugin live", () => {
   it("accepts V4 thinking replay after a prior plain assistant message", async () => {
     const context: Context = {
       messages: [
-        {
-          role: "user",
-          content: "Say hello.",
-          timestamp: Date.now() - 2,
-        },
+        makeUserMessage("Say hello.", Date.now() - 2),
         {
           role: "assistant",
           api: "openai-completions",
@@ -189,11 +174,7 @@ describeLive("deepseek plugin live", () => {
           stopReason: "stop",
           timestamp: Date.now() - 1,
         },
-        {
-          role: "user",
-          content: "Reply with exactly: ok",
-          timestamp: Date.now(),
-        },
+        makeUserMessage("Reply with exactly: ok", Date.now()),
       ],
     };
     let capturedPayload: Record<string, unknown> | undefined;

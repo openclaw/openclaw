@@ -105,7 +105,6 @@ import {
   buildIMessageInboundContext,
   mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
-  resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
@@ -113,6 +112,7 @@ import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { createPollCommentFolder } from "./poll-comment.js";
 import { renderIMessagePollBody } from "./poll-render.js";
+import { resolveIMessageReactionContext } from "./reaction-context.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import {
   advanceIMessageRecoveryCursor,
@@ -577,11 +577,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       effectiveAttachmentRoots,
     } = resolveIMessageInboundBodyText(message);
 
-    const storeAllowFrom = await readChannelAllowFromStore(
-      "imessage",
-      process.env,
-      accountInfo.accountId,
-    ).catch(() => []);
     const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
@@ -595,7 +590,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       allowLegacyConversationAllowFromForGroup,
       groupPolicy,
       dmPolicy,
-      storeAllowFrom,
+      readStoreAllowFrom: () =>
+        readChannelAllowFromStore("imessage", process.env, accountInfo.accountId),
       historyLimit,
       groupHistories,
       echoCache: sentMessageCache,

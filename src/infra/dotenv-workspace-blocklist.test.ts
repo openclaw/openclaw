@@ -3,16 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  makeEmptyPluginMetadataOwners,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata.test-support.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { loadDotEnv, loadDotEnvAsync, loadWorkspaceDotEnvFile } from "./dotenv.js";
@@ -71,44 +66,6 @@ async function expectWorkspaceEnv(
       expect(process.env[key], key).toBe(value);
     }
   });
-}
-
-function createManifestBackedProviderSnapshot(
-  plugin: PluginManifestRecord,
-): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash({});
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  };
-  return {
-    policyHash,
-    index,
-    registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: { plugins: [plugin], diagnostics: [] },
-    plugins: [plugin],
-    diagnostics: [],
-    byPluginId: new Map([[plugin.id, plugin]]),
-    normalizePluginId: (pluginId: string) => pluginId,
-    declaredProviderOwners: buildDeclaredProviderOwnerIndex([plugin]),
-    owners: { ...makeEmptyPluginMetadataOwners(), ...buildPluginMetadataProviderFacts([plugin]) },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: 1,
-    },
-  };
 }
 
 describe("workspace .env blocklist completeness", () => {
@@ -178,10 +135,13 @@ describe("workspace .env blocklist completeness", () => {
 
       delete process.env.RUNTIME_CLOUD_API_KEY;
       vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-      setCurrentPluginMetadataSnapshot(createManifestBackedProviderSnapshot(plugin), {
-        config: {},
-        env: process.env,
-      });
+      setCurrentPluginMetadataSnapshot(
+        createPluginMetadataSnapshotFixture(
+          { plugins: [plugin] },
+          resolveInstalledPluginIndexPolicyHash({}),
+        ),
+        { config: {}, env: process.env },
+      );
 
       try {
         loadDotEnv();
@@ -232,6 +192,7 @@ describe("workspace .env blocklist completeness", () => {
       HOMEBREW_SSH_CONFIG_PATH HOMEBREW_XDG_CONFIG_HOME IRC_HOST
       APPDATA LOCALAPPDATA DISCORD_API_URL
       MATTERMOST_URL MATRIX_HOMESERVER MINIMAX_API_HOST
+      MISE_DATA_DIR XDG_BIN_HOME
       BUZZ_RELAY_URL SMS_ALLOWED_USERS SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION
       SMS_PUBLIC_WEBHOOK_URL AWS_ACCESS_KEY_ID AWS_ACCOUNT_ID
       AWS_ACCOUNT_ID_ENDPOINT_MODE AWS_BEARER_TOKEN_BEDROCK AWS_BEDROCK_SKIP_AUTH

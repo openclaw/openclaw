@@ -228,9 +228,13 @@ function cleanSchemaForGeminiWithDefs(
       }
 
       if (key === "const" || key === "enum") {
-        // Google requires string enum entries without changing the declared schema type.
+        // Google accepts string enum entries only on string schemas. Keep other declared types
+        // and drop their enum so tool argument generation and runtime validation still agree.
+        const type = isStringArray(obj.type)
+          ? obj.type.find((entry) => entry !== "null")
+          : obj.type;
         const enumInput = key === "const" ? [value] : value;
-        if (Array.isArray(enumInput)) {
+        if (Array.isArray(enumInput) && (type === undefined || type === "string")) {
           const values = enumInput
             .filter(
               (entry) =>
@@ -256,8 +260,11 @@ function cleanSchemaForGeminiWithDefs(
         continue;
       }
       if (key === "type" && isStringArray(value)) {
-        const types = value.filter((entry) => entry !== "null");
-        cleaned.type = types.length === 1 ? types[0] : types;
+        // Gemini needs one type; use the same representative choice as union flattening.
+        const type = value.find((entry) => entry !== "null");
+        if (type) {
+          cleaned.type = type;
+        }
         continue;
       }
 

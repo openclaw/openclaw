@@ -83,7 +83,9 @@ suite.define(() => {
       await expect
         .poll(() => page.locator("html").getAttribute("data-theme-mode"))
         .toBe(colorScheme);
-      expect(await gateway.getRequests("chat.startup")).not.toHaveLength(0);
+      expect(
+        await gateway.getRequests("sessions.messages.subscribe", { key: sessionKey }),
+      ).not.toHaveLength(0);
 
       expect(await pane.locator("details.chat-system-events").count()).toBe(0);
       const notice = pane

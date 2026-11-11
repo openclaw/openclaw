@@ -61,6 +61,8 @@ export async function runSystemAgentWithInference(
   }
   let inference: BoundVerifySetupInferenceResult;
   try {
+    const { captureRuntimeConfigAsyncReader } = await import("../config/io.js");
+    await captureRuntimeConfigAsyncReader()();
     const { verifySetupInference } = await import("../system-agent/setup-inference.js");
     inference = await withConsoleSubsystemsSuppressed(() =>
       verifySetupInference({ runtime, bindSession: true }),

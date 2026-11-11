@@ -1,5 +1,6 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -57,11 +58,7 @@ suite.define(() => {
         await route.fulfill(
           meta
             ? {
-                json: {
-                  available: true,
-                  mediaTicket: `remount-ticket-${requests.metadata}`,
-                  mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-                },
+                json: mediaTicketPayload(`remount-ticket-${requests.metadata}`, 300_000),
               }
             : {
                 contentType: "image/png",

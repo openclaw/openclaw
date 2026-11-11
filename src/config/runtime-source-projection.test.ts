@@ -1,17 +1,19 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { resolvePluginActivationSourceConfig } from "../plugins/activation-source-config.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
 import {
   createConfigResolutionFacts,
+  getConfigResolutionFacts,
   getResolvedConfigEnvSecretRef,
   setConfigResolutionFacts,
 } from "./resolution-facts.js";
+import { captureRuntimeConfigWithSource } from "./runtime-config-capture-state.js";
 import {
   createRuntimeConfigReader as createReader,
-  hashRuntimeConfigValue as hashConfig,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot as setSnapshot,
 } from "./runtime-snapshot.js";
@@ -25,15 +27,134 @@ afterEach(() => resetConfigRuntimeState());
 
 const tokenPath = "gateway.auth.token";
 const tokenRef = new Map([[tokenPath, "GATEWAY_TOKEN"]]);
+
+it("keeps publication captures independent of the standalone immutable capture memo", () => {
+  const source = freezeJsonSnapshot({ gateway: { port: 19001 } });
+  const standalone = capture(source);
+  const publication = captureRuntimeConfigWithSource(source, source);
+  expect(publication).not.toBe(standalone);
+  expect(captureRuntimeConfigWithSource(source, source)).not.toBe(publication);
+  expect(capture(source)).toBe(standalone);
+  setSnapshot(source, source);
+  expect(capture(source)).not.toBe(standalone);
+  expect(capture(source)).toBe(capture(source));
+  expect(projectSource(publication)).toBe(publication);
+});
+
+it("reuses an unchanged immutable publication capture but replaces rebound provenance", () => {
+  const config = freezeJsonSnapshot({ gateway: { port: 19001 } });
+  setSnapshot(config, config);
+  const first = capture(config);
+  setSnapshot(config, config);
+  expect(capture(config)).toBe(first);
+  setConfigResolutionFacts(config, createConfigResolutionFacts([]));
+  setSnapshot(config, config);
+  expect(capture(config)).not.toBe(first);
+  expect(getConfigResolutionFacts(first)).toBeNull();
+});
+
+it("still captures mutable descendants and authored provenance on same-object publication", () => {
+  const config = Object.freeze({ gateway: { port: 19001 } });
+  const source = { gateway: { port: 19001 } };
+  setConfigResolutionFacts(config, createConfigResolutionFacts([]));
+  setSnapshot(config, source);
+  const first = capture(config);
+  config.gateway.port = 19002;
+  setSnapshot(config, source);
+  const edited = capture(config);
+  expect(edited.gateway?.port).toBe(19002);
+  expect(first.gateway?.port).toBe(19001);
+  freezeJsonSnapshot(config);
+  setConfigResolutionFacts(source, createConfigResolutionFacts([]));
+  setSnapshot(config, source);
+  const rebound = capture(config);
+  expect(rebound).not.toBe(edited);
+  expect(getConfigResolutionFacts(projectSource(rebound))).not.toBeNull();
+  expect(getConfigResolutionFacts(projectSource(edited))).toBeNull();
+  source.gateway.port = 19003;
+  setSnapshot(config, source);
+  expect(projectSource(capture(config)).gateway?.port).toBe(19003);
+  expect(projectSource(rebound).gateway?.port).toBe(19001);
+});
+
+it.each([false, true])("bounds full config copies across publications (aliased: %s)", (aliased) => {
+  const make = (port: number) =>
+    freezeJsonSnapshot({
+      gateway: { port },
+      agents: {
+        defaults: {
+          modelPolicy: {
+            allow: Array.from({ length: 256 }, (_, index) => `fixture/model-${index}`),
+          },
+        },
+      },
+    });
+  const a = make(19001);
+  const aSource = aliased ? a : make(19001);
+  const b = make(19002);
+  const bSource = aliased ? b : make(19002);
+  const clone = vi.spyOn(globalThis, "structuredClone");
+  const publish = (config: OpenClawConfig, source: OpenClawConfig) => {
+    clone.mockClear();
+    setSnapshot(config, source);
+    return clone.mock.calls.filter(([value]) => value === config || value === source).length;
+  };
+  try {
+    // Changed publications own detached value facts and captures, not a cache per workspace.
+    const changedCopies = aliased ? 2 : 4;
+    expect(publish(a, aSource)).toBe(changedCopies);
+    const pinned = capture(a);
+    expect(publish(a, aSource)).toBe(0);
+    const equal = make(19001);
+    expect(publish(equal, aliased ? equal : make(19001))).toBe(0);
+    expect(publish(b, bSource)).toBe(changedCopies);
+    expect(publish(a, aSource)).toBe(changedCopies);
+    expect(capture(a)).not.toBe(pinned);
+    expect(pinned.gateway?.port).toBe(19001);
+    expect(publish(a, aSource)).toBe(0);
+    setConfigResolutionFacts(aSource, createConfigResolutionFacts([]));
+    expect(publish(a, aSource)).toBe(aliased ? 1 : 2);
+    expect(getConfigResolutionFacts(projectSource(pinned))).toBeNull();
+  } finally {
+    clone.mockRestore();
+  }
+});
+
+it("reuses a frozen source capture while preserving edits before freezing and provenance changes", () => {
+  const source = Object.freeze({ gateway: { port: 19001 } });
+  setSnapshot({ ...source, tools: {} }, source);
+  const first = capture(source);
+  expect(capture(source)).not.toBe(first);
+  source.gateway.port = 19002;
+  freezeJsonSnapshot(source);
+  const frozen = capture(source);
+  expect(frozen.gateway?.port).toBe(19002);
+  expect(first.gateway?.port).toBe(19001);
+  expect(frozen).not.toBe(source);
+  expect(capture(source)).toBe(frozen);
+  expect(projectSource(frozen)).toBe(frozen);
+
+  const facts = createConfigResolutionFacts([]);
+  setConfigResolutionFacts(source, facts);
+  const rebound = capture(source);
+  expect(rebound).not.toBe(frozen);
+  expect(getConfigResolutionFacts(rebound)).toBe(facts);
+  expect(getConfigResolutionFacts(frozen)).toBeNull();
+  setConfigResolutionFacts(rebound, null);
+  const repaired = capture(source);
+  expect(repaired).not.toBe(rebound);
+  expect(getConfigResolutionFacts(repaired)).toBe(facts);
+  expect(capture(source)).toBe(repaired);
+});
+
 function expectIsolatedCopy(copy: OpenClawConfig, original: OpenClawConfig) {
   expect(copy).toEqual(original);
   expect(copy).not.toBe(original);
-  expect(hashConfig(copy)).toBe(hashConfig(original));
 }
 
 it("captures authored values and provenance with one isolated runtime generation", () => {
   const source: OpenClawConfig = {
-    agents: { entries: { ops: {}, research: {} } },
+    agents: { entries: { ops: {} } },
     gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
   };
   const runtime: OpenClawConfig = {
@@ -65,6 +186,16 @@ it("captures authored values and provenance with one isolated runtime generation
   expect(projectSource(captured)).toBe(authored);
   expect(captured.gateway?.auth?.token).toBe("synthetic-resolved-token");
   expect(authored.gateway?.auth?.token).toBe("${GATEWAY_TOKEN}");
+  setSnapshot(runtime, source);
+  runtime.gateway!.auth!.token = "after-publication";
+  source.gateway!.auth!.token = "after-publication";
+  const next = capture(runtime);
+  expect(next).not.toBe(captured);
+  expect(next.gateway?.auth?.token).toBe("changed-runtime");
+  expect(projectSource(next).gateway?.auth?.token).toBe("changed-source");
+  expect(capture(runtime)).toBe(next);
+  expect(capture(next)).toBe(next);
+  expect(captured.gateway?.auth?.token).toBe("synthetic-resolved-token");
 });
 
 it("projects runtime edits once while ordinary derived configs remain independent", () => {
@@ -86,44 +217,59 @@ it("projects runtime edits once while ordinary derived configs remain independen
   expect(authored.tools?.exec?.safeBins).toEqual(["jq"]);
 });
 
-it("uses one captured value when no authored source is active", () => {
+it("keeps a source-free capture pinned when its mutable origin later matches the process source", () => {
   const original = { gateway: { port: 19001 } };
   const captured = capture(original);
   expect(projectSource(captured)).toBe(captured);
   expect(capture(captured)).toBe(captured);
   original.gateway.port = 19002;
   expect(captured.gateway?.port).toBe(19001);
-});
-
-it("captures a revision at publication and reuses it until the next publication", () => {
-  const runtime = { gateway: { port: 19001 } };
-  const source = { gateway: { port: 19002 } };
+  const source: OpenClawConfig = { gateway: { port: 19002 } };
+  const runtime: OpenClawConfig = { gateway: { port: 19002, mode: "local" } };
   setSnapshot(runtime, source);
-  runtime.gateway.port = 19003;
-  source.gateway.port = 19004;
-  const first = capture(runtime);
-  expect(first.gateway?.port).toBe(19001);
-  expect(projectSource(first).gateway?.port).toBe(19002);
-  expect(capture(runtime)).toBe(first);
-  expect(capture(first)).toBe(first);
-
-  setSnapshot(runtime, source);
-  const next = capture(runtime);
-  expect(next).not.toBe(first);
-  expect(next.gateway?.port).toBe(19003);
-  expect(projectSource(next).gateway?.port).toBe(19004);
-  expect(first.gateway?.port).toBe(19001);
-});
-
-it("keeps a scoped capture pinned when its mutable origin later matches the process source", () => {
-  const source: OpenClawConfig = { gateway: { port: 19001 } };
-  const runtime: OpenClawConfig = { gateway: { port: 19001, mode: "local" } };
-  setSnapshot(runtime, source);
-  const scoped: OpenClawConfig = { gateway: { port: 19002 } };
-  const captured = capture(scoped);
-  scoped.gateway!.port = 19001;
-  const read = createReader(captured);
-  expect(read()).toBe(captured);
+  const scoped = { gateway: { port: 19003 } };
+  const pinned = capture(scoped);
+  scoped.gateway.port = 19002;
+  const read = createReader(pinned);
+  expect(read()).toBe(pinned);
   setSnapshot({ gateway: { port: 19003 } }, source);
-  expect(read()).toBe(captured);
+  expect(read()).toBe(pinned);
+});
+
+const pluginRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+const pluginConfig = (apiKey: unknown, meta?: object) =>
+  ({
+    plugins: { entries: { secretful: { enabled: true, config: { apiKey } } } },
+    ...(meta ? { meta } : {}),
+  }) as OpenClawConfig;
+const pluginSource = (config: OpenClawConfig) =>
+  projectSource(config).plugins?.entries?.secretful?.config;
+
+it("keeps an older runtime generation on its own published source", () => {
+  const held = pluginConfig("resolved-key");
+  setSnapshot(held, pluginConfig(pluginRef("PLUGIN_KEY")));
+  // A later config write adds top-level metadata the held generation never had.
+  setSnapshot(
+    pluginConfig("resolved-key", { lastTouchedVersion: "x" }),
+    pluginConfig(pluginRef("PLUGIN_KEY"), { lastTouchedVersion: "x" }),
+  );
+  expect(pluginSource(held)).toEqual({ apiKey: pluginRef("PLUGIN_KEY") });
+  // A rebuild still captures an isolated, frozen pair from the held generation.
+  const captured = capture(held);
+  expect(captured).not.toBe(held);
+  expect(Object.isFrozen(captured)).toBe(true);
+  expect(pluginSource(captured)).toEqual({ apiKey: pluginRef("PLUGIN_KEY") });
+});
+
+it("follows a newer source republished for the same runtime object", () => {
+  const runtime = pluginConfig("resolved-key");
+  setSnapshot(runtime, pluginConfig(pluginRef("PLUGIN_KEY_A")));
+  setSnapshot(runtime, pluginConfig(pluginRef("PLUGIN_KEY_B")));
+  expect(pluginSource(runtime)).toEqual({ apiKey: pluginRef("PLUGIN_KEY_B") });
+  setSnapshot(pluginConfig("resolved-key", { lastTouchedVersion: "x" }));
+  expect(pluginSource(runtime)).toEqual({ apiKey: pluginRef("PLUGIN_KEY_B") });
+  // Republishing without a source makes the runtime object its own source again.
+  setSnapshot(runtime);
+  expect(pluginSource(runtime)).toEqual({ apiKey: "resolved-key" });
+  expect(pluginSource(capture(runtime))).toEqual({ apiKey: "resolved-key" });
 });

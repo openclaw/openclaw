@@ -44,7 +44,7 @@ const summaryPrelude = (summaryText: string) =>
   formatClaudeCliFallbackPrelude({ summaryText, recentTurns: [] });
 
 it("emits the retry prompt with prelude even when sessionHasHistory is false (claude-cli case)", () => {
-  const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
+  const originalBody = "Summarize the report.";
   const prelude = "## Prior session context (from claude-cli)\nuser: prior question";
   const result = resolveFallbackRetryPrompt({
     body: originalBody,
@@ -62,24 +62,22 @@ describe("formatClaudeCliFallbackPrelude", () => {
     const out = await formatClaudeCliFallbackPrelude({
       summaryText: "Earlier summary",
       recentTurns: [
-        turn("user", "Earlier user question"),
+        turn("user", "question"),
         turn("assistant", [
-          { type: "text", text: "Earlier assistant reply" },
+          { type: "text", text: "answer" },
           { type: "toolcall", name: "Bash" },
         ]),
-        turn("user", [
-          { type: "tool_result", tool_use_id: "toolu_x", content: "Earlier tool output" },
-        ]),
+        turn("user", [{ type: "tool_result", tool_use_id: "toolu_x", content: "output" }]),
       ],
     });
     for (const fragment of [
       "## Prior session context (from claude-cli)",
       "Summary of earlier conversation:\nEarlier summary",
       "Recent turns:",
-      "user: Earlier user question",
-      "assistant: Earlier assistant reply",
+      "user: question",
+      "assistant: answer",
       "(tool call: Bash)",
-      "(tool result: Earlier tool output)",
+      "(tool result: output)",
     ]) {
       expect(out).toContain(fragment);
     }
@@ -150,14 +148,22 @@ describe("sessionTranscriptHasContent", () => {
       usage: buildUsageWithNoCost({}),
       timestamp: 2,
     });
+  const userMessage = (content: string, timestamp: number) => ({
+    role: "user" as const,
+    content,
+    timestamp,
+  });
+  async function expectHistory(manager: SessionManager, expected: boolean) {
+    manager.flushPendingPersistence();
+    expect(await sessionTranscriptHasContent(target)).toBe(expected);
+  }
 
   it("marks fallback history only after SQLite contains an assistant turn", async () => {
     expect(await sessionTranscriptHasContent(undefined)).toBe(false);
     expect(await sessionTranscriptHasContent(target)).toBe(false);
     const manager = SessionManager.open(target, tmpDir);
-    manager.appendMessage({ role: "user", content: "x".repeat(300 * 1024), timestamp: 1 });
-    manager.flushPendingPersistence();
-    expect(await sessionTranscriptHasContent(target)).toBe(false);
+    manager.appendMessage(userMessage("x".repeat(300 * 1024), 1));
+    await expectHistory(manager, false);
     manager.appendMessage(assistantMessage());
     manager.flushPendingPersistence();
 
@@ -170,20 +176,17 @@ describe("sessionTranscriptHasContent", () => {
 
   it("ignores abandoned assistants and clears history at reset boundaries", async () => {
     const manager = SessionManager.open(target, tmpDir);
-    const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    const root = manager.appendMessage(userMessage("root", 1));
     manager.appendMessage(assistantMessage());
     manager.branch(root);
-    manager.appendMessage({ role: "user", content: "active branch", timestamp: 3 });
-    manager.flushPendingPersistence();
-    expect(await sessionTranscriptHasContent(target)).toBe(false);
+    manager.appendMessage(userMessage("active branch", 3));
+    await expectHistory(manager, false);
 
     manager.appendMessage(assistantMessage());
-    manager.flushPendingPersistence();
-    expect(await sessionTranscriptHasContent(target)).toBe(true);
+    await expectHistory(manager, true);
     manager.appendResetBoundary("new");
-    manager.appendMessage({ role: "user", content: "fresh turn", timestamp: 4 });
-    manager.flushPendingPersistence();
-    expect(await sessionTranscriptHasContent(target)).toBe(false);
+    manager.appendMessage(userMessage("fresh turn", 4));
+    await expectHistory(manager, false);
   });
 });
 
@@ -235,9 +238,7 @@ describe("Claude CLI transcript probes", () => {
 
   it("returns true on the second scan when the assistant message lands during the grace window", async () => {
     const sessionId = "fs-flush-latency";
-    const file = await writeJsonlSession(sessionId, [
-      message("user", [{ type: "text", text: "hi" }]),
-    ]);
+    const file = await writeJsonlSession(sessionId, [message("user", "hi")]);
 
     const graceStarted = createDeferred();
     const releaseGrace = createDeferred();
@@ -261,11 +262,7 @@ describe("Claude CLI transcript probes", () => {
     try {
       await Promise.race([graceStarted.promise, pending]);
       expect(graceFires).toBe(1);
-      await fs.appendFile(
-        file,
-        `${JSON.stringify(message("assistant", [{ type: "text", text: "ack" }]))}\n`,
-        "utf-8",
-      );
+      await fs.appendFile(file, `${JSON.stringify(message("assistant", "ack"))}\n`, "utf-8");
       releaseGrace.resolve();
       expect(await pending).toBe(true);
     } finally {
@@ -276,6 +273,12 @@ describe("Claude CLI transcript probes", () => {
   });
   const tool = (id: string, type = "tool_use") => ({ type, id, name: "Bash", input: {} });
   const result = (id: string, type = "tool_result") => ({ type, tool_use_id: id, content: "ok" });
+  const call = (id: string) => message("assistant", [tool(id)]);
+  const answered = (id: string) => message("user", [result(id)]);
+  const request = (role: "user" | "assistant", content: unknown) => ({
+    type: "api-request-blob",
+    message: { role, content },
+  });
   const longPrefix = Array.from({ length: 600 }, (_, i) => message("user", `ping ${i}`));
 
   it.each([
@@ -293,40 +296,32 @@ describe("Claude CLI transcript probes", () => {
     [
       "a string assistant superseding an orphan past record 500",
       false,
-      [message("assistant", [tool("old")]), ...longPrefix, message("assistant", "moving on")],
+      [call("old"), ...longPrefix, message("assistant", "moving on")],
     ],
     [
       "answered calls repeated by a request echo before the final reply",
       false,
       [
-        message("assistant", [tool("spawn")]),
-        message("user", [result("spawn")]),
-        { type: "api-request-blob", message: { role: "assistant", content: [tool("spawn")] } },
+        call("spawn"),
+        answered("spawn"),
+        request("assistant", [tool("spawn")]),
         { type: "api-request" },
       ],
     ],
     [
       "an orphan followed only by a request echo",
       true,
-      [
-        message("assistant", [tool("orphan")]),
-        { type: "api-request-blob", message: { role: "user", content: [result("orphan")] } },
-      ],
+      [call("orphan"), request("user", [result("orphan")])],
     ],
     [
       "main-conversation orphans with sidechain results",
       true,
-      [message("assistant", [tool("main")]), message("user", [result("main")], true)],
+      [call("main"), message("user", [result("main")], true)],
     ],
     [
       "a trailing orphan past record 500",
       true,
-      [
-        ...longPrefix,
-        message("assistant", [tool("resolved")]),
-        message("user", [result("resolved")]),
-        message("assistant", [tool("orphan")]),
-      ],
+      [...longPrefix, call("resolved"), answered("resolved"), call("orphan")],
     ],
   ] satisfies [string, boolean, object[]][])("detects %s", async (_name, expected, lines) => {
     await writeJsonlSession("fixture", lines);

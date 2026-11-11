@@ -4,6 +4,7 @@ import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../packages/gateway-
 import { NODE_CLAUDE_SKILLS_CAPABILITY } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_CLAUDE_NATIVE_AUTH_CAPABILITY,
   NODE_DEVICE_APPS_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FS_LIST_DIR_COMMAND,
@@ -19,6 +20,19 @@ export const preferMacAppExecHost =
   process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 
 export type NodeHostManifest = ReturnType<typeof buildNodeHostManifest>;
+
+export function requireRequestedCommands(
+  manifest: NodeHostManifest,
+  commandAllowlist?: ReadonlySet<string>,
+) {
+  if (commandAllowlist && manifest.commands.length === 0) {
+    const requested = [...commandAllowlist].toSorted().join(", ") || "(empty allowlist)";
+    throw new Error(
+      `Node command allowlist retained no available commands. Unknown or unavailable ids: ${requested}. Check --commands and enable the plugin that provides each command.`,
+    );
+  }
+  return manifest;
+}
 
 export function buildNodeHostManifest(params: {
   pluginManifest: ReturnType<typeof listRegisteredNodeHostCapsAndCommands>;
@@ -43,6 +57,10 @@ export function buildNodeHostManifest(params: {
     ],
     ["mcp", [NODE_MCP_TOOLS_CALL_COMMAND]],
     ["device", params.installedAppsSharingEnabled ? [NODE_DEVICE_APPS_COMMAND] : []],
+    [
+      NODE_CLAUDE_NATIVE_AUTH_CAPABILITY,
+      params.claudeEnabled ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : [],
+    ],
     [
       NODE_CLAUDE_SKILLS_CAPABILITY,
       params.claudeEnabled ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : [],

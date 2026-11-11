@@ -31,6 +31,7 @@ import {
   type AnthropicTransportOptions,
 } from "./anthropic-transport-options.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
+import { withModelRequestBodyBytes } from "./model-request-body.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
@@ -49,23 +50,6 @@ const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 // bypass that layer; without a parser-local guard, partial frames grow forever.
 const ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 type AnthropicTransportModel = Model<"anthropic-messages">;
-
-function isKimiAnthropicProvider(provider: string | undefined): boolean {
-  return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
-}
-
-function buildAnthropicBetaHeader(
-  model: AnthropicTransportModel,
-  betaFeatures: readonly string[],
-  params: { oauth: boolean },
-): string | undefined {
-  if (!isDirectAnthropicModel(model)) {
-    return undefined;
-  }
-  return params.oauth
-    ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
-    : betaFeatures.join(",");
-}
 
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
@@ -124,12 +108,10 @@ async function* parseAnthropicSseBody(
         completed = chunk.done;
         return chunk;
       },
-      (pending) => {
-        if (pending.length > ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS) {
-          throw new Error(
-            `Anthropic Messages SSE response exceeded max pending buffer size (${ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS} chars) without event boundary`,
-          );
-        }
+      {
+        max: ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS,
+        unit: "characters",
+        message: `Anthropic Messages SSE response exceeded max pending buffer size (${ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS} chars) without event boundary`,
       },
     )) {
       const data = (terminated ? frame : frame.trim())
@@ -201,10 +183,13 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           (transportOptions.interleavedThinking ?? true) && !supportsClaudeAdaptiveThinking(model);
         // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
         // the OpenAI SDK compatibility sanitizer can stall before the text block.
-        const fetch =
-          isKimiAnthropicProvider(model.provider) && transportOptions.thinkingEnabled === true
+        const fetch = withModelRequestBodyBytes(
+          options,
+          /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(model.provider ?? "")) &&
+            transportOptions.thinkingEnabled === true
             ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
-            : buildGuardedModelFetch(model);
+            : buildGuardedModelFetch(model),
+        );
         const copilot = model.provider === "github-copilot";
         const bearerAuth = copilot || usesFoundryBearerAuth(resolveModelHeaderSentinels(model));
         const isOAuthToken = !bearerAuth && isAnthropicOAuthApiKey(apiKey);
@@ -231,7 +216,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (needsInterleavedBeta) {
             betaFeatures.push("interleaved-thinking-2025-05-14");
           }
-          const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: isOAuthToken });
+          const betaHeader = !isDirectAnthropicModel(model)
+            ? undefined
+            : isOAuthToken
+              ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
+              : betaFeatures.join(",");
           if (isOAuthToken) {
             const identity = buildAnthropicClaudeCodeIdentity(
               betaHeader,
@@ -276,7 +265,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           serverSideFallback: !isOAuthToken && supportsAnthropicServerSideFallback(model),
           claudeCodeVersion,
           directApiKeyBetaHeader,
-          request: async (body, requestHeaders) => {
+          request: async (_body, requestHeaders, encodeBody) => {
             const headers = new Headers(
               omitNullRequestHeaders(
                 mergeTransportHeaders(
@@ -297,7 +286,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const response = await fetch(url, {
               method: "POST",
               headers,
-              body: JSON.stringify(body),
+              body: encodeBody(),
               signal: transportOptions.signal,
             });
             return {

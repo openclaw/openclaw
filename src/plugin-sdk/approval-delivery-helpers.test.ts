@@ -8,6 +8,7 @@ import {
   createChannelApprovalCapability,
   splitChannelApprovalCapability,
 } from "./approval-delivery-helpers.js";
+import { createNativeApprovalRuntimeStub as makeNativeRuntime } from "./test-helpers/native-approval.js";
 
 const execRequest = {
   id: "approval-1",
@@ -23,17 +24,6 @@ const deliveryDefaults = {
   isNativeDeliveryEnabled: () => true,
   resolveNativeDeliveryMode: () => "dm" as const,
 };
-function makeNativeRuntime() {
-  return {
-    availability: { isConfigured: vi.fn(), shouldHandle: vi.fn() },
-    presentation: {
-      buildPendingPayload: vi.fn(),
-      buildResolvedResult: vi.fn(),
-      buildExpiredResult: vi.fn(),
-    },
-    transport: { prepareTarget: vi.fn(), deliverPending: vi.fn() },
-  };
-}
 
 describe("createApproverRestrictedNativeApprovalAdapter", () => {
   it("uses approver-restricted authorization for exec and plugin commands", () => {

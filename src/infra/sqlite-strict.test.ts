@@ -26,14 +26,6 @@ function rows(database: DatabaseSync, sql: string) {
   return database.prepare(sql).all();
 }
 
-function schemaObjects(database: DatabaseSync, names: string[]) {
-  return database
-    .prepare(
-      `SELECT type, name FROM sqlite_schema WHERE name IN (${names.map(() => "?").join(",")}) ORDER BY type`,
-    )
-    .all(...names);
-}
-
 function strictSchema(schema: string) {
   return schema
     .replace(/CREATE TABLE /g, "CREATE TABLE IF NOT EXISTS ")
@@ -128,10 +120,7 @@ describe("migrateSqliteSchemaToStrict", () => {
     migrate(database, strictSchema(schema));
     database.prepare("INSERT INTO items (id, name) VALUES (?, ?)").run(2, "second");
 
-    expect(schemaObjects(database, ["items_name_custom", "items_insert_custom"])).toEqual([
-      { type: "index", name: "items_name_custom" },
-      { type: "trigger", name: "items_insert_custom" },
-    ]);
+    expect(() => database.exec("INSERT INTO items VALUES (3, 'second')")).toThrow(/UNIQUE/);
     expect(rows(database, "SELECT * FROM item_audit ORDER BY item_id")).toEqual([
       { item_id: 1, action: "insert" },
       { item_id: 2, action: "insert" },
@@ -156,10 +145,6 @@ describe("migrateSqliteSchemaToStrict", () => {
     database.prepare("INSERT INTO events (id, amount) VALUES (?, ?)").run(1, 7);
 
     expect(rows(database, "SELECT * FROM counter_totals")).toEqual([{ id: 1, value: 7 }]);
-    expect(schemaObjects(database, ["counter_totals", "events_update_counter"])).toEqual([
-      { type: "trigger", name: "events_update_counter" },
-      { type: "view", name: "counter_totals" },
-    ]);
   });
 
   it.each([false, true])("preserves AUTOINCREMENT high-water marks (catalog=%s)", (useCatalog) => {

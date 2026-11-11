@@ -27,6 +27,11 @@ At startup, OpenClaw does roughly this:
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
+The asynchronous host loader prepares up to four independent external plugin source
+captures at a time. Module evaluation, registration, and diagnostics remain in
+manifest order; readiness waits for the complete registry. Each capture keeps its
+existing artifact and worker owner. Synchronous CLI loads acquire sources inline.
+
 Native plugin imports evaluate each requested SDK entry synchronously before
 linking the plugin's asynchronous module graph. This lets CommonJS bundles
 `require()` the same SDK entry during concurrent channel startup without seeing
@@ -56,6 +61,10 @@ one is known (including ids resolved from a manifest inside an
 otherwise-rejected directory), so config referencing that id sees a blocked
 plugin tied to a path-safety warning instead of an unrelated "unknown plugin"
 error.
+
+When every candidate is rejected, installation and capability inspection surface
+the discovery warning, including the unsafe path, so you can correct permissions
+or ownership before retrying.
 
 ### Manifest-first behavior
 
@@ -133,6 +142,12 @@ generation. Gateway runtime work after a lifecycle commit, including config
 reload listeners and owners started by the reload, reads the published
 generation instead. Account health and authentication state are not part of the
 immutable package inventory.
+
+Plugin auto-enable preparation shares results within an immutable runtime metadata
+generation for the same captured config and environment publication. Model-fallback
+runs reuse that prepared config and its normalized plugin policy. Replacing the
+config, metadata snapshot, or managed environment selects new facts; retained runs
+keep their own generation. Mutable setup inputs retain only same-turn deduplication.
 
 Gateway model admission uses the configured agent's workspace and plugin inventory,
 including its published discovery catalog. A session opened in another folder keeps

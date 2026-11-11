@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import * as gatewayRelayTransport from "./gateway-relay.ts";
 import * as googleLiveTransport from "./google-live.ts";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
+import { createGatewayRelaySession } from "./session.test-support.ts";
 import type { RealtimeTalkTransport, RealtimeTalkTransportContext } from "./shared.ts";
 import * as webRtcTransport from "./webrtc.ts";
 
@@ -29,20 +30,6 @@ const requestTimeoutOptions = { timeoutMs: 30_000 };
 
 function createWebRtcSession(voiceSessionId = "voice-1") {
   return { provider: "openai", transport: "webrtc", voiceSessionId, clientSecret: "secret" };
-}
-
-function createRelaySession(provider = "example", relaySessionId = "relay-1") {
-  return {
-    provider,
-    transport: "gateway-relay",
-    relaySessionId,
-    audio: {
-      inputEncoding: "pcm16",
-      inputSampleRateHz: 24000,
-      outputEncoding: "pcm16",
-      outputSampleRateHz: 24000,
-    },
-  };
 }
 
 function videoCatalog(supportsVideoFrames = true) {
@@ -208,7 +195,7 @@ describe("RealtimeTalkSession", () => {
   });
 
   it("closes a Gateway relay allocated after the session stops", async () => {
-    const create = createDeferred<ReturnType<typeof createRelaySession>>();
+    const create = createDeferred<ReturnType<typeof createGatewayRelaySession>>();
     const request = vi.fn((method: string) => {
       if (method === "talk.client.create") {
         return create.promise;
@@ -229,7 +216,7 @@ describe("RealtimeTalkSession", () => {
       ),
     );
     void session.stop();
-    create.resolve(createRelaySession("openai", "relay-stale"));
+    create.resolve(createGatewayRelaySession("openai", "relay-stale"));
     await starting;
 
     expect(request).toHaveBeenCalledWith(
@@ -301,7 +288,7 @@ describe("RealtimeTalkSession", () => {
         return { config: { talk: { realtime: { transport: "gateway-relay" } } } };
       }
       if (method === "talk.session.create") {
-        return createRelaySession("openai");
+        return createGatewayRelaySession("openai");
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -511,7 +498,7 @@ describe("RealtimeTalkSession", () => {
         return { config };
       }
       if (method === "talk.session.create") {
-        return createRelaySession();
+        return createGatewayRelaySession("example");
       }
       throw new Error(`Unexpected request: ${method}`);
     });

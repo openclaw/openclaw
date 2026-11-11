@@ -28,13 +28,13 @@ import {
   collectClawHubVerdictTargets,
   fetchOpenClawSkillSecurityVerdicts,
 } from "../../skills/security/clawhub-verdicts.js";
+import { respondError } from "./response.js";
 import { skillsFilesHandlers } from "./skills-files.js";
 import { handleSkillsInstall } from "./skills-install.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
 import { skillsRetiredHandlers } from "./skills-retired.js";
 import { buildRemoteAwareWorkspaceSkillStatus, handleSkillsStatus } from "./skills-status.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
-import { skillsWorkshopHandlers } from "./skills-workshop.js";
 import { resolveSkillsAgentWorkspace } from "./skills-workspace-handler.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
@@ -43,7 +43,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsFilesHandlers,
   ...skillsLibraryHandlers,
   ...skillsUploadHandlers,
-  ...skillsWorkshopHandlers,
   ...skillsRetiredHandlers,
   "skills.status": handleSkillsStatus,
   "skills.securityVerdicts": defineValidatedGatewayHandler(
@@ -61,7 +60,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         const items = targets.length === 0 ? [] : await fetchOpenClawSkillSecurityVerdicts(targets);
         respond(true, { schema: "openclaw.skills.security-verdicts.v1", items }, undefined);
       } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+        respondError(respond, ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
       }
     },
   ),
@@ -85,13 +84,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
           ?.skillCard?.content
       : undefined;
     if (!skill?.skillCard || content === undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `skill card not ${skill?.skillCard ? "readable" : "found"} for ${params.skillKey}`,
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `skill card not ${skill?.skillCard ? "readable" : "found"} for ${params.skillKey}`,
       );
       return;
     }
@@ -160,13 +156,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
         // ClawHub has no source-qualified read endpoint, so reading this by bare slug would
         // show a same-slug registry skill while install resolves the external artifact.
         // Refusing keeps review and install on one identity until that contract exists.
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `ClawHub cannot return details for ${requested.requestedReference}; external skill sources are install-only. Install it directly, or run "openclaw skills install ${requested.requestedReference}".`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `ClawHub cannot return details for ${requested.requestedReference}; external skill sources are install-only. Install it directly, or run "openclaw skills install ${requested.requestedReference}".`,
         );
         return;
       }
@@ -192,15 +185,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const p = params;
     if ("source" in p) {
       if (Boolean(p.slug) === Boolean(p.all)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            p.slug
-              ? 'clawhub skills.update accepts either "slug" or "all", not both'
-              : 'clawhub skills.update requires "slug" or "all"',
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          p.slug
+            ? 'clawhub skills.update accepts either "slug" or "all", not both'
+            : 'clawhub skills.update requires "slug" or "all"',
         );
         return;
       }

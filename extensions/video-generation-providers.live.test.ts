@@ -3,7 +3,6 @@ import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -30,8 +29,8 @@ import {
   parseProviderModelMap,
   parseVideoGenerationModelRef,
   redactLiveApiKey,
-  resolveConfiguredLiveVideoModels,
-  resolveLiveVideoAuthStore,
+  resolveConfiguredLiveProviderModels,
+  resolveLiveAuthStore,
   resolveLiveVideoResolution,
 } from "openclaw/plugin-sdk/test-media-generation";
 import type {
@@ -57,6 +56,7 @@ import runwayPlugin from "./runway/index.js";
 import {
   createReferencePng,
   maybeLoadShellEnvForGenerationProviders,
+  withPluginsEnabled,
 } from "./test-support/generation-live-test-helpers.js";
 import togetherPlugin from "./together/index.js";
 import vydraPlugin from "./vydra/index.js";
@@ -161,16 +161,6 @@ const CASES: LiveProviderCase[] = [
 function readPositiveIntegerEnv(raw: string | undefined, fallback: number): number {
   const value = Number.parseInt(raw?.trim() ?? "", 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-function withPluginsEnabled(cfg: OpenClawConfig): OpenClawConfig {
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      enabled: true,
-    },
-  };
 }
 
 function createEditReferencePng(): Buffer {
@@ -390,7 +380,9 @@ async function runLiveVideoProviderCase(
   skip: (note: string) => void,
 ): Promise<void> {
   const cfg = withPluginsEnabled(await readLiveTestConfig());
-  const configuredModels = resolveConfiguredLiveVideoModels(cfg);
+  const configuredModels = resolveConfiguredLiveProviderModels(
+    cfg.agents?.defaults?.mediaModels?.video,
+  );
   const agentDir = resolveDefaultAgentDir(cfg as never);
   const attempted: string[] = [];
   const skipped: string[] = [];
@@ -410,7 +402,7 @@ async function runLiveVideoProviderCase(
   }
 
   const hasLiveKeys = collectProviderApiKeys(testCase.providerId).length > 0;
-  const authStore = resolveLiveVideoAuthStore({
+  const authStore = resolveLiveAuthStore({
     requireProfileKeys: REQUIRE_PROFILE_KEYS,
     hasLiveKeys,
   });

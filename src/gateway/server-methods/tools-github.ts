@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   ErrorCodes,
   errorShape,
@@ -19,6 +20,8 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import { logWarn } from "../../logger.js";
+import { redactToolPayloadText } from "../../logging/redact.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
@@ -29,6 +32,7 @@ import { gitHubPublicApi } from "../github-public-api.js";
 import { prepareGitHubReaderIdentity } from "../github-reader-identity.js";
 import { updateGitHubToolIdentityConfig } from "../github-tool-identity-config.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -45,11 +49,7 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
     params.sessionKey !== undefined ||
     (params.refresh !== undefined && typeof params.refresh !== "boolean")
   ) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${req.method} params`),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, `invalid ${req.method} params`);
     return;
   }
   const caller = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
@@ -69,13 +69,10 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
     client?.internal?.pluginRuntimeOwnerId !== "github" ||
     !pluginCurrent
   ) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `GitHub reading requires an active ${toolName} tool invocation.`,
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      `GitHub reading requires an active ${toolName} tool invocation.`,
     );
     return;
   }
@@ -118,7 +115,7 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
       error instanceof GitHubIdentityError
         ? { message: error.message, retryable: error.reason !== "unavailable" }
         : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
+    respondError(respond, ErrorCodes.UNAVAILABLE, message, details);
   }
 };
 
@@ -225,12 +222,12 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
             selectedScope: params.scope,
           }),
         );
-      } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "GitHub identity setup failed"),
+      } catch (error) {
+        // Credential setup causes must be safe even in raw file logs.
+        logWarn(
+          `tools-github: GitHub identity setup failed: ${formatErrorMessage(error, { redact: redactToolPayloadText })}`,
         );
+        respondError(respond, ErrorCodes.UNAVAILABLE, "GitHub identity setup failed");
       }
     },
   ),
@@ -256,15 +253,12 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
           await service.startAuthorization({ scope: params.scope, agentId: resolved.agentId }),
         );
       } catch (error) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            error instanceof GitHubCliUnavailableError
-              ? error.message
-              : "GitHub authorization could not start",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          error instanceof GitHubCliUnavailableError
+            ? error.message
+            : "GitHub authorization could not start",
         );
       }
     },
@@ -287,10 +281,10 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
     async ({ params, respond, context }) => {
       const service = context.githubOAuthService;
       if (!service) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "GitHub authorization lifecycle is unavailable"),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "GitHub authorization lifecycle is unavailable",
         );
         return;
       }

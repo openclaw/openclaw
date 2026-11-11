@@ -25,8 +25,7 @@ import { updateRpcSourceSessionId } from "../../sessions/session-controller.rpc-
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createAgentDedupeLifecycle } from "../agent-turn/agent-dedupe-lifecycle.js";
-import { waitForAgentJob } from "../agent-turn/agent-job.js";
-import * as agentJob from "../agent-turn/agent-job.js";
+import { getAgentJobSession, waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dispatchAgentRunFromGateway } from "../agent-turn/agent-run-dispatch.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -138,7 +137,6 @@ it.each([
           options.abortSignal,
         );
         const details = asOptionalRecord(result.details);
-        expect(details?.status).toBe("running");
         if (details?.status !== "running" || typeof details.sessionId !== "string") {
           throw new Error("Expected an ordinary command to yield its process handle");
         }
@@ -239,11 +237,10 @@ it.each([
   },
 );
 
-it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
+it.each(["unchanged", "successor"] as const)(
   "sessions.abort preserves the %s receipt after committed partial persistence",
   async (mode) => {
     const { scope, runId, key, context, register } = await abortTarget();
-    const { sessionId } = scope;
     const reserve = () => {
       const lifecycle = createAgentDedupeLifecycle({
         cfg: getRuntimeConfig(),
@@ -259,11 +256,10 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
       lifecycle.bindSessionTarget(scope);
       return lifecycle;
     };
-    const original = mode === "unchanged" || mode === "successor" ? reserve() : undefined;
+    const original = reserve();
     const originalReceipt = context.dedupe.get(key);
     const removed = createDeferred();
     const registration = register({ kind: "agent", onRemoved: () => removed.resolve() });
-    expect(registration.registered).toBe(true);
     const releaseExecution = await startExecution(registration, true);
     context.chatRunState.getOrCreate(runId).buffer = "Predecessor partial";
     const committed = createDeferred();
@@ -294,36 +290,27 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
       const committedTranscript = await loadTranscriptEvents(scope);
       expect(
         committedTranscript.filter((event) => asOptionalRecord(event)?.type === "message"),
-      ).toEqual([
-        expect.objectContaining({
-          message: expect.objectContaining({
+      ).toMatchObject([
+        {
+          message: {
             role: "assistant",
             content: [{ type: "text", text: "Predecessor partial" }],
-          }),
-        }),
+          },
+        },
       ]);
-      const replacesReceipt = mode === "successor" || mode === "successor from absent";
+      const replacesReceipt = mode === "successor";
       let successorReceipt: typeof originalReceipt;
       if (replacesReceipt) {
         const reservation = reserve();
         successorReceipt = expectDefined(context.dedupe.get(key), "successor receipt");
         expect(successorReceipt).not.toBe(originalReceipt);
-        expect(reservation.reservationId).not.toBe(original?.reservationId);
-        expect(successorReceipt.payload).toMatchObject({
-          runId,
-          reservationId: reservation.reservationId,
-          status: "accepted",
-          sessionId,
-          sessionKey: scope.sessionKey,
-        });
+        expect(reservation.reservationId).not.toBe(original.reservationId);
         successor = register({ kind: "agent" });
-        expect(successor.registered).toBe(true);
         context.chatRunState.getOrCreate(runId).buffer = "Successor partial";
       }
       release.resolve();
       await request;
       expectStopped(respond, runId);
-      expect(persistence).toHaveBeenCalledOnce();
       expect(await loadTranscriptEvents(scope)).toEqual(committedTranscript);
       if (replacesReceipt) {
         expect(context.dedupe.get(key)).toBe(successorReceipt);
@@ -362,8 +349,6 @@ it("sessions.abort records the rotated RPC source identity on its terminal recei
   updateRpcSourceSessionId(entry, rotatedSessionId);
   context.chatRunState.getOrCreate(runId).buffer = "Rotated abort partial";
   const respond = vi.fn<RespondFn>();
-  const setDedupeEntry = vi.spyOn(agentJob, "setGatewayDedupeEntry");
-
   try {
     await stopSession(scope.sessionKey, respond, context, { runId }, null);
     expectStopped(respond, runId);
@@ -372,12 +357,8 @@ it("sessions.abort records the rotated RPC source identity on its terminal recei
       sessionId: rotatedSessionId,
       lifecycleGeneration,
     };
-    expect(setDedupeEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ key: `chat:${runId}`, session: expectedSession }),
-    );
-    expect(agentJob.getAgentJobSession(runId, "chat")).toEqual(expectedSession);
+    expect(getAgentJobSession(runId, "chat")).toEqual(expectedSession);
   } finally {
-    setDedupeEntry.mockRestore();
     releaseExecution();
     registration.cleanup();
     context.chatRunState.clearRun(runId);

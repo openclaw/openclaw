@@ -6,7 +6,7 @@ import {
   runWithAgentToolSourceExecutionScope,
 } from "./agent-tool-source-execution-guard.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
-import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
+import { resolveHostWorkspaceRoot, resolveHostRootAsync } from "./workspace-write-scope.js";
 
 export async function writeHostWorkspaceFile(
   root: string,
@@ -16,7 +16,7 @@ export async function writeHostWorkspaceFile(
   abortSignal?: AbortSignal,
 ) {
   const assertCurrent = captureAgentToolSourceExecutionGuard(abortSignal);
-  const selectedRoot = resolveHostWorkspaceRoot(root, absolutePath);
+  const selectedRoot = await resolveHostRootAsync(root, absolutePath);
   // Reject lexical escapes before opening the lazily created workspace root.
   const relative = toRelativeWorkspacePath(selectedRoot, absolutePath);
   const rootHandle = await getRoot(selectedRoot);

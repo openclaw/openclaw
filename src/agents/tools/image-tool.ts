@@ -11,6 +11,7 @@ import {
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
+import { decodeDataUrl } from "../../media/image-data-url.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -30,7 +31,6 @@ import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { readPositiveIntegerParam, type AnyAgentTool } from "./common.js";
 import {
   coerceImageModelConfig,
-  decodeDataUrl,
   type ImageModelConfig,
   resolveConfiguredImageModelRefs,
   resolveProviderVisionModelFromConfig,
@@ -62,6 +62,20 @@ import { textResult } from "./tool-results.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
+
+const ImageToolSchema = Type.Object({
+  prompt: Type.Optional(Type.String()),
+  path: Type.Optional(Type.String({ description: "One local image path or permitted URL." })),
+  paths: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Local image paths or permitted URLs; maxImages default 20.",
+    }),
+  ),
+  model: Type.Optional(Type.String()),
+  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
+  maxImages: optionalPositiveIntegerSchema(),
+});
+const NativeVisionImageToolSchema = Type.Omit(ImageToolSchema, ["model"]);
 
 type LoadedImageForTool = {
   buffer: Buffer;
@@ -275,18 +289,7 @@ export function createImageTool(options?: {
     name: "view_image",
     description,
     ...(modelHasVision ? { catalogMode: "direct-only" as const } : {}),
-    parameters: Type.Object({
-      prompt: Type.Optional(Type.String()),
-      path: Type.Optional(Type.String({ description: "One local image path or permitted URL." })),
-      paths: Type.Optional(
-        Type.Array(Type.String(), {
-          description: "Local image paths or permitted URLs; maxImages default 20.",
-        }),
-      ),
-      ...(modelHasVision ? {} : { model: Type.Optional(Type.String()) }),
-      maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
-      maxImages: optionalPositiveIntegerSchema(),
-    }),
+    parameters: modelHasVision ? NativeVisionImageToolSchema : ImageToolSchema,
     execute: async (_toolCallId, args, suppliedSignal) =>
       runWithAsyncWorkResources(async (onAcquired) => {
         const record = asRecord(args);

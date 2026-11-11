@@ -3,6 +3,7 @@ import { Session } from "node:inspector/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { resolveStateDir } from "../../src/config/state-dir.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../src/state/agent-database-admission.js";
 import { resolveOpenClawAgentSqlitePath } from "../../src/state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
 
@@ -31,10 +32,21 @@ const roots = [
 ] as const;
 const agentOptions = { agentId: "worker", env: roots[0] };
 const explicit = { ...agentOptions, path: "/synthetic/custom.sqlite" };
+const defaultEnvironment = { OPENCLAW_HOME: "/synthetic/home" };
+const preparedEnvironment = {
+  ...defaultEnvironment,
+  OPENCLAW_STATE_DIR: resolveStateDir(defaultEnvironment),
+};
+const defaultAdmission = { env: defaultEnvironment };
+const preparedAdmission = { env: preparedEnvironment };
 const coldRoots = Array.from({ length: iterations }, (_, index) => ({
   OPENCLAW_STATE_DIR: `/synthetic/cold/${index}`,
 }));
 const workloads: Record<string, (index: number) => string> = {
+  "default-admission": () =>
+    readAgentDatabaseAdmissionRefusal("worker", defaultAdmission)?.code ?? "",
+  "prepared-admission": () =>
+    readAgentDatabaseAdmissionRefusal("worker", preparedAdmission)?.code ?? "",
   "state-dir": () => resolveStateDir(roots[0]),
   "state-db": () => resolveOpenClawStateSqlitePath(roots[0]),
   "agent-db": () => resolveOpenClawAgentSqlitePath(agentOptions),

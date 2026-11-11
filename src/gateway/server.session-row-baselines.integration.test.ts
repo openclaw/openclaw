@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, onTestFinished, test, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
@@ -5,9 +6,11 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayChatEvents } from "../../ui/src/api/gateway-chat-events.ts";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { recordSessionParticipantInWorker } from "../config/sessions/session-sharing-store.async.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import {
   emitSessionsChanged,
   flushPendingSessionsChangedEvents,
@@ -21,6 +24,7 @@ import { collectSessionRowFrames } from "./session-row-delta-sockets.test-suppor
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 let harness: Awaited<ReturnType<typeof startGatewayServerHarness>>;
 let kernel: Awaited<ReturnType<typeof captureGatewayKernel>>;
@@ -113,7 +117,11 @@ test("ordinary fact changes keep warm wire rows across three real sockets", asyn
   const completed = createDeferred();
   dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
     const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
+    let releaseSource: (() => void) | undefined;
     try {
+      const source = getRpcSource(runId);
+      assert(source, "Expected registered synthetic dispatch source");
+      releaseSource = await claimRpcSourceForTest(source);
       await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
       await drain();
       await replyOptions?.onAgentRunStart?.(runId);
@@ -125,6 +133,7 @@ test("ordinary fact changes keep warm wire rows across three real sockets", asyn
       await lifecycle("end");
       return { queuedFinal, counts: dispatcher.getQueuedCounts() };
     } finally {
+      releaseSource?.();
       completed.resolve();
     }
   });
@@ -190,6 +199,18 @@ test("ordinary fact changes keep warm wire rows across three real sockets", asyn
   await recap(key);
   await drain();
 
+  const participantScope = { ...target, storePath: loaded.storePath };
+  const identity = { type: "agent" as const, id: "baseline-participant" };
+  await recordSessionParticipantInWorker(participantScope, { identity, promptedAt: 10 });
+  await waitForFrame((frame) => isRecord(frame.payload) && frame.payload.reason === "participants");
+  await drain();
+  const frameCounts = streams.map((frames) => frames.length);
+  const participantRow = projection.snapshot({ key, agentId: "main" }).row;
+  await recordSessionParticipantInWorker(participantScope, { identity, promptedAt: 20 });
+  await drain();
+  expect(streams.map((frames) => frames.length)).toEqual(frameCounts);
+  expect(projection.snapshot({ key, agentId: "main" }).row).toEqual(participantRow);
+
   const baseline = streams[2]!;
   const reasons: string[] = [];
   for (const encoded of streams.slice(0, 2)) {
@@ -229,6 +250,7 @@ test("ordinary fact changes keep warm wire rows across three real sockets", asyn
       "placement",
       "patch",
       "activity-summary",
+      "participants",
     ]),
   );
 });

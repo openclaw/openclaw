@@ -1,6 +1,6 @@
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "./embeddings.js";
 import {
   resolveMemoryFallbackProviderRequest,
   resolveMemoryPrimaryProviderRequest,
@@ -25,7 +25,7 @@ function createSettings(fallback: "ollama" | "lmstudio"): ResolvedMemorySearchCo
 
 describe("memory provider requests and lifecycle", () => {
   it("resolves a fallback provider as available", () => {
-    const provider: EmbeddingProvider = {
+    const provider: MemoryEmbeddingProvider = {
       id: "openai",
       model: "openai-model",
       embed: async () => [0],

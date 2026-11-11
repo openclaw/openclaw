@@ -31,6 +31,24 @@ import {
   createPluginToolFactoryResolver,
 } from "./tool-factory-runtime.js";
 
+const view = {
+  pluginId: "incidents",
+  viewId: "incident",
+  version: 1,
+  summary: "Showing incident INC-42.",
+  payload: { incidentId: "INC-42" },
+};
+const expectedInvocation = (toolCallId: string) => ({
+  pluginId: "incidents",
+  toolName: "show_incident",
+  toolCallId,
+});
+function searchRuntime(tool: AnyAgentTool) {
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool] });
+  return new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig());
+}
+
 function fixture(version = 1, frozenProxy = false) {
   const builder = createTestPluginRegistry(createPluginRuntimeMock());
   const record = createPluginRecord({
@@ -41,23 +59,21 @@ function fixture(version = 1, frozenProxy = false) {
   });
   builder.registry.plugins.push(record);
   const api = builder.createApi(record, { config: {} });
-  api.session.controls.registerControlUiDescriptor({
-    id: "incident",
-    surface: "inline",
-    label: "Incident dashboard",
-    version,
-  });
+  const registerVersion = (descriptorVersion: number) =>
+    api.session.controls.registerControlUiDescriptor({
+      id: "incident",
+      surface: "inline",
+      label: "Incident dashboard",
+      version: descriptorVersion,
+    });
+  registerVersion(version);
   const source: AnyAgentTool = {
     name: "show_incident",
     label: "Show incident",
     description: "Show an incident",
     parameters: Type.Object({}),
     execute: async () =>
-      api.inlineView(
-        "incident",
-        { incidentId: "INC-42" },
-        { version: 1, summary: "Showing incident INC-42." },
-      ),
+      api.inlineView(view.viewId, view.payload, { version: view.version, summary: view.summary }),
   };
   api.registerTool(frozenProxy ? new Proxy(Object.freeze(source), {}) : source);
   const entry = builder.registry.tools[0]!;
@@ -69,27 +85,16 @@ function fixture(version = 1, frozenProxy = false) {
   );
   assert(resolved && !Array.isArray(resolved));
   const tool = bindPluginToolCallbacks(entry, builder.registry, resolved);
-  return { ...builder, api, tool };
+  return { ...builder, api, tool, registerVersion };
 }
 
 describe("native inline tool results", () => {
   it("binds frozen Proxy tools through registered factories and rejects retired calls", async () => {
     const { registry, tool } = fixture(1, true);
     const direct = await tool.execute("direct-proxy", {});
-    expect(asOptionalRecord(direct.details)?.pluginInlineViewInvocation).toEqual({
-      pluginId: "incidents",
-      toolName: "show_incident",
-      toolCallId: "direct-proxy",
-    });
-    const catalogRef = createToolSearchCatalogRef();
-    registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool] });
-    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig());
-    const { result } = await runtime.call(tool.name, {}, { parentToolCallId: "proxy-parent" });
-    expect(asOptionalRecord(result.details)?.pluginInlineViewInvocation).toEqual({
-      pluginId: "incidents",
-      toolName: "show_incident",
-      toolCallId: "tool_call:proxy-parent:show_incident:1",
-    });
+    expect(asOptionalRecord(direct.details)?.pluginInlineViewInvocation).toEqual(
+      expectedInvocation("direct-proxy"),
+    );
     registry.plugins[0]!.enabled = false;
     await expect(tool.execute("retired-proxy", {})).rejects.toThrow("no longer active");
   });
@@ -123,22 +128,17 @@ describe("native inline tool results", () => {
   });
   it("binds canonical plugin identity and enforces JSON/UTF-8/summary bounds without rewriting data", () => {
     const { api } = fixture();
+    const inline = (payload: Parameters<typeof api.inlineView>[1], summary = "Showing incident.") =>
+      api.inlineView("incident", payload, { version: 1, summary });
     const payload = { incidentId: "INC-42", text: "<script>text is plugin data</script>" };
-    const result = api.inlineView("incident", payload, {
-      version: 1,
-      summary: "Showing incident.",
-    });
+    const result = inline(payload);
     expect(result.details.pluginInlineView).toEqual({
-      pluginId: "incidents",
-      viewId: "incident",
-      version: 1,
+      ...view,
       summary: "Showing incident.",
       payload,
     });
     expect(result.details.pluginInlineView.payload).toBe(payload);
-    expect(
-      api.inlineView("incident", "a".repeat(16_382), { version: 1, summary: "Exact limit." }),
-    ).toBeDefined();
+    expect(inline("a".repeat(16_382))).toBeDefined();
     for (const value of [
       "a".repeat(16_383),
       "😀".repeat(4096),
@@ -150,20 +150,11 @@ describe("native inline tool results", () => {
         },
       },
     ]) {
-      expect(() =>
-        api.inlineView("incident", value as never, {
-          version: 1,
-          summary: "Too large or not JSON.",
-        }),
-      ).toThrow("plain JSON");
+      expect(() => inline(value as never)).toThrow("plain JSON");
     }
-    expect(() => api.inlineView("incident", {}, { version: 1, summary: " " })).toThrow("summary");
-    expect(() => api.inlineView("incident", {}, { version: 1, summary: "a".repeat(4097) })).toThrow(
-      "4 KiB",
-    );
-    expect(() =>
-      api.inlineView("incident", {}, { version: 1, summary: "x" + "\n".repeat(2048) }),
-    ).toThrow("4 KiB");
+    expect(() => inline({}, " ")).toThrow("summary");
+    expect(() => inline({}, "a".repeat(4097))).toThrow("4 KiB");
+    expect(() => inline({}, "x" + "\n".repeat(2048))).toThrow("4 KiB");
   });
 
   it.each([0, -1, 65536, 1.5, Number.NaN, undefined])(
@@ -178,19 +169,9 @@ describe("native inline tool results", () => {
   );
 
   it("registers explicit older versions alongside newer interfaces", () => {
-    const { api, registry } = fixture();
-    api.session.controls.registerControlUiDescriptor({
-      id: "incident",
-      surface: "inline",
-      version: 2,
-      label: "Incident v2",
-    });
-    api.session.controls.registerControlUiDescriptor({
-      id: "incident",
-      surface: "inline",
-      version: 1,
-      label: "Duplicate",
-    });
+    const { registerVersion, registry } = fixture();
+    registerVersion(2);
+    registerVersion(1);
     expect(registry.controlUiDescriptors.map((entry) => entry.descriptor.version)).toEqual([1, 2]);
   });
 
@@ -220,14 +201,10 @@ describe("native inline tool results", () => {
         () => true,
       );
       const expected = {
+        ...view,
         type: "plugin_view",
-        pluginId: "incidents",
-        viewId: "incident",
         toolCallId: "direct-1",
         toolName: "show_incident",
-        summary: "Showing incident INC-42.",
-        version: 1,
-        payload: { incidentId: "INC-42" },
       };
       expect(asOptionalRecord(history?.details)?.pluginView).toEqual(expected);
       expect(asOptionalRecord(asOptionalRecord(live.data.result)?.details)?.pluginView).toEqual(
@@ -239,10 +216,11 @@ describe("native inline tool results", () => {
 
   it("keeps a real Tool Search child identity and summary through snapshot and nested history projection", async () => {
     const { registry, tool } = fixture();
-    const catalogRef = createToolSearchCatalogRef();
-    registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool] });
-    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig());
-    const { result } = await runtime.call(tool.name, {}, { parentToolCallId: "outer-exec" });
+    const { result } = await searchRuntime(tool).call(
+      tool.name,
+      {},
+      { parentToolCallId: "outer-exec" },
+    );
     const owner = asOptionalRecord(asOptionalRecord(result.details)?.pluginInlineViewInvocation)!;
     expect(owner.toolCallId).toBe("tool_call:outer-exec:show_incident:1");
     const activity = createNestedToolActivity({
@@ -278,12 +256,8 @@ describe("native inline tool results", () => {
     const empty = createTestPluginRegistry().registry;
     withPluginRuntimeRegistryScope(empty, () => {
       expect(projectPluginInlineView(saved.details, invocation)).toEqual({
+        ...view,
         type: "plugin_view",
-        pluginId: "incidents",
-        viewId: "incident",
-        version: 1,
-        payload: { incidentId: "INC-42" },
-        summary: "Showing incident INC-42.",
         ...invocation,
       });
     });

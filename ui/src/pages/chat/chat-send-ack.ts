@@ -4,7 +4,11 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
+
+registerChatComposerEnglish();
 
 type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
 
@@ -60,8 +64,8 @@ export function formatTerminalChatSendAckError(
   context: "chat" | "detached",
 ): string {
   return ack.status === "error"
-    ? "Chat failed before the run started; try again."
+    ? t("chat.sendErrors.sendFailed")
     : context === "detached"
-      ? "The active run ended before the detached message was accepted."
-      : "The run ended before the message was accepted.";
+      ? t("chat.sendErrors.detachedMessageNotAccepted")
+      : t("chat.sendErrors.messageNotAccepted");
 }

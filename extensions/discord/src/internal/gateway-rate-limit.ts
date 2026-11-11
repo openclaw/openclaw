@@ -94,7 +94,7 @@ export class GatewaySendLimiter {
       this.outboundFlushTimer = undefined;
       this.flush();
     }, delayMs);
-    this.outboundFlushTimer.unref?.();
+    this.outboundFlushTimer.unref();
   }
 
   private flush(): void {

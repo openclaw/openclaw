@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.ts";
+import { createSessionGoalFixture } from "../../../src/gateway/session-goal.test-support.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails } from "./chat-details.test-support.ts";
 import { chatMessage, exactButton, requireRecord } from "./chat-flow.test-support.ts";
@@ -10,18 +11,12 @@ const viewport = { width: 1440, height: 900 };
 const pageOptions = { viewport, colorScheme: "light" } as const;
 
 function goalFixture(now: number, id: string, overrides: Partial<SessionGoal> = {}): SessionGoal {
-  return {
-    schemaVersion: 1,
-    id,
-    objective: "Verify the sample deployment",
+  return createSessionGoalFixture(id, "Verify the sample deployment", {
     status: "paused",
     createdAt: now,
     updatedAt: now,
-    tokenStart: 0,
-    tokensUsed: 0,
-    continuationTurns: 0,
     ...overrides,
-  };
+  });
 }
 
 function goalSessions(
@@ -58,9 +53,12 @@ suite.define(() => {
       await exactButton(page, "Edit goal").click();
       const objective = page.locator(".agent-chat__composer-combobox textarea");
       const save = exactButton(page, "Save goal");
-      const invalid = page.getByText("Goal update is invalid. Check the objective and try again.", {
-        exact: true,
-      });
+      const invalid = page.getByText(
+        "Couldn’t update the goal. Check the objective and try again.",
+        {
+          exact: true,
+        },
+      );
       await objective.fill("x".repeat(16_001));
       await save.click();
       await expect
@@ -88,6 +86,7 @@ suite.define(() => {
         goal: committed,
       });
       await expect.poll(() => save.count()).toBe(0);
+      await page.clock.install();
       // Release the Goal refresh after the ACK to exercise the losing read order.
       const lists = await gateway.deferNext("sessions.list");
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -95,6 +94,7 @@ suite.define(() => {
         agentId: "main",
         reason: "goal",
       });
+      await page.clock.fastForward(5_001);
       await gateway.waitForRequest("sessions.list", { after: lists });
       await gateway.resolveDeferred("sessions.list");
       await expect
@@ -147,7 +147,9 @@ suite.define(() => {
         await original.click();
         if (legacyScope) {
           await page
-            .getByText("Goal update was not sent because its recovery request could not be saved.")
+            .getByText(
+              "Couldn’t save the recovery request. Free browser storage and try again. Your goal update wasn’t sent.",
+            )
             .waitFor();
           expect(await gateway.getRequests(method)).toHaveLength(0);
           expect(
@@ -263,6 +265,7 @@ suite.define(() => {
       const now = Date.now();
       const method = "sessions.goal.update";
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionKey: "agent:main:main",
         heldMethods: [method, "chat.startup"],
         historyMessages: [

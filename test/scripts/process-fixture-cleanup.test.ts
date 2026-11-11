@@ -2,8 +2,11 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../src/test-utils/prepare-compiled-subprocesses.js";
+import * as nodeProcess from "../../src/test-utils/node-process.js";
 import { createDeferred } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+
+const testNodeExecPath = nodeProcess.resolveTestNodeExecPath();
 
 const fixtures = [
   { owner: "setup", name: "forwards output and SIGTERM through the runner process group" },
@@ -16,6 +19,7 @@ afterEach(() => {
     "vitest",
     "node:fs",
     "node:child_process",
+    "../../src/test-utils/node-process.js",
     "../../scripts/profile-extension-memory.mts",
     "../../scripts/lib/vitest-build-prerequisites.mts",
     "../helpers/fixture-receipts.js",
@@ -70,6 +74,11 @@ async function runFixture(owner: (typeof fixtures)[number]["owner"]) {
     it: Object.assign(register, { each: () => () => {}, runIf: () => register, skip: register }),
     expect,
     vi,
+  }));
+  // Keep Bun's real Node prerequisite outside the synthetic filesystem and process faults.
+  vi.doMock("../../src/test-utils/node-process.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof nodeProcess>()),
+    resolveTestNodeExecPath: () => testNodeExecPath,
   }));
   await (owner === "setup"
     ? import("./vitest-e2e-global-setup.test.js")

@@ -23,7 +23,7 @@ import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { loadChatComposerState } from "./composer-draft-storage.ts";
 import { updateStoredChatComposerQueueItems } from "./composer-queue-persistence.ts";

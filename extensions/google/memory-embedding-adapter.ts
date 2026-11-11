@@ -1,6 +1,5 @@
 import {
   hasNonTextEmbeddingParts,
-  isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
   sanitizeEmbeddingCacheHeaders,
   type MemoryEmbeddingProviderAdapter,
@@ -20,9 +19,7 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   transport: "remote",
   authProviderId: "google",
   autoSelectPriority: 30,
-  allowExplicitWhenConfiguredAuto: true,
   supportsMultimodalEmbeddings: ({ model }) => isGeminiEmbedding2Model(model),
-  shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
     const { provider, client } = await createGeminiEmbeddingProvider({
       ...options,
@@ -60,6 +57,7 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
                 input: chunk.embeddingInput ?? { text: chunk.text },
                 model: client.model,
                 role: "document",
+                documentFormatApplied: batch.documentFormatApplied,
                 taskType: "RETRIEVAL_DOCUMENT",
                 modelPath: client.modelPath,
                 outputDimensionality: client.outputDimensionality,

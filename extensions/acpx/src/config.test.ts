@@ -1,13 +1,12 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 
-const requireFromTest = createRequire(import.meta.url);
-const TSX_IMPORT = requireFromTest.resolve("tsx");
+const TSX_IMPORT = import.meta.resolve("tsx");
+const runtimeArgs = process.versions.bun ? ["--no-install"] : [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workspaceDir = path.resolve("/tmp/openclaw-acpx");
 const resolve = (
@@ -53,13 +52,42 @@ it.each([
   expect(() => resolve(config)).toThrow(error);
 });
 
+it("passes agent process env lists through and leaves them unset by default", () => {
+  const resolved = resolve();
+  expect(resolved.agentProcessEnvAllow).toBeUndefined();
+  expect(resolved.agentProcessEnvBlock).toBeUndefined();
+  expect(
+    resolve({ agentProcessEnvAllow: [], agentProcessEnvBlock: ["OPENCLAW_GATEWAY_TOKEN"] }),
+  ).toMatchObject({
+    agentProcessEnvAllow: [],
+    agentProcessEnvBlock: ["OPENCLAW_GATEWAY_TOKEN"],
+  });
+});
+
+it.each([
+  ["agentProcessEnvBlock", "OPENCLAW_GATEWAY_TOKEN"],
+  ["agentProcessEnvBlock", [""]],
+  ["agentProcessEnvBlock", ["NAME=value"]],
+  ["agentProcessEnvAllow", [" PATH"]],
+  ["agentProcessEnvAllow", ["NUL\u0000NAME"]],
+  ["agentProcessEnvAllow", [42]],
+] as const)("rejects invalid %s %j", (key, value) => {
+  expect(() => resolve({ [key]: value })).toThrow(
+    `${key} must be an array of environment variable names`,
+  );
+});
+
 it("injects the built-in plugin-tools MCP server only when explicitly enabled", () => {
   const distEntry = path.resolve("dist/mcp/plugin-tools-serve.js");
   expect(resolve({ pluginToolsMcpBridge: true }).mcpServers["openclaw-plugin-tools"]).toEqual({
     command: process.execPath,
     args: fs.existsSync(distEntry)
-      ? [distEntry]
-      : ["--import", TSX_IMPORT, path.resolve("src/mcp/plugin-tools-serve.ts")],
+      ? [...runtimeArgs, distEntry]
+      : [
+          ...runtimeArgs,
+          ...(process.versions.bun ? [] : ["--import", TSX_IMPORT]),
+          path.resolve("src/mcp/plugin-tools-serve.ts"),
+        ],
   });
 });
 
@@ -93,11 +121,11 @@ it("launches managed bridges from the host package when acpx is an external pack
     expect(resolved.mcpServers).toEqual({
       "openclaw-plugin-tools": {
         command: process.execPath,
-        args: [path.join(hostRoot, "dist", "mcp", "plugin-tools-serve.js")],
+        args: [...runtimeArgs, path.join(hostRoot, "dist", "mcp", "plugin-tools-serve.js")],
       },
       "openclaw-tools": {
         command: process.execPath,
-        args: [path.join(hostRoot, "dist", "mcp", "openclaw-tools-serve.js")],
+        args: [...runtimeArgs, path.join(hostRoot, "dist", "mcp", "openclaw-tools-serve.js")],
       },
     });
   } finally {

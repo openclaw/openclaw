@@ -48,6 +48,7 @@ import { resolveControllerSessionKey } from "./subagent-registry-read-topology.j
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
@@ -301,7 +302,7 @@ export async function prepareSubagentRegistrationRows(
   selectedRunIds: readonly string[],
   context: OpenClawStateWorkerContext,
 ): Promise<() => ReadonlyMap<string, SubagentRunRecord>> {
-  const prepared = await prepareSubagentRunsCache(
+  const snapshot = await prepareSubagentRunsCache(
     persistedSubagentRunsReadCache,
     async (source) => {
       const rows = await readAllSubagentRunsInWorker(source);
@@ -313,14 +314,20 @@ export async function prepareSubagentRegistrationRows(
     context,
   );
   const runIds = new Set(selectedRunIds);
+  const matches = (entry: SubagentRunReadRecord) =>
+    runIds.has(entry.runId) || entry.childSessionKey.trim() === childSessionKey;
+  const children = new Set([childSessionKey]);
+  const select = (lookup: SubagentSessionReadLookup, additionalKeys: readonly string[]) =>
+    lookup.selectChildren(children, [...runIds, ...additionalKeys]);
+  const prepared = new Map<string, SubagentRunRecord>();
+  for (const runId of select(getSessionListLookup(persistedSubagentRunsReadCache, snapshot), [])) {
+    prepared.set(runId, snapshot.get(runId)!);
+  }
   return () =>
-    mergeSelectedFullRuns(
-      persistedSubagentRunsReadCache,
-      subagentRuns,
-      prepared,
-      (entry) => runIds.has(entry.runId) || entry.childSessionKey.trim() === childSessionKey,
-      { context },
-    );
+    mergeSelectedFullRuns(persistedSubagentRunsReadCache, subagentRuns, prepared, matches, {
+      context,
+      select,
+    });
 }
 
 export function getSubagentRunsSnapshotForRead(

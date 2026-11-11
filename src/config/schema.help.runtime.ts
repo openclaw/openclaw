@@ -223,10 +223,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
   "gateway.controlUi.experimental":
-    "Opt-in Control UI experiments. These capabilities may change between releases and remain disabled unless explicitly enabled.",
+    "Control UI experiments and retained advanced overrides. Experiments are disabled by default unless their setting documents otherwise.",
   "gateway.controlUi.experimental.customPlugins":
-    "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Changes apply without a Gateway restart. Reload open Control UI pages to clear previously loaded plugin code.",
-  "gateway.controlUi.experimental.claws":
+    "Allow enabled user-installed plugins to execute native JavaScript in the Control UI (default: true). Retained as an advanced config-only opt-out; existing false values remain off. Bundled plugin views are unaffected. Native UI shares the signed-in operator's Gateway permissions; install only trusted plugins. Changes apply without a Gateway restart. After disabling, reload open Control UI pages to clear previously loaded plugin code.",
+  "gateway.controlUi.experimental.templates":
     "Enable ClawHub discovery and one-way Add through the Control UI and Gateway (default: false). Existing agents keep running while this is off.",
   "gateway.controlUi.experimental.chatBubbles":
     "Enable experimental speech bubbles in the Control UI (default: false). Home defaults to bubbles while enabled; browser-local per-session choices take precedence. Changes apply without a Gateway restart.",
@@ -452,7 +452,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.enabled":
     "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":
-    "Restrict apply_patch paths to the workspace directory (default: true). Set false to allow writing outside the workspace (dangerous).",
+    "Restrict host apply_patch paths to the workspace directory (default: false). Set true for workspace-only access; required roots and session restrictions still apply.",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
   "tools.loopDetection.enabled":
@@ -479,7 +479,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.alsoAllow":
     "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
   "tools.byProvider":
-    "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
+    'Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy. exec.mode sets a restrict-only host exec ceiling for turns on that provider or provider/model (it never drops mandatory approvals or loosens a stricter mode), so mode "auto" puts only that model\'s exec misses behind the exec reviewer.',
   "agents.entries.*.tools.profile":
     "Per-agent override for tool profile selection when one agent needs a different capability baseline. Use this sparingly so policy differences across agents stay intentional and reviewable.",
   "agents.entries.*.tools.alsoAllow":
@@ -551,10 +551,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Trusted real target roots that skill symlinks may resolve into when they sit outside their configured source root. Keep this narrow, such as a sibling repo skills directory.",
   "skills.load.watch":
     "Enable filesystem-triggered skill discovery with a safety rescan every 30 minutes for missed events. Disabling this leaves explicit OpenClaw skill changes, relevant configuration changes, and Gateway startup refreshing skills immediately. Existing sessions use changed snapshots on their next agent turn.",
-  "skills.workshop.autonomous.mode":
-    'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work, and archives learned skills unused for 30 days. Every change is recorded and undoable. "off" disables background learning. Default: "auto".',
-  "skills.workshop.autonomous.channelNotices":
-    'Post background review notices to channel conversations, except Slack, with an Undo button (default: false); the Control UI shows that message as plain text. When disabled, notices appear only as the Learned row in the Control UI chat. Saying "undo" works either way.',
   approvals:
     "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":

@@ -15,6 +15,7 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run-orchest
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import * as embeddedAgent from "../../agents/embedded-agent.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import * as configModule from "../../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -143,19 +144,10 @@ async function createConversation() {
     config,
   );
   const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => ({
-    exists: true,
-    valid: true,
-    path: path.join(root, "synthetic-config.json"),
+    ...createTestConfigSnapshot(config, config, path.join(root, "synthetic-config.json")),
     hash: "synthetic-config-hash",
-    config,
-    runtimeConfig: config,
-    sourceConfig: config,
     raw: JSON.stringify(config),
     parsed: config,
-    resolved: config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
   });
   const observed = createDeferred<"waiting" | "dispatched">();
   const captured: {

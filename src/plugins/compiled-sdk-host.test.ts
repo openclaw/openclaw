@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
+import { prepareCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const require = createRequire(import.meta.url);
@@ -36,6 +36,7 @@ export const load = () => import("../dynamic.js").then((module) => module.value)
     "nested.cjs": "module.exports = { value: 3 };",
     "dynamic.js": "export const value = 7;",
     "worker.js": "export const value = 11;",
+    "process/spawn-broker/worker.js": "export const value = 19;",
     "node_modules/embedded-package/index.cjs": `
 const fs = require("node:fs");
 const path = require("node:path");
@@ -57,18 +58,18 @@ module.exports = {
   const entrypoint = (name: string) => ({
     root: sourceRoot,
     currentModuleUrl: import.meta.url,
-    sourceWorkerName: `../plugin-sdk/${name}`,
-    distWorkerPath: `plugin-sdk/${name}.js`,
+    sourceWorkerName: `../${name}`,
+    distWorkerPath: `${name}.js`,
   });
   const createHost = (first: string, ...rest: string[]) =>
     expectDefined(
-      createCompiledSdkHost([entrypoint(first), ...rest.map(entrypoint)], (prefix) =>
+      prepareCompiledSdkHost([entrypoint(first), ...rest.map(entrypoint)])((prefix) =>
         tempDirs.make(prefix),
       ),
       "compiled SDK host",
     );
-  const host = createHost("first", "second");
-  const narrowHost = createHost("second");
+  const host = createHost("plugin-sdk/first", "plugin-sdk/second", "process/spawn-broker/worker");
+  const narrowHost = createHost("plugin-sdk/second");
   expect(fs.existsSync(path.join(narrowHost, "dist/node_modules"))).toBe(false);
   expect(require(path.join(narrowHost, "dist/plugin-sdk/second.js"))).toMatchObject({ value: 2 });
   expect(fs.existsSync(path.join(host, "dist/unrelated.js"))).toBe(false);
@@ -93,4 +94,7 @@ module.exports = {
   await expect(first.load()).resolves.toBe(7);
   expect(require(fileURLToPath(first.workerUrl))).toMatchObject({ value: 11 });
   expect(require(path.join(host, "dist/plugin-sdk/second.js"))).toMatchObject({ value: 2 });
+  expect(require(path.join(host, "dist/process/spawn-broker/worker.js"))).toMatchObject({
+    value: 19,
+  });
 });

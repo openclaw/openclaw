@@ -48,7 +48,7 @@ describe("llama.cpp authored model setup", () => {
     const result = await runLlamaCppSetup(ctx);
 
     expect(result.defaultModel).toBe("llama-cpp/selected");
-    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models[0]?.id).toBe(
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models?.[0]?.id).toBe(
       "selected",
     );
   });
@@ -95,7 +95,7 @@ describe("llama.cpp authored model setup", () => {
         }),
       );
       expect(result.defaultModel).toBe("llama-cpp/selected");
-      expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models[0]).toEqual(
+      expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models?.[0]).toEqual(
         selected,
       );
       expect(mocks.ensureModel).toHaveBeenCalledWith(

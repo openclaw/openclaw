@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   commandSuccess,
+  gogSchemaSuccess,
+  gogServeSchema,
   commandGate,
   createGmailConfig,
   WatcherChild,
@@ -11,6 +13,10 @@ const mocks = vi.hoisted(() => ({
   ensureTailscaleEndpoint: vi.fn(),
   readRuntimeConfig: vi.fn(),
   runCommandWithTimeout: vi.fn(),
+  runUtf8CommandWithTimeout: vi.fn(),
+  inspectGogUpgrade: vi.fn(),
+  upgradeGog: vi.fn(),
+  confirm: vi.fn(),
   killProcessTree: vi.fn(),
   spawn: vi.fn(),
   log: { debug: vi.fn(), trace: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
@@ -28,7 +34,22 @@ vi.mock("node:child_process", async () => {
 });
 
 // mock-isolation: all command completion and cancellation is controlled by this fixture.
-vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: mocks.runCommandWithTimeout,
+  runUtf8CommandWithTimeout: mocks.runUtf8CommandWithTimeout,
+}));
+
+vi.mock("./gmail-gog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gmail-gog.js")>()),
+  inspectGogUpgrade: mocks.inspectGogUpgrade,
+  upgradeGog: mocks.upgradeGog,
+}));
+
+// mock-isolation: control terminal upgrade answers without opening an interactive prompt.
+vi.mock("@clack/prompts", () => ({
+  confirm: mocks.confirm,
+  isCancel: (value: unknown) => typeof value === "symbol",
+}));
 
 // mock-isolation: terminate only the fixture's fake child processes.
 vi.mock("../process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
@@ -54,12 +75,23 @@ vi.mock("./gmail-setup-utils.js", () => ({
   runGcloud: vi.fn(),
 }));
 
+// mock-isolation: resolve fixture executables without inspecting the host installation.
 vi.mock("../infra/executable-path.js", () => ({
   resolveExecutable: vi.fn((name: string) => name),
+  resolveExecutablePath: vi.fn((name: string) => name),
 }));
 
 const { runGmailService } = await import("./gmail-ops.js");
 const { stopGmailWatcher } = await import("./gmail-watcher.js");
+
+const ttyDescriptors = [process.stdin, process.stdout].map((stream) =>
+  Object.getOwnPropertyDescriptor(stream, "isTTY"),
+);
+function setTty(value: boolean) {
+  for (const stream of [process.stdin, process.stdout]) {
+    Object.defineProperty(stream, "isTTY", { value, configurable: true });
+  }
+}
 
 const signals = ["SIGINT", "SIGTERM"] as const;
 
@@ -85,12 +117,25 @@ function expectStopped() {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  setTty(false);
+  mocks.confirm.mockReset().mockResolvedValue(false);
+  mocks.inspectGogUpgrade.mockReset().mockResolvedValue({
+    eligible: true,
+    brew: "brew",
+    formula: "gogcli",
+    executable: "gog",
+  });
+  mocks.upgradeGog.mockReset().mockResolvedValue({
+    inspection: { executable: "gog", support: "supported" },
+    message: "Gog supports secure token environment sources.",
+  });
   signalBaselines = new Map(signals.map((signal) => [signal, process.rawListeners(signal)]));
   children = [];
   mocks.ensureDependency.mockReset().mockResolvedValue(undefined);
   mocks.ensureTailscaleEndpoint.mockReset().mockResolvedValue(undefined);
   mocks.readRuntimeConfig.mockResolvedValue(createGmailConfig(undefined, 1, { mode: "off" }));
   mocks.runCommandWithTimeout.mockReset().mockResolvedValue(commandSuccess);
+  mocks.runUtf8CommandWithTimeout.mockReset().mockResolvedValue(gogSchemaSuccess);
   mocks.spawn.mockReset().mockImplementation(() => {
     const child = new WatcherChild(9000 + children.length);
     children.push(child);
@@ -114,6 +159,14 @@ afterEach(async () => {
     await stopGmailWatcher();
     expectStopped();
   } finally {
+    [process.stdin, process.stdout].forEach((stream, index) => {
+      const descriptor = ttyDescriptors[index];
+      if (descriptor) {
+        Object.defineProperty(stream, "isTTY", descriptor);
+      } else {
+        Reflect.deleteProperty(stream, "isTTY");
+      }
+    });
     vi.useRealTimers();
   }
 });
@@ -141,16 +194,15 @@ it.each(["rejected renewal", "timed-out registration"])(
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(3);
     if (failure === "timed-out registration") {
       expect(mocks.log.error).toHaveBeenCalledTimes(3);
-      for (const [message] of mocks.log.error.mock.calls) {
-        expect(message.length).toBeLessThan(2000);
-        expect(message).toContain("gog gmail watch start failed");
-        expect(message).toContain("registration stdout tail");
-        expect(message).toContain("registration stderr tail");
-        expect(message).toContain("termination=timeout");
-        expect(message).toContain("code=124");
-        expect(message).toContain("signal=SIGTERM");
-        expect(message).not.toContain("\u001b");
-      }
+      const [message] = mocks.log.error.mock.calls[0]!;
+      expect(message.length).toBeLessThan(2000);
+      expect(message).toContain("gog gmail watch start failed");
+      expect(message).toContain("termination=timeout");
+      expect(message).toContain("code=124");
+      expect(message).toContain("signal=SIGTERM");
+      expect(message).toContain("registration stdout tail");
+      expect(message).toContain("registration stderr tail");
+      expect(message).not.toContain("\u001b");
     }
   },
 );
@@ -242,5 +294,64 @@ it.each(["tailscale", "spawn"])("cleans up signals after %s startup failure", as
     runGmailService({ tailscale: boundary === "tailscale" ? "serve" : "off" }),
   ).rejects.toThrow("fixture setup failed");
   expect(children).toHaveLength(0);
+  expectStopped();
+});
+
+it.each(["headless", "decline", "cancel", "upgrade", "unmanaged", "failed"])(
+  "handles the foreground Gog upgrade offer: %s",
+  async (mode) => {
+    setTty(mode !== "headless");
+    mocks.runUtf8CommandWithTimeout.mockResolvedValue({
+      ...commandSuccess,
+      stdout: JSON.stringify(gogServeSchema([])),
+    });
+    mocks.confirm.mockResolvedValue(
+      mode === "cancel" ? Symbol("cancel") : ["upgrade", "failed"].includes(mode),
+    );
+    if (mode === "unmanaged") {
+      mocks.inspectGogUpgrade.mockResolvedValue({ eligible: false, reason: "Custom installation" });
+    }
+    if (mode === "failed") {
+      mocks.upgradeGog.mockResolvedValue({
+        inspection: { executable: "gog", support: "unsupported" },
+        message: "Homebrew upgrade failed; update manually.",
+      });
+    }
+    if (mode === "cancel") {
+      await expect(runGmailService({})).rejects.toThrow("cancelled");
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    } else {
+      await runGmailService({});
+      const args = mocks.spawn.mock.calls[0]?.[1];
+      expect(args).toContain(mode === "upgrade" ? "--token-env" : "--token");
+      if (mode === "upgrade") {
+        expect(args).not.toContain("push-token");
+      }
+    }
+    expect(mocks.upgradeGog).toHaveBeenCalledTimes(["upgrade", "failed"].includes(mode) ? 1 : 0);
+    expect(mocks.confirm).toHaveBeenCalledTimes(["headless", "unmanaged"].includes(mode) ? 0 : 1);
+  },
+);
+
+it("SIGTERM cancels a pending upgrade prompt before starting Gmail", async () => {
+  setTty(true);
+  mocks.runUtf8CommandWithTimeout.mockResolvedValue({
+    ...commandSuccess,
+    stdout: JSON.stringify(gogServeSchema([])),
+  });
+  mocks.confirm.mockImplementation(
+    ({ signal }: { signal: AbortSignal }) =>
+      new Promise((resolve) => {
+        signal.addEventListener("abort", () => resolve(Symbol("cancel")), { once: true });
+      }),
+  );
+  const starting = runGmailService({});
+  await vi.advanceTimersByTimeAsync(0);
+  shutdownHandler("SIGTERM")();
+  await starting;
+  expect(mocks.upgradeGog).not.toHaveBeenCalled();
+  expect(mocks.spawn).not.toHaveBeenCalled();
+  expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
   expectStopped();
 });

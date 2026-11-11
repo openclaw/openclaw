@@ -1,25 +1,23 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../lib/reactive/i18n.ts";
-import { CLAWS_LAB_FEATURE } from "./claws-lab-feature.ts";
 import {
   BOOLEAN_GATE,
   labFeatureOverridePath,
   type LabFeature,
   type LabFeatureDefinition,
 } from "./labs-feature-state.ts";
+import { TEMPLATES_LAB_FEATURE } from "./templates-lab-feature.ts";
 
 export const LAB_FEATURES = (
   [
     {
       ...BOOLEAN_GATE,
       id: "decisionAssistance",
-      docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#decision-assistance",
       configPath: ["agents", "defaults", "experimental", "decisionAssistance"],
     },
     {
       ...BOOLEAN_GATE,
       id: "codeMode",
-      docsUrl: "https://docs.openclaw.ai/tools/code-mode",
       configPath: ["tools", "codeMode", "enabled"],
       // The on position writes the "auto" tier, never `true`: Labs offers
       // Auto/Off, and force-on for unevaluated models stays a config-only choice.
@@ -35,7 +33,6 @@ export const LAB_FEATURES = (
     {
       ...BOOLEAN_GATE,
       id: "toolSearch",
-      docsUrl: "https://docs.openclaw.ai/tools/tool-search",
       configPath: ["tools", "toolSearch", "enabled"],
       // Mirrors resolveToolSearchConfig: unauthored config is on, while explicit
       // booleans and objects retain their own enablement semantics.
@@ -54,40 +51,36 @@ export const LAB_FEATURES = (
     {
       ...BOOLEAN_GATE,
       id: "advisor",
-      docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#advisor",
       configPath: ["plugins", "entries", "advisor", "enabled"],
       settingsPluginId: "advisor",
     },
     {
       ...BOOLEAN_GATE,
       id: "composerPredictions",
-      docsUrl: "https://docs.openclaw.ai/web/control-ui/chat#composer-predictions",
       configPath: ["gateway", "controlUi", "experimental", "composerPredictions", "enabled"],
     },
     {
       ...BOOLEAN_GATE,
       id: "chatBubbles",
-      docsUrl: "https://docs.openclaw.ai/web/control-ui/chat",
       configPath: ["gateway", "controlUi", "experimental", "chatBubbles"],
     },
-    {
-      ...BOOLEAN_GATE,
-      id: "customPluginUi",
-      docsUrl: "https://docs.openclaw.ai/plugins/feature-plugins",
-      configPath: ["gateway", "controlUi", "experimental", "customPlugins"],
-    },
-    CLAWS_LAB_FEATURE,
+    TEMPLATES_LAB_FEATURE,
     {
       ...BOOLEAN_GATE,
       id: "hostDesktop",
-      docsUrl: "https://docs.openclaw.ai/gateway/configuration-reference#desktop",
       configPath: ["desktop", "host", "enabled"],
       resetScope: null,
     },
     {
       ...BOOLEAN_GATE,
+      id: "openclawId",
+      configPath: ["gateway", "openclawId", "enabled"],
+      // Off writes false and keeps the service URLs an operator configured.
+      resetScope: null,
+    },
+    {
+      ...BOOLEAN_GATE,
       id: "workerDesktop",
-      docsUrl: "https://docs.openclaw.ai/gateway/cloud-workers#desktop-interactive",
       configPath: ["cloudWorkers", "desktop"],
     },
   ] as const satisfies readonly LabFeatureDefinition[]

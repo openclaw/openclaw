@@ -45,6 +45,7 @@ import {
 import { registerConfigWritePreflightTests } from "./io.write-preflight.test-support.js";
 import { registerConfigWriteWarningTests } from "./io.write-warnings.test-support.js";
 import { replaceConfigFile, transformConfigFile, transformConfigFileWithRetry } from "./mutate.js";
+import { createSnapshot } from "./mutate.test-support.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
 import type { AgentModelEntryConfig, AgentModelPolicyConfig } from "./types.agent-defaults.js";
@@ -298,25 +299,6 @@ itWithHome(
     );
   },
 );
-
-const existingSnapshot = (
-  configPath: string,
-  config: OpenClawConfig,
-  raw: string | null,
-): ConfigFileSnapshot => ({
-  path: configPath,
-  exists: true,
-  raw,
-  parsed: config,
-  sourceConfig: config,
-  resolved: config,
-  valid: true,
-  runtimeConfig: config,
-  config,
-  issues: [],
-  warnings: [],
-  legacyIssues: [],
-});
 
 const readConfig = async (configPath: string): Promise<OpenClawConfig> =>
   JSON.parse(await readRaw(configPath)) as OpenClawConfig;
@@ -806,7 +788,11 @@ it.each(["success", "EEXIST"] as const)(
         },
       ),
     });
-    const baseSnapshot = existingSnapshot(configPath, original, originalRaw);
+    const baseSnapshot = createSnapshot({
+      path: configPath,
+      sourceConfig: original,
+      raw: originalRaw,
+    });
     const preflight = vi.fn(async () => {
       throw new Error("should not preflight rejected writes");
     });
@@ -902,7 +888,11 @@ itWithHome("allows shrinking without losing mode protection", async (home) => {
   const io = homeIO(home, {
     env: { VITEST: "true" },
   });
-  const baseSnapshot = existingSnapshot(configPath, original, originalRaw);
+  const baseSnapshot = createSnapshot({
+    path: configPath,
+    sourceConfig: original,
+    raw: originalRaw,
+  });
   const acceptedWrite = await io.writeConfigFile(
     { meta: original.meta, gateway: { mode: "local" } },
     {
@@ -1635,7 +1625,8 @@ it.each([
         if (layout === "include") {
           const { agents: sourceAgents, ...sourceRoot } = snapshot.sourceConfig;
           const { agents: runtimeAgents, ...runtimeRoot } = snapshot.runtimeConfig;
-          expect(sourceRoot).toStrictEqual(runtimeRoot);
+          // Undefined normalization-only fields have no authored JSON representation.
+          expect(sourceRoot).toEqual(runtimeRoot);
           expect(sourceAgents).not.toStrictEqual(runtimeAgents);
         }
         const originalRoot = await readRaw(configPath);
@@ -2028,7 +2019,13 @@ for (const failure of ["warnings", "missing-raw", "concurrent", "env"] as const)
             writeConfigFile(
               next,
               failure === "missing-raw"
-                ? { baseSnapshot: existingSnapshot(configPath, initial, null) }
+                ? {
+                    baseSnapshot: createSnapshot({
+                      path: configPath,
+                      sourceConfig: initial,
+                      raw: null,
+                    }),
+                  }
                 : undefined,
             ),
           ).rejects.toThrow(
@@ -2526,15 +2523,15 @@ itWithHome("audits Doctor paths and snapshot fingerprints", async (home) => {
     gateway: { port: 18789 },
   });
   const io = fastIO(home);
-  const snapshot = await io.readConfigFileSnapshot();
+  const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
   const nextConfig = structuredClone(snapshot.config);
   nextConfig.env = { ...nextConfig.env, vars: nextVars };
   const result = await withActiveConfig(
     configPath,
     () =>
       writeConfigFile(nextConfig, {
+        ...writeOptions,
         baseSnapshot: snapshot,
-        expectedConfigPath: configPath,
         auditOrigin: "doctor",
         afterWrite: { mode: "none", reason: "automatic migration" },
         skipOutputLogs: true,
@@ -2551,8 +2548,7 @@ itWithHome("audits Doctor paths and snapshot fingerprints", async (home) => {
     result: "rename",
     previousHash: snapshot.hash,
     nextHash: result.persistedHash,
-    // The runtime writer also records its managed plugins.installs removal.
-    changedPathCount: 71,
+    changedPathCount: 70,
   });
   if (!record || record.event !== "config.write") {
     throw new Error("expected config write audit record");
@@ -2560,7 +2556,7 @@ itWithHome("audits Doctor paths and snapshot fingerprints", async (home) => {
   expect(record.origin).toBe("doctor");
   expect((await io.readConfigFileSnapshot()).hash).toBe(result.persistedHash);
   expect(record.changedPaths).toHaveLength(64);
-  expect(record.changedPaths?.at(-1)).toBe("…+8 more");
+  expect(record.changedPaths?.at(-1)).toBe("…+7 more");
   expect(record.changedPaths?.slice(0, 2)).toEqual(["env.vars.SETTING_00", "env.vars.SETTING_01"]);
   const slot = await readLatestConfigSnapshotAuditRecordAsync({
     env: { OPENCLAW_TEST_FAST: "1" },

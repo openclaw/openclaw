@@ -13,10 +13,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -184,14 +181,16 @@ export function useDoctorSessionSqliteTestFixture() {
   };
   // Reuse child imports within each case; snapshots still admit and read fresh state.
   aroundEach((runTest) => withSqliteReadOnlyWorkerScope(runTest));
-  beforeEach(() => {
+  beforeEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeStateDatabaseForTest();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeStateDatabaseForTest();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
     previousEnv.restore();
   });
 

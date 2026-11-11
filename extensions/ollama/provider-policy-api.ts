@@ -115,27 +115,16 @@ export function normalizeConfig({
       models.push(model);
       continue;
     }
-    models.push({
-      ...model,
-      maxTokens:
-        providerConfig.maxTokens ??
-        resolveOllamaOutputBudget({
-          modelId: model.id,
-          contextWindow: model.contextWindow,
-          remote,
-        }),
-    });
+    const maxTokens =
+      providerConfig.maxTokens ??
+      resolveOllamaOutputBudget({
+        modelId: model.id,
+        contextWindow: model.contextWindow,
+        remote,
+      });
+    models.push(maxTokens === undefined ? model : { ...model, maxTokens });
   }
   return { ...providerConfig, baseUrl, models };
-}
-
-/**
- * Runtime normalization only prepares compaction policy, not model-list fields.
- * Skip full plugin activation for the unchanged configured-row projection.
- */
-export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelContext) {
-  const provider = ctx.provider.trim().toLowerCase();
-  return provider === "ollama" || provider === OLLAMA_CLOUD_PROVIDER_ID ? null : undefined;
 }
 
 export function resolveThinkingProfile({

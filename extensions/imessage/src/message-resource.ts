@@ -14,17 +14,6 @@ import type { IMessageService, IMessageTarget } from "./targets.js";
 
 const MAX_REPLY_TO_ID_LENGTH = 256;
 
-type IMessageResourceAuthorizationParams = {
-  accountId: string;
-  chatContext: IMessageChatContext;
-  cliPath: string;
-  dbPath?: string;
-  remoteHost?: string;
-  hasExclusiveLocalDatabase: boolean;
-  messageId: string;
-  conversationReadOrigin?: string;
-};
-
 function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
   const trimmed = rawReplyToId?.trim();
   if (!trimmed) {
@@ -76,9 +65,16 @@ export async function resolveAuthorizedIMessageReplyReference(params: {
   return messageId;
 }
 
-export async function authorizeIMessageResourceReference(
-  params: IMessageResourceAuthorizationParams,
-): Promise<void> {
+export async function authorizeIMessageResourceReference(params: {
+  accountId: string;
+  chatContext: IMessageChatContext;
+  cliPath: string;
+  dbPath?: string;
+  remoteHost?: string;
+  hasExclusiveLocalDatabase: boolean;
+  messageId: string;
+  conversationReadOrigin?: string;
+}): Promise<void> {
   const cacheContext = {
     ...params.chatContext,
     accountId: params.accountId,

@@ -1,19 +1,21 @@
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import type { CyberAccessProgram } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
 import type { ResolvedAgentConfig } from "../../agent-scope-config.js";
+import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
 import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
-} from "../../agent-scope.js";
-import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
+} from "../../model-selection-config.js";
 import {
   type ModelRef,
   resolveSubagentConfiguredModelSelection,
   resolveSubagentSpawnModelSelection,
 } from "../../model-selection.js";
+import { buildThinkingCatalog } from "../../model-thinking-default-core.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
@@ -39,7 +41,7 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
 }) {
   return resolveNonNegativeIntegerOption(
     params.runTimeoutSeconds,
-    resolveNonNegativeIntegerOption(params.cfg?.agents?.defaults?.subagents?.runTimeoutSeconds, 0),
+    resolveNonNegativeIntegerOption(params.cfg.agents?.defaults?.subagents?.runTimeoutSeconds, 0),
   );
 }
 
@@ -54,6 +56,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   callerThinkingExplicit?: boolean;
   inheritedModel?: ModelRef;
   fastMode?: FastMode;
+  cyberAccessProgram?: CyberAccessProgram;
   workspaceDir?: string;
   requiresTools?: boolean;
 }) {
@@ -67,18 +70,16 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   const { model: requestedModel, profile: authProfileId } =
     splitTrailingAuthProfile(rawResolvedModel);
 
-  const thinkingPlan = resolveSubagentThinkingOverride({
-    cfg: params.cfg,
-    requesterAgentConfig: params.requesterAgentConfig,
-    targetAgentConfig: params.targetAgentConfig,
-    thinkingOverrideRaw: params.thinkingOverrideRaw,
-    callerThinkingRaw: params.callerThinkingRaw,
-    callerThinkingExplicit: params.callerThinkingExplicit,
-  });
+  const thinkingPlan = resolveSubagentThinkingOverride(params);
   if (thinkingPlan.status === "error") {
     const { provider, model } = splitModelRef(requestedModel);
     // The hint is provider/model-specific because valid thinking levels vary by backend.
-    const hint = formatThinkingLevels(provider, model);
+    const hint = formatThinkingLevels(
+      provider,
+      model,
+      ", ",
+      buildThinkingCatalog({ cfg: params.cfg, provider, model }),
+    );
     return {
       status: "error" as const,
       resolvedModel: requestedModel,
@@ -172,6 +173,9 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
         : {}),
       ...thinkingPlan.initialSessionPatch,
       ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
+      ...(params.cyberAccessProgram !== undefined
+        ? { cyberAccessProgram: params.cyberAccessProgram }
+        : {}),
     } satisfies Partial<InternalSessionEntry>,
   };
 }

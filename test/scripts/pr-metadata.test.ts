@@ -218,10 +218,11 @@ require("node:module").syncBuiltinESMExports();
   script(
     "gh",
     `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 const args = process.argv.slice(2);
-const root = __dirname;
+const root = import.meta.dirname;
 const fixture = JSON.parse(process.env.FAKE_GH_FIXTURE);
 fs.appendFileSync(path.join(root, "trace"), JSON.stringify(args) + "\\n");
 const inputPath = args.find(arg => arg.startsWith("--input="))?.slice("--input=".length)
@@ -279,7 +280,7 @@ if (args[0] === "browse") {
     throw new Error("Repository discovery must not open the configured browser");
   }
   if (fixture.probeGit) {
-    const git = require("node:child_process").execFileSync("git", ["--version"], {encoding:"utf8"});
+    const git = execFileSync("git", ["--version"], {encoding:"utf8"});
     if (git.trim() !== "selected fixture Git") throw new Error("Wrong Git reached default repository resolver");
   }
   const repoFlag = args.indexOf("--repo");
@@ -1036,48 +1037,56 @@ it.each(["quota", "forbidden", "exit"] as const)(
     expect(result.calls.every((args) => args[0] === "api")).toBe(true);
   },
 );
-it.each(["changed source", "redirected import root", "changed response parser"])(
-  "rejects %s snapshot code",
-  (kind) => {
-    const root = tempDirs.make("openclaw-pr-gh-snapshot-");
-    for (const file of [
-      "pr-lib/github.sh",
-      "pr-lib/github.mjs",
-      "pr-lib/gh-api-preflight.mjs",
-      "lib/plain-gh.mjs",
-      "lib/direct-run.mjs",
-    ]) {
-      const target = join(root, "scripts", file);
-      mkdirSync(dirname(target), { recursive: true });
-      copyFileSync(join(process.cwd(), "scripts", file), target);
-    }
-    const target = join(
-      root,
-      "scripts/pr-lib",
-      kind === "changed response parser" ? "gh-api-preflight.mjs" : "github.mjs",
-    );
-    if (kind !== "redirected import root") {
-      writeFileSync(target, "throw new Error('unverified source ran');\n");
-    } else {
-      const outside = join(root, "outside/github.mjs");
-      mkdirSync(dirname(outside));
-      copyFileSync(target, outside);
-      unlinkSync(target);
-      symlinkSync(outside, target);
-    }
-    const result = spawnSync(
-      "/bin/bash",
-      ["-c", 'source "$1"', "snapshot-test", join(process.cwd(), "scripts/pr-lib/github.sh")],
-      {
-        encoding: "utf8",
-        env: { ...process.env, OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: root },
-      },
-    );
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Refusing unverified scripts/pr GitHub helper snapshot");
-    expect(result.stderr).not.toContain("unverified source ran");
-  },
-);
+it.each([
+  "changed source",
+  "redirected import root",
+  "changed response parser",
+  "changed Git invocation",
+])("rejects %s snapshot code", (kind) => {
+  const root = tempDirs.make("openclaw-pr-gh-snapshot-");
+  for (const file of [
+    "pr-lib/github.sh",
+    "pr-lib/github.mjs",
+    "pr-lib/git-invocation.mjs",
+    "pr-lib/gh-api-preflight.mjs",
+    "lib/plain-gh.mjs",
+    "lib/direct-run.mjs",
+    "windows-cmd-helpers.mjs",
+  ]) {
+    const target = join(root, "scripts", file);
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(join(process.cwd(), "scripts", file), target);
+  }
+  const target = join(
+    root,
+    "scripts/pr-lib",
+    kind === "changed response parser"
+      ? "gh-api-preflight.mjs"
+      : kind === "changed Git invocation"
+        ? "git-invocation.mjs"
+        : "github.mjs",
+  );
+  if (kind !== "redirected import root") {
+    writeFileSync(target, "throw new Error('unverified source ran');\n");
+  } else {
+    const outside = join(root, "outside/github.mjs");
+    mkdirSync(dirname(outside));
+    copyFileSync(target, outside);
+    unlinkSync(target);
+    symlinkSync(outside, target);
+  }
+  const result = spawnSync(
+    "/bin/bash",
+    ["-c", 'source "$1"', "snapshot-test", join(process.cwd(), "scripts/pr-lib/github.sh")],
+    {
+      encoding: "utf8",
+      env: { ...process.env, OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: root },
+    },
+  );
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Refusing unverified scripts/pr GitHub helper snapshot");
+  expect(result.stderr).not.toContain("unverified source ran");
+});
 
 it.each([
   ["pr_gh_plain pr view 42", "GitHub metadata reads require explicit JSON fields."],

@@ -1,15 +1,11 @@
-import path from "node:path";
 import { getEnvironmentData, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
-import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { PostgresSyncConnection } from "../postgres-sync/connection.js";
-import { publishSqliteDatabaseSchemaChange } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
+import type { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
+import { createPostgresEngineTestFixture } from "./engine-store.test-support.js";
 import { bindStoreSearch } from "./search.js";
 import type { TextQuery } from "./text-contract.js";
 
@@ -75,51 +71,17 @@ async function fixture(
   }) => void | Promise<void>,
 ) {
   expect(threadId, "The fixture host must retain the native admission descriptor").toBe(0);
-  const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-search-"), "anchor.sqlite"));
-  const connections: PostgresSyncConnection[] = [];
-  const open = () => {
-    const db = openEngineStore({
-      anchor,
-      schema,
-      input: { connection: connection!, schemaPrefix: "search_test" },
-      openSqlite: () => {
-        throw new Error("Unexpected SQLite bootstrap");
-      },
-      prepareAnchor: () => {},
-      inspectSqlite: () => {
-        admitSqliteSchema(anchor);
-        return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-      },
-    });
-    if (!(db instanceof PostgresSyncConnection)) {
-      throw new Error("Expected PostgreSQL");
-    }
-    connections.push(db);
-    return db;
-  };
-  try {
-    // The synchronous bridge runs before an async test yields; no admission scope spans an await.
-    const { result } = withEngineStoreAdmission(() => ({
-      result: test({
-        db: open(),
-        open,
-        invalidate: () => publishSqliteDatabaseSchemaChange(anchor),
-      }),
-    }));
-    await result;
-  } finally {
-    withEngineStoreAdmission(() => {
-      try {
-        const db = connections[0];
-        if (db) {
-          db.exec(`DROP SCHEMA "${db.schema}" CASCADE`);
-        }
-      } finally {
-        connections.forEach((db) => db.close());
-        anchor.close();
-      }
-    });
-  }
+  using store = createPostgresEngineTestFixture({
+    directory: dirs.make("pg-search-"),
+    connection: connection!,
+    schemaPrefix: "search_test",
+    schema,
+  });
+  // The synchronous bridge runs before an async test yields; no admission scope spans an await.
+  const { result } = withEngineStoreAdmission(() => ({
+    result: test({ db: store.open(), open: store.open, invalidate: store.invalidate }),
+  }));
+  await result;
 }
 
 function searchFixture(db: PostgresSyncConnection) {

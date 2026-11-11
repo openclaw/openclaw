@@ -90,6 +90,8 @@ function runWithHarnessSourceFence<T>(
 
 function buildHarnessContextEngineRuntimeSettings(
   params: HarnessRuntimeSettingsParams,
+  tokenBudget = params.tokenBudget,
+  maxOutputTokens = params.maxOutputTokens,
 ): ContextEngineRuntimeSettings {
   if (params.runtimeSettings !== undefined && params.runtimeSettings !== null) {
     return params.runtimeSettings;
@@ -107,8 +109,8 @@ function buildHarnessContextEngineRuntimeSettings(
     selectedContextEngineId: selectedId,
     contextEngineSelectionSource:
       selectedId === "legacy" ? "default" : selectedId ? "configured" : "unknown",
-    promptTokenBudget: params.tokenBudget,
-    maxOutputTokens: params.maxOutputTokens,
+    promptTokenBudget: tokenBudget,
+    maxOutputTokens,
     fallbackReason: params.fallbackReason,
     degradedReason: params.degradedReason,
   });
@@ -175,6 +177,7 @@ type HarnessContextEngineAssemblyParams = Omit<
   sessionKey?: string;
   agentId?: string;
   appendOnlyRuntimeContext?: boolean;
+  clearsTurnScopedSystemUpdates?: boolean;
   messages: AgentMessage[];
   tokenBudget?: number;
   availableTools?: Set<string>;
@@ -202,7 +205,12 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
     return undefined;
   }
   const assembled = await runWithHarnessSourceFence(params, async () => {
-    const assembly = await assembleHarnessContextEngineWithinSourceScope(params, contextEngine);
+    const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
+    const assembly = await assembleHarnessContextEngineWithinSourceScope(
+      params,
+      contextEngine,
+      tokenBudget,
+    );
     const bounded = boundContextEngineAssembly(
       assembly.result,
       params.contextEngineHostSupport?.id === "codex-app-server" &&
@@ -210,7 +218,9 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
         !contextEngine.info.ownsCompaction
         ? undefined
         : resolveContextEngineTranscriptByteLimit(contextEngine),
-      resolveAssemblyHistoryTokenBudget(params),
+      tokenBudget,
+      undefined,
+      params.clearsTurnScopedSystemUpdates,
     );
     return { result: bounded, snapshot: assembly.snapshot };
   });
@@ -249,23 +259,24 @@ function resolveAssemblyHistoryTokenBudget(params: HarnessContextEngineAssemblyP
 async function assembleHarnessContextEngineWithinSourceScope(
   params: HarnessContextEngineAssemblyParams,
   contextEngine: ContextEngine,
+  tokenBudget: number | undefined,
+  inputMessages = params.messages,
 ) {
-  const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
   const maxOutputTokens = params.promptBudget
     ? Math.max(0, Math.floor(params.promptBudget.reserveTokens))
     : params.maxOutputTokens;
   // Append-only replay policies keep persisted carriers in the assembled window;
   // dropping one here would change the prefix bound to later thinking signatures.
-  const messages = (
-    params.appendOnlyRuntimeContext
-      ? params.messages
-      : stripRuntimeContextCustomMessages(params.messages)
-  ).slice();
-  const runtimeSettings = buildHarnessContextEngineRuntimeSettings({
-    ...params,
-    maxOutputTokens,
+  const projectedMessages = params.appendOnlyRuntimeContext
+    ? inputMessages
+    : stripRuntimeContextCustomMessages(inputMessages);
+  // Filtering already isolates the plugin's working array from authoritative history.
+  const messages = projectedMessages === inputMessages ? inputMessages.slice() : projectedMessages;
+  const runtimeSettings = buildHarnessContextEngineRuntimeSettings(
+    params,
     tokenBudget,
-  });
+    maxOutputTokens,
+  );
   const snapshot: ContextEngineAssemblySnapshot = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -339,6 +350,7 @@ export async function prepareHarnessContextEnginePrompt(
   }
   let snapshot: ContextEngineAssemblySnapshot | undefined;
   const prepared = await runWithHarnessSourceFence(params, async () => {
+    const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
     // Windowing and replay hooks can leave orphaned results before assembly.
     const pipelineMessages = params.repairToolUseResultPairing
       ? sanitizeToolUseResultPairingForModel(params.messages, params.isOpenAIResponsesApi)
@@ -355,13 +367,17 @@ export async function prepareHarnessContextEnginePrompt(
             : assembled.messages,
         },
         resolveContextEngineTranscriptByteLimit(contextEngine),
-        resolveAssemblyHistoryTokenBudget(params),
+        tokenBudget,
+        undefined,
+        params.clearsTurnScopedSystemUpdates,
       );
     let bounded: AssembleResult;
     try {
       const assembled = await assembleHarnessContextEngineWithinSourceScope(
-        { ...params, messages: pipelineMessages },
+        params,
         contextEngine,
+        tokenBudget,
+        pipelineMessages,
       );
       bounded = prepareAssembly(assembled.result);
       snapshot = assembled.snapshot;
@@ -434,6 +450,7 @@ export async function finalizeHarnessContextEngineTurn(
     config?: OpenClawConfig;
     warn: (message: string) => void;
     modelContextWindow?: number;
+    abortSignal?: AbortSignal;
     turnCandidate?: {
       admission?: UserTurnTranscriptAdmissionReceipt;
       terminalEntryId?: string | null;
@@ -449,10 +466,21 @@ export async function finalizeHarnessContextEngineTurn(
     const { admission, terminalEntryId, record } = params.turnCandidate;
     if (admission && terminalEntryId) {
       const committed = params.turnCandidate[completedTurnMessageAnchor];
+      if (!committed) {
+        // Recovery can rewrite away the append receipt before its projection is ready.
+        const { waitForSessionTranscriptProjection } =
+          await import("../../config/sessions/session-transcript-reconcile.js");
+        await waitForSessionTranscriptProjection(admission, params.abortSignal);
+        params.abortSignal?.throwIfAborted();
+      }
       // Reconstructed managers need one anchor snapshot, not a version that a later append can stale.
       const terminal = committed
         ? committed.anchor
-        : await readActiveTranscriptEntryAnchorAsync({ ...admission, entryId: terminalEntryId });
+        : await readActiveTranscriptEntryAnchorAsync(
+            { ...admission, entryId: terminalEntryId },
+            params.abortSignal,
+          );
+      params.abortSignal?.throwIfAborted();
       committed?.assertCurrent();
       if (terminal) {
         record({
@@ -474,6 +502,9 @@ export async function finalizeHarnessContextEngineTurn(
                 provider: params.providerId,
                 modelId: params.modelId,
               }) ?? params.tokenBudget,
+            ...(params.runtimeContext?.promptCache
+              ? { promptCache: params.runtimeContext.promptCache }
+              : {}),
           },
         });
       }

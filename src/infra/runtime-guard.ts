@@ -9,10 +9,12 @@ import {
 import {
   canRunOpenClawNodeDiagnostics,
   classifyUnsupportedNodeCommand,
+  emitNodeSecurityWarning,
   formatUnsupportedNodeDiagnosticWarning,
   isNodeVersionAtLeast,
   MINIMUM_BUN_VERSION,
   parseNodeReleaseVersion,
+  SUPPORTED_NODE_VERSION_RANGE,
   type NodeReleaseVersion,
 } from "../../node-version.mjs";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
@@ -162,6 +164,9 @@ export async function assertSupportedRuntime(
   const writeNotice = (message: string) =>
     providedRuntime ? providedRuntime.error(message) : process.stderr.write(`${message}\n`);
   if (runtimeSatisfies(details)) {
+    if (details.kind === "node" && emitDiagnosticWarning) {
+      emitNodeSecurityWarning(details.version, writeNotice);
+    }
     return;
   }
   // Only startup callers with a pre-dotenv snapshot may select another runtime.
@@ -214,9 +219,9 @@ export async function assertSupportedRuntime(
   }
   const requirement =
     details.kind === "bun"
-      ? "openclaw requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release)."
+      ? "openclaw requires Bun 1.4.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release)."
       : (details.sqliteProbe && nodeRuntimeFailure(details.version, details.sqliteProbe)) ||
-        "openclaw requires Node >=24.22.1 <25, or >=26.12.1.";
+        `openclaw requires Node ${SUPPORTED_NODE_VERSION_RANGE.replace(" || ", ", or ")}.`;
   const retryHint =
     details.kind === "bun"
       ? "Upgrade Bun or run OpenClaw with a supported Node release."

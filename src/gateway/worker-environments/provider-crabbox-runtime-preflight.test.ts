@@ -6,13 +6,34 @@ import {
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
-import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { importFreshModule } from "../../plugin-sdk/test-helpers/import-fresh.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createPluginStateKeyedStoreV2 } from "../../plugin-state/plugin-state-store.js";
+import { clearBundledDiscoveryModeMemo } from "../../plugins/bundled-discovery-state.js";
+import { createPluginRecord } from "../../plugins/loader-records.js";
 import { resolvePluginModuleExport } from "../../plugins/module-export.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
+import { maintainConfiguredWorkerProviders } from "../../plugins/worker-provider-maintenance.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
+import {
+  createNodeRegistryRuntime,
+  updateNodeRunnerInventory,
+  waitForNodeWorkerSupervisor,
+} from "../node-registry-private.js";
+import { NodeRegistry } from "../node-registry.js";
+import { createWorkerSupervisorNodeClient } from "../server-methods/nodes.runner-inventory.test-support.js";
+import { createWorkerRuntimeRefreshWaiter } from "../server-worker-placement-runtime-refresh.js";
+import { result as commandResult } from "./bootstrap.test-support.js";
+import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 
 const CLASSLESS_PROFILE = {
@@ -24,23 +45,11 @@ const CLASSLESS_PROFILE = {
 };
 const PROFILE = { ...CLASSLESS_PROFILE, class: "standard" };
 
-function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
-
 describe("Crabbox runtime preflight cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
   const pluginServices: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   let scheduler: ReturnType<typeof createTestPluginServiceScheduler>;
-  async function registerProvider(): Promise<WorkerProvider> {
+  async function registerProvider(warn = (_message: string) => {}): Promise<WorkerProvider> {
     let registered: WorkerProvider | undefined;
     const { register } = resolvePluginModuleExport(
       await importFreshModule<unknown>(import.meta.url, "../../../extensions/crabbox/index.ts"),
@@ -51,6 +60,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     )(
       createTestPluginApi({
         id: "crabbox",
+        logger: { info() {}, warn, error() {}, debug() {} },
         runtime: createPluginRuntimeMock({
           state: {
             openKeyedStoreV2: (options) =>
@@ -76,6 +86,9 @@ describe("Crabbox runtime preflight cleanup", () => {
     scheduler.beginClose();
     try {
       for (const service of pluginServices.splice(0)) {
+        if (!service || service.apiVersion === 2 || service.apiVersion === 3) {
+          throw new Error("Expected service API version 1");
+        }
         await service.stop?.({
           scheduler,
           config: support.testState.config,
@@ -86,8 +99,256 @@ describe("Crabbox runtime preflight cleanup", () => {
     } finally {
       await scheduler.stop();
     }
+    clearBundledDiscoveryModeMemo();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it.each(["allowed", "revoked", "cancelled"] as const)(
+    "routes disconnected admission through the registered provider: %s",
+    async (authority) => {
+      support.getDevelopmentProfile().provider = "crabbox";
+      const settings = { ...PROFILE, provider: "azure-sandbox", warmImage: false };
+      const environmentId = "registered-node-resume";
+      const leaseId = "cbx_registered_resume";
+      const store = support.testState.store;
+      await store.createIntent({
+        environmentId,
+        providerId: "crabbox",
+        profileId: "development",
+        provisionOperationId: "registered-resume-operation",
+        profileSnapshot: {
+          settings,
+          runtimePreparation: {
+            source: "empty",
+            contractVersion: 2,
+            key: "c".repeat(64),
+            cacheKey: "d".repeat(64),
+            target: { machineClass: "standard", platform: "linux" },
+            artifacts: {
+              nodeBootstrapSha256: "b".repeat(64),
+              enabledPluginIds: [],
+              workerBundleHash: support.BUNDLE_HASH,
+              workerArchiveSha256: "e".repeat(64),
+              openclawVersion: "2026.7.2",
+              protocolFeatures: [],
+            },
+          },
+        },
+      });
+      await store.transition({ environmentId, from: "requested", to: "provisioning" });
+      await store.transition({
+        environmentId,
+        from: "provisioning",
+        to: "ready",
+        patch: {
+          ...support.readyPatch(environmentId),
+          leaseId,
+          nodeDeviceId: "node-1",
+          sharedHost: false,
+        },
+      });
+      const environment = await store.transition({
+        environmentId,
+        from: "ready",
+        to: "attached",
+        patch: support.attachedPatch(environmentId, REQUEST.sessionId),
+      });
+      const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+      const placement = await seedActivePlacement(placements, {
+        environmentId,
+        ownerEpoch: environment.ownerEpoch,
+      });
+      if (placement.state !== "active") {
+        throw new Error("Expected an active fixture placement");
+      }
+      const admittedEnvironment = expectDefined(
+        store.get(environmentId),
+        "admitted fixture environment",
+      );
+      const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
+        () => new NodeRegistry(),
+      );
+      const calls: string[] = [];
+      const controller = new AbortController();
+      let current = true;
+      vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(
+        async (argv, options) => {
+          if (argv[1] === "--version") {
+            return commandResult({ stdout: "999.0.0" });
+          }
+          if (argv[1] === "heartbeat") {
+            return commandResult();
+          }
+          calls.push(argv[1]!);
+          expect(argv[argv.indexOf("--id") + 1]).toBe(leaseId);
+          if (argv[1] === "inspect") {
+            return commandResult({
+              stdout: JSON.stringify({ id: leaseId, state: "running", ready: true }),
+            });
+          }
+          expect(argv[1]).toBe("run");
+          expect(argv).toContain("--no-sync");
+          expect(argv).toContain("--no-hydrate");
+          if (typeof options === "number") {
+            throw new Error("Expected options for an owned Crabbox command");
+          }
+          expect(options.killGraceMs).toBe(20_000);
+          expect(options.timeoutMs).toBeGreaterThan(0);
+          expect(options.timeoutMs).toBeLessThanOrEqual(120_000);
+          if (
+            typeof options.input === "string" &&
+            options.input.includes("CRABBOX_NODE_RESUME_INSPECT_SCRIPT")
+          ) {
+            expect(options.input).not.toContain("launchNodeProcess");
+            if (authority === "revoked") {
+              current = false;
+            }
+            if (authority === "cancelled") {
+              controller.abort();
+            }
+            return commandResult();
+          }
+          expect(options).toMatchObject({ input: expect.stringContaining("--resume-device") });
+          nodeRegistry.register(createWorkerSupervisorNodeClient("resumed"), {
+            pairingIdentity: "identity-a",
+            pairingGeneration: "generation-a",
+          });
+          updateNodeRunnerInventory({
+            registry: nodeRegistry,
+            nodeId: "node-1",
+            connId: "resumed",
+            declaration: {
+              protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+              workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
+            },
+          });
+          return commandResult();
+        },
+      );
+      const service = support.createService(await registerProvider());
+      const waiter = createWorkerRuntimeRefreshWaiter({
+        environments: service,
+        isStopping: () => false,
+        hasCurrentRunner: (deviceId) => nodeWorkerSupervisorTransport.hasCurrentRunner(deviceId),
+      });
+      waiter.bind((nodeId, options) => waitForNodeWorkerSupervisor(nodeRegistry, nodeId, options));
+      try {
+        const waiting = waiter.wait({
+          placement,
+          signal: controller.signal,
+          assertCurrent() {
+            if (!current) {
+              throw new Error("Resume authority revoked");
+            }
+          },
+        });
+        if (authority === "allowed") {
+          await waiting;
+          expect(nodeWorkerSupervisorTransport.hasCurrentRunner("node-1")).toBe(true);
+          expect(calls).toEqual(["inspect", "run", "run"]);
+        } else {
+          await expect(waiting).rejects.toThrow();
+          expect(nodeWorkerSupervisorTransport.hasCurrentRunner("node-1")).toBe(false);
+          expect(calls).toEqual(["inspect", "run"]);
+        }
+        expect(store.get(environmentId)).toEqual(admittedEnvironment);
+      } finally {
+        nodeRegistry.unregister("resumed");
+      }
+    },
+  );
+
+  it("retries retained retirement periodically with no reserves or environments", async () => {
+    writeConfigMachineState("plugins.bundledDiscovery", "compat");
+    clearBundledDiscoveryModeMemo();
+    support.testState.config.plugins = { allow: ["another-plugin"] };
+    const profile = { ...PROFILE, provider: "aws", warmImage: true };
+    support.testState.config.cloudWorkers = {
+      preparedPool: { maxTotal: 0 },
+      profiles: { development: { provider: "crabbox", readyWorkers: 0, settings: profile } },
+    };
+    const store = createPluginStateKeyedStoreV2<{
+      version: number;
+      allocations: Record<string, unknown>;
+      operation?: { type: string; checkpointId: string };
+    }>(
+      "crabbox",
+      { namespace: "warm-images", maxEntries: 128, overflowPolicy: "reject-new" },
+      { assertCurrent() {} },
+    );
+    const retained = { version: 3, allocations: {} };
+    await store.register("retiring", {
+      ...retained,
+      operation: { type: "retire", checkpointId: "chk_retired" },
+    });
+    let fails = true;
+    const deletions: string[] = [];
+    vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "999.0.0" });
+      }
+      expect(argv.slice(1)).toEqual(["checkpoint", "delete", "chk_retired"]);
+      deletions.push(argv[3]!);
+      return fails
+        ? commandResult({ code: 7, stderr: "fixture provider deletion failed" })
+        : commandResult();
+    });
+    const warn = vi.fn<(message: string) => void>();
+    const provider = await registerProvider(warn);
+    const registry = createEmptyPluginRegistry();
+    const owner = createPluginRecord({
+      id: "crabbox",
+      source: "/synthetic/crabbox/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+      contracts: { workerProviders: ["crabbox"] },
+    });
+    registry.plugins.push(owner);
+    registry.workerProviders.set("crabbox", { pluginId: owner.id, source: owner.source, provider });
+    markPluginRegistryActive(registry);
+    const time = createGatewaySchedulerClock();
+    const gatewayScheduler = createTestGatewayScheduler(time.clock);
+    let completed = createDeferred();
+    const service = support.createService(provider, {
+      scheduler: gatewayScheduler,
+      reconcileIntervalMs: 60_000,
+      maintainProviders: async (signal) => {
+        try {
+          await maintainConfiguredWorkerProviders({
+            getRegistry: () => registry,
+            getConfig: () => support.testState.config,
+            signal,
+            warn,
+          });
+        } finally {
+          completed.resolve();
+        }
+      },
+    });
+    try {
+      expect(support.testState.store.list()).toEqual([]);
+      service.start();
+      await completed.promise;
+      await vi.dynamicImportSettled();
+      expect(warn.mock.calls).toEqual([
+        [expect.stringContaining("fixture provider deletion failed")],
+      ]);
+      expect(deletions).toEqual(["chk_retired"]);
+      expect((await store.lookup("retiring"))?.operation).toBeDefined();
+      fails = false;
+      completed = createDeferred();
+      await time.advanceBy(60_000);
+      await completed.promise;
+      await vi.dynamicImportSettled();
+      expect(deletions).toEqual(["chk_retired", "chk_retired"]);
+      expect(await store.lookup("retiring")).toBeUndefined();
+      expect(support.testState.store.list()).toEqual([]);
+    } finally {
+      await service.stop();
+      await gatewayScheduler.stop();
+    }
   });
 
   it("reclaims after Crabbox accepts stop while retaining waiting-stop release confirmation", async ({

@@ -46,6 +46,7 @@ function trust(signal?: AbortSignal) {
 
 function approvals(...initial: string[]): ConstructorParameters<typeof ReefFriendManager>[2] & {
   values: Set<string>;
+  list: ReturnType<typeof vi.fn>;
   remove: ReturnType<typeof vi.fn>;
 } {
   const values = new Set(initial);
@@ -123,10 +124,22 @@ describe("ReefFriendManager pairing", () => {
   });
   afterEach(() => cleanupStateTestDirectory(stateDir));
 
+  it.each([false, true])("reads pairing once per lifecycle tick (pending=%s)", async (pending) => {
+    const { relay, pairing, manager } = pairingFixture();
+    if (!pending) {
+      relay.listFriends.mockResolvedValue({ friendships: [] });
+    }
+    const issue = vi.fn(async () => {});
+    await manager.reconcile(undefined, issue);
+    expect(issue).toHaveBeenCalledTimes(pending ? 1 : 0);
+    expect(relay.listFriends).toHaveBeenCalledTimes(2);
+    expect(pairing.list).toHaveBeenCalledOnce();
+  });
+
   it("surfaces an inbound request and consumes pairing approval into durable peer trust", async () => {
     const { friend: pending, relay, store, pairing, manager } = pairingFixture();
     const issue = vi.fn(async () => {});
-    await manager.surfacePairingCandidates(issue);
+    await manager.reconcile(undefined, issue);
     const { revision } = await store.snapshot(pending.peer);
     expect(issue).toHaveBeenCalledWith({
       peer: "alice",
@@ -153,9 +166,27 @@ describe("ReefFriendManager pairing", () => {
     const { friend: pending, relay, store, pairing, manager } = pairingFixture();
     pairing.remove.mockResolvedValue(false);
     await addApproval(store, pairing, pending);
-    await expect(manager.reconcile()).resolves.toEqual([]);
+    const issue = vi.fn(async () => {});
+    await expect(manager.reconcile(undefined, issue)).resolves.toEqual([]);
     expect(relay.respondFriend).not.toHaveBeenCalled();
     expect(await store.get("alice")).toBeUndefined();
+    expect(issue).toHaveBeenCalledOnce();
+  });
+
+  it("defers a newly added approval to the next reconciliation", async () => {
+    const { friend, relay, store, pairing, manager } = pairingFixture();
+    const issue = vi.fn(async () => {});
+    relay.listFriends
+      .mockResolvedValueOnce({ friendships: [friend] })
+      .mockImplementationOnce(async () => {
+        await addApproval(store, pairing, friend);
+        return { friendships: [friend] };
+      });
+    await expect(manager.reconcile(undefined, issue)).resolves.toEqual([]);
+    expect(relay.respondFriend).not.toHaveBeenCalled();
+    expect(issue).toHaveBeenCalledOnce();
+    await expect(manager.reconcile()).resolves.toEqual(["alice"]);
+    expect(await store.get("alice")).toBeDefined();
   });
 
   it("adopts a locally requested friendship once active and consumes its intent marker", async () => {
@@ -324,7 +355,7 @@ describe("ReefFriendManager pairing", () => {
     const { manager } = pairingFixture(relayFriend("alice", "active", generateIdentity(), 1, "me"));
     const issue = vi.fn(async () => {});
     await expect(manager.reconcile()).resolves.toEqual([]);
-    await manager.surfacePairingCandidates(issue);
+    await manager.reconcile(undefined, issue);
     expect(issue).toHaveBeenCalledOnce();
     expect(await manager.trust.get("alice")).toBeUndefined();
   });
@@ -333,11 +364,11 @@ describe("ReefFriendManager pairing", () => {
     const changed = relayFriend("alice", "reapprove_required");
     const { pairing, manager } = pairingFixture(changed);
     const issue = vi.fn(async () => {});
-    await manager.surfacePairingCandidates(issue);
+    await manager.reconcile(undefined, issue);
     expect(issue).toHaveBeenCalledOnce();
     await addApproval(manager.trust, pairing, changed);
     issue.mockClear();
-    await manager.surfacePairingCandidates(issue);
+    await manager.reconcile(undefined, issue);
     expect(issue).not.toHaveBeenCalled();
   });
 
@@ -349,11 +380,17 @@ describe("ReefFriendManager pairing", () => {
       );
       await pin(store, friend, "extended");
       const issue = vi.fn(async () => {});
-      await manager.surfacePairingCandidates(issue);
+      await manager.reconcile(undefined, issue);
       expect(issue).toHaveBeenCalledOnce();
       await addApproval(store, pairing, friend);
-      await expect(manager.reconcile()).resolves.toEqual(["alice"]);
+      relay.listFriends
+        .mockResolvedValueOnce({ friendships: [{ ...friend }] })
+        .mockResolvedValue({ friendships: [{ ...friend, status: "active" }] });
+      relay.respondFriend.mockResolvedValue({ peer: friend.peer, status: "active" });
+      issue.mockClear();
+      await expect(manager.reconcile(undefined, issue)).resolves.toEqual(["alice"]);
       expect(relay.respondFriend).toHaveBeenCalledWith(friend, true, undefined);
+      expect(issue).not.toHaveBeenCalled();
       expect(await store.get("alice")).toMatchObject({
         autonomy: "extended",
         safetyNumberChanged: false,
@@ -383,7 +420,16 @@ describe("ReefFriendManager pairing", () => {
     const active = relayFriend("alice", "active", nextIdentity, 2);
     const { store, pairing, manager } = pairingFixture(active);
     await pin(store, relayFriend("alice", "active", oldIdentity), "extended");
-    await expect(manager.reconcile()).resolves.toEqual(["alice"]);
+    const issue = vi.fn(async () => {});
+    await expect(manager.reconcile(undefined, issue)).resolves.toEqual(["alice"]);
+    expect(issue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalToken: store.createPairingApproval(
+          active,
+          (await store.snapshot("alice")).revision,
+        ),
+      }),
+    );
     expect(await store.get("alice")).toMatchObject({
       ed25519PublicKey: oldIdentity.signing.publicKey,
       keyEpoch: 1,

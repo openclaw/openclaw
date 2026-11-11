@@ -26,11 +26,9 @@ import {
   readAdmittedRunOperatorAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
 } from "../admitted-run-context.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.async.js";
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-import {
-  createOpenClawCodingToolsInternal,
-  createOpenClawCodingToolsInternalAsync,
-} from "../agent-tools.js";
+import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
@@ -474,7 +472,7 @@ export function createAgentHarnessHostCapabilities(params: {
     retainSourceAuthority: () =>
       retainHarnessSource(attempt.admittedRunContext, assertActive, nativeModelPolicySupported),
     reportOutputTokens: (outputTokens) => {
-      assertActive();
+      assertActive.assertScopeCurrent();
       const data = emitAgentRunOutputTokens({
         runId,
         lifecycleGeneration,
@@ -492,9 +490,9 @@ export function createAgentHarnessHostCapabilities(params: {
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...media.capabilities,
     ...bindBoundedSeed(attempt, assertActive, withCaller, capabilityAbortController.signal, media),
-    ...bindHarnessTrajectory(attempt, assertActive, assertActive.assertScopeCurrent),
+    ...bindHarnessTrajectory(attempt, assertActive.assertScopeCurrent),
     preparedEnvironment: () => {
-      assertActive();
+      assertActive.assertScopeCurrent();
       return preparedRunEnvironment;
     },
     activeComputerContext: () => {
@@ -622,11 +620,15 @@ export function createAgentHarnessHostCapabilities(params: {
       assertActive();
       const result = await withCaller(
         async () =>
-          await callGatewayTool<{ id?: string } & Partial<AgentHarnessHostApprovalResult>>(
-            "plugin.approval.waitDecision",
-            { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
-            { id: request.approvalId },
-            { signal: request.signal },
+          await withGatewayToolApprovalOwner(
+            params.pluginId,
+            async () =>
+              await callGatewayTool<{ id?: string } & Partial<AgentHarnessHostApprovalResult>>(
+                "plugin.approval.waitDecision",
+                { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+                { id: request.approvalId },
+                { requireAgentRuntimeIdentity: true, signal: request.signal },
+              ),
           ),
         request.signal,
       );

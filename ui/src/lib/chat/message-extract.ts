@@ -2,12 +2,15 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
+import { projectImportedMessageForDisplay } from "../../../../src/chat/session-catalog-display.js";
 import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantPhaseText } from "../../../../src/shared/chat-message-content.js";
 import { stripAssistantMessageText } from "./assistant-message-text.ts";
-import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
+
+export const isInlineImageSource = (source: string | undefined): source is string =>
+  source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
@@ -104,17 +107,7 @@ function extractRawText(message: unknown): string | null {
   );
 }
 
-export function readTranscriptMediaEntries(message: unknown): Array<{
-  factIndex: number;
-  path: string;
-  mediaType: string | undefined;
-  fileName: string | undefined;
-  origin?: "paste" | "file";
-  sizeBytes?: number;
-  durationMs?: number;
-  width?: number;
-  height?: number;
-}> {
+export function readTranscriptMediaEntries(message: unknown) {
   if (!message || typeof message !== "object") {
     return [];
   }

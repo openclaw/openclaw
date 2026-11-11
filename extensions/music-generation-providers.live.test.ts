@@ -3,7 +3,6 @@ import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -26,8 +25,8 @@ import {
   parseCsvFilter,
   parseProviderModelMap,
   redactLiveApiKey,
-  resolveConfiguredLiveMusicModels,
-  resolveLiveMusicAuthStore,
+  resolveConfiguredLiveProviderModels,
+  resolveLiveAuthStore,
 } from "openclaw/plugin-sdk/test-media-generation";
 import { describe, expect, it, vi } from "vitest";
 import falPlugin from "./fal/index.js";
@@ -37,6 +36,7 @@ import openrouterPlugin from "./openrouter/index.js";
 import {
   createReferencePng,
   maybeLoadShellEnvForGenerationProviders,
+  withPluginsEnabled,
 } from "./test-support/generation-live-test-helpers.js";
 
 const LIVE = isLiveTestEnabled();
@@ -81,16 +81,6 @@ const CASES: LiveProviderCase[] = [
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))
   .toSorted((left, right) => left.providerId.localeCompare(right.providerId));
-
-function withPluginsEnabled(cfg: OpenClawConfig): OpenClawConfig {
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      enabled: true,
-    },
-  };
-}
 
 function createEditReferencePng(): Buffer {
   return createReferencePng(192, 192, (x, y) => {
@@ -184,7 +174,9 @@ describeLive("music generation provider live", () => {
     "covers generate plus declared edit paths with shell/profile auth",
     async ({ skip }) => {
       const cfg = withPluginsEnabled(await readLiveTestConfig());
-      const configuredModels = resolveConfiguredLiveMusicModels(cfg);
+      const configuredModels = resolveConfiguredLiveProviderModels(
+        cfg.agents?.defaults?.mediaModels?.music,
+      );
       const agentDir = resolveDefaultAgentDir(cfg as never);
       const attempted: string[] = [];
       const skipped: string[] = [];
@@ -203,7 +195,7 @@ describeLive("music generation provider live", () => {
         }
 
         const hasLiveKeys = collectProviderApiKeys(testCase.providerId).length > 0;
-        const authStore = resolveLiveMusicAuthStore({
+        const authStore = resolveLiveAuthStore({
           requireProfileKeys: REQUIRE_PROFILE_KEYS,
           hasLiveKeys,
         });
