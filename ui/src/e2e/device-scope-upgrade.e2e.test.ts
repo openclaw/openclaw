@@ -280,7 +280,7 @@ suite.define(() => {
     });
     await clearedPage.goto(`${suite.server.baseUrl}settings/appearance`);
     await waitForControlUiSettingsTakeover(clearedPage);
-    expect(await clearedPage.locator("openclaw-sidebar-attention").count()).toBe(0);
+    await clearedPage.getByRole("button", { name: "0 inbox items", exact: true }).waitFor();
     await clearedPage.close();
 
     const recurrencePage = await context.newPage();
@@ -340,10 +340,10 @@ suite.define(() => {
       .getByRole("menuitem", { exact: true, name: "Settings" })
       .click();
     await waitForControlUiSettingsTakeover(page);
-    expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
+    await page.getByRole("button", { name: "1 inbox item", exact: true }).waitFor();
     await captureProof(
       page,
-      "settings-without-inbox-pending.png",
+      "settings-rail-inbox-pending.png",
       page.locator(".settings-workspace"),
     );
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
