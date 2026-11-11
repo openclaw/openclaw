@@ -131,6 +131,9 @@ export type WorkboardDispatchResult = {
 };
 export type WorkboardListOptions = {
   boardId?: unknown;
+  sessionKey?: unknown;
+  runId?: unknown;
+  lifecycle?: unknown;
 };
 export type WorkboardDispatchOptions = WorkboardListOptions & {
   now?: unknown;
