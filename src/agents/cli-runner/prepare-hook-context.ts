@@ -1,4 +1,7 @@
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextCronFields,
+} from "../../plugins/hook-agent-context.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import { buildAgentHookMemoryAudienceFields } from "../harness/hook-context.js";
 import { resolveCliMcpMemoryAudience } from "./mcp-memory-audience.js";
@@ -33,6 +36,11 @@ export async function prepareCliTurnHookContext(
     turnAudience,
     promptBuildHookContext: {
       runId: run.runId,
+      ...buildAgentHookContextCronFields({
+        runId: run.runId,
+        agentId: facts.agentId,
+        trigger: run.trigger,
+      }),
       agentId: facts.agentId,
       sessionKey: run.sessionKey,
       sessionId: run.sessionId,

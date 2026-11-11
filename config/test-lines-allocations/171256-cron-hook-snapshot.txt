@@ -1,0 +1,7 @@
+# PR #171256: retain 410 net regression-test lines for cron snapshot projection,
+# actual hook-context builders, and the isolated Gateway persisted-edit scenario.
+# CI run 42859929920 on base ecbad2efa1d7e89d041965612b2237760a024c50
+# reports allowed growth 428: 410 contribution lines plus 18 inherited debt.
+# Main 7680e833 adds 120 test LF bytes and 120 allocation credits: debt unchanged.
+# Exact reconciliation with no spare credit; shared scalar unchanged.
+428
