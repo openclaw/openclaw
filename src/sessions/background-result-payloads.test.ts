@@ -11,10 +11,7 @@ import * as logger from "../logger.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  commitBackgroundPayloadsToSession,
-  retainDeliveredMediaReferences,
-} from "./background-result-payloads.js";
+import { commitBackgroundPayloadsToSession } from "./background-result-payloads.js";
 
 const DESTINATION_KEY = "agent:main:telegram:group:-100123";
 const DESTINATION_SESSION_ID = "destination";
@@ -125,41 +122,91 @@ describe("background result payload projection", () => {
     });
   });
 
-  describe("retainDeliveredMediaReferences", () => {
-    it("converts a false delivery-failed block and keeps the name in the display text", () => {
-      const retained = retainDeliveredMediaReferences([
-        { type: "text", text: "Voice note" },
-        {
-          type: "attachment_error",
-          attachment: { code: "delivery-failed", kind: "audio", label: "Generated audio 1" },
+  it("prepends a text reference when the delivered content has no text block", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const dir = tempDirs.make("openclaw-bg-payload-");
+      const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
+      await replaceSessionEntry(
+        { sessionKey: DESTINATION_KEY, storePath },
+        { sessionId: DESTINATION_SESSION_ID, updatedAt: 1 },
+      );
+      const result = await commitBackgroundPayloadsToSession({
+        agentId: "main",
+        sessionKey: DESTINATION_KEY,
+        expectedGeneration: { sessionId: DESTINATION_SESSION_ID, lifecycleRevision: undefined },
+        payloads: [{ mediaUrls: ["data:audio/ogg;base64,not-valid!"] }],
+        idempotencyKey: "confirmed-no-text:0",
+        deliveryConfirmed: true,
+        config: {
+          session: { store: storePath },
+          agents: { defaults: { workspace: state.workspaceDir } },
         },
-      ]);
-      expect(retained).toEqual([
-        { type: "text", text: "Voice note\nGenerated audio 1" },
-        { type: "attachment", attachment: { kind: "audio", label: "Generated audio 1" } },
-      ]);
+      });
+      expect(result).toEqual({ ok: true });
+      const messages = (
+        await loadTranscriptEvents({
+          sessionKey: DESTINATION_KEY,
+          sessionId: DESTINATION_SESSION_ID,
+          storePath,
+        })
+      )
+        .map(readTranscriptEventMessage)
+        .filter(Boolean);
+      expect(messages).toHaveLength(1);
+      const display = readAssistantDisplayContent(messages[0]);
+      expect(display.some((block) => block.type === "attachment_error")).toBe(false);
+      expect(display).toContainEqual({
+        type: "attachment",
+        attachment: { kind: "audio", label: "Generated audio 1" },
+      });
+      // With no existing text block, the reference name becomes its own text block so the
+      // UI consumer still renders it.
+      expect(display).toContainEqual({ type: "text", text: "Generated audio 1" });
     });
+  });
 
-    it("prepends a text reference when the content has no text block", () => {
-      expect(
-        retainDeliveredMediaReferences([
-          {
-            type: "attachment_error",
-            attachment: { code: "delivery-failed", kind: "video", label: "clip.mp4" },
-          },
-        ]),
-      ).toEqual([
-        { type: "text", text: "clip.mp4" },
-        { type: "attachment", attachment: { kind: "video", label: "clip.mp4" } },
-      ]);
-    });
-
-    it("preserves independently meaningful preparation failures", () => {
-      const block = {
-        type: "attachment_error" as const,
-        attachment: { code: "unsupported-format", kind: "document", label: "script.js" },
-      };
-      expect(retainDeliveredMediaReferences([block])).toEqual([block]);
+  it("preserves independently meaningful preparation failures when delivery is confirmed", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const dir = tempDirs.make("openclaw-bg-payload-");
+      const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
+      await replaceSessionEntry(
+        { sessionKey: DESTINATION_KEY, storePath },
+        { sessionId: DESTINATION_SESSION_ID, updatedAt: 1 },
+      );
+      const result = await commitBackgroundPayloadsToSession({
+        agentId: "main",
+        sessionKey: DESTINATION_KEY,
+        expectedGeneration: { sessionId: DESTINATION_SESSION_ID, lifecycleRevision: undefined },
+        payloads: [{ text: "Chart", mediaUrls: ["data:image/svg+xml;base64,PHN2Zy8+"] }],
+        idempotencyKey: "confirmed-unsupported:0",
+        deliveryConfirmed: true,
+        config: {
+          session: { store: storePath },
+          agents: { defaults: { workspace: state.workspaceDir } },
+        },
+      });
+      expect(result).toEqual({ ok: true });
+      const messages = (
+        await loadTranscriptEvents({
+          sessionKey: DESTINATION_KEY,
+          sessionId: DESTINATION_SESSION_ID,
+          storePath,
+        })
+      )
+        .map(readTranscriptEventMessage)
+        .filter(Boolean);
+      expect(messages).toHaveLength(1);
+      const display = readAssistantDisplayContent(messages[0]);
+      // SVG is an image kind but not an embeddable managed format; the failure is
+      // independently meaningful and must keep its recovery guidance, not be rewritten
+      // into a delivered reference.
+      expect(display).toContainEqual(
+        expect.objectContaining({
+          type: "attachment_error",
+          attachment: expect.objectContaining({ code: "unsupported-format", kind: "image" }),
+        }),
+      );
+      expect(display).toContainEqual({ type: "text", text: "Chart" });
     });
   });
 });

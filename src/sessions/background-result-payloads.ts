@@ -228,7 +228,7 @@ async function buildResultDisplayContent(params: {
 // outcomes such as `unsupported-format` keep their recovery guidance. The name stays visible
 // through the display text block, which the UI consumer renders even when it drops a
 // reference attachment that has no URL.
-export function retainDeliveredMediaReferences(
+function retainDeliveredMediaReferences(
   blocks: readonly Record<string, unknown>[],
 ): Record<string, unknown>[] {
   const referenceNames: string[] = [];
