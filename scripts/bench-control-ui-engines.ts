@@ -183,6 +183,8 @@ const { values } = parseArgs({
     "mutation-audit": { type: "boolean", default: false },
     "transcript-layout-audit": { type: "boolean", default: false },
     "transcript-paint-marker": { type: "boolean", default: false },
+    "transcript-paint-probe": { type: "boolean", default: false },
+    "transcript-timing-only": { type: "boolean", default: false },
     "live-region-audit": { type: "boolean", default: false },
     "remount-audit": { type: "boolean", default: false },
     "route-transitions": { type: "boolean", default: false },
@@ -308,6 +310,14 @@ if (values.trace && values["cpu-only"]) {
 }
 if (values["transcript-paint-marker"] && !values["transcript-layout-audit"]) {
   throw new Error("--transcript-paint-marker requires --transcript-layout-audit");
+}
+if (values["transcript-paint-probe"] && !values["transcript-layout-audit"]) {
+  throw new Error("--transcript-paint-probe requires --transcript-layout-audit");
+}
+if (values["transcript-timing-only"] && values["transcript-layout-audit"]) {
+  throw new Error(
+    "--transcript-timing-only requires a separate run from --transcript-layout-audit",
+  );
 }
 if (
   values["transcript-layout-audit"] &&
@@ -579,7 +589,10 @@ try {
   const catalog: EngineScenario[] = [
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
-    ...createEngineCompletedRunScenarios(servers[0]!.server.baseUrl),
+    ...createEngineCompletedRunScenarios(
+      servers[0]!.server.baseUrl,
+      !values["transcript-timing-only"],
+    ),
     ...createEngineIdleScenarios(idleDurationMs),
     ...createEngineIdleControls(idleDurationMs),
     ...createChatComposerScenarios(),
@@ -788,6 +801,8 @@ try {
     mutationAudit: values["mutation-audit"],
     transcriptLayoutAudit: values["transcript-layout-audit"],
     transcriptPaintMarker: values["transcript-paint-marker"],
+    transcriptPaintProbe: values["transcript-paint-probe"],
+    transcriptTimingOnly: values["transcript-timing-only"],
     liveRegionAudit: values["live-region-audit"],
     remountAudit: values["remount-audit"],
     routeTransitions: values["route-transitions"],
@@ -866,9 +881,10 @@ try {
               createEngineBootScenarios(slot.server.baseUrl, networkProfile.gatewayLatencyMs).find(
                 ({ id }) => id === item.id,
               ) ??
-              createEngineCompletedRunScenarios(slot.server.baseUrl).find(
-                ({ id }) => id === item.id,
-              ) ??
+              createEngineCompletedRunScenarios(
+                slot.server.baseUrl,
+                !values["transcript-timing-only"],
+              ).find(({ id }) => id === item.id) ??
               createEngineProfileReadinessScenarios(
                 slot.server.baseUrl,
                 networkProfile.gatewayLatencyMs,
@@ -1415,6 +1431,7 @@ try {
                   artifactPrefix,
                   engine,
                   values["transcript-paint-marker"],
+                  values["transcript-paint-probe"],
                 );
               }
               if (scenario.id.startsWith("gesture-")) {

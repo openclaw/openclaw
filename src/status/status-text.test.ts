@@ -228,6 +228,20 @@ describe("prepared status", () => {
     },
   );
 
+  it.each([
+    [undefined, "off", "channels.telegram.widgets=true"],
+    [true, "on", "Bot API 10.4 message widgets"],
+  ] as const)("renders the Telegram widgets setting (%s)", async (widgets, enabled, hint) => {
+    await expectText(
+      render({
+        cfg: { channels: { telegram: { widgets } } },
+        statusChannel: "telegram",
+        sessionEntry: entry({}),
+      }),
+      [`Telegram widgets: ${enabled}`, hint],
+    );
+  });
+
   it("shows the selected global agent's children instead of the default agent's", async () => {
     const cfg: Params["cfg"] = {
       agents: { defaults: { systemAgent: { agentId: "ops" } }, entries: { research: {}, ops: {} } },

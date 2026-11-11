@@ -65,6 +65,8 @@
   gap: 6px;
   min-width: 0;
   min-height: 0;
+  /* Keep the first attached card clear of status text in the transcript overlap. */
+  padding-block-start: 8px;
   overflow-y: auto;
 }
 

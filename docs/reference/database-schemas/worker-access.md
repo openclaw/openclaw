@@ -6178,6 +6178,12 @@ permission generation, cancellation, and one-time replay consumption remain live
 checks after waits. The core run settles outside reader custody. This changes no
 schema, stored bytes, retention, durability, or update behavior.
 
+Bounded transcript cohorts validate the selected session's entry keys and transcript
+ID against the existing scoped write receipts. Unrelated worker commits do not
+restart hydration or model-context reads. Same-session and unclassified writes
+retain retry and serialized fallback; native mutation witnesses and FIFO acceptance
+remain unchanged.
+
 Orphan preparation under a selected transcript owner skips hydration when the
 persisted current input already matches the model tail or is excluded from model
 context. That decision performs no repair and grants no replay authority; final

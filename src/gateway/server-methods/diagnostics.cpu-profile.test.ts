@@ -95,7 +95,17 @@ describe("diagnostics.cpuProfile dispatch", () => {
     expect(call.respond).toHaveBeenCalledWith(true, result, undefined);
   });
 
-  it("admits a bounded batch through the existing admin capture owner", async () => {
+  it("returns a batch artifact receipt through the existing admin capture owner", async () => {
+    const { profile: _profile, ...measurement } = result;
+    const artifact = {
+      ...measurement,
+      requestedDurationMs: 150_000,
+      path: "/synthetic/state/diagnostics/cpu-timestamp.cpuprofile",
+      sizeBytes: 2_000_000,
+      windowBoundariesMicros: Array.from({ length: 31 }, (_, index) => index * 5_000_000),
+      summary: { nodeCount: 20_000, sampleCount: 15_000 },
+    };
+    capture.mockResolvedValue({ status: "complete", result: artifact });
     const call = await completedRequest({ params: { windows: 30, windowMs: 5_000 } });
     expect(capture).toHaveBeenCalledExactlyOnceWith({
       windows: 30,
@@ -103,7 +113,7 @@ describe("diagnostics.cpuProfile dispatch", () => {
       signal: expect.any(AbortSignal),
       hasAuthority: expect.any(Function),
     });
-    expect(call.respond).toHaveBeenCalledWith(true, result, undefined);
+    expect(call.respond).toHaveBeenCalledWith(true, artifact, undefined);
   });
 
   it.each([

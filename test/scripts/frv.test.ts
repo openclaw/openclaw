@@ -2498,13 +2498,18 @@ describe("FRV child rerun", () => {
           ? [{ ...job("test", "failure"), id: 101 }]
           : Array.from({ length: copies }, () => queued),
     };
-    await withFastPolling(
-      () =>
-        expect(
+    vi.useFakeTimers();
+    try {
+      await withFastPolling(async () => {
+        const rejected = expect(
           continueFailed(plan([scenario.selected]), "77", client, { child: "101", log: vi.fn() }),
-        ).rejects.toThrow(message),
-      "5",
-    );
+        ).rejects.toThrow(message);
+        await Promise.all([rejected, vi.advanceTimersByTimeAsync(10)]);
+      }, "5");
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(scenario.counters.reads.child).toBeGreaterThan(0);
     expect(scenario.counters.posts.child).toBe(1);
   });
 
