@@ -1,15 +1,20 @@
 import { afterEach, beforeEach, expect, it as baseIt, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDefaultProactiveJob } from "../../cron/default-proactive-job.js";
 import { saveProactiveJobsForTest } from "../../cron/proactive-job.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
+import { registerOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { prepareStatusSessionStores } from "../../status/session-stores.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
@@ -132,6 +137,17 @@ test("reuses unchanged stores while refreshing heartbeat, age and changed rows",
   expect(select).toHaveBeenCalledTimes(3);
   await readHealth(cfg, projection);
   expect(select).toHaveBeenCalledTimes(3);
+  select.mockClear();
+  const key = "agent:worker:first";
+  await deleteSessionEntryLifecycle({
+    agentId: "worker",
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "worker" }),
+    archiveTranscript: false,
+    target: { canonicalKey: key, storeKeys: [key] },
+  });
+  await settleProjection(projection);
+  expect((await readHealth(cfg, projection)).map((agent) => agent.sessions.count)).toEqual([2, 0]);
+  expect(select).not.toHaveBeenCalled();
 });
 
 test("updates shared-store summary windows from row publications without rescanning", async ({
@@ -203,9 +219,75 @@ test("updates shared-store summary windows from row publications without rescann
   await expectWindows(256, [...burstKeys, mainKey(246), mainKey(245)]);
   expect(select).not.toHaveBeenCalled();
 
+  for (const [index, count, recent] of [
+    [0, 255, [...burstKeys, mainKey(246), mainKey(245)]],
+    [248, 254, [...burstKeys.slice(1), mainKey(246), mainKey(245), mainKey(244)]],
+  ] as const) {
+    const key = mainKey(index);
+    await deleteSessionEntryLifecycle({
+      agentId: "main",
+      storePath,
+      archiveTranscript: false,
+      target: { canonicalKey: key, storeKeys: [key] },
+    });
+    await settleProjection(projection);
+    await expectWindows(count, [...recent]);
+    expect(select).not.toHaveBeenCalled();
+  }
+
   const retained = prepared.publish();
   expect(retained.count).toBe(256);
   expect(retained.byAgent[0]?.count).toBe(248);
   expect(retained.byAgent[0]?.recent.map(({ sessionKey }) => sessionKey)).toEqual(initialKeys);
   expect(retained.byAgent[0]?.recent[0]?.entry.updatedAt).toBe(248);
+});
+
+test("deletes only the physical summary for a federated sentinel", async ({ state }) => {
+  const cfg: OpenClawConfig = {
+    agents: { entries: { main: {} } },
+    session: { scope: "global", store: state.statePath("secondary-{agentId}.sqlite") },
+  };
+  setRuntimeConfigSnapshot(cfg);
+  const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  const secondary = state.statePath("secondary-main.sqlite");
+  for (const [storePath, sessionId, updatedAt] of [
+    [primary, "primary", 2],
+    [secondary, "secondary", 1],
+  ] as const) {
+    replaceSessionEntrySync(
+      { agentId: "main", storePath, sessionKey: "global" },
+      { sessionId, updatedAt },
+    );
+    registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
+  }
+  using projection = await createTestProjection({ cfg, modelCatalog: [] });
+  await settleProjection(projection);
+  const select = vi.spyOn(projection, "selectEntries");
+  const read = (storePath: string) =>
+    prepareStatusSessionStores(
+      { ...cfg, session: { ...cfg.session, store: storePath } },
+      [{ id: "main" }],
+      5,
+      { projection },
+    );
+  const retained = await read(primary);
+  expect(retained.publish().recent[0]?.entry.sessionId).toBe("primary");
+  expect((await read(secondary)).publish().recent[0]?.entry.sessionId).toBe("secondary");
+  expect(select).toHaveBeenCalledTimes(2);
+  select.mockClear();
+  await deleteSessionEntryLifecycle({
+    agentId: "main",
+    storePath: primary,
+    archiveTranscript: false,
+    target: { canonicalKey: "global", storeKeys: ["global"] },
+  });
+  await settleProjection(projection);
+  expect((await read(primary)).publish().count).toBe(0);
+  const current = (await read(secondary)).publish();
+  expect(current.count).toBe(1);
+  expect(current.recent).toMatchObject([
+    { sessionKey: "global", entry: { sessionId: "secondary" } },
+  ]);
+  expect(select).not.toHaveBeenCalled();
+  expect(retained.publish().count).toBe(1);
 });

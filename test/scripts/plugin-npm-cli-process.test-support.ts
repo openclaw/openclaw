@@ -38,12 +38,18 @@ type RequestRecord = {
   kind: string;
   route?: string;
   transport?: string;
+  callsite?: string;
 };
 
 // Materialize external GitHub responses before starting any consumer. The
 // subprocess never imports fixture clients or receives an authenticated owner.
 // The recovery graph retains the original Q receipts under a distinct P seal.
-export async function createNpmCliProcessFixture(root: string, plugins = "") {
+export async function createNpmCliProcessFixture(
+  root: string,
+  plugins = "",
+  packageCount = 2,
+  receiptRecovery = true,
+) {
   const f = candidatePublicationFixture();
   const responses: Record<string, ResponseBytes> = {};
   const json = (route: string, value: unknown) => {
@@ -56,6 +62,7 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
   const bytes = (route: string, value: Uint8Array) => {
     responses[route] = { encoding: "base64", data: Buffer.from(value).toString("base64") };
   };
+  json("/rate_limit", { resources: { core: { remaining: 5000, reset: 4_070_908_800 } } });
   const source = (path: string, sha: string, text: string) =>
     json("contents/" + path + "?ref=" + sha, {
       type: "file",
@@ -113,7 +120,11 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
     artifact: typeof producer;
   }> = [];
   const artifacts = new Map<number, ReturnType<typeof metadata>>();
-  for (const [index, extensionId] of ["alpha", "beta"].entries()) {
+  const extensionIds = Array.from(
+    { length: packageCount },
+    (_, index) => ["alpha", "beta"][index] ?? "plugin-" + index,
+  );
+  for (const [index, extensionId] of extensionIds.entries()) {
     const { packageDir, packageName } = writePublishablePluginFixture(root, {
       extensionId,
       version,
@@ -171,6 +182,9 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
       },
     });
   }
+  packages.sort((a, b) =>
+    a.packageName < b.packageName ? -1 : a.packageName > b.packageName ? 1 : 0,
+  );
   const request = {
     repository: f.source.repository,
     candidateSha: f.source.candidateSha,
@@ -293,7 +307,7 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
     permission: "write",
     user: f.admission.actor,
   });
-  json("run view " + f.runId, f.client.getRunView(f.runId));
+  json("run view " + f.runId, await f.client.getRunView(f.runId));
   for (const id of [f.runId, ...f.plan.children.map((child) => child.runId)]) {
     const run = await f.client.getRun(id);
     json("actions/runs/" + id, run);
@@ -338,6 +352,13 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
     head_repository: { full_name: f.repository },
   };
   json("actions/runs/5001/attempts/1", packageRun);
+  const packageArtifacts = [...artifacts.values()].filter(
+    (entry) => entry.workflow_run.id === 5001,
+  );
+  json("actions/runs/5001/artifacts?per_page=100&page=1", {
+    total_count: packageArtifacts.length,
+    artifacts: packageArtifacts,
+  });
   const carrierRun = {
     ...packageRun,
     id: 800,
@@ -366,6 +387,7 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
   for (const [id, artifact] of artifacts) {
     json("actions/artifacts/" + id, artifact);
   }
+  const ordinaryResponses = { ...responses };
   const recovery = addRecoveryGraph({
     f,
     producer,
@@ -376,6 +398,12 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
     source,
     metadata,
   });
+  if (!receiptRecovery) {
+    for (const key of Object.keys(responses)) {
+      delete responses[key];
+    }
+    Object.assign(responses, ordinaryResponses);
+  }
   const responseFile = join(root, "responses.json");
   const log = join(root, "requests.jsonl");
   const gh = join(root, "gh");
@@ -405,7 +433,7 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
     PREPARED_NPM_PARENT_RUN_ID: "700",
     PREPARED_NPM_PARENT_RUN_ATTEMPT: "1",
     PREPARED_NPM_ARTIFACT: JSON.stringify(producer),
-    PREPARED_NPM_FRV_RUN_ID: recovery.runId,
+    PREPARED_NPM_FRV_RUN_ID: receiptRecovery ? recovery.runId : f.runId,
     PREPARED_NPM_FRV_RUN_ATTEMPT: "1",
     PREPARED_NPM_SELECTION_MODE: plugins ? "selected" : "all-publishable",
     PREPARED_NPM_PLUGINS: plugins,
@@ -461,8 +489,8 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
     bytes,
     save,
     run,
-    authorize: (invocation: string, replay = true) =>
-      run(invocation, ["authorize", "--package", JSON.stringify(packages[0])], replay),
+    authorize: (invocation: string, replay = true, index = 0) =>
+      run(invocation, ["authorize", "--package", JSON.stringify(packages[index])], replay),
     // Match the workflow: load takes its roster selection from the CLI option,
     // while the environment selection binds the adoption/evidence request.
     preview: (invocation = "preview") =>

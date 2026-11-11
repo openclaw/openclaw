@@ -209,8 +209,7 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   const shell: MessageGroupData = {
     key: frame.key,
     kind: "group",
-    // A completed tool-only continuation owns activity, not an empty agent reply.
-    role: firstAssistant || streamRun || frame.outcome.kind !== "completed" ? "assistant" : "tool",
+    role: "assistant",
     senderLabel: firstAssistant?.senderLabel,
     replyToSender: firstAssistant?.replyToSender ?? streamRun?.replyToSender,
     replyToMessage: firstAssistant?.replyToMessage ?? streamRun?.replyToMessage,
@@ -306,7 +305,7 @@ function RunFrame(props: FrameProps) {
           (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
         );
     // The recap retains this run's terminal timing after the session moves on.
-    // Run duration appears only on the Worked summary; turns without one show no timing.
+    // Work retains its timing independently of the reply's metadata tooltip.
     if (work?.kind !== "work-group") {
       return undefined;
     }
