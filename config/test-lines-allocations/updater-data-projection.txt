@@ -1,0 +1,4 @@
+# Functional regressions for bounded updater data projection: producer/Doctor reads,
+# source and hardlink isolation, eligibility boundaries, native identity, and missing-file repair.
+# Exact net added test lines; no global baseline or other CI budget changes.
+416

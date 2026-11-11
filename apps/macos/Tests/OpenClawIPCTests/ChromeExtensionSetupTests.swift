@@ -8,15 +8,42 @@ struct ChromeExtensionSetupTests {
     private let prepared = ChromeExtensionSetup.Result(
         action: .install,
         target: .init(
-            kind: "local-host", platform: "darwin", hostname: "Example Mac", profile: "chrome", relayPort: 18792),
-        phase: .needsBrowserAction, reason: "chrome_approval_required",
+            kind: "local-host",
+            platform: "darwin",
+            hostname: "Example Mac",
+            profile: "chrome",
+            relayPort: 18792),
+        phase: .needsBrowserAction,
+        reason: "chrome_approval_required",
         installation: .init(
-            nativeHostRegistered: true, installRequested: true, installedProfiles: 1, discoveredProfiles: 0,
-            awaitingApproval: true, automaticBootstrapSupported: true),
-        connection: .init(state: .notChecked, extensionVersion: nil), nextAction: .approveExtension)
+            nativeHostRegistered: true,
+            installRequested: true,
+            installedProfiles: 1,
+            discoveredProfiles: 0,
+            awaitingApproval: true,
+            automaticBootstrapSupported: true),
+        connection: .init(state: .notChecked, extensionVersion: nil),
+        nextAction: .approveExtension)
+
+    @Test func `fresh default profile and CLI updates wait for explicit Chrome setup`() async throws {
+        var actions: [ChromeExtensionSetupAction] = []
+        let setup = ChromeExtensionSetup { action in
+            actions.append(action)
+            return self.prepared
+        }
+        defer { setup.stop() }
+        let center = NotificationCenter()
+        setup.start(
+            plan: AppLaunchRuntimePlan(arguments: ["OpenClaw"]),
+            profile: AppProfile(environment: [:]),
+            center: center)
+        center.post(name: .openclawCLIInstalled, object: nil)
+        _ = try await setup.run(action: .inspect) { true }
+        #expect(actions == [.inspect])
+    }
 
     @Test(arguments: [["OpenClaw"], ["OpenClaw", "--background-only"]])
-    func `admitted startup and successful CLI updates serialize with manual retry`(arguments: [String]) async throws {
+    func `CLI updates after explicit setup serialize with manual retry`(arguments: [String]) async throws {
         let center = NotificationCenter()
         let events = AsyncStream<Void>.makeStream()
         var iterator = events.stream.makeAsyncIterator()
@@ -46,11 +73,14 @@ struct ChromeExtensionSetupTests {
         let plan = AppLaunchRuntimePlan(arguments: arguments)
         setup.start(plan: plan, profile: AppProfile(environment: [:]), center: center)
         setup.start(plan: plan, profile: AppProfile(environment: [:]), center: center)
+        let initial = Task { try await setup.run(action: .install) { true } }
         await iterator.next()
+        #expect(calls == 1)
+        release?.resume()
+        #expect(try await initial.value == self.prepared)
         #expect(calls == 1)
         center.post(name: .openclawCLIInstalled, object: nil)
         let manual = Task { try await setup.run(action: .install) { true } }
-        release?.resume()
         await iterator.next()
         await iterator.next()
         #expect(try await manual.value == self.prepared)
@@ -73,7 +103,7 @@ struct ChromeExtensionSetupTests {
         #expect(calls == 1)
     }
 
-    @Test func `best effort startup failure leaves manual retry available`() async throws {
+    @Test func `failed explicit setup leaves manual retry available`() async throws {
         var calls = 0
         let setup = ChromeExtensionSetup { _ in
             calls += 1
@@ -87,8 +117,36 @@ struct ChromeExtensionSetupTests {
             plan: AppLaunchRuntimePlan(arguments: ["OpenClaw"]),
             profile: AppProfile(environment: [:]),
             center: NotificationCenter())
+        await #expect(throws: ChromeExtensionSetup.SetupError.self) {
+            try await setup.run(action: .install) { true }
+        }
         #expect(try await setup.run(action: .install) { true } == self.prepared)
         #expect(calls == 2)
+    }
+
+    @Test(arguments: [false, true])
+    func `admitted setup survives retirement of its requesting document`(rejectResult: Bool) async throws {
+        var actions: [ChromeExtensionSetupAction] = []
+        var current = true
+        let setup = ChromeExtensionSetup { action in
+            actions.append(action)
+            if actions.count == 1 {
+                current = false
+                if rejectResult { throw ChromeExtensionSetup.SetupError.retired }
+            }
+            return self.prepared
+        }
+        defer { setup.stop() }
+        await #expect(throws: ChromeExtensionSetup.SetupError.self) {
+            try await setup.run(action: .install) { current }
+        }
+        setup.start(
+            plan: AppLaunchRuntimePlan(arguments: ["OpenClaw"]),
+            profile: AppProfile(environment: [:]),
+            center: NotificationCenter())
+        // The inspect request drains maintenance queued by the app-owned observer.
+        _ = try await setup.run(action: .inspect) { true }
+        #expect(actions == [.install, .install, .inspect])
     }
 
     @Test(arguments: [false, true])
@@ -114,6 +172,7 @@ struct ChromeExtensionSetupTests {
             plan: AppLaunchRuntimePlan(arguments: ["OpenClaw"]),
             profile: AppProfile(environment: [:]),
             center: NotificationCenter())
+        let initial = Task { try await setup.run(action: .inspect) { true } }
         await iterator.next()
         let admitted = AsyncStream<Void>.makeStream()
         var admissions = admitted.stream.makeAsyncIterator()
@@ -131,6 +190,7 @@ struct ChromeExtensionSetupTests {
             current = false
         }
         release?.resume()
+        _ = try await initial.value
         await #expect(throws: ChromeExtensionSetup.SetupError.self) { try await manual.value }
         #expect(calls == 1)
         admitted.continuation.finish()

@@ -7,7 +7,13 @@ vi.mock("@aws-sdk/client-bedrock", () => {
     constructor(readonly input: unknown) {}
   }
   class BedrockClient {
-    send = vi.fn(async () => ({ models: [] }));
+    send = vi.fn(async () => ({
+      models: [
+        {
+          modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-6",
+        },
+      ],
+    }));
     destroy = vi.fn();
   }
   return { BedrockClient, GetInferenceProfileCommand };
@@ -58,6 +64,10 @@ describe("Amazon Bedrock registration cache policy", () => {
     expect(result.onPayload).toBeTypeOf("function");
     await result.onPayload?.(payload, model);
 
+    expect(payload.system).toEqual([
+      { text: "Stable workspace" },
+      { cachePoint: { type: "default" } },
+    ]);
     expect(payload.messages[0]?.content).toHaveLength(2);
   });
 });

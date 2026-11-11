@@ -1,12 +1,7 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DiagnosticsTimelineOptions as CliCommandStartupTimingOptions } from "../infra/diagnostics-timeline.js";
 import { measureGatewayBootstrapStep } from "./startup-trace.js";
 
 type DiagnosticsTimelineModule = typeof import("../infra/diagnostics-timeline.js");
-
-type CliCommandStartupTimingOptions = {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-};
 
 let diagnosticsTimelineModulePromise: Promise<DiagnosticsTimelineModule> | undefined;
 

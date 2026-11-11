@@ -1,0 +1,2 @@
+# Scheduled discovery recovers from a returned failure and retains healthy caching.
+26

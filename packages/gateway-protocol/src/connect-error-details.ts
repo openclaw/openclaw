@@ -4,6 +4,7 @@
  * These details cross client/server boundaries, so readers normalize untrusted
  * payloads before using them in reconnect decisions or user-facing messages.
  */
+import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   isProtocolRecord,
@@ -527,10 +528,10 @@ function formatProtocolMismatchMessage(message: string | undefined, details: unk
     expectedProtocol?: unknown;
     minimumProbeProtocol?: unknown;
   };
-  const clientMin = normalizeProtocolNumber(raw.clientMinProtocol);
-  const clientMax = normalizeProtocolNumber(raw.clientMaxProtocol);
-  const expected = normalizeProtocolNumber(raw.expectedProtocol);
-  const probeMin = normalizeProtocolNumber(raw.minimumProbeProtocol);
+  const clientMin = asPositiveInteger(raw.clientMinProtocol);
+  const clientMax = asPositiveInteger(raw.clientMaxProtocol);
+  const expected = asPositiveInteger(raw.expectedProtocol);
+  const probeMin = asPositiveInteger(raw.minimumProbeProtocol);
   const parts: string[] = [];
   if (clientMin !== undefined && clientMax !== undefined) {
     parts.push(
@@ -547,8 +548,4 @@ function formatProtocolMismatchMessage(message: string | undefined, details: unk
   }
   const normalized = normalizeOptionalProtocolString(message) ?? "protocol mismatch";
   return parts.length > 0 ? `${normalized}: ${parts.join(", ")}` : normalized;
-}
-
-function normalizeProtocolNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }

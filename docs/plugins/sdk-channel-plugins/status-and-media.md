@@ -19,6 +19,23 @@ successor to `healthState`. Existing plugins may keep publishing `healthState`
 during adoption, and core-derived policy writes remain supported. There is no
 removal date; removal waits for external channel-plugin adoption.
 
+For a transport reconnect after a successful connection, publish
+`connected: false`, `lifecycle: "recovering"`, and `lastDisconnect: { at }`.
+Record `at` at the first disconnect of that outage, retain it across failed
+retries, and clear `lastDisconnect` when READY/resume succeeds. Do not manufacture
+a disconnect timestamp for an account that has never connected. Publish
+`lastConnectedAt` on successful connection and preserve terminal/blocked failures.
+The shared health policy allows two minutes of reconnect grace and projects
+`healthState: "reconnect-grace"` into status; detailed Gateway readiness reports
+the affected channel in `degraded` while keeping `ready: true` if its other checks
+pass. Active work does not extend an explicitly recovering transport's window.
+Log transport failures and recovery so a ready response cannot hide an outage.
+Transport reconnects belong to the transport owner; a lifecycle failure settles
+that run so the Gateway can apply its existing restart policy. Reserve
+`terminalDisconnect` and `lifecycle: "blocked"` for failures requiring operator
+repair, such as invalid credentials or disallowed intents, not restartable
+protocol errors or exhaustion of one transport's reconnect attempts.
+
 ## Typing indicators
 
 If your channel supports typing indicators outside inbound replies, expose
@@ -53,8 +70,13 @@ still works for params intentionally shared across every exposed action.
 Channels that must expose a temporary public URL for a platform-side media
 fetch can use `createHostedOutboundMediaStore(...)` from
 `openclaw/plugin-sdk/outbound-media` with plugin state stores. Keep platform
-route parsing and token enforcement in the channel plugin; the shared helper
-only owns media loading, expiry metadata, chunk rows, and cleanup.
+route binding and token authentication in the channel plugin. For namespaced
+capability query parameters, `resolveHostedOutboundMediaRequest(req, res, prefix)`
+returns `false` for unrelated requests, `true` after rejecting ambiguous tokens
+or unsupported methods, or `{ url, id, token, method }` for the plugin to authenticate.
+It accepts only `GET` and `HEAD` with one `<prefix>_<24-character lowercase hex ID>`
+parameter. `resolveOutboundMediaAccess(params)` combines current `mediaAccess`
+with legacy local-root and reader parameters before loading.
 
 `prepareUrl({ mediaAccess })` forwards host-authorized local media access to
 the shared outbound loader. Hosted media capacity defaults to
@@ -119,8 +141,8 @@ the model-facing action schema.
 A waiting reply can carry the optional host-owned
 `info.adoptProgressDraft(draft)` capability in its reply-dispatch context. An
 editable-progress adapter uses it to keep an already visible card live while the
-children the turn waits on run, not to send a replacement card or credit
-final-answer delivery.
+children or detached media generation runs the turn waits on run, not to send a
+replacement card or credit final-answer delivery.
 
 Drain and flush the existing draft, recheck `assertPlatformSendAuthorized`, and
 confirm the platform accepted the card. Staged content or an ambiguous send does

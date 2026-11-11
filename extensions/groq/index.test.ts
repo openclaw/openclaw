@@ -1,253 +1,131 @@
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import {
-  createAssistantMessageEventStream,
-  type SimpleStreamOptions,
-} from "openclaw/plugin-sdk/llm";
+import { streamSimple, resolveOpenAIRequestReasoning, type Model } from "openclaw/plugin-sdk/llm";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it } from "vitest";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-model-metadata";
+import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { assert, expect, it } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-describe("groq provider compat", () => {
-  it("recovers only matching implicit-budget rejections without changing normal tools", async () => {
-    const [provider] = capturePluginRegistration(plugin).providers;
+const catalog = buildManifestModelProviderConfig({
+  providerId: "groq",
+  catalog: manifest.modelCatalog.providers.groq,
+});
+const qwen = catalog.models.find((model) => model.id === "qwen/qwen3.6-27b");
+if (!qwen) {
+  throw new Error("Expected Groq Qwen catalog model");
+}
+const enabledLevels = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const context = { messages: [] };
+const makeModel = (row: (typeof catalog.models)[number]) =>
+  ({
+    ...row,
+    input: ["text"],
+    provider: "groq",
+    api: "openai-completions",
+    baseUrl: catalog.baseUrl,
+  }) satisfies Model<"openai-completions">;
+function completionStreams(model: Model<"openai-completions">) {
+  const [provider] = capturePluginRegistration(plugin).providers;
+  return [provider?.wrapStreamFn, provider?.wrapSimpleCompletionStreamFn].map((wrap) => {
+    const stream = wrap?.({ provider: "groq", modelId: model.id, model, streamFn: streamSimple });
+    if (!stream) {
+      throw new Error("Expected wrapped Groq stream");
+    }
+    return stream;
+  });
+}
 
-    const capturePayloads = async ({
-      extraParams,
-      firstError,
-      initialMaxTokens = 32_768,
-      onPayload,
-      streamMaxTokens,
-      withTools = true,
-      modelParams,
-      maxTokensSource = "discovered",
-    }: {
-      extraParams?: Record<string, unknown>;
-      firstError?: string;
-      initialMaxTokens?: number;
-      onPayload?: SimpleStreamOptions["onPayload"];
-      streamMaxTokens?: number;
-      withTools?: boolean;
-      modelParams?: Record<string, unknown>;
-      maxTokensSource?: "configured" | "discovered" | null;
-    } = {}) => {
-      const payloads: Array<Record<string, unknown>> = [];
-      const baseStreamFn: StreamFn = async (model, _context, options) => {
-        const payload: Record<string, unknown> = {
-          max_completion_tokens: initialMaxTokens,
-        };
-        if (withTools) {
-          payload.tools = [{ type: "function", function: { name: "read" } }];
-          payload.tool_choice = "auto";
-        }
-        const replacement = await options?.onPayload?.(payload, model);
-        const finalPayload =
-          replacement && typeof replacement === "object"
-            ? (replacement as Record<string, unknown>)
-            : payload;
-        payloads.push(finalPayload);
-        const stream = createAssistantMessageEventStream();
-        if (payloads.length === 1 && firstError) {
-          stream.push({
-            type: "error",
-            reason: "error",
-            error: { stopReason: "error", errorMessage: firstError } as never,
-          });
-        } else {
-          stream.push({
-            type: "done",
-            reason: "stop",
-            message: { stopReason: "stop" } as never,
-          });
-        }
-        stream.end();
-        return stream;
-      };
-      const streamFn = provider?.wrapStreamFn?.({
-        provider: "groq",
-        modelId: "llama-3.3-70b-versatile",
-        extraParams,
-        model: {
-          maxTokens: initialMaxTokens,
-          ...(maxTokensSource ? { maxTokensSource } : {}),
-          ...(modelParams ? { params: modelParams } : {}),
-        } as never,
-        streamFn: baseStreamFn,
-      } as never);
-      const stream = streamFn?.(
-        {} as never,
-        { messages: [], ...(withTools ? { tools: [{ name: "read" }] } : {}) } as never,
-        { onPayload, maxTokens: streamMaxTokens },
-      );
-      // Drain the wrapper so a matching error can trigger its fallback attempt.
-      for await (const event of (await stream) ?? []) {
-        void event;
+it("clamps GPT OSS thinking levels to Groq's low, medium, and high efforts", () => {
+  const rows = catalog.models.filter((model) => model.id.includes("gpt-oss"));
+  expect(rows.map((row) => row.id)).toEqual([
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-safeguard-20b",
+  ]);
+  for (const row of rows) {
+    const model = makeModel(row);
+    // Groq rejects `minimal` for GPT OSS with a 400.
+    expect(
+      (["minimal", "medium", "xhigh"] as const).map(
+        (reasoning) => buildOpenAICompletionsParams(model, context, { reasoning }).reasoning_effort,
+      ),
+    ).toEqual(["low", "medium", "high"]);
+  }
+});
+
+it("maps Groq reasoning to its wire contract on both completion paths", async () => {
+  const gptOss = catalog.models.find((model) => model.id === "openai/gpt-oss-120b");
+  assert(gptOss, "Expected Groq GPT OSS catalog model");
+  expect(qwen.input).toEqual(["text"]);
+  expect(qwen.compat?.supportedReasoningEfforts).toEqual(["none", "default"]);
+  const qwenModel = makeModel(qwen);
+  expect(
+    ["none", "adaptive"].map((level) => resolveOpenAIRequestReasoning(qwenModel, level).effort),
+  ).toEqual(["none", "default"]);
+  expect(
+    buildOpenAICompletionsParams(qwenModel, context, { reasoningEffort: "none" }).reasoning_effort,
+  ).toBe("none");
+  for (const [row, levels, effort, parsed] of [
+    [qwen, [undefined, "off", ...enabledLevels], "default", true],
+    [{ ...qwen, id: "qwen/future-reasoner" }, ["high"], "default", true],
+    [{ ...qwen, id: "qwen/future-text-model", reasoning: false }, ["high"], undefined, false],
+    [gptOss, ["high"], "high", false],
+  ] as const) {
+    const model = makeModel(row);
+    for (const [streamFn, reasoning] of completionStreams(model).flatMap((stream) =>
+      levels.map((level) => [stream, level] as const),
+    )) {
+      let payload: unknown;
+      const stream = await streamFn(model, context, {
+        apiKey: "synthetic-unused-key",
+        reasoning,
+        onPayload(value) {
+          payload = value;
+          throw new Error("captured before request");
+        },
+      });
+      expect((await stream.result()).errorMessage).toBe("captured before request");
+      const enabled = reasoning !== undefined && reasoning !== "off";
+      if (effort === undefined) {
+        expect(payload).not.toHaveProperty("reasoning_effort");
+      } else {
+        expect(payload).toMatchObject({ reasoning_effort: enabled ? effort : "none" });
       }
-      return payloads;
-    };
-
-    const successfulDefault = await capturePayloads();
-    expect(successfulDefault).toHaveLength(1);
-    expect(successfulDefault[0]).toMatchObject({
-      max_completion_tokens: 32_768,
-      tools: [{ type: "function", function: { name: "read" } }],
-    });
-
-    const matchingError =
-      "413 Request too large for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 12000, Requested 30000";
-    let payloadHookCalls = 0;
-    const recovered = await capturePayloads({
-      firstError: matchingError,
-      onPayload(payload) {
-        const record = payload as Record<string, unknown>;
-        payloadHookCalls += 1;
-        return payloadHookCalls === 1
-          ? payload
-          : {
-              ...record,
-              max_tokens: 65_536,
-              max_completion_tokens: 32_768,
-              tools: [{ type: "function", function: { name: "restored" } }],
-              tool_choice: "required",
-              parallel_tool_calls: true,
-              parallelToolCalls: false,
-            };
-      },
-    });
-    expect(payloadHookCalls).toBe(2);
-    expect(recovered).toHaveLength(2);
-    expect(recovered[0]).toMatchObject({
-      max_completion_tokens: 32_768,
-      tools: [{ type: "function", function: { name: "read" } }],
-    });
-    expect(recovered[1]).toEqual({ max_completion_tokens: 1_024 });
-
-    const noTools = await capturePayloads({ firstError: matchingError, withTools: false });
-    expect(noTools).toEqual([{ max_completion_tokens: 32_768 }, { max_completion_tokens: 1_024 }]);
-
-    for (const unrelatedMessage of [
-      "413 context length exceeded",
-      "429 Rate limit reached on tokens per minute (TPM)",
-    ]) {
-      const unrelatedError = await capturePayloads({ firstError: unrelatedMessage });
-      expect(unrelatedError).toHaveLength(1);
-      expect(unrelatedError[0]).toHaveProperty("tools");
+      if (enabled && parsed) {
+        expect(payload).toHaveProperty("reasoning_format", "parsed");
+      } else {
+        expect(payload).not.toHaveProperty("reasoning_format");
+      }
     }
+  }
+});
 
-    for (const budget of [
-      { extraParams: { max_completion_tokens: 4_096 } },
-      { modelParams: { maxTokens: 4_096 } },
-      { modelParams: { max_completion_tokens: 4_096 } },
-      { modelParams: { max_tokens: 4_096 } },
-      { modelParams: { extra_body: { max_completion_tokens: 4_096 } } },
-      { modelParams: { extra_body: { max_tokens: 4_096 } } },
-      { modelParams: { extraBody: { max_completion_tokens: 4_096 } } },
-      { modelParams: { extraBody: { max_tokens: 4_096 } } },
-      { maxTokensSource: "configured" },
-      { maxTokensSource: null },
-      { streamMaxTokens: 4_096 },
-    ] as const) {
-      const payloads = await capturePayloads({
-        firstError: matchingError,
-        initialMaxTokens: 4_096,
-        ...budget,
-      });
-      expect(payloads).toHaveLength(1);
-      expect(payloads[0]).toMatchObject({
-        max_completion_tokens: 4_096,
-        tools: [{ type: "function", function: { name: "read" } }],
-        tool_choice: "auto",
-      });
-    }
-  });
-
-  it("preserves synchronous throws and complete asynchronous error metadata", async () => {
-    const [provider] = capturePluginRegistration(plugin).providers;
-    if (!provider) {
-      throw new Error("expected Groq provider registration");
-    }
-    const model = {
-      api: "openai-completions",
-      provider: "groq",
-      id: "llama-3.3-70b-versatile",
-    } as never;
-    const context = { messages: [], tools: [{ name: "read" }] } as never;
-    const wrap = (streamFn: StreamFn) =>
-      provider.wrapStreamFn?.({
-        provider: "groq",
-        modelId: "llama-3.3-70b-versatile",
-        model: { maxTokensSource: "discovered" } as never,
-        streamFn,
-      } as never);
-
-    const synchronous = wrap(() => {
-      throw new Error("synchronous failure");
-    });
-    expect(() => synchronous?.(model, context, {})).toThrow("synchronous failure");
-
-    const asynchronous = wrap(async () => {
-      throw new Error("asynchronous failure");
-    });
-    const events = [];
-    for await (const event of (await asynchronous?.(model, context, {})) ?? []) {
-      events.push(event);
-    }
-    expect(events).toEqual([
+it("registers Groq model and media providers", () => {
+  const captured = capturePluginRegistration(plugin);
+  const [provider] = captured.providers;
+  expect(provider).toMatchObject({
+    docsPath: "/providers/groq",
+    envVars: ["GROQ_API_KEY"],
+    id: "groq",
+    label: "Groq",
+    auth: [
       {
-        type: "error",
-        reason: "error",
-        error: expect.objectContaining({
-          api: "openai-completions",
-          provider: "groq",
-          model: "llama-3.3-70b-versatile",
-          stopReason: "error",
-          errorMessage: "asynchronous failure",
-          timestamp: expect.any(Number),
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-        }),
+        id: "api-key",
+        kind: "api_key",
+        label: "Groq API key",
+        starterModel: `groq/${manifest.modelCatalog.providers.groq.defaultModel}`,
+        wizard: { choiceId: "groq-api-key", groupId: "groq" },
       },
-    ]);
+    ],
   });
-
-  it("registers Groq model and media providers", () => {
-    const captured = capturePluginRegistration(plugin);
-    const [provider] = captured.providers;
-    if (!provider) {
-      throw new Error("Expected Groq provider");
-    }
-    expect(provider).toMatchObject({
-      docsPath: "/providers/groq",
-      envVars: ["GROQ_API_KEY"],
-      id: "groq",
-      label: "Groq",
-    });
-    expect(provider.auth).toHaveLength(1);
-    expect(provider.auth[0]).toMatchObject({
-      id: "api-key",
-      kind: "api_key",
-      label: "Groq API key",
-      starterModel: `groq/${manifest.modelCatalog.providers.groq.defaultModel}`,
-      wizard: {
-        choiceId: "groq-api-key",
-        groupId: "groq",
-      },
-    });
-    expect(captured.modelCatalogProviders.map((entry) => entry.kinds)).toEqual([["text"]]);
-    expect(captured.mediaUnderstandingProviders).toHaveLength(1);
-    const [mediaProvider] = captured.mediaUnderstandingProviders;
-    expect(mediaProvider).toEqual({
+  expect(captured.modelCatalogProviders.map((entry) => entry.kinds)).toEqual([["text"]]);
+  expect(captured.mediaUnderstandingProviders).toEqual([
+    {
       autoPriority: { audio: 20 },
       capabilities: ["audio"],
       defaultModels: { audio: "whisper-large-v3-turbo" },
       id: "groq",
       transcribeAudio: expect.any(Function),
-    });
-  });
+    },
+  ]);
 });

@@ -138,6 +138,9 @@
           "state": "available",
           "promptTokens": 7,
           "totalTokens": 12
+        },
+        "usageReport": {
+          "state": "available"
         }
       },
       "stopReason": "stop"
@@ -278,6 +281,9 @@
           "state": "available",
           "promptTokens": 7,
           "totalTokens": 12
+        },
+        "usageReport": {
+          "state": "available"
         }
       },
       "stopReason": "stop"

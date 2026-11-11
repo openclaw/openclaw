@@ -52,9 +52,7 @@ function readBundledExtensionCatalogEntriesSync(
 }
 
 function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
-  const bundledExternalEntries = BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES.filter(
-    (entry): entry is ChannelCatalogEntryLike => typeof entry === "object" && entry !== null,
-  );
+  const bundledExternalEntries = [...BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES];
   for (const packageRoot of listPackageRoots()) {
     const candidate = path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH);
     const payload = readPluginCacheJsonFile(candidate);
@@ -71,18 +69,8 @@ function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
   return bundledExternalEntries;
 }
 
-function isChannelCatalogEntryLike(
-  entry: ChannelCatalogEntryLike | PluginPackageChannel,
-): entry is ChannelCatalogEntryLike {
-  return "openclaw" in entry;
-}
-
-function toBundledChannelEntry(
-  entry: ChannelCatalogEntryLike | PluginPackageChannel,
-): BundledChannelCatalogEntry | null {
-  const channel: PluginPackageChannel | undefined = isChannelCatalogEntryLike(entry)
-    ? entry.openclaw?.channel
-    : entry;
+function toBundledChannelEntry(entry: ChannelCatalogEntryLike): BundledChannelCatalogEntry | null {
+  const channel = entry.openclaw?.channel;
   const id = normalizeOptionalLowercaseString(channel?.id);
   if (!id || !channel) {
     return null;

@@ -1,6 +1,11 @@
+import type { CronAddResult } from "../../../packages/gateway-protocol/src/schema/cron.types.js";
+import {
+  readCanonicalCronListPage,
+  resolveCronListPageNextOffset,
+} from "../../../src/cron/service/list-page-validation.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { CronJob, CronJobsListResult } from "../api/types.ts";
-import { assertCanonicalCronJobsCursor, readCanonicalCronJobsPage } from "./cron/jobs.ts";
+import type { CronJob } from "../api/types.ts";
+import { readCronInventory } from "./cron/inventory.ts";
 import {
   CI_AUTOMATION_OPTIONS,
   ciAutomationDeclarationKey,
@@ -26,8 +31,8 @@ export async function loadCiAutomationJobs(
   let offset = 0;
   let revision: string | undefined;
   do {
-    const response = await client.request<CronJobsListResult>(
-      "cron.list",
+    const response = await readCronInventory(
+      client,
       {
         sessionKey: target.sessionKey,
         sessionAgentId: target.agentId,
@@ -38,8 +43,8 @@ export async function loadCiAutomationJobs(
       },
       { signal },
     );
-    const page = readCanonicalCronJobsPage(response, 200);
-    assertCanonicalCronJobsCursor(page, offset);
+    const page = readCanonicalCronListPage<CronJob>(response, 200);
+    resolveCronListPageNextOffset(page, offset);
     if (revision && revision !== page.snapshotRevision) {
       throw new Error("Automation inventory changed. Refresh and try again.");
     }
@@ -72,11 +77,12 @@ export async function setCiAutomationEnabled(
   option: CiAutomationOption,
   enabled: boolean,
   current: CronJob | undefined,
-): Promise<CronJob | undefined> {
+): Promise<{ job: CronJob; warning?: string } | undefined> {
   if (!current && !enabled) {
     return undefined;
   }
   let result: CronJob;
+  let warning: string | undefined;
   if (current) {
     if (!ciAutomationJobMatches(current, target, option) || !current.configRevision) {
       throw new Error("Refresh the automation before changing it.");
@@ -88,14 +94,15 @@ export async function setCiAutomationEnabled(
     });
   } else {
     // Declaration convergence makes a lost create acknowledgement discoverable as the same job.
-    const response = await client.request<{ job: CronJob }>(
+    const response = await client.request<CronAddResult>(
       "cron.add",
       ciAutomationJobSpec(target, option),
     );
-    result = response.job;
+    result = "job" in response ? response.job : response;
+    warning = response.warning;
   }
   if (!result || !ciAutomationJobMatches(result, target, option)) {
     throw new Error("The automation changed while saving. Refresh to check its current state.");
   }
-  return result;
+  return { job: result, ...(warning ? { warning } : {}) };
 }

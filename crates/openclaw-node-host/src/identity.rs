@@ -54,24 +54,6 @@ impl DeviceSigningRequest {
         signature_token: Option<&str>,
         signed_at: u64,
     ) -> Result<Self, IdentityError> {
-        Self::new_at(
-            public_key,
-            nonce,
-            platform,
-            device_family,
-            signature_token,
-            signed_at,
-        )
-    }
-
-    fn new_at(
-        public_key: [u8; 32],
-        nonce: &str,
-        platform: &str,
-        device_family: Option<&str>,
-        signature_token: Option<&str>,
-        signed_at: u64,
-    ) -> Result<Self, IdentityError> {
         VerifyingKey::from_bytes(&public_key).map_err(|_| IdentityError::InvalidPublicKey)?;
         let device_id = device_id_from_public_key(&public_key);
         let signed_at_text = signed_at.to_string();
@@ -217,7 +199,7 @@ fn normalize_metadata(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use ed25519_dalek::{Signature, Verifier};
 
     use super::*;
@@ -232,7 +214,7 @@ mod tests {
             identity.public_key_base64url()
         );
 
-        let request = DeviceSigningRequest::new_at(
+        let request = DeviceSigningRequest::new(
             identity.signing_key.verifying_key().to_bytes(),
             "nonce-1",
             "Windows",
@@ -266,7 +248,7 @@ mod tests {
     #[test]
     fn external_signing_request_rejects_a_signature_for_other_bytes() {
         let identity = NodeIdentity::from_secret_bytes([7; 32]);
-        let request = DeviceSigningRequest::new_at(
+        let request = DeviceSigningRequest::new(
             identity.signing_key.verifying_key().to_bytes(),
             "nonce-1",
             "linux",
@@ -285,7 +267,7 @@ mod tests {
     #[test]
     fn signing_request_debug_redacts_the_canonical_payload() {
         let identity = NodeIdentity::from_secret_bytes([7; 32]);
-        let request = DeviceSigningRequest::new_at(
+        let request = DeviceSigningRequest::new(
             identity.signing_key.verifying_key().to_bytes(),
             "sentinel-nonce",
             "windows",

@@ -1,0 +1,94 @@
+{
+  "id": "liquid-ai",
+  "categories": ["models"],
+  "activation": { "onStartup": false },
+  "enabledByDefault": true,
+  "providers": ["liquid-ai"],
+  "providerEndpoints": [
+    { "endpointClass": "liquid-ai-native", "hosts": ["api.liquid.ai"] }
+  ],
+  "providerRequest": { "providers": { "liquid-ai": { "family": "liquid-ai" } } },
+  "modelCatalog": {
+    "providers": {
+      "liquid-ai": {
+        "baseUrl": "https://api.liquid.ai/decisions/v1",
+        "models": [
+          {
+            "id": "d1",
+            "name": "Liquid AI d1",
+            "input": ["text", "image"],
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "liquid-ai-systemone",
+                "input": ["text", "image"],
+                "questions": {
+                  "boolean": { "probabilities": "boolean", "abstention": false },
+                  "choice": { "probabilities": "categorical", "abstention": false, "minOptions": 2 },
+                  "score": { "probabilities": "categorical", "abstention": false, "minOptions": 2 }
+                },
+                "confidence": "provider-specific",
+                "reasoning": { "modes": ["auto"] },
+                "limits": {
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg", "image/webp"],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": { "unit": "tokens", "source": "provider-docs", "usdPerMillion": { "output": 0 } }
+              }
+            }
+          },
+          {
+            "id": "d1-ultra",
+            "name": "Liquid AI d1 Ultra",
+            "input": ["text", "image"],
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "liquid-ai-systemone",
+                "input": ["text", "image"],
+                "questions": {
+                  "boolean": { "probabilities": "boolean", "abstention": false },
+                  "choice": { "probabilities": "categorical", "abstention": false, "minOptions": 2 },
+                  "score": { "probabilities": "categorical", "abstention": false, "minOptions": 2 }
+                },
+                "confidence": "provider-specific",
+                "reasoning": { "modes": ["auto"] },
+                "limits": {
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg", "image/webp"],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": { "unit": "tokens", "source": "provider-docs", "usdPerMillion": { "input": 0.042, "output": 0 } }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "setup": { "providers": [{ "id": "liquid-ai", "envVars": ["LIQUIDAI_API_KEY"] }] },
+  "providerAuthChoices": [
+    {
+      "provider": "liquid-ai",
+      "method": "api-key",
+      "choiceId": "liquid-ai-api-key",
+      "appGuidedSecret": true,
+      "credentialOnly": true,
+      "choiceLabel": "Liquid AI API key",
+      "groupId": "liquid-ai",
+      "groupLabel": "Liquid AI",
+      "groupHint": "Native Decision models",
+      "optionKey": "liquidAiApiKey",
+      "cliFlag": "--liquid-ai-api-key",
+      "cliOption": "--liquid-ai-api-key <key>",
+      "cliDescription": "Liquid AI API key"
+    }
+  ],
+  "contracts": { "decisionProviders": ["liquid-ai"] },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

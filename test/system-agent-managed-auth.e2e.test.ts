@@ -109,7 +109,7 @@ it("opens New Agent through the real Gateway and runner using a protected provid
           role: "operator",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.statePath("test-device.sqlite"),
+            path: instance.state.statePath("test-device", "client", "credentials.sqlite"),
           }),
         },
         {

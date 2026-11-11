@@ -57,4 +57,21 @@ describe("formatPluginLine", () => {
     expect(output).not.toContain("\u001B[31m");
     expect(output.match(/activation reason:/g)).toHaveLength(1);
   });
+  it("includes recorded trust reasons in verbose output without inventing missing provenance", () => {
+    const trusted = formatPluginLine(
+      createPluginRecord({
+        id: "official",
+        trust: { reason: "trusted-official", registryPath: null, origin: "global" },
+      }),
+    );
+    const untrusted = formatPluginLine(
+      createPluginRecord({
+        id: "external",
+        trust: { reason: "provenance-missing", registryPath: null, origin: "global" },
+      }),
+    );
+    expect(trusted).toMatch(/trust: .*trusted-official/);
+    expect(untrusted).toMatch(/trust: .*provenance-missing/);
+    expect(formatPluginLine(createPluginRecord({ id: "unknown" }))).not.toContain("trust:");
+  });
 });

@@ -6,6 +6,11 @@ import type {
   TelegramAccountConfig,
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import {
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramDmAllow } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -81,7 +86,6 @@ export function createTelegramHandlerAuthorization({
   bot,
   opts,
   logger,
-  telegramDeps,
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
 }: RegisterTelegramHandlerParams): TelegramHandlerAuthorization {
@@ -167,7 +171,7 @@ export function createTelegramHandlerAuthorization({
       threadSpec: params.threadSpec,
       groupAllowFrom: authorizationSettings.groupAllowFrom,
       skipPairingStoreRead: commandAuthorizedByConfig,
-      readChannelAllowFromStore: telegramDeps.readChannelAllowFromStore,
+      readChannelAllowFromStore,
       resolveTelegramGroupConfig,
     });
     const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
@@ -282,7 +286,7 @@ export function createTelegramHandlerAuthorization({
   const authorizeInboundMessage = async (
     params: Parameters<TelegramHandlerAuthorization["authorizeInboundMessage"]>[0],
   ): Promise<TelegramInboundGate> => {
-    const authorizationCfg = telegramDeps.getRuntimeConfig();
+    const authorizationCfg = getRuntimeConfig();
     const context = await resolveTelegramEventAuthorizationContext({
       cfg: authorizationCfg,
       msg: params.msg,
@@ -341,7 +345,7 @@ export function createTelegramHandlerAuthorization({
               accountId,
               bot,
               logger,
-              upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
+              upsertPairingRequest: upsertChannelPairingRequest,
             })
           : await isTelegramDmAccessAllowed({
               dmPolicy,

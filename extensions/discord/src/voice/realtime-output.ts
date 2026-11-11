@@ -7,13 +7,12 @@ import {
   DISCORD_AUDIO_PLAYED_BYTES,
   DISCORD_AUDIO_STARTED,
   DiscordAudioOutputStatus,
-  admitDiscordAudioInput,
   getDiscordAudioOutputStatus,
-  releaseDiscordAudioInput,
   setDiscordAudioOutputStatus,
   restoreDiscordAudioError,
   type DiscordAudioEvent,
 } from "./audio-worker-protocol.js";
+import { resolveDiscordOutputAudioDelta } from "./output-activity.js";
 import type { DiscordRealtimePlayer } from "./realtime-player.js";
 
 /** Main retains provider item identity; physical output state belongs to the worker. */
@@ -145,27 +144,14 @@ export class DiscordRealtimeOutput {
     item: RealtimeVoicePlaybackItem | undefined,
     onAccepted: () => void,
   ): boolean {
-    if (
-      this.closed ||
-      this.activity.snapshot().streamEnding ||
-      !admitDiscordAudioInput(this.clock)
-    ) {
+    if (!this.isAcceptingAudio()) {
       return false;
     }
-    try {
-      onAccepted();
-    } catch (error) {
-      releaseDiscordAudioInput(this.clock);
-      throw error;
-    }
-    // Observers may cancel synchronously after admission, before publication.
-    if (this.closed) {
-      releaseDiscordAudioInput(this.clock);
-      return true;
-    }
+    onAccepted();
+    // A chunk racing natural worker retirement may be dropped; the next chunk opens a new output.
     const previous = this.activity.snapshot();
-    const sinkBytes = Math.floor((previous.sourceAudioBytes + audio.length) / 2) * 8;
-    const audioMs = (sinkBytes - previous.sinkAudioBytes) / 192;
+    const delta = resolveDiscordOutputAudioDelta(previous, audio.length);
+    const { audioMs } = delta;
     if (item) {
       const last = this.spans.at(-1);
       if (last?.item === item && last.endMs === previous.audioMs) {
@@ -174,11 +160,7 @@ export class DiscordRealtimeOutput {
         this.spans.push({ item, startMs: previous.audioMs, endMs: previous.audioMs + audioMs });
       }
     }
-    this.activity.markAudio({
-      audioMs,
-      sourceAudioBytes: audio.length,
-      sinkAudioBytes: sinkBytes - previous.sinkAudioBytes,
-    });
+    this.activity.markAudio(delta);
     this.params.player.audio.send({ type: "output-audio", id: this.id, audio, audible });
     return true;
   }

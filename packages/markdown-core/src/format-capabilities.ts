@@ -47,7 +47,7 @@ type DefinedChunk<Chunk extends FormatCapabilityProfile["chunk"]> = Omit<
 /** Defines a channel profile with native support as the default for each construct. */
 function defineFormatProfile<
   const Mechanism extends FormatCapabilityProfile["mechanism"],
-  const Overrides extends Partial<FormatCapabilityProfile["constructs"]> = Record<never, never>,
+  const Overrides extends Partial<FormatCapabilityProfile["constructs"]> = object,
   const Chunk extends FormatCapabilityProfile["chunk"] = FormatCapabilityProfile["chunk"],
 >(profile: {
   mechanism: Mechanism;

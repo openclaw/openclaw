@@ -20,7 +20,6 @@ import type { LegacyMcpOAuthImportResult } from "./state-migrations.mcp-oauth.wo
 import { resolveLegacyMigrationSourceKey } from "./state-migrations.receipts.js";
 import {
   LegacyMigrationSourceClaim,
-  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   resolveLegacyMigrationRelativePath,
   type LegacyMigrationSourceSnapshot,
@@ -249,10 +248,7 @@ async function migrateOneStore(params: {
     if (await source.exists()) {
       throw new Error("legacy MCP OAuth source reappeared during import");
     }
-    const finalSnapshot = await source.read(true);
-    if (!snapshotsMatch(snapshot, finalSnapshot)) {
-      throw new Error("legacy MCP OAuth claim changed after SQLite import");
-    }
+    await source.verify(snapshot, "legacy MCP OAuth claim changed after SQLite import", true);
     await source.remove({
       removeSource: params.removeSource,
       claimRemainingMessage: "legacy MCP OAuth Doctor claim remains after cleanup",

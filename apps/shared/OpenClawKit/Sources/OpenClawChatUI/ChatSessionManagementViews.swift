@@ -631,6 +631,7 @@ public struct ChatNewSessionOptionsPopover: View {
                 Toggle(isOn: self.$usesWorktree) {
                     Text("Separate working copy")
                         .font(OpenClawChatTypography.formControl.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .toggleStyle(.switch)
                 .disabled(self.agentOptions.isLoading || self.isCreating || self.agentOptions.selectedAgent?
@@ -689,6 +690,7 @@ public struct ChatNewSessionOptionsPopover: View {
                     Text("Create Thread").font(OpenClawChatTypography.formControl.weight(.medium))
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(OpenClawChatTheme.accent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(
                     self.agentOptions.isLoading || self.isCreating || self.agentOptions.selectedAgentID.isEmpty || self

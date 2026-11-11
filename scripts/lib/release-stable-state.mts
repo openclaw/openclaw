@@ -13,8 +13,9 @@ export const RELEASE_PHASES = [
   "publish",
   "flip-github",
   "sync-beta",
-  "macos",
+  // Closeout records pending apps; macOS retries must preserve its independent receipt.
   "closeout",
+  "macos",
 ] as const;
 export type ReleasePhase = (typeof RELEASE_PHASES)[number];
 const phaseSchema = z.enum(RELEASE_PHASES);
@@ -90,6 +91,7 @@ const releaseStateSchema = z.strictObject({
     appcastVerifiedAt: timestamp.optional(),
   }),
   closeout: z.strictObject({
+    websiteRunId: id.optional(),
     publishRunConclusion: z.string().optional(),
     runId: id.optional(),
     verifiedAt: timestamp.optional(),
@@ -129,6 +131,11 @@ export type ReleaseOptions = {
   from?: ReleasePhase;
   dryRun: boolean;
   status: boolean;
+  watch: boolean;
+  watchOnce: boolean;
+  watchJson: boolean;
+  watchPollSeconds: number;
+  watchTimeoutSeconds: number;
   approvePublication: boolean;
   cutSha?: string;
   confirmCutSha?: string;
@@ -359,7 +366,9 @@ export function getReleasePhaseData(state: ReleaseState) {
 }
 export function resetReleasePhases(state: ReleaseState, from: ReleasePhase): void {
   const data = getReleasePhaseData(state);
-  for (const phase of RELEASE_PHASES.slice(RELEASE_PHASES.indexOf(from))) {
+  // Closeout and app publication have independent receipts and can restart separately.
+  const phases = from === "closeout" ? [from] : RELEASE_PHASES.slice(RELEASE_PHASES.indexOf(from));
+  for (const phase of phases) {
     state.history.push({
       at: new Date().toISOString(),
       phase,
@@ -370,7 +379,7 @@ export function resetReleasePhases(state: ReleaseState, from: ReleasePhase): voi
   }
 }
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
-type RunOptions = { allowFailure?: boolean; dryRunStdout?: string };
+type RunOptions = { allowFailure?: boolean; dryRunStdout?: string; timeoutMs?: number };
 export type ReleaseRunner = (
   bin: string,
   args: string[],
@@ -384,6 +393,12 @@ export type ReleaseContext = {
   log: (phase: ReleasePhase, message: string) => void;
   resume: (phase?: ReleasePhase, extra?: string[]) => string;
 };
+export function requireReleaseValue(value: string | undefined, name: string): string {
+  if (!value) {
+    throw new Error(`Missing ${name}; complete the preceding release phase.`);
+  }
+  return value;
+}
 function durationFromEnv(name: string, fallback: number): number {
   const value = process.env[name];
   if (value === undefined) {
@@ -394,11 +409,28 @@ function durationFromEnv(name: string, fallback: number): number {
   }
   return Number(value);
 }
-function spawnCommand(bin: string, args: string[]): Promise<CommandResult> {
+function spawnCommand(
+  bin: string,
+  args: string[],
+  options: RunOptions = {},
+): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    const timer =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGKILL");
+          }, options.timeoutMs);
+    const clear = () => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -407,8 +439,18 @@ function spawnCommand(bin: string, args: string[]): Promise<CommandResult> {
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ stdout, stderr, exitCode: code ?? 1 }));
+    child.on("error", (error) => {
+      clear();
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clear();
+      resolve({
+        stdout,
+        stderr: timedOut ? `command timed out after ${options.timeoutMs}ms` : stderr,
+        exitCode: timedOut ? 1 : (code ?? 1),
+      });
+    });
   });
 }
 function isGhGet(bin: string, args: string[]): boolean {
@@ -438,15 +480,30 @@ export function createReleaseRunner(
   execute: ReleaseRunner = spawnCommand,
 ): ReleaseRunner {
   return async (bin, args, options = {}) => {
+    if (
+      options.timeoutMs !== undefined &&
+      (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)
+    ) {
+      throw new Error("Release command timeout must be a positive integer.");
+    }
     if (dryRun) {
       console.log(`+ ${shellCommand(bin, args)}`);
       return { stdout: options.dryRunStdout ?? "", stderr: "", exitCode: 0 };
     }
     const attempts = isGhGet(bin, args) ? 4 : 1;
+    const deadline = options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs;
     let result: CommandResult = { stdout: "", stderr: "", exitCode: 1 };
     for (let attempt = 0; attempt < attempts; attempt++) {
+      const remaining = deadline === undefined ? undefined : deadline - Date.now();
+      if (remaining !== undefined && remaining <= 0) {
+        result = { stdout: "", stderr: "release command deadline exceeded", exitCode: 1 };
+        break;
+      }
       try {
-        result = await execute(bin, args);
+        result = await execute(bin, args, {
+          ...options,
+          timeoutMs: remaining === undefined ? undefined : Math.max(1, remaining),
+        });
       } catch (error) {
         result = {
           stdout: "",
@@ -454,11 +511,23 @@ export function createReleaseRunner(
           exitCode: 1,
         };
       }
-      if (result.exitCode === 0) {
+      if (result.exitCode === 0 && (deadline === undefined || Date.now() <= deadline)) {
         return result;
       }
+      if (result.exitCode === 0) {
+        result = { stdout: "", stderr: "release command deadline exceeded", exitCode: 1 };
+      }
       if (attempt + 1 < attempts) {
-        await delay(durationFromEnv("OPENCLAW_RELEASE_STABLE_BACKOFF_MS", 2000) * 2 ** attempt);
+        let backoff = durationFromEnv("OPENCLAW_RELEASE_STABLE_BACKOFF_MS", 2000) * 2 ** attempt;
+        if (deadline !== undefined) {
+          backoff = Math.min(backoff, Math.max(0, deadline - Date.now()));
+        }
+        if (deadline !== undefined && deadline <= Date.now()) {
+          break;
+        }
+        if (backoff > 0) {
+          await delay(backoff);
+        }
       }
     }
     if (!options.allowFailure) {

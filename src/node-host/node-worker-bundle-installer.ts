@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { createReadStream, type Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -14,11 +15,12 @@ import {
   type WorkerAdmissionHandshake,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
-import { extractErrorCode, hasErrnoCode } from "../infra/errors.js";
+import { extractErrorCode, hasErrnoCode, isMissingPathError } from "../infra/errors.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeDeployEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerEnv } from "../infra/runtime-worker-url.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
@@ -44,6 +46,7 @@ import {
   NodeWorkerTransferHttpError,
   withNodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
+import { replaceNodeWorkerDirectory } from "./node-worker-workspace-replacement.js";
 
 const INSTALL_RECEIPT = "bootstrap-receipt.json";
 const INSTALL_IGNORED_TOP_LEVEL = new Set([INSTALL_RECEIPT]);
@@ -284,7 +287,14 @@ async function readReceipt(bundleDir: string): Promise<WorkerAdmissionHandshake 
       await fsp.readFile(path.join(bundleDir, INSTALL_RECEIPT), "utf8"),
     ) as unknown;
     return validateWorkerAdmissionHandshake(raw) ? raw : undefined;
-  } catch {
+  } catch (error) {
+    // Missing or malformed cache receipts are repaired by the next installation.
+    if (!isMissingPathError(error) && !(error instanceof SyntaxError)) {
+      log.warn(
+        "Worker bundle receipt read failed; treating installation as missing. Check node-host storage permissions and disk health.",
+        { errorCode: extractErrorCode(error) },
+      );
+    }
     return undefined;
   }
 }
@@ -313,7 +323,15 @@ async function validateInstalledBundle(
     const root = await fsp.realpath(bundleDir);
     const entry = await fsp.realpath(path.join(root, WORKER_BUNDLE_ENTRY_PATH));
     return isPathInside(root, entry) && (await fsp.stat(entry)).isFile();
-  } catch {
+  } catch (error) {
+    // Invalid inventory is regenerable; filesystem failures still need a diagnostic.
+    const errorCode = extractErrorCode(error);
+    if (errorCode && !isMissingPathError(error)) {
+      log.warn(
+        "Worker bundle cache read failed; treating installation as missing. Check node-host storage permissions and disk health.",
+        { errorCode },
+      );
+    }
     return false;
   }
 }
@@ -329,45 +347,19 @@ async function removeStaleInstallStaging(bundlesRoot: string): Promise<void> {
   );
 }
 
-async function publishBundle(
-  destination: string,
-  staging: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const prior = `${destination}.previous-${process.pid}-${randomUUID()}`;
-  let movedPrior = false;
-  signal?.throwIfAborted();
-  try {
-    await fsp.rename(destination, prior);
-    movedPrior = true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-  try {
-    // Cancellation after moving the old install must restore it through the same rollback path.
-    signal?.throwIfAborted();
-    await fsp.rename(staging, destination);
-  } catch (error) {
-    if (movedPrior) {
-      await fsp.rename(prior, destination).catch(() => undefined);
-    }
-    throw error;
-  }
-  if (movedPrior) {
-    await fsp.rm(prior, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
 export class NodeWorkerBundleInstaller {
   readonly #root: string;
   readonly #packageRoot: string | null;
   readonly #operations = new KeyedAsyncQueue();
-  readonly #bundleGenerationsByNamespace = new Map<string, Map<string, number>>();
   readonly #currentGenerationByNamespace = new Map<string, number>();
   readonly #prewarmedBundles = new Set<string>();
+  readonly #pendingValidations = new Map<
+    string,
+    { build: WorkerAdmissionHandshake; result: Promise<boolean> }
+  >();
   readonly #workerEnv: NodeJS.ProcessEnv;
+  #prefetch: AbortController | undefined;
+  #foreground = 0;
 
   constructor(options: { root?: string; env?: NodeJS.ProcessEnv } = {}) {
     const env = options.env ?? process.env;
@@ -376,60 +368,88 @@ export class NodeWorkerBundleInstaller {
     this.#workerEnv = snapshotNodeWorkerEnv(env);
   }
 
-  #markPendingRetention(gatewayNamespace: string, bundleHash: string): void {
+  #recordInstall(gatewayNamespace: string): void {
     const generation = (this.#currentGenerationByNamespace.get(gatewayNamespace) ?? 0) + 1;
     this.#currentGenerationByNamespace.set(gatewayNamespace, generation);
-    const generations =
-      this.#bundleGenerationsByNamespace.get(gatewayNamespace) ?? new Map<string, number>();
-    generations.set(bundleHash, generation);
-    this.#bundleGenerationsByNamespace.set(gatewayNamespace, generations);
   }
 
-  async #prewarmBundle(bundleDir: string, signal?: AbortSignal): Promise<void> {
-    if (this.#prewarmedBundles.has(bundleDir)) {
-      return;
-    }
-    try {
-      await execFileAsync(
-        process.execPath,
-        [
-          ...resolveRuntimeArgs(),
-          path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH),
-          "--internal-worker-prewarm",
-        ],
-        {
-          cwd: bundleDir,
-          env: this.#workerEnv,
-          timeout: WORKER_PREWARM_TIMEOUT_MS,
-          windowsHide: true,
-          ...(signal ? { signal } : {}),
-        },
-      );
-    } catch (error) {
-      if (signal?.aborted) {
-        throw signal.reason ?? error;
-      }
-      throw error;
-    }
-    this.#prewarmedBundles.add(bundleDir);
-  }
-
-  async ensure(params: {
+  async ensure(request: {
     input: NodeWorkerBundleInstallInput;
     gatewayUrl: string;
     gatewayTlsFingerprint?: string;
     gatewayCloudflareAccess?: CloudflareAccessCredentials;
     signal?: AbortSignal;
   }): Promise<WorkerAdmissionHandshake> {
-    const { input } = params;
+    const { input } = request;
+    if (input.prefetch && (this.#prefetch || this.#foreground > 0)) {
+      return input.build;
+    }
+    const prefetch = input.prefetch ? new AbortController() : undefined;
+    const params = prefetch
+      ? {
+          ...request,
+          signal: AbortSignal.any([prefetch.signal, ...(request.signal ? [request.signal] : [])]),
+        }
+      : request;
+    if (prefetch) {
+      this.#prefetch = prefetch;
+    } else {
+      this.#foreground++;
+      this.#prefetch?.abort(new Error("worker bundle prefetch yielded to a session"));
+    }
     // One namespace owns every staging sibling, so serialize it before sweeping crash residue.
     const key = input.gatewayNamespace;
-    return await this.#operations.enqueue(key, async () => {
-      try {
+    const bundlesRoot = path.join(this.#root, key, "bundles");
+    const destination = path.join(bundlesRoot, input.build.bundleHash);
+    try {
+      params.signal?.throwIfAborted();
+      // Share read-only checks after prewarm; downloads and child execution keep caller custody.
+      if (!input.prefetch && this.#prewarmedBundles.has(destination)) {
+        const validationBuild = input.build;
+        const validationDestination = destination;
+        let pending = this.#pendingValidations.get(key);
+        if (!pending || !sameWorkerBuild(pending.build, validationBuild)) {
+          pending = {
+            build: validationBuild,
+            result: this.#operations.enqueue(key, () =>
+              validateInstalledBundle(validationDestination, validationBuild),
+            ),
+          };
+          this.#pendingValidations.set(key, pending);
+        }
+        let valid: boolean;
+        try {
+          valid = await pending.result;
+        } finally {
+          // Installed files remain mutable: only overlapping readers share this scan.
+          if (this.#pendingValidations.get(key) === pending) {
+            this.#pendingValidations.delete(key);
+          }
+        }
+
+        if (valid) {
+          params.signal?.throwIfAborted();
+          this.#recordInstall(key);
+          return input.build;
+        }
+      }
+      // New callers must queue behind this possible replacement, not join an earlier read.
+      this.#pendingValidations.delete(key);
+      return await this.#operations.enqueue(key, async () => {
         params.signal?.throwIfAborted();
-        const bundlesRoot = path.join(this.#root, input.gatewayNamespace, "bundles");
-        const destination = path.join(bundlesRoot, input.build.bundleHash);
-        const installed = await validateInstalledBundle(destination, input.build);
+        // Prefetch never repairs or activates an existing bundle; the session owns that work.
+        if (input.prefetch) {
+          try {
+            await fsp.lstat(destination);
+            return input.build;
+          } catch (error) {
+            if (!isMissingPathError(error)) {
+              throw error;
+            }
+          }
+        }
+        const installed =
+          !input.prefetch && (await validateInstalledBundle(destination, input.build));
         params.signal?.throwIfAborted();
         if (!installed) {
           await fsp.mkdir(bundlesRoot, { recursive: true, mode: 0o700 });
@@ -438,24 +458,45 @@ export class NodeWorkerBundleInstaller {
             path.join(bundlesRoot, `.staging-${input.build.bundleHash}-`),
           );
           try {
-            const archivePath = path.join(operationRoot, "bundle.tgz");
+            let archivePath = path.join(operationRoot, "bundle.tgz");
+            const prefetchedArchive = path.join(destination, "bundle.tgz");
             const staging = path.join(operationRoot, "root");
             params.signal?.throwIfAborted();
-            await acquireBundle({
-              packageRoot: this.#packageRoot,
-              gatewayUrl: params.gatewayUrl,
-              gatewayTlsFingerprint: params.gatewayTlsFingerprint,
-              gatewayCloudflareAccess: params.gatewayCloudflareAccess,
-              input,
-              destination: archivePath,
-              signal: params.signal,
-            });
-            params.signal?.throwIfAborted();
-            await verifyBundleArchive({
-              destination: archivePath,
-              archive: input.archive,
-              signal: params.signal,
-            });
+            if (!input.prefetch) {
+              try {
+                await verifyBundleArchive({
+                  destination: prefetchedArchive,
+                  archive: input.archive,
+                  signal: params.signal,
+                });
+                archivePath = prefetchedArchive;
+              } catch {
+                params.signal?.throwIfAborted();
+              }
+            }
+            if (archivePath !== prefetchedArchive) {
+              await acquireBundle({
+                packageRoot: this.#packageRoot,
+                gatewayUrl: params.gatewayUrl,
+                gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+                gatewayCloudflareAccess: params.gatewayCloudflareAccess,
+                input,
+                destination: archivePath,
+                signal: params.signal,
+              });
+              params.signal?.throwIfAborted();
+              await verifyBundleArchive({
+                destination: archivePath,
+                archive: input.archive,
+                signal: params.signal,
+              });
+            }
+            if (input.prefetch) {
+              params.signal?.throwIfAborted();
+              // No extraction or native execution: foreground cancellation only drains I/O.
+              await replaceNodeWorkerDirectory(destination, operationRoot, "bundle", params.signal);
+              return input.build;
+            }
             await extractWorkerBundleArchive({
               tarballPath: archivePath,
               destination: staging,
@@ -471,7 +512,7 @@ export class NodeWorkerBundleInstaller {
             } finally {
               await receipt.close();
             }
-            await publishBundle(destination, staging, params.signal);
+            await replaceNodeWorkerDirectory(destination, staging, "bundle", params.signal);
             if (!(await validateInstalledBundle(destination, input.build))) {
               throw new Error("published worker bundle failed validation");
             }
@@ -481,35 +522,65 @@ export class NodeWorkerBundleInstaller {
         }
         params.signal?.throwIfAborted();
         if (input.bundlePrewarm) {
-          await this.#prewarmBundle(destination, params.signal);
+          const prewarmSignal = params.signal;
+          if (!this.#prewarmedBundles.has(destination)) {
+            const entry = resolveRuntimeDeployEntrypointUrl("worker", destination);
+            try {
+              await execFileAsync(
+                process.execPath,
+                [...resolveRuntimeArgs(), fileURLToPath(entry), "--internal-worker-prewarm"],
+                {
+                  cwd: destination,
+                  env: resolveRuntimeWorkerEnv(entry, this.#workerEnv),
+                  timeout: WORKER_PREWARM_TIMEOUT_MS,
+                  windowsHide: true,
+                  ...(prewarmSignal ? { signal: prewarmSignal } : {}),
+                },
+              );
+            } catch (error) {
+              if (prewarmSignal?.aborted) {
+                throw prewarmSignal.reason ?? error;
+              }
+              throw error;
+            }
+            this.#prewarmedBundles.add(destination);
+          }
         }
         params.signal?.throwIfAborted();
-        this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
-        return structuredClone(input.build);
-      } catch (error) {
-        if (error instanceof NodeWorkerBundleInstallError) {
-          throw error;
-        }
-        if (error instanceof NodeWorkerTransferHttpError) {
-          throw new NodeWorkerBundleInstallError(
-            error.reason === "tls-fingerprint-mismatch"
-              ? "worker-bundle-install-failed: gateway TLS fingerprint mismatch"
-              : error.reason === "cloudflare-access-requires-tls"
-                ? "worker-bundle-install-failed: Cloudflare Access credentials require HTTPS"
-                : "worker-bundle-install-failed: gateway transfer is unavailable",
-            { cause: error },
-          );
-        }
-        const detail = truncateUtf16Safe(
-          redactSensitiveText(error instanceof Error ? error.message : String(error)),
-          512,
-        );
+        this.#recordInstall(input.gatewayNamespace);
+        return input.build;
+      });
+    } catch (error) {
+      if (error instanceof NodeWorkerBundleInstallError) {
+        throw error;
+      }
+      if (error instanceof NodeWorkerTransferHttpError) {
         throw new NodeWorkerBundleInstallError(
-          `worker-bundle-install-failed: ${detail || "bundle installation did not complete"}`,
+          error.reason === "tls-fingerprint-mismatch"
+            ? "worker-bundle-install-failed: gateway TLS fingerprint mismatch"
+            : error.reason === "cloudflare-access-requires-tls"
+              ? "worker-bundle-install-failed: Cloudflare Access credentials require HTTPS"
+              : "worker-bundle-install-failed: gateway transfer is unavailable",
           { cause: error },
         );
       }
-    });
+      const detail = truncateUtf16Safe(
+        redactSensitiveText(error instanceof Error ? error.message : String(error)),
+        512,
+      );
+      throw new NodeWorkerBundleInstallError(
+        `worker-bundle-install-failed: ${detail || "bundle installation did not complete"}`,
+        { cause: error },
+      );
+    } finally {
+      if (prefetch) {
+        if (this.#prefetch === prefetch) {
+          this.#prefetch = undefined;
+        }
+      } else {
+        this.#foreground--;
+      }
+    }
   }
 
   async inspect(params: {
@@ -534,8 +605,8 @@ export class NodeWorkerBundleInstaller {
   async retain(params: {
     gatewayNamespace: string;
     bundleHashes: readonly string[];
-    acknowledgedGeneration?: number;
   }): Promise<{ deleted: number; hasMore: boolean; generation: number }> {
+    this.#pendingValidations.delete(params.gatewayNamespace);
     return await this.#operations.enqueue(params.gatewayNamespace, async () => {
       const bundlesRoot = path.join(this.#root, params.gatewayNamespace, "bundles");
       let entries: Dirent[];
@@ -552,22 +623,6 @@ export class NodeWorkerBundleInstaller {
         throw error;
       }
       const protectedHashes = new Set(params.bundleHashes);
-      const generations =
-        this.#bundleGenerationsByNamespace.get(params.gatewayNamespace) ??
-        new Map<string, number>();
-      const acknowledgedGeneration = params.acknowledgedGeneration ?? 0;
-      for (const [bundleHash, generation] of generations) {
-        if (generation > acknowledgedGeneration) {
-          protectedHashes.add(bundleHash);
-        } else {
-          generations.delete(bundleHash);
-        }
-      }
-      if (generations.size > 0) {
-        this.#bundleGenerationsByNamespace.set(params.gatewayNamespace, generations);
-      } else {
-        this.#bundleGenerationsByNamespace.delete(params.gatewayNamespace);
-      }
       const candidates = entries
         .filter(
           (entry) =>

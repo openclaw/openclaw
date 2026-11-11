@@ -5,6 +5,7 @@ import type {
   ToolKind,
 } from "@agentclientprotocol/sdk";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   hasNonEmptyString,
@@ -13,6 +14,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readParsedField } from "../utils/string-readers.js";
 
 type GatewayAttachment = {
   type: string;
@@ -102,24 +104,6 @@ function normalizeToolLocationPath(value: string): string | undefined {
   return trimmed;
 }
 
-function normalizeToolLocationLine(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const line = Math.floor(value);
-  return line > 0 ? line : undefined;
-}
-
-function extractToolLocationLine(record: Record<string, unknown>): number | undefined {
-  for (const key of TOOL_LOCATION_LINE_KEYS) {
-    const line = normalizeToolLocationLine(record[key]);
-    if (line !== undefined) {
-      return line;
-    }
-  }
-  return undefined;
-}
-
 function addToolLocation(
   locations: Map<string, ToolCallLocation>,
   rawPath: string,
@@ -140,11 +124,7 @@ function addToolLocation(
       locations.delete(existingKey);
     }
   }
-  const locationKey = `${path}:${line ?? ""}`;
-  if (locations.has(locationKey)) {
-    return;
-  }
-  locations.set(locationKey, line ? { path, line } : { path });
+  locations.set(`${path}:${line ?? ""}`, line ? { path, line } : { path });
 }
 
 function collectLocationsFromTextMarkers(
@@ -188,7 +168,11 @@ function collectToolLocations(
   }
 
   const record = value as Record<string, unknown>;
-  const line = extractToolLocationLine(record);
+  const line = readParsedField(
+    record,
+    TOOL_LOCATION_LINE_KEYS,
+    (lineValue) => floorPositiveFiniteNumber(lineValue) || undefined,
+  );
   for (const key of TOOL_LOCATION_PATH_KEYS) {
     const rawPath = record[key];
     if (typeof rawPath === "string") {
@@ -314,10 +298,7 @@ export function extractToolCallContent(value: unknown): ToolCallContent[] | unde
       }
     }
     if (texts.length === 0) {
-      const fallbackText =
-        readStringValue(record.text) ??
-        readStringValue(record.message) ??
-        readStringValue(record.error);
+      const fallbackText = readParsedField(record, ["text", "message", "error"], readStringValue);
       if (hasNonEmptyString(fallbackText)) {
         texts.push(fallbackText);
       }

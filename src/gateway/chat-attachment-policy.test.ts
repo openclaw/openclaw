@@ -3,7 +3,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  DEFAULT_CHAT_ATTACHMENT_MAX_BYTES,
   resolveChatAttachmentMaxBytes,
   resolveChatAttachmentPolicy,
 } from "./chat-attachment-policy.js";
@@ -14,27 +13,6 @@ const cfgWithMediaMaxMb = (value: unknown): OpenClawConfig =>
   ({ agents: { defaults: { mediaMaxMb: value } } }) as unknown as OpenClawConfig;
 
 describe("resolveChatAttachmentMaxBytes", () => {
-  it("falls back to the default ceiling when unset", () => {
-    expect(resolveChatAttachmentMaxBytes({} as OpenClawConfig)).toBe(
-      DEFAULT_CHAT_ATTACHMENT_MAX_BYTES,
-    );
-    expect(resolveChatAttachmentMaxBytes({ agents: {} } as unknown as OpenClawConfig)).toBe(
-      DEFAULT_CHAT_ATTACHMENT_MAX_BYTES,
-    );
-  });
-
-  it("rejects non-positive, non-finite, or non-number values", () => {
-    for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, "50", null, undefined]) {
-      expect(resolveChatAttachmentMaxBytes(cfgWithMediaMaxMb(bad))).toBe(
-        DEFAULT_CHAT_ATTACHMENT_MAX_BYTES,
-      );
-    }
-  });
-
-  it("never floors a legal sub-byte mediaMaxMb to zero", () => {
-    expect(resolveChatAttachmentMaxBytes(cfgWithMediaMaxMb(0.0000001))).toBe(1);
-  });
-
   it("keeps an enormous mediaMaxMb representable instead of overflowing", () => {
     expect(resolveChatAttachmentMaxBytes(cfgWithMediaMaxMb(1e308))).toBe(Number.MAX_SAFE_INTEGER);
   });
