@@ -2911,6 +2911,7 @@
                       "cli/cron",
                       "cli/connect",
                       "cli/devices",
+                      "cli/id",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox",

@@ -28,7 +28,7 @@
         "type": "integer",
         "minimum": 0,
         "maximum": 1000,
-        "default": 10
+        "default": 0
       },
       "everyMinutes": {
         "type": "integer",
@@ -46,7 +46,7 @@
   "uiHints": {
     "everyToolCalls": {
       "label": "Review every N tool calls",
-      "help": "Review after this many tool calls in a conversation. 0 turns this trigger off."
+      "help": "Also review after this many tool calls in a conversation. Default 0 (off)."
     },
     "everyMinutes": {
       "label": "Review every N minutes",
