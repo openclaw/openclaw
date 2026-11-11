@@ -156,21 +156,23 @@ describe("historical page recovery context", () => {
         const before = await raw();
         const active = await read({ max: 20, offset: 0 });
         expect(active.messages.map(readChatHistoryMessageId)).toEqual(["user", "partial"]);
-        expect(active.messages.some(readRunFailureNotice)).toBe(false);
+        expect(active.messages.some((message) => readRunFailureNotice(message))).toBe(false);
         expect(active.messages[1]).toMatchObject({ content: partial.content });
         expect(active.messages[1]).not.toHaveProperty("stopReason");
         await fail("recovered-run");
         await fail("recovered-run");
         const settled = await read({ max: 20, offset: 0 });
-        expect(settled.messages.map(readRunFailureNotice).filter(Boolean)).toEqual([
+        expect(
+          settled.messages.map((message) => readRunFailureNotice(message)).filter(Boolean),
+        ).toEqual([
           {
             runId: "recovered-run",
-            summary: "Your request couldn't be completed: All model attempts failed",
+            summary: "Your request couldn't be completed.",
           },
         ]);
         expect(settled.messages[1]).toMatchObject({ content: partial.content });
         const older = await read({ max: 2, offset: 1 });
-        expect(older.messages.some(readRunFailureNotice)).toBe(false);
+        expect(older.messages.some((message) => readRunFailureNotice(message))).toBe(false);
         expect(older.messages).toContainEqual(
           expect.objectContaining({ content: partial.content }),
         );

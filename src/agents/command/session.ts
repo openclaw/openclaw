@@ -700,7 +700,9 @@ export async function resolveSession(
     sessionId,
     sessionKey,
     sessionEntry: resolvedSessionEntry,
-    storePath,
+    // Nested command/runner admission must retain the selected memory owner,
+    // not create a second controller under the configured durable store.
+    storePath: memory?.path ?? storePath,
     isNewSession,
     previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
     automaticReset,

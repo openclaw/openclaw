@@ -181,7 +181,7 @@ suite.define(() => {
         __mockError: { code: "INVALID_REQUEST", message: "Transcript export exceeds 4 MiB" },
       });
       await click(reader, "Download JSONL");
-      await reader.getByRole("alert").filter({ hasText: "Download failed" }).waitFor();
+      await reader.getByRole("alert").filter({ hasText: "Couldn’t download" }).waitFor();
       await control(page, "link", "Meeting capture").click();
       const capture = page.locator("openclaw-meeting-capture-settings");
       await text(capture, "Not active").waitFor();
@@ -227,7 +227,8 @@ suite.define(() => {
         await gateway.setMethodResponse("transcripts.list", {
           __mockError: { code: "FORBIDDEN", message: "Shared archive restricted" },
         });
-        await click(page, "Refresh");
+        await click(page, "More actions");
+        await control(page, "menuitem", "Refresh").click();
         await control(page, "heading", "Transcript access is restricted").waitFor();
         expect(await page.locator(".transcripts-list__entry").count()).toBe(0);
       },

@@ -236,7 +236,7 @@ suite.define(() => {
       };
       await page.goto(suite.server.baseUrl);
       await gateway.waitForRequest("connect");
-      await page.locator(".connect-splash").waitFor();
+      await page.locator(".gateway-connection-view").waitFor();
       expect(failure.chunkDocumentCount()).toBe(0);
       await rejectLogin();
       const error = page.locator(".lazy-view-error");

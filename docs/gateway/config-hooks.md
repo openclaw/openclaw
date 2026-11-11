@@ -358,6 +358,8 @@ are available, and renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt 
 Do not start a second foreground watcher on the same listener. Setup output can
 contain tokens; see the [CLI reference](/cli/webhooks).
 
+The watcher probes the selected Gog executable. Gog v0.48.0 and supporting builds use `--token-env` and `--hook-token-env` automatically. Older Gog and inconclusive probes keep the existing connection working through legacy arguments, with one warning per watcher lifecycle; these connections remain affected by local process-argument token exposure until Gog is upgraded. Serve retries never downgrade environment transport. Startup does not upgrade packages. Interactive setup/run and explicit `openclaw doctor --repair` can upgrade eligible, unpinned Homebrew installations; custom wrappers and other installations remain operator-managed. After upgrading Gog, restart the watcher or Gateway. See [compatibility and upgrades](/cli/webhooks#webhooks-gmail-run). A started watcher is not readiness or registration proof.
+
 A successful push or hook response is transport/admission evidence, not proof of
 completed email processing or delivery. Verify the restricted reader through
 [logs and its run output](/automation/cron-jobs#verify-the-reader-boundary). For a

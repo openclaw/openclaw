@@ -91,7 +91,9 @@ vi.mock("../state/openclaw-state-lease-worker-operation.js", () => ({
     return result;
   },
 }));
+// mock-isolation: Synthetic checkout admission must not enter the real shared-state lifecycle.
 vi.mock("../state/openclaw-state-db-cache.js", () => ({
+  openClawStateDatabaseCache: { getKnownOpenClawStateDatabaseIdentity: () => undefined },
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
     databasePath,
     assertCurrent() {},

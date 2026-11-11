@@ -11,7 +11,6 @@ import type { ApplicationContext } from "../../app/context-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { DevicesPageDataState } from "../../lib/nodes/page-operations.ts";
 
-type PolicyKind = "bindings" | "approvals";
 type SaveScope = {
   state: DevicesPageDataState;
   gateway: ApplicationContext["gateway"] | null;
@@ -19,14 +18,16 @@ type SaveScope = {
   target: string | null;
 };
 
+const SAVED_NOTICE_MS = 2400;
+
 export function createDevicePolicyActions(options: {
   scope: Accessor<SaveScope>;
   canSave(): boolean;
   canEdit(): boolean;
   runtimeConfig(): ApplicationContext["runtimeConfig"];
   isCurrent(view: SaveScope): boolean;
-  read(kind: PolicyKind): Refreshable<Accessor<unknown>>;
-  run(kind: PolicyKind): Promise<unknown>;
+  read(): Refreshable<Accessor<unknown>>;
+  run(): Promise<unknown>;
   publish(): void;
 }) {
   const scope = createMemo(options.scope, {
@@ -38,22 +39,41 @@ export function createDevicePolicyActions(options: {
   });
   const presentation = createMemo(() => {
     const current = scope();
-    const [configSaving, setConfigSaving] = createOptimistic(false);
     const [approvalsSaving, setApprovalsSaving] = createOptimistic(false);
-    return { ...current, configSaving, setConfigSaving, approvalsSaving, setApprovalsSaving };
+    return { ...current, approvalsSaving, setApprovalsSaving };
   });
   let lifetime = Promise.withResolvers<void>();
+  let savedNotice: { state: DevicesPageDataState; timer: ReturnType<typeof setTimeout> } | null =
+    null;
+  const clearSavedNotice = () => {
+    if (savedNotice) {
+      clearTimeout(savedNotice.timer);
+      savedNotice.state.execApprovalsSavedNotice = false;
+      savedNotice = null;
+    }
+  };
+  const fadeSavedNotice = (state: DevicesPageDataState) => {
+    if (savedNotice) {
+      clearTimeout(savedNotice.timer);
+    }
+    savedNotice = {
+      state,
+      timer: setTimeout(() => {
+        clearSavedNotice();
+        options.publish();
+      }, SAVED_NOTICE_MS),
+    };
+  };
   const present = action(function* (
     view: ReturnType<typeof presentation>,
     currentLifetime: typeof lifetime,
     pending: Promise<unknown>,
-    kind: PolicyKind,
   ) {
     const isCurrent = () => currentLifetime === lifetime && options.isCurrent(view);
-    const snapshot = options.read(kind);
+    const snapshot = options.read();
     try {
       if (isCurrent()) {
-        (kind === "bindings" ? view.setConfigSaving : view.setApprovalsSaving)(true);
+        view.setApprovalsSaving(true);
         affects(snapshot);
       }
       // Retirement releases presentation; the plain owner still settles its write.
@@ -63,7 +83,7 @@ export function createDevicePolicyActions(options: {
       }
     } catch (error) {
       if (isCurrent()) {
-        view.state.lastError = formatUiError(error);
+        view.state.execApprovalsError = formatUiError(error);
         options.publish();
       }
     }
@@ -88,22 +108,26 @@ export function createDevicePolicyActions(options: {
         }
       }
     },
-    configSaving: () => presentation().configSaving(),
     approvalsSaving: () => presentation().approvalsSaving(),
     retire() {
+      clearSavedNotice();
       lifetime.resolve();
       lifetime = Promise.withResolvers<void>();
     },
-    async save(kind: PolicyKind) {
+    async save() {
       if (!options.canSave()) {
         return;
       }
       const view = presentation();
       const currentLifetime = lifetime;
-      const pending = options.run(kind);
+      const pending = options.run();
+      void pending.then(
+        () => fadeSavedNotice(view.state),
+        () => undefined,
+      );
       // Publish the owner's admitted operation before opening its presentation.
       await Promise.resolve();
-      return present(view, currentLifetime, pending, kind);
+      return present(view, currentLifetime, pending);
     },
   };
 }

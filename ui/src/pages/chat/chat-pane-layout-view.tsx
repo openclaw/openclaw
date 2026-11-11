@@ -1,6 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createSignal, lazy, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -16,7 +17,6 @@ import { renderChatTopbarNotices } from "./chat-view-notices.tsx";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
 import type { ComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./components/chat-details.tsx";
-import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { PaneHeaderView } from "./components/chat-pane-header.tsx";
 import type { ChatPaneHeaderPresentation } from "./components/chat-pane-header.types.ts";
@@ -231,7 +231,7 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
         background={background}
       />
       <Show when={presented()}>
-        <ChatImageLightbox
+        <ImageLightboxItemView
           item={props.data.overlays.image}
           onClose={() => props.data.overlays.onCloseImage()}
         />

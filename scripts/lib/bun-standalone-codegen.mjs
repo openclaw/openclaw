@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { findBundledModuleRegion } from "./bundled-module-regions.mjs";
 
 const programOwners = [
   "src/media/staged-inputs.ts",
@@ -185,13 +186,17 @@ function staticProgramCalls(contents, parse) {
 }
 
 function receiverCaptureSource(contents, parse) {
-  const marker = `//#region ${receiverOwner}\n`;
-  const start = contents.indexOf(marker);
+  const region = findBundledModuleRegion(contents, receiverOwner);
   const calls = staticProgramCalls(contents, parse).filter(({ selection }) => selection);
-  if (start < 0 || calls.length !== 1 || calls[0].node.start < start) {
+  if (
+    !region ||
+    calls.length !== 1 ||
+    calls[0].node.start < region.start ||
+    calls[0].node.end > region.end
+  ) {
     throw new Error("Unsupported workspace rsync receiver capture layout");
   }
-  const prefix = contents.slice(0, start);
+  const prefix = contents.slice(0, region.start);
   const declarations = new Set(
     parse(prefix, { ecmaVersion: "latest", sourceType: "module" })
       .body.filter((node) => node.type === "VariableDeclaration")
@@ -291,7 +296,7 @@ export async function createStandaloneCodegenAdapter({
     const matches = candidates.filter(
       (entry) =>
         entry.startsWith(prefix) &&
-        fs.readFileSync(path.join(distRoot, entry), "utf8").includes(`//#region ${owner}\n`),
+        findBundledModuleRegion(fs.readFileSync(path.join(distRoot, entry), "utf8"), owner),
     );
     if (matches.length !== 1) {
       throw new Error(

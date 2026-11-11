@@ -40,6 +40,8 @@ function skipNamespaceEntry(id: string, name: string, installed: boolean) {
     id === ".tmp" ||
     id === ".cache/openclaw-pnpm-store" ||
     id === ".cache/vitest" ||
+    id === ".cache/openclaw-vitest-fs-cache" ||
+    id === ".cache/openclaw-node-compile-cache" ||
     id === "apps/macos/.build" ||
     id === "apps/macos/.build-local" ||
     id === "apps/macos-mlx-tts/.build" ||

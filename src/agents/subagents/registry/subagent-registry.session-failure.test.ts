@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, assert, expect, it } from "vitest";
 import * as runtimeConfig from "../../../config/runtime-snapshot.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
 import {
@@ -58,7 +58,12 @@ it.each(["error", "timeout"] as const)(
       setDiagnosticsEnabledForProcess(true);
       let repeatedWrites = 0;
       const unsubscribe = onWorkerRequestMetrics((kind, requestClass, phase) => {
-        if (kind === "sqlite_writer" && requestClass === "sessions" && phase === "completed") {
+        if (
+          kind === "sqlite_writer" &&
+          (requestClass === "session.entries.replace" ||
+            requestClass === "session.entry.replacements.commit") &&
+          phase === "completed"
+        ) {
           repeatedWrites++;
         }
       });
@@ -74,10 +79,19 @@ it.each(["error", "timeout"] as const)(
       );
       const notice = {
         customType: "run-failed-before-reply",
+        content: "Your request couldn't be completed.",
         display: true,
-        details: { runId: record.runId, error: reason.slice(0, 512) },
+        details: {
+          runId: record.runId,
+          error: expect.stringMatching(/^Repository base ref is missing\..*details$/),
+        },
       };
       expect(notices).toMatchObject([notice]);
+      const [stored] = notices;
+      assert(
+        isRecord(stored) && isRecord(stored.details) && typeof stored.details.error === "string",
+      );
+      expect(stored.details.error.length).toBeLessThanOrEqual(512);
       for (const status of ["running", "queued"] as const) {
         await persist({ execution: { status } });
         expectRecordFields(read(), { lastRunError, status: undefined });

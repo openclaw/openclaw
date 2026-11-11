@@ -1,6 +1,5 @@
 import { mkdir } from "node:fs/promises";
 import { backup } from "node:sqlite";
-import { queryObjects } from "node:v8";
 import { emitModelTransportError } from "@openclaw/ai/diagnostics";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
@@ -48,6 +47,7 @@ import {
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
   createSessionActivitySummaries,
@@ -531,9 +531,13 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       preparationStarted.resolve();
       return withinTest(preparation.promise, testSignal);
     });
-    await service.ensure(target, { ...read()!, skillsSnapshot: new SavedSkillSnapshot() });
+    const snapshot = await (async () => {
+      const skillsSnapshot = new SavedSkillSnapshot();
+      await service.ensure(target, { ...read()!, skillsSnapshot });
+      return new WeakRef(skillsSnapshot);
+    })();
     await withinTest(preparationStarted.promise, testSignal);
-    expect(queryObjects(SavedSkillSnapshot)).toBe(0);
+    await expectCollected(snapshot);
     await awaitPublication(() => preparation.resolve(prepared));
     expect(read()?.activitySummary).toMatchObject(summary(2));
   });

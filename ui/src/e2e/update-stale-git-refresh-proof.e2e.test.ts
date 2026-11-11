@@ -54,10 +54,10 @@ suite.define(() => {
           pathname: "/settings/appearance",
           routeId: "appearance",
         });
-        await gateway.deferNext("update.status");
+        const after = await gateway.deferNext("update.status", { refreshCheckout: true });
         await page.locator('a[href="/settings/updates"]').click();
         await waitForControlUiRoute(page, { pathname: "/settings/updates", routeId: "updates" });
-        await gateway.waitForRequest("update.status");
+        await gateway.waitForRequest("update.status", { after, match: { refreshCheckout: true } });
         const staleStatus = page.locator(".settings-status", { hasText: "12 commits behind" });
         await page.locator(".settings-status", { hasText: "Checking for updates…" }).waitFor();
         expect(
@@ -65,7 +65,9 @@ suite.define(() => {
         ).not.toHaveLength(0);
         const refreshedStatus = { sentinel: null, schedule: currentSchedule, updateAvailable };
         await gateway.setMethodResponse("update.status", refreshedStatus);
-        await gateway.resolveDeferred("update.status", refreshedStatus);
+        await gateway.resolveDeferred("update.status", refreshedStatus, {
+          match: { refreshCheckout: true },
+        });
         await page.getByText("Up to date", { exact: true }).waitFor();
         await page
           .locator(".settings-status", { hasText: "Checking for updates…" })

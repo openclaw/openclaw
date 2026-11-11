@@ -343,7 +343,7 @@ it.each(["file", "directory", "symlink"] as const)(
   },
 );
 
-it.each(["timestamps and unrelated source", "runtime-written metadata"])(
+it.each(["timestamps and unrelated source", "runtime-written metadata", "CI transform cache"])(
   "restores captured compiler facts despite changes to %s",
   async (change) => {
     const f = fixture();
@@ -356,6 +356,8 @@ it.each(["timestamps and unrelated source", "runtime-written metadata"])(
     if (change === "timestamps and unrelated source") {
       fs.utimesSync(path.join(f.root, "src/value.js"), new Date(1000), new Date(1000));
       f.write("notes/unrelated.ts", 'export const unrelated = "second";\n');
+    } else if (change === "CI transform cache") {
+      f.write(".cache/openclaw-vitest-fs-cache/slots/project/0/_metadata.json", "{}\n");
     }
     const restored = await f.restore();
     expect(restored?.outputs).toEqual(manifest.outputs);

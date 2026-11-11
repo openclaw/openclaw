@@ -15,6 +15,7 @@ const TemplateCatalogCoordinateSchema = closedObject({
 });
 
 export const TemplatesCatalogSearchParamsSchema = closedObject({
+  overview: Type.Optional(Type.Boolean()),
   query: Type.Optional(Type.String({ maxLength: 200 })),
   category: Type.Optional(Type.String({ maxLength: 40 })),
   featured: Type.Optional(Type.Boolean()),
@@ -38,6 +39,17 @@ export const TemplatesCatalogEntrySchema = closedObject({
 
 export const TemplatesCatalogSearchResultSchema = closedObject({
   entries: Type.Array(TemplatesCatalogEntrySchema),
+  overview: Type.Optional(
+    closedObject({
+      featured: Type.Array(TemplatesCatalogEntrySchema),
+      sections: Type.Array(
+        closedObject({
+          category: NonEmptyString,
+          entries: Type.Array(TemplatesCatalogEntrySchema),
+        }),
+      ),
+    }),
+  ),
 });
 
 const TemplatesCatalogContentsSchema = closedObject({

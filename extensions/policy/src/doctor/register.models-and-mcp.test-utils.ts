@@ -669,8 +669,8 @@ describe("registerPolicyDoctorChecks", () => {
       mcp: {
         servers: {
           docs: {
-            command: "npx",
-            args: ["-y", "@modelcontextprotocol/server-fetch"],
+            command: "uvx",
+            args: ["mcp-server-fetch"],
           },
           remote: {
             url: "https://example.com/mcp",

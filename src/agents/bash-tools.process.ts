@@ -1,12 +1,12 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Static } from "typebox";
 import { attachInternalToolResultAcknowledgement } from "../../packages/agent-core/src/internal-hooks.js";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
+import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import type { ManagedRunStdin } from "../process/supervisor/types.js";
-import { sleep } from "../utils/sleep.js";
 import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
@@ -20,10 +20,10 @@ import {
   deleteSession,
   getFinishedSession,
   getSession,
-  hasPendingPollDelivery,
   listFinishedSessions,
   listRunningSessions,
   prepareSessionPoll,
+  waitForSessionPoll,
 } from "./bash-process-registry.js";
 import { createProcessToolScope } from "./bash-process-scope.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
@@ -243,13 +243,6 @@ function createAbortError(reason: unknown): Error {
   return createNamedAbortError(typeof reason === "string" ? reason : "Aborted");
 }
 
-function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
-  // Shared sleeps retain their timer so one-shot callers still receive the child's result.
-  return sleep(ms, signal).catch((error: unknown) => {
-    throw signal?.aborted ? createAbortError(signal.reason) : error;
-  });
-}
-
 // Unknown keys otherwise pass through the schema and silently turn a waiting poll into a no-wait poll.
 function assertSupportedProcessParams(args: unknown): void {
   if (isRecord(args) && Object.hasOwn(args, "timeoutMs")) {
@@ -294,6 +287,10 @@ export function createProcessTool(
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
+    interruptible: (args) => {
+      const action = asNonArrayRecord(args).action;
+      return action === "list" || action === "poll" || action === "log";
+    },
     outputSchema: ProcessToolOutputSchema,
     execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const assertCallerCurrent = () => {
@@ -317,6 +314,10 @@ export function createProcessTool(
 
       if (params.action === "list") {
         await scope.resolveAncestorScopes();
+        for (const session of listRunningSessions().filter((record) => isInScope(record))) {
+          await session.durable?.observe();
+          assertCurrent();
+        }
         return await runWithAgentToolSourceExecutionScope(assertSourceCurrent, async () => {
           assertCurrent();
           const sessions = [...listRunningSessions(), ...listFinishedSessions()]
@@ -381,8 +382,8 @@ export function createProcessTool(
       }
 
       const sessionId = params.sessionId;
-      const session = getSession(sessionId);
-      const finished = getFinishedSession(sessionId);
+      let session = getSession(sessionId);
+      let finished = getFinishedSession(sessionId);
       const assertSelectedCurrent = (record: ProcessSession) => {
         assertCurrent();
         if (
@@ -404,6 +405,12 @@ export function createProcessTool(
         if (isInScope(selected)) {
           assertSelectedCurrent(selected);
         }
+      }
+      if (session && isInScope(session) && session.durable) {
+        await session.durable.observe();
+        assertSelectedCurrent(session);
+        session = getSession(sessionId);
+        finished = getFinishedSession(sessionId);
       }
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
@@ -442,24 +449,15 @@ export function createProcessTool(
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           if (pollWaitMs > 0 && !scopedSession.exited) {
+            await waitForSessionPoll(scopedSession, pollWaitMs, signal);
+            if (signal?.reason instanceof ToolInterruptedByUser) {
+              return runningSessionResult(
+                scopedSession,
+                `Poll interrupted by the user. Background process ${sessionId} remains independently managed; use process poll to check it or process kill to stop it.`,
+              );
+            }
             if (signal?.aborted) {
               throw createAbortError(signal.reason);
-            }
-            // The wait budget is elapsed time, so a wall-clock step cannot end it early
-            // or stretch it past the requested timeout.
-            const deadline = performance.now() + pollWaitMs;
-            // Interactive children cannot progress until their pending prompt reaches the model.
-            while (
-              !scopedSession.exited &&
-              !hasPendingPollDelivery(scopedSession) &&
-              scopedSession.pendingStdoutChars + scopedSession.pendingStderrChars === 0 &&
-              !scopedSession.pendingOutputDropped &&
-              performance.now() < deadline
-            ) {
-              await sleepPollInterval(
-                Math.max(0, Math.min(250, deadline - performance.now())),
-                signal,
-              );
             }
           }
           return await runWithAgentToolSourceExecutionScope(assertSourceCurrent, async () => {
@@ -575,6 +573,11 @@ export function createProcessTool(
               return failText(controlError);
             }
             const stdin = scopedSession.stdin;
+            if (scopedSession.durable) {
+              return failText(
+                "Durable processes have no interactive input; use a non-durable process for write/send-keys/submit/paste.",
+              );
+            }
             if (!isWritableStdin(stdin)) {
               return failText(`Session ${sessionId} stdin is not writable.`);
             }

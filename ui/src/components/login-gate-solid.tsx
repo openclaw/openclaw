@@ -116,6 +116,7 @@ function FailureFooter(props: { feedback: LoginFailureFeedback }) {
     <footer class="login-gate__foot">
       <details class="login-gate__failure-detail">
         <summary>{t("login.failure.rawError")}</summary>
+        <For each={props.feedback.details ?? []}>{(detail) => <p>{detail}</p>}</For>
         <div class="login-gate__failure-raw mono">{props.feedback.rawError}</div>
       </details>
       <a

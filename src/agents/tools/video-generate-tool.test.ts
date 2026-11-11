@@ -28,8 +28,8 @@ import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-m
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../../secrets/provider-env-vars.js";
+import type { VideoGenerationProvider } from "../../video-generation/provider-types.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
-import type { VideoGenerationProvider } from "../../video-generation/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { createEmptyPreparedModelRuntimeFixture } from "../embedded-agent-runner/model.fixture.test-support.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";

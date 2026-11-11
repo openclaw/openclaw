@@ -10,6 +10,7 @@ import {
   discoverReusableReleaseChild,
   validateReusableReleaseChild,
 } from "../../scripts/lib/full-release-child-reuse.mjs";
+import { createReleaseEvidenceReplay } from "../../scripts/lib/release-evidence-replay.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const REPOSITORY = "openclaw/openclaw";
@@ -18,7 +19,10 @@ const TARGET = "b".repeat(40);
 const PUBLISHER = "Seal full release child evidence / Seal child receipt";
 const NOW = Date.parse("2026-09-23T12:00:00Z");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 function digest(value: string | Uint8Array) {
   return createHash("sha256").update(value).digest("hex");
@@ -208,6 +212,59 @@ async function fixture(
 }
 
 describe("independent release child reuse", () => {
+  it("replays exact raw child evidence but refuses fresh child and source-parent attempts", async () => {
+    const data = await fixture();
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    const { downloadArchive, ...deps } = data.deps;
+    const { archiveBytes } = await downloadArchive();
+    let zipReads = 0;
+    vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+      if ((input instanceof Request ? input.url : input.toString()).endsWith("/zip")) {
+        zipReads += 1;
+        return new Response(Uint8Array.from(archiveBytes));
+      }
+      return Response.json(data.artifact);
+    });
+    const github = async (endpoint: string) =>
+      endpoint === "actions/runs/77" ? data.parent : deps.github(endpoint);
+    const writer = createReleaseEvidenceReplay(data.request);
+    await validateReusableReleaseChild(selection, data.request, {
+      ...deps,
+      github,
+      token: "synthetic",
+      immutableReads: writer,
+    });
+    expect(zipReads).toBe(1);
+    const payload = JSON.parse(writer.serialize());
+    const replay = createReleaseEvidenceReplay(data.request, payload);
+    await validateReusableReleaseChild(selection, data.request, {
+      ...deps,
+      github,
+      token: "synthetic",
+      immutableReads: replay,
+    });
+    expect(zipReads).toBe(1);
+    data.parent.run_attempt = 2;
+    await expect(
+      validateReusableReleaseChild(selection, data.request, {
+        ...deps,
+        github,
+        token: "synthetic",
+        immutableReads: createReleaseEvidenceReplay(data.request, payload),
+      }),
+    ).rejects.toThrow(/source parent attempt/);
+    data.parent.run_attempt = 1;
+    data.run.run_attempt = 2;
+    await expect(
+      validateReusableReleaseChild(selection, data.request, {
+        ...deps,
+        github,
+        token: "synthetic",
+        immutableReads: createReleaseEvidenceReplay(data.request, payload),
+      }),
+    ).rejects.toThrow();
+  });
+
   it("accepts candidate-owned evidence outside main ancestry", async () => {
     const data = await fixture("normalCi", undefined, TARGET);
     const workflowRef = `release-ci/${TARGET.slice(0, 12)}-123`;

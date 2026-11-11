@@ -57,13 +57,8 @@ function mockStream(
   refreshTimeout?: () => void,
 ) {
   const source = responseStream(chunks, options);
-  const release = mockResponse(
-    new Response(source.stream, {
-      headers: contentType ? { "content-type": contentType } : undefined,
-    }),
-    undefined,
-    refreshTimeout,
-  );
+  const init = contentType ? { headers: { "content-type": contentType } } : undefined;
+  const release = mockResponse(new Response(source.stream, init), undefined, refreshTimeout);
   return { ...source, release };
 }
 
@@ -267,11 +262,14 @@ describe("buildGuardedModelFetch", () => {
     expect(managedStreamCleanupRegistrations).toHaveLength(0);
   });
 
-  it("synthesizes split JSON without a content type into SDK-readable SSE", async () => {
-    mockStream(['{"ok"', ": true}"]);
+  it.each([undefined, "\n", "\r\n", "\r"])("synthesizes %j JSON", async (ending) => {
+    const payload = { text: "first\nsecond 🦞", nested: { ok: true } };
+    const json = JSON.stringify(payload, null, ending ? 2 : undefined);
+    const body = ending ? json.replaceAll("\n", ending) : json;
+    mockStream([body.slice(0, 4), body.slice(4)], ending ? "application/json" : undefined);
     const response = await request(streaming);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
-    await expect(parseSse(response)).resolves.toEqual([{ ok: true }]);
+    await expect(parseSse(response)).resolves.toEqual([payload]);
   });
 
   it.each([undefined, "application/json; charset=utf-8"])(

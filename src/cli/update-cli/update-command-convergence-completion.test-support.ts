@@ -56,10 +56,7 @@ export function registerConvergenceCompletionTests({
         run: { runId: run.runId, env, executorFence: { assertCurrent() {} } },
       };
       const pluginUpdate = { ...successfulPluginUpdate, changed: false };
-      vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
-        ...pluginUpdate,
-        assessment: { kind: "no-payload-repair" },
-      });
+      vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce(pluginUpdate);
       vi.mocked(completePostCorePluginUpdate).mockImplementationOnce(async (params) => {
         expect(mocks.leaseActive).toBe(false);
         await params.beforeDoctor?.();

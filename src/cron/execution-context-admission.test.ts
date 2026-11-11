@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
 const readSessionEntryInWorker = vi.fn<(params: { sessionKey: string }) => Promise<unknown>>();
@@ -71,38 +72,6 @@ beforeEach(() => {
   generationRelease.mockReset();
   generationAssert.mockReset();
 });
-
-function operatorSource() {
-  return {
-    executionRevision: "exec-1",
-    source: {
-      version: 1,
-      agentId: "main",
-      sessionKey: PARENT_KEY,
-      sessionId: "parent-session",
-      lifecycleRevision: "rev-1",
-      sourceRunId: "source-run",
-      snapshot: {
-        profileId: "profile-1",
-        scopes: ["operator.admin"],
-        assignedRole: null,
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "grant-gen",
-          role: "operator",
-          authMethod: "device-token",
-        },
-        device: { deviceId: "device-1", key: "a".repeat(64) },
-        controlUiAdmin: true,
-        localOperator: false,
-        sourceIngress: "control-ui",
-      },
-    },
-  } as unknown as NonNullable<CronStoredJob["operatorSource"]>;
-}
 
 const LINKED_JOB = {
   owner: { agentId: "main", sessionKey: PARENT_KEY, accountId: "default" },
@@ -312,12 +281,15 @@ describe("admitScheduledOccurrence", () => {
       lifecycleRevision: "rev-1",
     });
     const occurrence = await admit(
-      job({ sessionTarget: `session:${PARENT_KEY}`, operatorSource: operatorSource() }),
+      job({
+        sessionTarget: `session:${PARENT_KEY}`,
+        operatorSource: createTestCronOperatorSource(PARENT_KEY),
+      }),
     );
     const runSessionKey = PARENT_KEY;
     expect(occurrence.mint({ ...RUN, runSessionKey }).result).toMatchObject({
       status: "ready",
-      facts: { authority: { owner: false, basis: "none" } },
+      facts: { authority: { owner: false, basis: "operator-source" } },
     });
     expect(
       occurrence.mint({ ...RUN, runSessionKey, operatorAuthority: RESTORED_OPERATOR }).result,

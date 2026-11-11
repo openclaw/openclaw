@@ -275,7 +275,7 @@ env:
 jobs:
   run_package_telegram_e2e:
     name: Run package Telegram E2E
-    runs-on: ${{ (inputs.runner_group || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP) || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((inputs.runner_group || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP) || '')), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
+    runs-on: ${{ (inputs.runner_group || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP) || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((inputs.runner_group || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP) || '')), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 60
     environment: qa-live-shared
     permissions:
@@ -292,13 +292,13 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          cache-key: scripts/e2e/Dockerfile
+          version: v0.23.0
 
       - name: Build Docker E2E image
-        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./scripts/e2e/Dockerfile

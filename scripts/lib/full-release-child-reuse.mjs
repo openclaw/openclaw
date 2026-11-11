@@ -9,6 +9,7 @@ import {
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,
+  readBoundedResponseBody,
 } from "./actions-artifact-archive.mjs";
 import { canonicalizeJsonValue } from "./canonical-json.mjs";
 import {
@@ -78,23 +79,52 @@ function dependencies(repository, deps) {
   };
   const github = async (endpoint) => {
     const timeout = Math.min(60_000, remaining());
-    return deps.github
-      ? deps.github(endpoint)
-      : JSON.parse(
-          await execGhReadAsync(["api", `repos/${repository}/${endpoint}`], {
+    const load = async () =>
+      deps.github
+        ? JSON.stringify(await deps.github(endpoint))
+        : execGhReadAsync(["api", "repos/" + repository + "/" + endpoint], {
             timeout,
             maxBuffer: 4 * 1024 * 1024,
             env: { ...process.env, OCTOPOOL_FRESH: "1" },
-          }),
-        );
+          });
+    const value = JSON.parse(
+      await (deps.immutableReads ? deps.immutableReads.text(endpoint, load) : load()),
+    );
+    deps.immutableReads?.observeRun(endpoint, value);
+    return value;
   };
   return {
     github,
+    immutableReads: deps.immutableReads,
     downloadArchive:
       deps.downloadArchive ??
       (async (params) => {
         if (params.token) {
-          return downloadExactActionsArtifactArchive(params);
+          return downloadExactActionsArtifactArchive({
+            ...params,
+            ...(deps.immutableReads
+              ? {
+                  fetchImpl: async (url, options) => {
+                    const route = String(url).replace(
+                      "https://api.github.com/repos/" + repository + "/",
+                      "",
+                    );
+                    if (!route.endsWith("/zip")) {
+                      return fetch(url, options);
+                    }
+                    const bytes = await deps.immutableReads.bytes(route, async () => {
+                      const response = await fetch(url, options);
+                      return readBoundedResponseBody(response, {
+                        expectedBytes: params.expected.artifactSizeBytes,
+                        maxBytes: MAX_RELEASE_ARTIFACT_BYTES,
+                        label: "Child evidence archive",
+                      });
+                    });
+                    return new Response(bytes);
+                  },
+                }
+              : {}),
+          });
         }
         // Local verifiers can use gh's authenticated session without exporting
         // its token. The shared verifier below still checks metadata and bytes.
@@ -355,6 +385,13 @@ async function validateEvidence(selection, request, deps) {
       ),
     "receipt does not match the complete live composite workload",
   );
+  if (deps.immutableReads) {
+    const currentParent = await deps.github("actions/runs/" + selection.sourceParentRunId);
+    requireEvidence(
+      currentParent.run_attempt === selection.sourceParentAttempt,
+      "source parent attempt changed",
+    );
+  }
   const parent = await deps.github(
     `actions/runs/${selection.sourceParentRunId}/attempts/${selection.sourceParentAttempt}`,
   );

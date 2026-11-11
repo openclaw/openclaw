@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -10,6 +18,8 @@ import {
 } from "./pr-prepare.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const retryTemplates = useAutoCleanupTempDirTracker(afterAll);
+let retryTemplate: { repoDir: string; headSha: string } | undefined;
 const createPublisher = createPublisherRepoFactory({
   cases: tempDirs,
   templates: useAutoCleanupTempDirTracker(afterAll),
@@ -21,8 +31,8 @@ function fixtureGit(cwd: string, args: string[]) {
   return result.stdout.trim();
 }
 
-function initRepo() {
-  const repoDir = join(tempDirs.make("openclaw-pr-gates-"), "repo");
+function initRepo(dirs = tempDirs) {
+  const repoDir = join(dirs.make("openclaw-pr-gates-"), "repo");
   mkdirSync(repoDir);
   const git = (...args: string[]) => fixtureGit(repoDir, args);
   git("init", "-q", "-b", "main");
@@ -43,10 +53,29 @@ function commitFile(repoDir: string, path: string, text: string, message = "chan
 }
 
 function makeRetryRepo() {
-  const { repoDir, git } = initRepo();
-  git("commit", "-q", "--allow-empty", "-m", "retry head");
-  const headSha = git("rev-parse", "HEAD");
-  return { repoDir, headSha };
+  if (!retryTemplate) {
+    const { repoDir, git } = initRepo(retryTemplates);
+    // Keep the pristine seed unchanged while each case copies its private Git state.
+    git(
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "gc.auto=0",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "retry head",
+    );
+    retryTemplate = { repoDir, headSha: git("rev-parse", "HEAD") };
+  }
+  const repoDir = join(tempDirs.make("openclaw-pr-gates-"), "repo");
+  // Cases mutate private refs, indexes, objects and gate receipts.
+  cpSync(retryTemplate.repoDir, repoDir, {
+    recursive: true,
+    mode: constants.COPYFILE_FICLONE,
+  });
+  return { repoDir, headSha: retryTemplate.headSha };
 }
 
 function changePlan(base: string, files = "''", docsOnly = false, changelogUpdate = false) {

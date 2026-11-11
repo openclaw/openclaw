@@ -1,9 +1,8 @@
 import { performance } from "node:perf_hooks";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { expectCollected } from "../../test-utils/retention.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import { createStubChildAdapter, type StubChildAdapter } from "./supervisor.test-support.js";
@@ -14,6 +13,24 @@ const { child, pty, readMemory } = vi.hoisted(() => ({
   pty: vi.fn(),
   readMemory: vi.fn<(path: string, callback: (error: null, text: Buffer) => void) => void>(),
 }));
+const memoryOwner = vi.hoisted(() => ({
+  setBudget: (_budget: { memoryBytes: number; swapBytes: number } | undefined) => {},
+}));
+vi.mock("../../shared/global-singleton.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../shared/global-singleton.js")>();
+  return {
+    ...actual,
+    resolveGlobalSingleton: (...args: Parameters<typeof actual.resolveGlobalSingleton>) => {
+      const owner = actual.resolveGlobalSingleton(...args);
+      if (args[0] === Symbol.for("openclaw.hostExecMemory") && owner && typeof owner === "object") {
+        memoryOwner.setBudget = (budget) => {
+          Object.assign(owner, { budget });
+        };
+      }
+      return owner;
+    },
+  };
+});
 vi.mock("./adapters/child.js", () => ({
   createChildAdapter: async (
     ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
@@ -26,6 +43,10 @@ vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: pty }));
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
   readFile: readMemory,
+}));
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs/promises")>()),
+  readdir: async () => [],
 }));
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
@@ -82,6 +103,7 @@ beforeEach(() => {
   supervisor = createProcessSupervisor();
 });
 afterEach(() => {
+  memoryOwner.setBudget(undefined);
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -107,11 +129,13 @@ describe("process supervisor", () => {
     const run = await spawn({ scopeKey: "scope" });
     adapter.settle(0);
     await run.wait();
-    const failure = new ExpiredCaller().fail();
+    const { failure, caller: callerRef } = (() => {
+      const caller = new ExpiredCaller();
+      return { failure: caller.fail(), caller: new WeakRef(caller) };
+    })();
     extinction.reject(failure);
     await run.waitForExtinction!().catch(() => undefined);
-    await nextTurn();
-    expect(queryObjects(ExpiredCaller)).toBe(0);
+    await expectCollected(callerRef);
     await expect(cleanup()).rejects.toBe(failure);
     await expect(supervisor.shutdown()).rejects.toBe(failure);
     expect(failure.code).toBe("ECLEANUP");
@@ -123,6 +147,7 @@ describe("process supervisor", () => {
     async (mode) => {
       vi.useFakeTimers();
       mockProcessPlatform("linux");
+      memoryOwner.setBudget({ memoryBytes: 128 * 1024, swapBytes: 0 });
       const read = readMemory.mockImplementation((_path, callback) => {
         callback(null, Buffer.from("Name:\tfixture\nVmRSS:\t256 kB\n"));
       });
@@ -136,27 +161,33 @@ describe("process supervisor", () => {
       const run = await supervisor.spawn({
         mode: mode === "pty" ? "pty" : "child",
         argv: ["fixture"],
-        memoryLimitBytes: 128 * 1024,
+        executionIntent: "agent-tool",
         ...(mode === "external" ? { cleanupOwnership: "external" } : {}),
       });
-      await vi.advanceTimersByTimeAsync(1000);
-      if (mode === "external") {
-        expect(read).not.toHaveBeenCalled();
+      try {
+        await vi.advanceTimersByTimeAsync(1000);
+        if (mode === "external") {
+          expect(read).not.toHaveBeenCalled();
+          adapter.settle(0);
+        } else {
+          expect(read).toHaveBeenCalledWith("/proc/4321/status", expect.any(Function));
+          expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+          await expect(run.wait()).resolves.toMatchObject({
+            reason: "memory-limit",
+            timedOut: false,
+            stderr: expect.stringContaining("shared host exec memory budget"),
+          });
+        }
+        await run.wait();
+        await supervisor.shutdown();
+        const reads = read.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(read).toHaveBeenCalledTimes(reads);
+      } finally {
         adapter.settle(0);
-      } else {
-        expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-        expect(read).toHaveBeenCalledWith("/proc/4321/status", expect.any(Function));
-        await expect(run.wait()).resolves.toMatchObject({
-          reason: "memory-limit",
-          timedOut: false,
-          stderr: expect.stringContaining("Command killed for exceeding its host memory bound"),
-        });
+        await run.wait();
+        await supervisor.shutdown();
       }
-      await run.wait();
-      await supervisor.shutdown();
-      const reads = read.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(5000);
-      expect(read).toHaveBeenCalledTimes(reads);
     },
   );
 
@@ -167,6 +198,31 @@ describe("process supervisor", () => {
     expect(child).toHaveBeenCalledWith(expect.objectContaining({ exactEnv: true, secretInput }));
     adapter.settle(0);
     await run.wait();
+  });
+
+  it("keeps shared session budgets separate from individual command cancellation", async () => {
+    const stopped = prepare(terminating());
+    const sibling = prepare();
+    const other = prepare();
+    const runs = await Promise.all([
+      spawn({ runId: "first", scopeKey: "session-a", executionIntent: "agent-tool" }),
+      spawn({ runId: "second", scopeKey: "session-a", executionIntent: "agent-tool" }),
+      spawn({ runId: "third", scopeKey: "session-b", executionIntent: "agent-tool" }),
+    ]);
+    expect(child.mock.calls.map(([input]) => input.executionScopeKey)).toEqual([
+      "session-a",
+      "session-a",
+      "session-b",
+    ]);
+    supervisor.cancel("first");
+    await expect(runs[0]!.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    expect(stopped.killMock).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    expect(sibling.killMock).not.toHaveBeenCalled();
+    expect(other.killMock).not.toHaveBeenCalled();
+    sibling.settle(0);
+    other.settle(0);
+    await Promise.all(runs.map((run) => run.wait()));
+    await supervisor.shutdown();
   });
 
   it("coalesces overlapping Windows deadlines while hard kill is pending", async () => {

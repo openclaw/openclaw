@@ -1,10 +1,9 @@
 // Owner-boundary allocation proof; run on the approved benchmark host with scripts/tsx.mjs.
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
-import { existsSync, readFileSync, writeSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -12,7 +11,8 @@ import { parseArgs } from "node:util";
 import type { SessionActorHotState } from "../../src/config/sessions/session-actor-contract.js";
 import type { PreparedSessionTranscriptHydration } from "../../src/config/sessions/session-history-read.types.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -36,10 +36,7 @@ assert.equal(
 );
 function markGc(phase: string, profilePath?: string) {
   if (tracing) {
-    writeSync(
-      1,
-      `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-    );
+    writeGatewayGcTraceMarker(phase, profilePath);
   }
 }
 const mode = values.mode;
@@ -63,22 +60,10 @@ const ownerUrl = new URL(
 const sourceUrl = values["owner-file"]
   ? pathToFileURL(path.resolve(values["owner-file"]))
   : ownerUrl;
-let ownerLoaded = false;
-if (values["owner-file"]) {
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url === ownerUrl.href) {
-        ownerLoaded = true;
-        const loaded = nextLoad(sourceUrl.href, context);
-        return { format: loaded.format, source: loaded.source, shortCircuit: true };
-      }
-      return nextLoad(url, context);
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl.href, values["owner-file"]);
 const { seedSessionActorTranscriptContext: seed, readSessionActorTranscriptContext: read } =
   await import("../../src/config/sessions/session-actor-transcript-replica.js");
-assert(!values["owner-file"] || ownerLoaded, "Requested owner replacement was not loaded");
+assert(!values["owner-file"] || wasOwnerReplaced(), "Requested owner replacement was not loaded");
 if (tracing) {
   assert(global.gc, "Trace identification requires --expose-gc");
   markGc("identify-start");
@@ -295,7 +280,7 @@ try {
     scope:
       "Synthetic owner seed/read pairs; no Gateway, turn latency, or live allocation-share claim",
     sourceSha256: hash("sha256", readFileSync(sourceUrl), "hex"),
-    ownerReplacement: ownerLoaded,
+    ownerReplacement: wasOwnerReplaced(),
     mode,
     operations,
     seedCalls: operations,

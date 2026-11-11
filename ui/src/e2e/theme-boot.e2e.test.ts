@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors } from "../test-helpers/rendered-colors.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
@@ -219,9 +220,34 @@ async function checkStartup({
           await gateway.waitForRequest("users.prefs.get");
           await page.locator(".agent-chat__composer-combobox textarea").waitFor();
           await twoFrames(page);
+          if (reload) {
+            await evaluateControlUiContext(page, (app) => {
+              const records: Array<string | null> = [];
+              const observer = new MutationObserver((entries) => {
+                records.push(...entries.map((entry) => entry.attributeName));
+              });
+              observer.observe(document.documentElement, { attributes: true });
+              const completed = new Promise<Array<string | null>>((resolve) => {
+                const stop = app.theme.subscribe(() => {
+                  stop();
+                  queueMicrotask(() => {
+                    records.push(...observer.takeRecords().map((record) => record.attributeName));
+                    observer.disconnect();
+                    resolve(records);
+                  });
+                });
+              });
+              Reflect.set(window, "themeReloadAppearanceWrites", completed);
+            });
+          }
           await gateway.resolveDeferred("users.prefs.get", profileResponse);
         }
         await ready(page);
+        if (reload && saved) {
+          expect(
+            await page.evaluate(() => Reflect.get(window, "themeReloadAppearanceWrites")),
+          ).toEqual([]);
+        }
         await assertThemeFrames(page, expectedAppearance);
       }
     },

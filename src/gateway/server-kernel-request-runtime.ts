@@ -62,6 +62,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       logHealth,
     });
   });
+  gatewayRequestContext.restartResumeWindows = runtime.opts.restartResumeWindows;
   const projectionReady = runtime.opts.updateCanary
     ? undefined
     : startupTrace.measure("sessions.projection", async () => {

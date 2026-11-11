@@ -96,7 +96,7 @@ suite.define(() => {
         }
         const activity = group.locator(".chat-subagent-activity");
         const rows = activity.locator(".chat-subagent-activity__row");
-        await expect.poll(() => rows.count()).toBe(4);
+        await expect.poll(() => rows.count()).toBe(3);
         const capture = async (name: string) => {
           if (!artifactDir) {
             return;
@@ -107,6 +107,8 @@ suite.define(() => {
           await writeFile(path.join(artifactDir, name), frame.png);
         };
         await capture("initial-wide.png");
+        // The lazy fallback has inert rows until live observation is mounted.
+        await activity.locator("button.chat-subagent-activity__row").first().waitFor();
         const emit = (text: string, runId = "child-run-0", revision = 1) =>
           gateway.emitGatewayEvent("session.observer", {
             sessionKey: children[0]!.key,
@@ -132,7 +134,7 @@ suite.define(() => {
           .waitFor();
         await capture("live-wide.png");
         expect(await activity.locator(".chat-reading-indicator").count()).toBe(0);
-        expect(await pane.locator(".chat-thread openclaw-chat-subagent-activity").count()).toBe(0);
+        expect(await pane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         await closeChatDetails(pane);
         for (const child of children) {
           expect(await gateway.getRequests("chat.history", { sessionKey: child.key })).toHaveLength(
@@ -321,9 +323,7 @@ suite.define(() => {
         const childReadsAfterClose = (await childHistoryReads()).length;
         await observeChild(1, 1, "Verifying the API response");
         expect(await childHistoryReads()).toHaveLength(childReadsAfterClose);
-        expect(
-          await activePane.locator(".chat-thread openclaw-chat-subagent-activity").count(),
-        ).toBe(0);
+        expect(await activePane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         expect(await indicator.textContent()).not.toContain("Backend implementation");
         // The ordinary launch tool remains readable and navigable; only the separate
         // transcript activity presentation is gone.
@@ -730,17 +730,13 @@ suite.define(() => {
           session: finishedChild,
           ancestorSessions: [finishedParent],
         });
-        // One closing line for the request: 77s since it was asked, not the
-        // resumed run's own 2s, with both runs' tokens.
+        // One closing line for the request with both runs' tokens; run duration
+        // belongs to the Worked summary, never a separate "Done in" line.
         const recap = activePane.locator(".chat-turn-recap");
         await recap.waitFor();
         expect(
           await recap.locator(":scope > span:not(.chat-turn-recap__claw)").allTextContents(),
-        ).toEqual([
-          "4.4k output tokens",
-          "·",
-          expect.stringMatching(/^Done in 1 minute,? 17 seconds$/),
-        ]);
+        ).toEqual(["4.4k output tokens"]);
         expect(await block.locator(".chat-turn-recap").count()).toBe(1);
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         // Completed duration and child navigation remain available in Subagents.

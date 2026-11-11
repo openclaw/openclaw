@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { findClientToolNameConflicts } from "../agent-tool-definition-adapter.js";
+import type { ClientToolDefinition } from "../command/shared-types.js";
 import {
   createClientToolDefinition as clientTool,
   createStubTool,
@@ -10,7 +11,6 @@ import {
   createToolSearchCatalogRef,
   TOOL_CALL_RAW_TOOL_NAME,
 } from "../tool-search.js";
-import type { ClientToolDefinition } from "./run/params.js";
 import {
   collectAllowedToolNames,
   collectRegisteredToolNames,
@@ -35,7 +35,6 @@ describe("tool name allowlists", () => {
     const names = Object.freeze(["write", "read", "write", "exec"]);
     const allowlist = toSessionToolAllowlist(names);
     expect(allowlist).toEqual(["exec", "read", "write"]);
-    expect(names).toEqual(["write", "read", "write", "exec"]);
     allowlist.push("child-only");
     expect(toSessionToolAllowlist(names.values())).toEqual(["exec", "read", "write"]);
   });

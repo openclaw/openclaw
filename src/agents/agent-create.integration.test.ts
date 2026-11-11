@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { expectBytesEqual, expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -191,7 +192,10 @@ it("restores only the configured held store after explicit creation, never throu
   expect(
     isHeld(resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }), "main"),
   ).toBeFalsy();
-  expect(await recovery.readBytes()).toEqual(recovery.bytes);
+  expectFilesEqual(
+    (await recovery.readBytes()).map((bytes) => ({ bytes })),
+    recovery.bytes.map((bytes) => ({ bytes })),
+  );
   expect(readAgentDeletionJournal("main", { env: state.env })).toBeUndefined();
   expect(await readAgentDeletionJournalStatusInWorker("main", { env: state.env })).toBe("absent");
   expect(isAgentDeletionBlocked("main", { env: state.env })).toBe(false);
@@ -287,7 +291,7 @@ it("restores a held custom filename only after its session store configuration s
   await state.writeConfig({ ...config, session: { store: target.path } });
   await expectCreation(params, { status: "created", agentId: target.agentId });
   expect(recovery.readHolds()).toEqual([]);
-  expect(await fs.readFile(target.path)).toEqual(recovery.bytes[0]);
+  expectBytesEqual(await fs.readFile(target.path), recovery.bytes[0]!, target.path);
 });
 
 it.each(["missing", "un-authored"] as const)(
@@ -323,7 +327,7 @@ it.each(["missing", "un-authored"] as const)(
     }
     await expectMissing(workspace, state.agentDir());
     expect(recovery.readHolds()).toEqual([target]);
-    expect(await fs.readFile(target.path)).toEqual(recovery.bytes[0]);
+    expectBytesEqual(await fs.readFile(target.path), recovery.bytes[0]!, target.path);
   },
 );
 
@@ -367,7 +371,7 @@ it.each(["bootstrap", "explicit"])(
     expect(commit).not.toHaveBeenCalled();
     await expectMissing(stagedFile, state.agentDir(target.agentId));
     expect(recovery?.readHolds()).toEqual([target]);
-    expect(await fs.readFile(target.path)).toEqual(recovery?.bytes[0]);
+    expectBytesEqual(await fs.readFile(target.path), recovery!.bytes[0]!, target.path);
   },
 );
 
@@ -413,7 +417,7 @@ it.each([
   });
   expect(result).toMatchObject(duplicate);
   expect(recovery.readHolds()).toEqual([target]);
-  expect(await fs.readFile(moved)).toEqual(recovery.bytes[0]);
+  expectBytesEqual(await fs.readFile(moved), recovery.bytes[0]!, moved);
   if (change.endsWith("after publication")) {
     expect(await state.readJsonConfig()).toHaveProperty("agents.entries.main");
     expect(rollback).not.toHaveBeenCalled();
@@ -458,7 +462,10 @@ it("keeps a restored main agent held until its new config entry is published", a
   expect(created).toMatchObject({ status: "created", agentId: "main" });
   expect(await state.readJsonConfig()).toHaveProperty("agents.entries.main");
   expect(recovery.readHolds()).toEqual(recovery.held.slice(1));
-  expect(await recovery.readBytes()).toEqual(recovery.bytes);
+  expectFilesEqual(
+    (await recovery.readBytes()).map((bytes) => ({ bytes })),
+    recovery.bytes.map((bytes) => ({ bytes })),
+  );
 });
 
 it("does not create an agent after delegated authority closes while awaiting the config lock", async () => {

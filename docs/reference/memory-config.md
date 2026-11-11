@@ -631,10 +631,12 @@ auto-injected.
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
 files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
-file entries are indexed exactly. Entries with the same resolved directory share one scan, and
-scans skip subdirectories that their patterns can prove irrelevant. Complex patterns retain
-conservative traversal. The builtin engine skips symlinks. When a configured root is a
-symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
+file entries are indexed exactly. Wildcards do not implicitly include dotfiles or hidden
+directories: use an explicit dot pattern such as `.*.md` or `.notes/**/*.md` to include them.
+Brace alternatives and extglobs are supported. Entries with the same resolved directory share
+one scan, and scans skip subdirectories that their patterns can prove irrelevant. The builtin
+engine skips symlinks. When a configured root is a symlink, `openclaw memory status` names the
+skipped root in text and JSON output and recommends
 configuring its resolved absolute directory instead.
 
 Set `evergreen: true` only for stable reference sources whose relevance should not fall as their
@@ -713,6 +715,11 @@ limits reported without a count (Mistral's "Too many tokens overall, split into
 more batches."), fall back to halving the rejected batch. Successful slices
 retain their input order and cache entries. A single input that still exceeds a
 per-input limit fails the pass and is reported.
+
+If an ordinary indexing request reaches its embedding watchdog timeout, OpenClaw
+halves the batch instead of resending the same request. Smaller successful slices
+retain their input order and cache entries. A single input that still times out
+fails the pass and is reported. Provider-owned timeout budgets stay unchanged.
 
 ---
 
@@ -930,7 +937,9 @@ before applying it. Source session transcripts remain in the session store.
 
 ## Dreaming
 
-Dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `memory.search`.
+Dreaming user settings for Memory CLI commands are configured under `plugins.entries.memory-core.config.dreaming`, not under `memory.search`.
+
+The managed Gateway dreaming sidecar may additionally read dreaming settings from the selected memory-slot owner (for example `plugins.entries.<memory-slot-owner>.config.dreaming`) when that plugin exposes them. Slot-owned Gateway settings are separate from any plugin-specific vector-native dreaming pipeline.
 
 Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as an implementation detail.
 

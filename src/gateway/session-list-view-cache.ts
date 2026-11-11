@@ -34,10 +34,13 @@ function scheduleRetentionReport() {
   }).unref();
 }
 
+function selectionEntryRefs(value: SessionEntrySelection | SessionListFilteredEntries) {
+  return value.entries.length + ("ownerEntries" in value ? value.ownerEntries.length : 0);
+}
+
 function selectionRefs(value: SessionEntrySelection | SessionListFilteredEntries) {
   return (
-    value.entries.length +
-    ("ownerEntries" in value ? value.ownerEntries.length : 0) +
+    selectionEntryRefs(value) +
     value.ownerFacet.length +
     (value.ownerSessionCounts?.length ?? 0) +
     (value.ownerSessionProfiles?.size ?? 0) +
@@ -45,17 +48,43 @@ function selectionRefs(value: SessionEntrySelection | SessionListFilteredEntries
   );
 }
 
-class SelectionPartitions extends WeakMap<object, SessionListFilteredEntries> {
+class SelectionPartitions extends Map<object, SessionListFilteredEntries> {
   refs = 0;
-  count = 0;
+  entryRefs = 0;
 
   override set(key: object, value: SessionListFilteredEntries) {
     const previous = this.get(key);
     this.refs += selectionRefs(value) - (previous ? selectionRefs(previous) : 0);
-    this.count += Number(!previous);
-    // Dead weak keys may overestimate retention until view eviction. Never undercount
-    // old partition arrays by scanning or trying to predict garbage collection.
+    this.entryRefs += selectionEntryRefs(value) - (previous ? selectionEntryRefs(previous) : 0);
     return super.set(key, value);
+  }
+
+  override delete(key: object) {
+    const previous = this.get(key);
+    if (previous) {
+      this.refs -= selectionRefs(previous);
+      this.entryRefs -= selectionEntryRefs(previous);
+    }
+    return super.delete(key);
+  }
+}
+
+export function retainCurrentSessionListPartitions(
+  retained: Map<object, SessionListFilteredEntries>,
+  partitions: Iterable<{ revision: object; entries: { size: number } }>,
+) {
+  // Only current nonempty partitions can be reused. Retire obsolete values and
+  // their charges together, without waiting for revision tokens to be collected.
+  const revisions = new Set<object>();
+  for (const partition of partitions) {
+    if (partition.entries.size) {
+      revisions.add(partition.revision);
+    }
+  }
+  for (const revision of retained.keys()) {
+    if (!revisions.has(revision)) {
+      retained.delete(revision);
+    }
   }
 }
 
@@ -219,16 +248,19 @@ export class SessionListViewCache {
     const rowRefs = (view.rows?.length ?? 0) + view.historyRefs;
     const entryRefs =
       (view.selection ? selectionRefs(view.selection) : 0) + (view.partitions?.refs ?? 0);
+    const pairRefs =
+      (view.selection ? selectionEntryRefs(view.selection) : 0) + (view.partitions?.entryRefs ?? 0);
     const refs = rowRefs + entryRefs;
-    // Eight-byte current row references/history IDs; conservative selection entries,
-    // vector/revision overhead and UTF-16 query keys. Duplicate current row strings
-    // are discounted separately while any view retains them.
+    // Selection vectors reference pairs owned by the selection index; charge their
+    // slots, not another pair per view. Facet/map records retain the larger estimate.
+    // Shared current row strings are discounted separately.
     const bytes =
       1024 +
       view.key.length * 2 +
       rowRefs * 8 +
-      entryRefs * 48 +
-      (view.partitions?.count ?? 0) * 64 +
+      pairRefs * 8 +
+      (entryRefs - pairRefs) * 48 +
+      (view.partitions?.size ?? 0) * 64 +
       (view.rowHistory?.length ?? 0) * 160 +
       (view.encodedBytes ?? 0);
     retainedRefs += refs - view.refs;
@@ -280,6 +312,7 @@ export class SessionListViewCache {
 
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
+  // Negative numbers encode a leading run [0, -rows); nonnegative numbers are singletons.
   type Fact = { encoded: string; fact: Partial<T>; rows: number | number[] };
   const prepared = new WeakMap<
     T,
@@ -289,7 +322,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       rawBytes: number;
       packed?: {
         row: GatewaySessionRow;
-        keys: string[];
+        fields: Fact[];
         prefix?: { json: string; utf8Bytes: number; retainedBytes: number };
       };
     }
@@ -299,14 +332,20 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     if (sessions.length < 2) {
       return { sessions, sharedFacts: [] };
     }
-    type SharedFact = { fact: Partial<T>; rows: number[] };
+    type SharedFact = { fact: Partial<T>; rows: number | number[] };
     const candidates = new Map<string, Fact>();
     const rows: GatewaySessionRow[] = [];
-    sessions.forEach((row, index) => {
+    const fieldCounts = new Uint32Array(sessions.length);
+    const fields: Fact[][] = [];
+    const referenceCounts = new Uint32Array(sessions.length);
+    const required = (row: T): GatewaySessionRow => {
       const { key, kind, updatedAt, sessionId, rowMode } = row;
-      const required = { key, kind, updatedAt, sessionId, rowMode };
-      rows.push(required);
-      let facts = prepared.get(row)?.facts;
+      return { key, kind, updatedAt, sessionId, rowMode };
+    };
+    const retainedRows = sessions.map((row, index) => {
+      let retained = prepared.get(row);
+      rows.push(retained?.packed?.row ?? required(row));
+      let facts = retained?.facts;
       if (!facts) {
         facts = [];
         let bytes = 0;
@@ -327,34 +366,77 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         }
         // Reserve a possible singleton delta without retaining its unused raw JSON.
         // Each optional one-field object contributes its property and one comma.
-        const rawBytes = JSON.stringify(required).length * 2 + bytes - facts.length * 2;
-        prepared.set(row, { facts, bytes, rawBytes });
+        const rawBytes = JSON.stringify(rows[index]).length * 2 + bytes - facts.length * 2;
+        retained = { facts, bytes, rawBytes };
+        prepared.set(row, retained);
       }
       for (const fact of facts) {
         const candidate = candidates.get(fact.encoded);
         if (candidate) {
           if (typeof candidate.rows === "number") {
-            candidate.rows = [candidate.rows, index];
+            if (candidate.rows === -index) {
+              candidate.rows--;
+            } else {
+              candidate.rows =
+                candidate.rows < 0
+                  ? Array.from({ length: -candidate.rows }, (_, i) => i)
+                  : [candidate.rows];
+              candidate.rows.push(index);
+            }
           } else {
             candidate.rows.push(index);
           }
         } else {
-          fact.rows = index;
+          fact.rows = index === 0 ? -1 : index;
           candidates.set(fact.encoded, fact);
         }
       }
+      return retained!;
     });
+    // A source can occur twice in one page; publishing one occurrence must not
+    // replace the comparison layout of its later aliases.
+    const previousRows = retainedRows.map((retained) => retained.packed);
+    // Compare each response-local layout against the immutable source's last packed row.
+    // Copy only the matching singleton prefix when that layout actually changes.
+    const writable = (index: number) => {
+      const previous = previousRows[index];
+      let row = rows[index]!;
+      if (previous && row === previous.row) {
+        row = required(sessions[index]!);
+        const prefix = previous.fields.slice(0, fieldCounts[index]);
+        for (const field of prefix) {
+          Object.assign(row, field.fact);
+        }
+        fields[index] = prefix;
+        rows[index] = row;
+      }
+      return row;
+    };
     // Facts with the same recipients share one reference, including common scalar defaults.
     const groups = new Map<string, SharedFact>();
     for (const candidate of candidates.values()) {
-      const recipients = candidate.rows;
+      let recipients = candidate.rows;
       // Recipient scratch belongs to this response, never to the retained row facts.
       candidate.rows = 0;
-      if (typeof recipients === "number") {
-        Object.assign(rows[recipients]!, candidate.fact);
+      if (typeof recipients === "number" && recipients >= -1) {
+        recipients = Math.max(0, recipients);
+        const previous = previousRows[recipients];
+        if (
+          !previous ||
+          rows[recipients] !== previous.row ||
+          previous.fields[fieldCounts[recipients]!] !== candidate
+        ) {
+          Object.assign(writable(recipients), candidate.fact);
+          (fields[recipients] ??= []).push(candidate);
+        }
+        fieldCounts[recipients]!++;
         continue;
       }
-      const key = recipients.join(",");
+      // Common defaults need no per-field copies of the same all-row index vector.
+      if (typeof recipients === "number" && recipients !== -sessions.length) {
+        recipients = Array.from({ length: -recipients }, (_, i) => i);
+      }
+      const key = typeof recipients === "number" ? "" : recipients.join(",");
       const group = groups.get(key);
       if (group) {
         Object.assign(group.fact, candidate.fact);
@@ -365,32 +447,45 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     const sharedFacts: Partial<T>[] = [];
     for (const group of groups.values()) {
       const reference = sharedFacts.push(group.fact) - 1;
-      for (const index of group.rows) {
-        (rows[index]!.sharedFacts ??= []).push(reference);
+      const count = typeof group.rows === "number" ? -group.rows : group.rows.length;
+      for (let offset = 0; offset < count; offset++) {
+        const index = typeof group.rows === "number" ? offset : group.rows[offset]!;
+        const position = referenceCounts[index]!++;
+        const previous = previousRows[index];
+        if (
+          previous &&
+          rows[index] === previous.row &&
+          previous.row.sharedFacts?.[position] === reference
+        ) {
+          continue;
+        }
+        const row = writable(index);
+        (row.sharedFacts ??= previous?.row.sharedFacts?.slice(0, position) ?? []).push(reference);
       }
     }
     for (let index = 0; index < rows.length; index++) {
-      const retained = prepared.get(sessions[index]!)!;
-      const row = rows[index]!;
-      const previous = retained.packed;
-      let keyCount = 0;
-      for (const key in row) {
-        if (key !== previous?.keys[keyCount++]) {
-          keyCount = -1;
-          break;
+      const retained = retainedRows[index]!;
+      const previous = previousRows[index];
+      const references = referenceCounts[index]!;
+      if (
+        previous &&
+        rows[index] === previous.row &&
+        (previous.fields.length !== fieldCounts[index] ||
+          (previous.row.sharedFacts?.length ?? 0) !== references)
+      ) {
+        const row = writable(index);
+        if (references > 0) {
+          row.sharedFacts = previous.row.sharedFacts!.slice(0, references);
         }
       }
-      // The immutable source owns values; only field order and response-local fact indexes
-      // can change its packed bytes. Retain one layout, never a cache of list shapes.
-      const sameKeys = previous && previous.keys.length === keyCount;
-      if (
-        sameKeys &&
-        previous.row.sharedFacts?.length === row.sharedFacts?.length &&
-        (row.sharedFacts?.every((ref, position) => ref === previous.row.sharedFacts?.[position]) ??
-          true)
-      ) {
-        rows[index] = previous.row;
-      } else {
+      const row = rows[index]!;
+      if (row !== previous?.row) {
+        const currentFields = fields[index] ?? [];
+        const sameKeys =
+          previous &&
+          currentFields.length === previous.fields.length &&
+          currentFields.every((field, i) => field === previous.fields[i]) &&
+          Boolean(row.sharedFacts) === Boolean(previous.row.sharedFacts);
         let prefix: NonNullable<typeof previous>["prefix"];
         if (sameKeys && row.sharedFacts) {
           // Packing appends numeric fact indexes last. All preceding fields and their
@@ -408,7 +503,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
           const suffix = JSON.stringify(row.sharedFacts) + "}";
           registerSerializedSessionRow(row, prefix.json + suffix, prefix.utf8Bytes + suffix.length);
         }
-        retained.packed = { row, keys: sameKeys ? previous.keys : Object.keys(row), prefix };
+        retained.packed = { row, fields: sameKeys ? previous.fields : currentFields, prefix };
       }
     }
     return { sessions: rows, sharedFacts };

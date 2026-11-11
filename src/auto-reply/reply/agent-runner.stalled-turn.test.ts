@@ -45,6 +45,7 @@ import { admitReplyTurn } from "./reply-turn-admission.js";
 import {
   isReplyOperationStalledBeforeOutput,
   resolveStalledTurnNoticeText,
+  STALLED_TURN_GUIDANCE,
 } from "./stalled-turn-recovery.js";
 import { createReplyParams } from "./test-helpers.js";
 
@@ -288,7 +289,7 @@ describe("runReplyAgent stalled turn continuation", () => {
     await settleStalledOwner(stalled);
     await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
     const recovery = drainedRuns.mock.calls[0]?.[0];
-    expect(recovery?.prompt).toContain("previous turn stopped making progress");
+    expect(recovery?.prompt).toContain(STALLED_TURN_GUIDANCE);
     await expectTranscriptOnlyRecovery(stalled, recovery);
     expect(recovery?.disableTools).toBeUndefined();
     const authoring = recovery?.run.skillLibraryAuthoring;
@@ -353,7 +354,7 @@ describe("runReplyAgent stalled turn continuation", () => {
       expect(stalled.runState.continueStalledTurn?.()).toBe(true);
       expect(queued.currentInboundContext?.fragments).toContainEqual({
         kind: "runtime-instruction",
-        text: expect.stringContaining("previous turn stopped making progress"),
+        text: expect.stringContaining(STALLED_TURN_GUIDANCE),
       });
       await settleStalledOwner(stalled);
       await settled.promise;

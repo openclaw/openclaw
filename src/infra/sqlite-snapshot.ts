@@ -2,6 +2,7 @@
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import {
   getPublishFileExclusiveFailureDetails,
@@ -12,7 +13,7 @@ import {
   syncDirectory,
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveSqliteFilesystemPath } from "./node-sqlite.js";
 import { pathEntryExists } from "./path-existence.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
@@ -54,6 +55,11 @@ import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { configureSqliteSnapshotPragmas } from "./sqlite-wal.js";
 
 export type { SqliteSnapshotValidator } from "./sqlite-snapshot.types.js";
+
+/** Reuse a bounded page cache when mappings are unavailable on an inspection copy. */
+export function configureSqliteSnapshotReadCache(database: DatabaseSync): void {
+  database.exec("PRAGMA cache_size = -16384; PRAGMA mmap_size = 268435456;");
+}
 
 export type SqliteReplacementReceipt = SqliteFileContent & {
   targetPath: string;
@@ -103,12 +109,9 @@ async function copyFileExclusive(
   let target: Awaited<ReturnType<typeof fs.open>> | undefined;
   let targetIdentity: BigIntStats | undefined;
   try {
-    const publication = await copySqliteFile(
-      sourcePath,
-      targetPath,
-      sourceFingerprint,
+    const publication = await copySqliteFile(sourcePath, targetPath, sourceFingerprint, {
       beforeByteCopy,
-    );
+    });
     target = await fs.open(targetPath, "r+");
     // Native receipts retain exact Windows file IDs beyond Number precision.
     const openedIdentity = await target.stat({ bigint: true });
@@ -604,13 +607,19 @@ export async function createVerifiedSqliteSnapshot(
             undefined,
             options.onProgress,
           );
-      return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
-        verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+      return withPreparedSqliteSnapshot(
+        prepared,
+        (privateSourcePath) => verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+        { bestEffortCleanup: options.sourceAcquisition.bestEffortCleanup },
       );
     }
     return verifyAndPublishSqliteSnapshot(options);
   };
-  return retained ? withPreparedSqliteSnapshot(retained.prepared, create) : create();
+  return retained
+    ? withPreparedSqliteSnapshot(retained.prepared, create, {
+        bestEffortCleanup: options.sourceAcquisition?.bestEffortCleanup,
+      })
+    : create();
 }
 
 async function verifyAndPublishSqliteSnapshot(
@@ -623,6 +632,7 @@ async function verifyAndPublishSqliteSnapshot(
     : await createPrivateSqliteTempDirectory(path.dirname(options.targetPath), ".sqlite-snapshot-");
   await fs.chmod(stagingDir, 0o700);
   const stagedPath = privateSourcePath ?? path.join(stagingDir, "database.sqlite");
+  let outputPath = stagedPath;
   let stagedIdentity: BigIntStats | undefined;
   try {
     await withSqliteSnapshotSource(
@@ -681,18 +691,24 @@ async function verifyAndPublishSqliteSnapshot(
       // checkpoints opt out because VACUUM can rewrite implicit row IDs. DELETE
       // journaling above still makes the published artifact single-file.
       if (!options.preserveRowIds) {
-        snapshot.exec("VACUUM;");
+        // Keep the database-sized rebuild on the staging volume rather than
+        // SQLite's potentially quota-limited SQLITE_TMPDIR/TMPDIR filesystem.
+        // Reuse the staging payload name recognized by abandoned-snapshot reclamation.
+        const compactedPath = path.join(stagingDir, "database.sqlite.partial");
+        snapshot.prepare("VACUUM INTO ?;").run(resolveSqliteFilesystemPath(compactedPath));
+        outputPath = compactedPath;
+        await fs.chmod(outputPath, 0o600);
       }
       // Publication validates this output once, after transfer and before exposing the target.
       const userVersion = readSqliteUserVersion(snapshot);
       snapshot.close();
-      await syncFile(stagedPath);
-      stagedIdentity = await fs.lstat(stagedPath, { bigint: true });
-      const expectedContent = await hashPublishedFile(stagedPath, stagedIdentity);
+      await syncFile(outputPath);
+      stagedIdentity = await fs.lstat(outputPath, { bigint: true });
+      const expectedContent = await hashPublishedFile(outputPath, stagedIdentity);
       await publishSqliteFile(
         {
           sourceIdentity: stagedIdentity,
-          sourcePath: stagedPath,
+          sourcePath: outputPath,
           targetPath: options.targetPath,
           expectedContent,
           beforePublish: options.beforePublish,

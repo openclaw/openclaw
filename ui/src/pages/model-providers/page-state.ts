@@ -1,4 +1,5 @@
 import type { ModelsProbeResult } from "../../api/types.ts";
+import type { AddedChatModel } from "./add-provider-activation.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type { DefaultsDraft } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
@@ -13,6 +14,8 @@ export type ModelProvidersState = {
   profileOrders: Record<string, string[]>;
   addProviderId: string;
   addProviderKey: string;
+  /** Set when Save provider activated the agent's first model; the dialog offers Start chat. */
+  addStartChat: AddedChatModel | null;
   defaultsDraft: DefaultsDraft | null;
   selectedAgentId: string;
   /** Advances on a forced refresh so each account row re-reads its plan limits. */

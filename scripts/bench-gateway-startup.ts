@@ -73,10 +73,12 @@ import {
   writePluginFixtures,
   waitForInitialProbe as waitForProbe,
 } from "./lib/gateway-bench-runtime.ts";
+import { summarizeGatewayModuleLoads } from "./lib/gateway-startup-module-counts.mjs";
 import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
 type GatewayBenchCase = {
+  agentDatabaseMib?: number;
   agentTopology?: "incident-scale" | "single" | "shared-eleven-plus-distinct-one";
   bundledPluginFixture?: OpenClawConfig;
   completionTracePhase?: string;
@@ -87,15 +89,27 @@ type GatewayBenchCase = {
   name: string;
   pluginActivationOnStartup?: boolean;
   pluginCount?: number;
+  pluginMigrationFixture?: "pending" | "deferred";
   providerCatalogStallMs?: number;
   providerStaticCatalogModelCount?: number;
   providerStaticCatalogStallMs?: number;
   publicationGitDelayMs?: number;
   publicationApiDelayMs?: number;
+  teamScale?: boolean;
   runByDefault?: boolean;
 };
 
+type ExitListenerSnapshot = {
+  peak: number;
+  current: number;
+  defaultLimit: number;
+  registrations: { name: string; stack: string; count: number; removed: boolean }[];
+  warnings: { name: string; message: string; stack: string }[];
+};
+
 type GatewaySample = {
+  exitListeners?: ExitListenerSnapshot;
+  pluginMigration?: { total: number; completed: number; warnings: number };
   publicationRecovery?: { startedAtMs: number; releasedAtMs: number; delayMs: number };
   publicationApi?: {
     calls: { endpoint: string; startedAtMs: number; releasedAtMs: number }[];
@@ -121,6 +135,9 @@ type GatewaySample = {
   gatewayReadyLogMs: number | null;
   healthz: InitialProbeResult;
   heapProfilePath?: string;
+  snapshotCounts?: { directories: number; files: number; bytes: number; processes: number };
+  moduleCounts?: ReturnType<typeof summarizeGatewayModuleLoads>;
+  moduleCountsAtHttpListen?: ReturnType<typeof summarizeGatewayModuleLoads>;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
   hostLoadBefore: number[];
@@ -147,6 +164,8 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   cases: GatewayBenchCase[];
   cpuProfDir?: string;
   entry: string;
+  exitListeners: boolean;
+  assertExitListeners: boolean;
   heapProfDir?: string;
   installedCohort?: string;
   installedChild: boolean;
@@ -158,6 +177,8 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   warmup: number;
   fixtureRoot?: string;
   seedOnly: boolean;
+  snapshotCounts: boolean;
+  moduleCounts: boolean;
   agentDatabaseMib: number;
   agentGateDelayMs: number;
   startAt?: number;
@@ -177,6 +198,11 @@ const BOOLEAN_FLAGS = new Set([
   "--installed-child",
   "--installed-cpu-diagnostic",
   "--seed-only",
+  "--team-scale",
+  "--snapshot-counts",
+  "--module-counts",
+  "--exit-listeners",
+  "--assert-exit-listeners",
 ]);
 const VALUE_FLAGS = new Set([
   "--case",
@@ -197,6 +223,7 @@ const VALUE_FLAGS = new Set([
   "--bundled-plugin-fixture",
   "--publication-git-delay-ms",
   "--publication-api-delay-ms",
+  "--plugin-migration-fixture",
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
@@ -238,6 +265,7 @@ function preparedRuntimeConfig(): Record<string, unknown> {
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "teamBoot",
+    completionTracePhase: "plugins.runtime-post-bind",
     name: "gateway, 44 startup plugins, eight agents and 10000 sessions",
     agentTopology: "incident-scale",
     pluginActivationOnStartup: true,
@@ -449,6 +477,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--cpu-prof-dir",
       "--heap-prof-dir",
       "--timeout-ms",
+      "--exit-listeners",
+      "--assert-exit-listeners",
     ]) {
       if (argv.includes(flag)) {
         throw new CliArgumentError(`${flag} is not supported with --installed-cohort`);
@@ -459,6 +489,37 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     }
   }
   let cases = installedCohort ? [] : resolveCases(flags.get("--case") ?? []);
+  if (cases.length === 1 && cases[0]?.id === "teamBoot" && flags.has("--agent-database-mib")) {
+    cases = [
+      {
+        ...cases[0],
+        agentDatabaseMib: parseNonNegativeInt(
+          flags.get("--agent-database-mib")?.[0],
+          0,
+          "--agent-database-mib",
+        ),
+      },
+    ];
+  }
+  if (flags.has("--team-scale")) {
+    if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
+      throw new CliArgumentError("--team-scale requires --case teamBoot");
+    }
+    cases = [{ ...cases[0], teamScale: true, pluginCount: 46 }];
+  }
+  if (flags.has("--plugin-migration-fixture")) {
+    const pluginMigrationFixture = flags.get("--plugin-migration-fixture")?.[0];
+    if (
+      cases.length !== 1 ||
+      cases[0]?.id !== "teamBoot" ||
+      (pluginMigrationFixture !== "pending" && pluginMigrationFixture !== "deferred")
+    ) {
+      throw new CliArgumentError(
+        "--plugin-migration-fixture requires --case teamBoot and pending or deferred",
+      );
+    }
+    cases = [{ ...cases[0], pluginMigrationFixture }];
+  }
   if (flags.has("--publication-git-delay-ms")) {
     if (cases.length !== 1 || cases[0]?.id !== "teamBoot" || process.platform === "win32") {
       throw new CliArgumentError("--publication-git-delay-ms requires --case teamBoot on POSIX");
@@ -502,10 +563,12 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     const value: unknown = JSON.parse(readFileSync(bundledPluginFixturePath, "utf8"));
     if (
       !isRecord(value) ||
-      Object.keys(value).some((key) => !["plugins", "models", "tools", "channels"].includes(key))
+      Object.keys(value).some(
+        (key) => !["plugins", "models", "tools", "channels", "secrets"].includes(key),
+      )
     ) {
       throw new CliArgumentError(
-        "--bundled-plugin-fixture may configure only plugins, models, tools, and channels",
+        "--bundled-plugin-fixture may configure only plugins, models, tools, channels, and secrets",
       );
     }
     const validated = validateConfigObjectRaw(value);
@@ -526,8 +589,14 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
         "--bundled-plugin-fixture requires 1–44 unique plugins.allow IDs and no plugins.load paths",
       );
     }
-    const { plugins, models, tools, channels } = validated.config;
-    cases = [{ ...cases[0], bundledPluginFixture: { plugins, models, tools, channels } }];
+    const { plugins, models, tools, channels, secrets } = validated.config;
+    cases = [{ ...cases[0], bundledPluginFixture: { plugins, models, tools, channels, secrets } }];
+  }
+  if (
+    cases[0]?.pluginMigrationFixture &&
+    (cases[0].bundledPluginFixture?.plugins?.allow?.length ?? 0) >= cases[0].pluginCount!
+  ) {
+    throw new CliArgumentError("--plugin-migration-fixture requires a synthetic plugin slot");
   }
   return {
     ...parseGatewayBenchRuntimeOptions(flags),
@@ -535,6 +604,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     cpuProfDir: flags.get("--cpu-prof-dir")?.[0],
     entry: resolveGatewayBenchEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
     heapProfDir: flags.get("--heap-prof-dir")?.[0],
+    exitListeners: flags.has("--exit-listeners") || flags.has("--assert-exit-listeners"),
+    assertExitListeners: flags.has("--assert-exit-listeners"),
     installedCohort,
     installedChild,
     installedCpuDiagnostic,
@@ -545,6 +616,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     warmup: parseNonNegativeInt(flags.get("--warmup")?.[0], DEFAULT_WARMUP, "--warmup"),
     fixtureRoot: flags.get("--fixture-root")?.[0],
     seedOnly: flags.has("--seed-only"),
+    snapshotCounts: flags.has("--snapshot-counts"),
+    moduleCounts: flags.has("--module-counts"),
     agentDatabaseMib: parseNonNegativeInt(
       flags.get("--agent-database-mib")?.[0],
       512,
@@ -578,17 +651,23 @@ Options:
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --cpu-prof-dir <dir> Write one V8 CPU profile per run
   --heap-prof-dir <dir> Sample main-thread allocations through /readyz, including collected objects
+  --exit-listeners     Trace every main-thread exit registration and warning through startup
+  --assert-exit-listeners Fail if startup exceeds the default exit-listener limit (implies tracing)
   --installed-cohort <path> Measure one fresh installed startup and eight retained-state restarts
   --installed-cpu-diagnostic Profile one established startup after an unprofiled fresh prime; requires --installed-cohort
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
   --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
+  --snapshot-counts   Count private SQLite staging directories/bytes and retain full Gateway output
+  --module-counts     Count loaded module files at listener log and completion (diagnostic pass)
   --seed-only         Create a new --fixture-root without launching a Gateway
-  --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
+  --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels/secrets config for teamBoot
+  --plugin-migration-fixture <status> Seed a pending or deferred config-only teamBoot obligation
+  --team-scale                   Seed 46 plugins, 12 GiB shared/35 GiB agent data and 62k workspace files
   --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
   --publication-api-delay-ms <n> Recover four historical publications through delayed mock GitHub reads (200–800)
-  --agent-database-mib <n> Synthetic slow-agent cache payload (default: 512)
+  --agent-database-mib <n> Slow-agent cache payload (default: 512), or teamBoot total transcript database size
   --agent-gate-delay-ms <n> Benchmark-only delay before the real integrity scan (default: 10000)
   --start-at <epoch-ms> Synchronize prepared fixture startup with a concurrent comparison
 
@@ -609,6 +688,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
     ...(benchCase.id === "teamBoot"
       ? {
           expectedPluginCount: benchCase.pluginCount ?? 44,
+          pluginMigrationFixture: benchCase.pluginMigrationFixture,
           bundledPluginIds: benchCase.bundledPluginFixture?.plugins?.allow ?? [],
           publicationGitDelayMs: benchCase.publicationGitDelayMs,
           publicationApiDelayMs: benchCase.publicationApiDelayMs,
@@ -633,7 +713,10 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
   };
 }
 
-function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
+function collectResultFailures(
+  results: CaseResult[],
+  assertExitListeners = false,
+): BenchmarkFailure[] {
   const failures: BenchmarkFailure[] = [];
   for (const result of results) {
     result.samples.forEach((sample, index) => {
@@ -688,6 +771,17 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
           missing.push("full integrity scan");
         }
       }
+      if (assertExitListeners) {
+        if (!sample.exitListeners) {
+          missing.push("exit-listener capture");
+        } else if (sample.exitListeners.peak > sample.exitListeners.defaultLimit) {
+          failures.push({
+            id: result.id,
+            reason: `exit listeners peaked at ${sample.exitListeners.peak} (default limit ${sample.exitListeners.defaultLimit})`,
+            sampleIndex: index + 1,
+          });
+        }
+      }
       if (missing.length > 0) {
         failures.push({
           id: result.id,
@@ -695,6 +789,21 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
           sampleIndex: index + 1,
         });
         return;
+      }
+      if (result.id === "teamBoot") {
+        const expectedMigrations = result.pluginMigrationFixture ? 1 : 0;
+        if (
+          sample.pluginMigration?.total !== expectedMigrations ||
+          sample.pluginMigration.completed !== expectedMigrations ||
+          sample.pluginMigration.warnings !== 0
+        ) {
+          failures.push({
+            id: result.id,
+            reason:
+              "plugin migration confirmation did not settle the synthetic obligations cleanly",
+            sampleIndex: index + 1,
+          });
+        }
       }
       if (result.expectedPluginCount !== undefined) {
         const inventory = /http server listening \((\d+) plugins?: ([^;)]+)/u.exec(
@@ -1031,6 +1140,19 @@ function writeConfig(root: string, benchCase: GatewayBenchCase): string {
         providerStaticCatalogStallMs: benchCase.providerStaticCatalogStallMs,
       })
     : null;
+  if (benchCase.pluginMigrationFixture) {
+    const pluginRoot = path.join(root, "plugins", "bench-plugin-01");
+    const manifestPath = path.join(pluginRoot, "openclaw.plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({ ...manifest, doctorContract: { stateMigrations: [] } }, null, 2)}\n`,
+    );
+    writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      "module.exports = { stateMigrations: [] };\n",
+    );
+  }
   const agentList =
     benchCase.id === "slowAgentDatabase"
       ? SLOW_DATABASE_AGENT_IDS.map((id) => ({ id, workspace: path.join(root, "workspace", id) }))
@@ -1340,6 +1462,34 @@ async function inspectPublicationApiFixture(
   }
 }
 
+async function inspectTeamBootPluginMigrations(root: string) {
+  const env = createGatewayBenchEnv(root, path.join(root, "openclaw.json"), {});
+  const stateDb = await import("../src/state/openclaw-state-db.js");
+  const previousEnv = process.env;
+  process.env = env;
+  try {
+    const { db } = stateDb.openOpenClawStateDatabase({ env });
+    const counts = db
+      .prepare(
+        `SELECT COUNT(*) AS total,
+                COUNT(CASE WHEN status = 'completed' THEN 1 END) AS completed
+         FROM migration_runs WHERE id LIKE ?`,
+      )
+      .get("deferred-plugin-migration:%");
+    if (
+      !isRecord(counts) ||
+      typeof counts.total !== "number" ||
+      typeof counts.completed !== "number"
+    ) {
+      throw new Error("Plugin migration fixture counts are unavailable");
+    }
+    return { total: counts.total, completed: counts.completed };
+  } finally {
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    process.env = previousEnv;
+  }
+}
+
 async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): Promise<void> {
   mkdirSync(root);
   const configPath = writeConfig(root, benchCase);
@@ -1354,8 +1504,11 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
         import("../src/state/config-machine-state-async.js"),
       ]);
+    const { appendTranscriptEventsInTransaction } =
+      await import("../src/config/sessions/session-accessor.sqlite-transcript-store.js");
     const now = Date.parse("2026-10-19T00:00:00Z");
     const agents = buildBenchAgentList(root, benchCase.agentTopology)!;
+    const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
     const databasePaths: string[] = [];
     let statePath = "";
     try {
@@ -1376,10 +1529,87 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
           { agentId, env },
         );
         database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        // Real incompressible transcript pages exercise state-size-dependent startup work.
+        const targetBytes = ((benchCase.agentDatabaseMib ?? 0) * 1024 * 1024) / agents.length;
+        let message = 0;
+        while (statSync(database.path).size < targetBytes) {
+          agentDb.runOpenClawAgentWriteTransaction(
+            (writable) => {
+              for (let index = 0; index < 32; index++) {
+                const sessionIndex = message % 1250;
+                appendTranscriptEventsInTransaction(
+                  writable,
+                  {
+                    agentId,
+                    sessionKey: `agent:${agentId}:bench-${sessionIndex}`,
+                    sessionId: `team-boot-${agentId}-${sessionIndex}`,
+                  },
+                  [
+                    {
+                      type: "message",
+                      id: `startup-size-${message++}`,
+                      parentId: null,
+                      timestamp: new Date(now).toISOString(),
+                      message: {
+                        role: "user",
+                        content: [
+                          {
+                            type: "text",
+                            text: cipher.update(Buffer.alloc(192 * 1024)).toString("base64"),
+                          },
+                        ],
+                        timestamp: now,
+                      },
+                    },
+                  ],
+                );
+              }
+            },
+            { agentId, env },
+          );
+          database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+        if (benchCase.teamScale && databasePaths.length === 0) {
+          // Inert canonical cache pages model a large agent DB without inventing schema.
+          const insert = database.db.prepare(
+            "INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES ('startup-benchmark', ?, ?, ?)",
+          );
+          for (let index = 0; index < 35 * 1024; index++) {
+            insert.run(String(index), cipher.update(Buffer.alloc(1024 * 1024)), now);
+            if (index % 32 === 31) {
+              database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+            }
+          }
+        }
         databasePaths.push(database.path);
       }
       const state = stateDb.openOpenClawStateDatabase({ env });
       statePath = state.path;
+      if (benchCase.pluginMigrationFixture) {
+        const { recordDeferredPluginMigrationsInTransaction } =
+          await import("../src/infra/deferred-plugin-migrations.js");
+        // Config-only obligations can complete from an explicit stateless contract.
+        const obligation = {
+          pluginId: "bench-plugin-01",
+          reason: "Synthetic config-only completion fixture",
+          command: "openclaw doctor --fix",
+        };
+        stateDb.runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            recordDeferredPluginMigrationsInTransaction(db, { pending: [obligation] });
+            if (benchCase.pluginMigrationFixture === "deferred") {
+              recordDeferredPluginMigrationsInTransaction(db, {
+                pending: [],
+                expectedPending: [obligation],
+                settlements: [
+                  { pluginId: obligation.pluginId, status: "deferred", reason: obligation.reason },
+                ],
+              });
+            }
+          },
+          { env, database: state },
+        );
+      }
       if (benchCase.publicationGitDelayMs !== undefined) {
         await seedTeamBootPublication(root, benchCase.publicationGitDelayMs, agents[0]!.id);
       }
@@ -1400,8 +1630,8 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
       }
       // An inert machine-state namespace adds real, incompressible pages without
       // making startup parse 128 MiB of synthetic records or changing the schema.
-      const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
-      for (let index = 0; index < 128; index++) {
+      const sharedMib = benchCase.teamScale ? 12 * 1024 : 128;
+      for (let index = 0; index < sharedMib; index++) {
         if (index % 8 === 0 && process.platform === "linux") {
           const dirtyKb = Number(
             /^Dirty:\s+(\d+) kB$/mu.exec(readFileSync("/proc/meminfo", "utf8"))?.[1],
@@ -1419,17 +1649,31 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
           await delay(100);
         }
       }
+      if (benchCase.teamScale) {
+        for (let index = 0; index < 62_000; index++) {
+          const workspace = agents[index % agents.length]!.workspace;
+          const directory = path.join(workspace, `synthetic-${Math.floor(index / 1000)}`);
+          mkdirSync(directory, { recursive: true });
+          writeFileSync(path.join(directory, `${index}.bin`), cipher.update(Buffer.alloc(19_050)));
+        }
+      }
     } finally {
       await agentDb.closeOpenClawAgentDatabasesAsync();
       await stateDb.closeOpenClawStateDatabaseAsync();
     }
     writeBenchmarkJson(
       {
-        pluginCount: 44,
+        pluginCount: benchCase.pluginCount,
+        agentDatabaseMib: benchCase.agentDatabaseMib,
+        pluginMigrationFixture: benchCase.pluginMigrationFixture,
+        teamScale: benchCase.teamScale ?? false,
+        workspaceFileCount: benchCase.teamScale ? 62_000 : 0,
+        workspaceBytes: benchCase.teamScale ? 62_000 * 19_050 : 0,
         bundledPluginFixture: benchCase.bundledPluginFixture ?? {},
         publicationGitDelayMs: benchCase.publicationGitDelayMs,
         publicationApiDelayMs: benchCase.publicationApiDelayMs,
-        externalPluginCount: 44 - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
+        externalPluginCount:
+          benchCase.pluginCount! - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
         agentCount: agents.length,
         sessionCount: agents.length * 1250,
         stateDatabaseBytes: statSync(statePath).size,
@@ -1716,12 +1960,54 @@ async function captureStartupHeapProfile(
   });
 }
 
+async function captureStartupExitListeners(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<ExitListenerSnapshot> {
+  return await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off("message", onMessage);
+      child.off("exit", onExit);
+      child.off("error", onError);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = () => onError(new Error("Gateway exited before exit-listener capture"));
+    // The benchmark preload owns this IPC response.
+    const onMessage = (message: { type?: string; exitListeners?: ExitListenerSnapshot }) => {
+      if (message?.type !== "openclaw-startup-exit-listeners:captured" || !message.exitListeners) {
+        return;
+      }
+      cleanup();
+      resolve(message.exitListeners);
+    };
+    const timer = setTimeout(
+      () => onError(new Error("Exit-listener capture timed out")),
+      timeoutMs,
+    );
+    child.on("message", onMessage);
+    child.once("exit", onExit);
+    child.once("error", onError);
+    child.send({ type: "openclaw-startup-exit-listeners:capture" }, (error) => {
+      if (error) {
+        onError(error);
+      }
+    });
+  });
+}
+
 async function runGatewaySample(
   options: GatewayBenchRuntimeOptions & {
     benchCase: GatewayBenchCase;
     cpuProfDir?: string;
     entry: string;
     heapProfDir?: string;
+    exitListeners?: boolean;
+    snapshotCounts?: boolean;
+    moduleCounts?: boolean;
     sampleIndex: number;
     timeoutMs: number;
     fixtureRoot?: string;
@@ -1774,9 +2060,30 @@ async function runGatewaySample(
     if (preload) {
       env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${preload}`.trim();
     }
+    const snapshotCountPath = options.snapshotCounts
+      ? path.join(root, "snapshot-counts.jsonl")
+      : undefined;
+    if (snapshotCountPath) {
+      writeFileSync(snapshotCountPath, "");
+      env.OPENCLAW_BENCH_SNAPSHOT_COUNTS = snapshotCountPath;
+      const observer = fileURLToPath(
+        new URL("./lib/gateway-startup-snapshot-counts.mjs", import.meta.url),
+      );
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${observer}`.trim();
+    }
     const agentRecoveryMs: Record<string, number> = {};
+    const moduleCountPath = options.moduleCounts
+      ? path.join(root, "module-counts.jsonl")
+      : undefined;
+    if (moduleCountPath) {
+      writeFileSync(moduleCountPath, "");
+      env.OPENCLAW_BENCH_MODULE_COUNTS = moduleCountPath;
+      const observer = new URL("./lib/gateway-startup-module-counts.mjs", import.meta.url).href;
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${observer}`.trim();
+    }
     const integrityGateMs: Record<string, number> = {};
     let agentDatabaseAdmissionErrors = 0;
+    let pluginMigrationWarnings = 0;
     if (options.benchCase.incidentFixture) {
       await writeIncidentFixture(root, { kind: options.benchCase.incidentFixture });
       if (fixtureIncludesPackagedPlugins(options.benchCase.incidentFixture)) {
@@ -1802,6 +2109,7 @@ async function runGatewaySample(
     let gatewayReadyLogMs: number | null = null;
     let httpListenLogLine: string | null = null;
     let httpListenLogMs: number | null = null;
+    let moduleCountsAtHttpListen: ReturnType<typeof summarizeGatewayModuleLoads> | undefined;
     let childExited = false;
     let heapProfilePath: string | undefined;
     let child: ChildProcess | undefined;
@@ -1809,6 +2117,13 @@ async function runGatewaySample(
 
     try {
       const nodeOptions = [
+        ...(options.exitListeners
+          ? [
+              "--trace-warnings",
+              "--import",
+              fileURLToPath(new URL("./lib/gateway-startup-exit-listeners.mjs", import.meta.url)),
+            ]
+          : []),
         ...(options.heapProfDir
           ? [
               "--import",
@@ -1829,7 +2144,12 @@ async function runGatewaySample(
         cwd: process.cwd(),
         detached: process.platform !== "win32",
         env,
-        stdio: ["pipe", "pipe", "pipe", ...(options.heapProfDir ? ["ipc" as const] : [])],
+        stdio: [
+          "pipe",
+          "pipe",
+          "pipe",
+          ...(options.heapProfDir || options.exitListeners ? ["ipc" as const] : []),
+        ],
       });
       try {
         await once(child, "spawn");
@@ -1850,6 +2170,17 @@ async function runGatewaySample(
         if (options.benchCase.publicationApiDelayMs !== undefined) {
           appendFileSync(path.join(root, "publication-gateway.log"), `${line}\n`);
         }
+        if (
+          line.includes("Plugin data/settings readiness could not be confirmed:") ||
+          line.includes("Plugin data/settings upgrade awaits config repair:") ||
+          line.includes("Refused plugin migrations that do not match the immutable action order") ||
+          line.includes("failed to load doctor contract for ") ||
+          /Plugin "[^"]+" data\/settings upgrade is blocked(?: in [^:]+)?:|Plugin \S+ is not prepared:|Failed detecting [^\r\n]+:/u.test(
+            line,
+          )
+        ) {
+          pluginMigrationWarnings++;
+        }
         if (line.includes("AgentDatabaseAdmissionError")) {
           agentDatabaseAdmissionErrors++;
         }
@@ -1861,6 +2192,11 @@ async function runGatewaySample(
         if (readyLogKind === "http-listen" && httpListenLogMs == null) {
           httpListenLogMs = nowMs;
           httpListenLogLine = line;
+          if (moduleCountPath) {
+            moduleCountsAtHttpListen = summarizeGatewayModuleLoads(
+              readFileSync(moduleCountPath, "utf8"),
+            );
+          }
         }
         if (readyLogKind === "gateway-ready" && gatewayReadyLogMs == null) {
           gatewayReadyLogMs = nowMs;
@@ -1876,7 +2212,7 @@ async function runGatewaySample(
         }
         const text = chunk.toString("utf8");
         output.push(text);
-        if (output.length > 20) {
+        if (!options.snapshotCounts && output.length > 20) {
           output.splice(0, output.length - 20);
         }
         const parsed = collectOutputLines(outputBuffers[stream], text);
@@ -1901,7 +2237,7 @@ async function runGatewaySample(
       const [healthz, readyz, firstSessionRpc] = await Promise.all([
         healthzProbe,
         probe("/readyz").then(async (readiness) => {
-          if (readiness.status === 200 && options.heapProfDir) {
+          if (readiness.status === 200 && options.heapProfDir && !options.exitListeners) {
             heapProfilePath = await captureStartupHeapProfile(
               startedChild,
               options.heapProfDir,
@@ -1968,7 +2304,9 @@ async function runGatewaySample(
       // Compare CPU/RSS after the same optional startup work, even when publication
       // recovery overlaps that work on only one side of the comparison.
       const postReadyCompletion =
-        publicationMarker || options.benchCase.publicationApiDelayMs !== undefined
+        publicationMarker ||
+        options.benchCase.publicationApiDelayMs !== undefined ||
+        options.exitListeners
           ? await Promise.all(
               ["post-ready.startup-maintenance", "post-ready.gateway-data.plugins"].map((phase) =>
                 waitForStartupTracePhase({
@@ -1980,7 +2318,7 @@ async function runGatewaySample(
               ),
             )
           : [];
-      const completionMs = postReadyCompletion.includes(null)
+      let completionMs = postReadyCompletion.includes(null)
         ? null
         : options.benchCase.completionTracePhase
           ? await waitForStartupTracePhase({
@@ -1990,12 +2328,33 @@ async function runGatewaySample(
               startupTrace,
             })
           : performance.now() - startAt;
+      if (options.benchCase.id === "teamBoot" && completionMs !== null) {
+        // The trace stores a phase duration, not elapsed time from process spawn.
+        completionMs = performance.now() - startAt;
+      }
       const completedAt = performance.now();
       const cpuEndMs = readProcessTreeCpuMs(startedChild.pid);
       const cpuMs =
         cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
       const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
+      if (options.heapProfDir && options.exitListeners && !childExited) {
+        heapProfilePath = await captureStartupHeapProfile(
+          startedChild,
+          options.heapProfDir,
+          Math.max(1, deadlineAt - performance.now()),
+        );
+      }
+      const exitListeners =
+        options.exitListeners && !childExited
+          ? await captureStartupExitListeners(
+              startedChild,
+              Math.max(1, deadlineAt - performance.now()),
+            )
+          : undefined;
       const shutdownStartedAt = performance.now();
+      const moduleCounts = moduleCountPath
+        ? summarizeGatewayModuleLoads(readFileSync(moduleCountPath, "utf8"))
+        : undefined;
       let shutdownForced = false;
       const exit = await stopChild(startedChild, {
         ...(options.benchCase.id === "teamBoot" ? { teardownGraceMs: 30_000 } : {}),
@@ -2008,7 +2367,43 @@ async function runGatewaySample(
       child = undefined;
       flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
 
+      const snapshotEvents: Array<{
+        kind: string;
+        pathname?: string;
+        bytes?: number;
+        pid: number;
+      }> = snapshotCountPath
+        ? readFileSync(snapshotCountPath, "utf8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        : [];
       return {
+        ...(moduleCounts ? { moduleCounts } : {}),
+        ...(moduleCountsAtHttpListen ? { moduleCountsAtHttpListen } : {}),
+        ...(snapshotCountPath
+          ? {
+              snapshotCounts: {
+                directories: new Set(
+                  snapshotEvents
+                    .filter((event) => event.kind === "directory")
+                    .map((event) => event.pathname),
+                ).size,
+                files: snapshotEvents.filter((event) => event.kind === "publication").length,
+                bytes: snapshotEvents.reduce((bytes, event) => bytes + (event.bytes ?? 0), 0),
+                processes: new Set(snapshotEvents.map((event) => event.pid)).size,
+              },
+            }
+          : {}),
+        ...(options.benchCase.id === "teamBoot"
+          ? {
+              pluginMigration: {
+                ...(await inspectTeamBootPluginMigrations(root)),
+                warnings: pluginMigrationWarnings,
+              },
+            }
+          : {}),
         ...(publicationMarker && existsSync(publicationMarker)
           ? {
               publicationRecovery: JSON.parse(
@@ -2031,12 +2426,15 @@ async function runGatewaySample(
         gatewayReadyLogMs,
         healthz,
         ...(heapProfilePath ? { heapProfilePath } : {}),
+        ...(exitListeners ? { exitListeners } : {}),
         httpListenLogLine,
         httpListenLogMs,
         hostLoadBefore,
         hostLoadAfter: loadavg(),
         maxRssMb,
-        outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
+        outputTail: options.snapshotCounts
+          ? output.join("")
+          : output.join("").split(/\r?\n/u).slice(-20).join("\n"),
         readyz,
         shutdownForced,
         shutdownMs,
@@ -2059,6 +2457,9 @@ async function runCase(
     cpuProfDir?: string;
     entry: string;
     heapProfDir?: string;
+    exitListeners?: boolean;
+    snapshotCounts?: boolean;
+    moduleCounts?: boolean;
     runs: number;
     timeoutMs: number;
     warmup: number;
@@ -2174,10 +2575,22 @@ async function main() {
       const fixture = JSON.parse(
         readFileSync(path.join(options.fixtureRoot, "team-boot-fixture.json"), "utf8"),
       ) as {
+        agentDatabaseMib?: number;
         bundledPluginFixture?: OpenClawConfig;
         publicationGitDelayMs?: number;
         publicationApiDelayMs?: number;
+        teamScale?: boolean;
+        pluginMigrationFixture?: GatewayBenchCase["pluginMigrationFixture"];
       };
+      if (fixture.agentDatabaseMib !== options.cases[0]?.agentDatabaseMib) {
+        throw new CliArgumentError("--agent-database-mib must match the prepared fixture");
+      }
+      if (fixture.pluginMigrationFixture !== options.cases[0]?.pluginMigrationFixture) {
+        throw new CliArgumentError("--plugin-migration-fixture must match the prepared fixture");
+      }
+      if (Boolean(fixture.teamScale) !== Boolean(options.cases[0]?.teamScale)) {
+        throw new CliArgumentError("--team-scale must match the prepared fixture");
+      }
       if (
         JSON.stringify(fixture.bundledPluginFixture ?? {}) !==
         JSON.stringify(options.cases[0]?.bundledPluginFixture ?? {})
@@ -2243,7 +2656,7 @@ async function main() {
     }
   }
 
-  const failures = collectResultFailures(results);
+  const failures = collectResultFailures(results, options.assertExitListeners);
   if (failures.length > 0) {
     printBenchmarkFailures(failures);
     process.exitCode = 1;

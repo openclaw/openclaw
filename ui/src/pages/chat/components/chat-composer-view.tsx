@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
 import { createMemo, createSignal, lazy, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
@@ -9,7 +8,6 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -40,6 +38,7 @@ import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import { ComposerWidthEdge, prepareComposerWidthEdge } from "./chat-composer-width-ref.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
 import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.tsx";
@@ -52,7 +51,10 @@ const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx
   export: "HumanMentionMenuView",
 });
 const EmojiMenu = lazy(() => import("./chat-composer-emoji.tsx"), { export: "EmojiMenu" });
-warmWhenIdle(SlashMenu.preload, SkillMenu.preload, HumanMentionMenuView.preload, EmojiMenu.preload);
+// The reply strip loads with the first reply, outside the chat boot bundle.
+const ReplyPreview = lazy(() => import("./chat-composer-reply-preview.tsx"), {
+  export: "ComposerReplyPreview",
+});
 const ChatGoal = lazy(() => import("./chat-composer-goal.tsx"), { export: "ChatGoal" });
 const ChatGoalRecoveryNotice = lazy(() => import("./chat-composer-goal.tsx"), {
   export: "ChatGoalRecoveryNotice",
@@ -76,13 +78,14 @@ export function renderChatComposerView(
   const inputHandle = createChatAttachmentInputHandle();
   let shell: HTMLDivElement | undefined;
   let placeholderElement: HTMLSpanElement | undefined;
-  const { mobileEditing, keyboardNavigation, lifecycle } = createComposerMobileInteraction(
-    context,
-    props,
-    state,
-    () => shell,
-    () => placeholderElement,
-  );
+  const { mobileEditing, mobileResting, keyboardNavigation, lifecycle } =
+    createComposerMobileInteraction(
+      context,
+      props,
+      state,
+      () => shell,
+      () => placeholderElement,
+    );
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
   const capabilityAvailable = createMemo(() => Boolean(props.capabilityMenu));
   const [capabilityView, setCapabilityView] = createSignal<ChatComposerPlusMenuView>(
@@ -106,7 +109,8 @@ export function renderChatComposerView(
   const placeholder = createMemo(() =>
     context().goalComposer.active
       ? t("chat.goals.objectivePlaceholder")
-      : t("chat.composer.placeholder", { name: props.assistantName || "agent" }),
+      : (context().slashArgsHint ??
+        t("chat.composer.placeholder", { name: props.assistantName || "agent" })),
   );
   const mirrorCameraPreview = createMemo(
     () =>
@@ -217,6 +221,7 @@ export function renderChatComposerView(
         {props.realtimeTalkInputNotice ? (
           <ChatVoiceStatus
             status="error"
+            tone="warning"
             detail={props.realtimeTalkInputNotice}
             onDismissError={props.onDismissRealtimeTalkInputNotice}
           />
@@ -288,21 +293,18 @@ export function renderChatComposerView(
   return (
     <div
       class="agent-chat__composer-shell"
-      ref={[
-        footerControl,
-        (element) => {
-          shell = element;
-        },
-        elementRef(props.onComposerShellRef),
-      ]}
+      ref={[footerControl, (element) => (shell = element), elementRef(props.onComposerShellRef)]}
       data-mobile-composer={props.mobileComposer ? "true" : undefined}
       data-composer-editing={mobileEditing() ? "true" : "false"}
+      data-composer-resting={mobileResting() ? "true" : undefined}
       data-composer-keyboard={props.mobileKeyboardVisible ? "true" : undefined}
       data-composer-keyboard-navigation={keyboardNavigation() ? "true" : undefined}
+      onPointerEnter={() => void prepareComposerWidthEdge()}
+      onKeyDown={() => void prepareComposerWidthEdge()}
     >
       {lifecycle}
       <div class="agent-chat__composer-float" ref={[elementRef(props.onComposerFloatRef)]}>
-        <div class="chat-footer__context">
+        <div class="chat-footer__context" ref={(element) => (state.composerContext = element)}>
           {props.footerContent}
           <div class="agent-chat__composer-notices">
             {props.notices} {composerStatus()} {composerAlerts()} {fallbackStatus()}
@@ -403,14 +405,13 @@ export function renderChatComposerView(
               {
                 "agent-chat__input--offline": props.offline,
                 "agent-chat__input--dictating": context().dictation?.active,
+                "agent-chat__input--submit-queued": context().submitQueued,
                 "agent-chat__input--disabled": !context().canCompose,
               },
             ]}
             aria-busy={props.disabledReasonBusy ? "true" : "false"}
-            data-composer-layout={
-              props.mobileComposer && !mobileEditing() ? "single-line" : undefined
-            }
-            data-incognito={props.selectedSession?.incognito ? "true" : undefined}
+            data-composer-layout={mobileResting() ? "single-line" : undefined}
+            data-incognito={props.incognito ? "true" : undefined}
             onOpenclaw-composer-dismiss-invocations={() => {
               context().state.slashMenu.reset();
               context().state.skillMenu.reset();
@@ -488,33 +489,13 @@ export function renderChatComposerView(
                 }}
                 avatarUrls={context().state.mentionMenu.selectedAvatarUrls}
               />
-              {props.replyTarget ? (
-                <div class="chat-reply-preview composer-context-strip">
-                  <span class="chat-reply-preview__label composer-context-strip__label">
-                    <span class="chat-reply-preview__icon composer-context-strip__icon">
-                      {<Icon name="messageSquare" />}
-                    </span>
-                    <span class="composer-context-strip__label-text">
-                      {t("chat.messages.replyingTo", {
-                        name: props.replyTarget.senderLabel ?? t("chat.messages.message"),
-                      })}
-                    </span>
-                  </span>
-                  <span class="chat-reply-preview__text composer-context-strip__text">
-                    {truncateUtf16Safe(props.replyTarget.text, 120)}
-                    {props.replyTarget.text.length > 120 ? "..." : ""}
-                  </span>
-                  <button
-                    type="button"
-                    class="chat-reply-preview__dismiss composer-context-strip__dismiss"
-                    onClick={() => props.onClearReply?.()}
-                    aria-label={t("chat.composer.cancelReply")}
-                    title={t("chat.composer.cancelReply")}
-                  >
-                    {<Icon name="x" />}
-                  </button>
-                </div>
-              ) : undefined}
+              <Show when={props.replyTarget}>
+                {(target) => (
+                  <ChatLazyBoundary>
+                    <ReplyPreview composer={props} target={target()} />
+                  </ChatLazyBoundary>
+                )}
+              </Show>
               {props.sessionAdmitted === false ? undefined : (
                 <McpAppContextStrip sessionKey={props.sessionKey} agentId={props.currentAgentId} />
               )}
@@ -537,9 +518,7 @@ export function renderChatComposerView(
                     class={{ "agent-chat__video-preview-mirrored": mirrorCameraPreview() }}
                     autoplay
                     muted
-                    ref={(video) => {
-                      video.muted = true;
-                    }}
+                    ref={(video) => (video.muted = true)}
                     playsinline
                     aria-label={t("chat.composer.cameraPreview")}
                     prop:srcObject={props.realtimeTalkVideoStream}
@@ -582,6 +561,7 @@ export function renderChatComposerView(
                 <span
                   class="agent-chat__composer-placeholder"
                   aria-hidden="true"
+                  style={{ display: context().slashArgsHint ? "block" : undefined }}
                   ref={[
                     elementRef<HTMLSpanElement>((element) => {
                       placeholderElement = element;
@@ -593,7 +573,18 @@ export function renderChatComposerView(
                     }),
                   ]}
                 >
-                  {context().dictation?.active || context().predictionText ? "" : placeholder()}
+                  {context().dictation?.active || context().predictionText ? (
+                    ""
+                  ) : (
+                    <>
+                      {context().slashArgsHint ? (
+                        <span style={{ visibility: "hidden", "white-space": "pre" }}>
+                          {context().visibleDraft}
+                        </span>
+                      ) : undefined}
+                      {placeholder()}
+                    </>
+                  )}
                 </span>
                 <Show when={context().predictionText}>
                   <span class="agent-chat__composer-prediction" aria-hidden="true">
@@ -668,12 +659,18 @@ export function renderChatComposerView(
               <div class="agent-chat__composer-trail">
                 <div class="agent-chat__composer-meta agent-chat__composer-context">
                   <ContextNotice
+                    contextUsage={props.contextUsage}
                     session={props.selectedSession}
                     messages={props.messages}
                     providerUsage={props.providerUsage}
+                    accountSelection={props.composerControls?.model.accountSelection}
                     gateway={props.contextGateway}
                     agentId={props.currentAgentId}
                     onOpenContext={props.onOpenContext}
+                    onCompact={props.onCompact}
+                    compactionStatus={props.compactionStatus}
+                    runActive={props.runActive}
+                    connected={props.connected}
                   />
                 </div>
                 <Show when={props.composerControls}>
@@ -697,6 +694,7 @@ export function renderChatComposerView(
               </div>
             </div>
           </div>
+          <ComposerWidthEdge options={() => props} shell={() => shell} />
         </ComposerInputScope>
       ) : props.disabledBanner?.kind === "composer-replacement" ? (
         disabledBanner

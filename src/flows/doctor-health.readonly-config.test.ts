@@ -31,6 +31,8 @@ it.each([false, true])(
       },
       async (state) => {
         mocks.emulateNativeInstall = false;
+        fs.writeFileSync(state.path("package.json"), '{"name":"openclaw"}');
+        mocks.packageRoot.mockReturnValue(state.root);
         await state.writeConfig({
           agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
           gateway: { mode: "local", auth: { mode: "none" } },

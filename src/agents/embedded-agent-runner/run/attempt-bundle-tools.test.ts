@@ -3,6 +3,7 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
+import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
@@ -320,9 +321,17 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     });
 
     const cleanupScope = createAgentCleanupScope();
-    await expect(cleanupScope.run(() => prepare(createInput()))).rejects.toThrow(
-      "bundle policy failed",
-    );
+    const completed: string[] = [];
+    await expect(
+      withDiagnosticsTimelineObserver(
+        (name) => () => {
+          completed.push(name);
+        },
+        () => cleanupScope.run(() => prepare(createInput())),
+      ),
+    ).rejects.toThrow("bundle policy failed");
+    expect(completed).toContain("attempt.bundle-tools.policy");
+    expect(completed).toContain("attempt.bundle-tools.cleanup");
     expect(cleanupScope.outcome).toBe("uncertain");
     expect(disposeMcp).toHaveBeenCalledOnce();
     expect(disposeLsp).toHaveBeenCalledOnce();

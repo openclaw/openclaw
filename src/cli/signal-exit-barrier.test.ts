@@ -17,6 +17,7 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 
 function exitProbe() {
   const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
   const exit = vi.spyOn(process, "exit").mockImplementation(() => {
     throw new Error("Process exited");
   });

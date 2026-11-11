@@ -323,13 +323,7 @@ describe("pw-tools-core interaction navigation guard", () => {
     const dispose = captureDownloads(drain);
     install(page);
     await expect(
-      act(
-        { kind: "wait", fn: "() => false" },
-        {
-          evaluateEnabled: true,
-          signal: ctrl.signal,
-        },
-      ),
+      act({ kind: "wait", fn: "() => false" }, { evaluateEnabled: true, signal: ctrl.signal }),
     ).rejects.toThrow("aborted by test");
     expect(drain).toHaveBeenCalledWith(downloadGrace);
     expect(dispose).toHaveBeenCalledOnce();
@@ -342,35 +336,38 @@ describe("pw-tools-core interaction navigation guard", () => {
       name: "SsrFBlockedError",
     });
     const page = { url: vi.fn(() => currentUrl) };
-    install(page, {
-      hover: vi.fn(async () => {
-        currentUrl = "https://example.org/safe";
-        setTimeout(() => {
-          currentUrl = "http://127.0.0.1:18080/private-final";
-        }, 200);
-      }),
+    const hover = vi.fn(async () => {
+      currentUrl = "https://example.org/safe";
+      setTimeout(() => (currentUrl = "http://127.0.0.1:18080/private-final"), 200);
     });
+    install(page, { hover });
     complete.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
       expect(currentUrl).toBe("http://127.0.0.1:18080/private-final");
       await session.quarantineBlockedNavigationTarget({ ...target, page });
       throw blocked;
     });
     await withFakeTimers(async () => {
-      const guardSettled = vi.fn();
-      session.withPageNavigationRequestGuard.mockImplementationOnce(async ({ action }) => {
-        try {
-          return await action(page.url());
-        } finally {
-          guardSettled();
-        }
-      });
-      const task = act(hoverAction);
-      const rejected = expect(task).rejects.toBe(blocked);
-      await vi.advanceTimersByTimeAsync(249);
-      expect(guardSettled).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      await rejected;
-      expect(guardSettled).toHaveBeenCalledOnce();
+      const monotonic = vi.spyOn(performance, "now").mockReturnValue(1_000);
+      const wallClock = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValue(101_000);
+      try {
+        const guardSettled = vi.fn();
+        session.withPageNavigationRequestGuard.mockImplementationOnce(async ({ action }) => {
+          try {
+            return await action(page.url());
+          } finally {
+            guardSettled();
+          }
+        });
+        const rejected = expect(act(hoverAction)).rejects.toBe(blocked);
+        await vi.advanceTimersByTimeAsync(249);
+        expect(guardSettled).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await rejected;
+        expect(guardSettled).toHaveBeenCalledOnce();
+      } finally {
+        monotonic.mockRestore();
+        wallClock.mockRestore();
+      }
     });
     expect(complete).toHaveBeenCalledTimes(2);
     expectQuarantine(page);

@@ -24,6 +24,10 @@ import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { configRawForDisplay } from "../../lib/config/config-draft-model.ts";
 import {
+  configSecretFields,
+  type ConfigSecretFields,
+} from "../../lib/config/config-secret-fields.ts";
+import {
   currentConfigRead,
   currentDisplayConfig,
   currentDisplayRuntimeConfig,
@@ -43,6 +47,7 @@ import {
   configSelectionFromSearch,
   defaultConfigSelection,
   normalizeConfigSelection,
+  omitCuratedOwnedConfigLeaves,
   type ConfigSelection,
   ADVANCED_EXCLUDED_SECTIONS,
   type ConfigPageId,
@@ -62,6 +67,7 @@ import {
   type SessionObserverModelSelection,
 } from "./session-observer-settings.ts";
 import { createConfigUpdatesPresentation } from "./updates-page-presentation.ts";
+import { asConfigSchema } from "./view-schema.tsx";
 import { createConfigViewState } from "./view-state.ts";
 import type * as View from "./view-state.ts";
 
@@ -70,14 +76,21 @@ registerEnglishCatalog(registerSettingsEnglish);
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
 /** Coordinates page-local drafts and requests; config and preference writes stay with their owners. */
+// Hides optional feature controls from the page without changing the editable
+// config; an unresolved schema passes through unchanged.
+function visibleConfigSchema(value: unknown, openclawIdEnabled: boolean | undefined): unknown {
+  const schema = asConfigSchema(value);
+  return schema ? omitCuratedOwnedConfigLeaves(schema, "", openclawIdEnabled) : value;
+}
+
 export function createConfigPage(
   context: ApplicationContext,
   route: () => { pageId: ConfigPageId; routeData: ConfigRouteData | null },
   host: () => HTMLElement,
 ) {
-  const applicationConfig = projectOwner(context.config, (owner) => owner.current);
   const agents = projectOwner(context.agents, (owner) => owner.state);
   const identities = projectOwner(context.agentIdentity, (owner) => owner);
+  const applicationConfig = projectOwner(context.config, (owner) => owner.current);
   const lobsterdex = projectSource(subscribeLobsterdex, {
     read: getLobsterdex,
     subscribe: (subscribe, notify) => subscribe(notify),
@@ -430,7 +443,10 @@ export function createConfigPage(
       connected: configState.connected,
       mutationAllowed: runtimeConfig.canSet,
       openFileAllowed: runtimeConfig.canOpenFile,
-      schema: configState.configSchema,
+      schema: visibleConfigSchema(
+        configState.configSchema,
+        applicationConfig.read().openclawIdEnabled,
+      ),
       schemaLoading: configState.configSchemaLoading,
       schemaRead: runtimeConfig.schemaRead,
       onRetrySchema: () => void runtimeConfig.refreshSchema(),
@@ -460,6 +476,7 @@ export function createConfigPage(
         invalidate();
       },
       onViewStateChange: () => invalidate(),
+      secretFields: configSecretFields(context) as ConfigSecretFields | undefined,
       onFormPatch: withConfigMutation((path: Array<string | number>, value: unknown) =>
         runtimeConfig.patchForm(path, value),
       ),
@@ -623,7 +640,6 @@ export function createConfigPage(
       onCameraRefresh: () => void mediaDeviceOwner.refresh("camera", true),
       onCameraSelect: mediaDeviceOwner.selectCamera,
       gatewayUrl: context.gateway.connection.gatewayUrl,
-      assistantName: applicationConfig.read().assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: renderPageId === "advanced" ? undefined : titleForRoute(renderPageId),
       showSectionDocs: renderPageId !== "communications",

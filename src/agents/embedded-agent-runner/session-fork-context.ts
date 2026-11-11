@@ -216,7 +216,7 @@ export async function prepareEmbeddedSessionForkContext(params: {
       chatType: params.chatType,
     });
     assertCurrent();
-    systemPrompt = buildConfiguredAgentSystemPrompt({
+    systemPrompt = await buildConfiguredAgentSystemPrompt({
       config: params.config,
       workspaceDir: params.workspaceDir,
       agentId: params.agentId,

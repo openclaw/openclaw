@@ -32,6 +32,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readGlobalSingleton } from "../../shared/global-singleton.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -444,6 +445,13 @@ describe("delegate compaction resource retirement", () => {
     "keeps actual work owned through %s",
     { timeout: 30_000 },
     async (mode, { signal }) => {
+      const listeners = readGlobalSingleton(
+        Symbol.for("openclaw.internalSessionTranscriptListeners"),
+      );
+      if (!(listeners instanceof Set)) {
+        throw new Error("Transcript listener registry is unavailable");
+      }
+      const listenersBefore = listeners.size;
       const lspCancelled = mode === "lsp-parent-abort";
       const mcpCancelled = mode === "mcp-caller-abort";
       const pendingPreparation = lspCancelled || mcpCancelled;
@@ -713,6 +721,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
               }
               expect(current.envRestored).toBe(true);
               expect(current.disposals).toBe(preparationFailed ? 0 : 1);
+              expect(listeners.size).toBe(listenersBefore);
               if (lspCancelled || mcpCancelled) {
                 expect(current.session).toBeUndefined();
                 expect(current.tools).toHaveLength(1);

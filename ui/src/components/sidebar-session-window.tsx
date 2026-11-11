@@ -17,12 +17,9 @@ export function createSidebarSessionWindow(
 ) {
   const scroll = useContext(SidebarScrollContext);
   let list: HTMLDivElement;
-  const [rowFloor, setRowFloor] = createSignal(30);
+  const [rowFloor, setRowFloor] = createSignal(scroll?.rowFloor() ?? 32);
   const [focusedKey, setFocusedKey] = createSignal<string>();
-  const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>({
-    items: [],
-    height: 0,
-  });
+  const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>();
   const retained = (row: SidebarRecentSession, focused: string | undefined): boolean =>
     row.visuallyActive ||
     row.key === focused ||
@@ -36,7 +33,7 @@ export function createSidebarSessionWindow(
     const preview =
       host().sessionsShowPreview &&
       Boolean(row.snapshotSubtitle?.subtitle || row.lastMessagePreview || row.channelPresentation);
-    const ownHeight = Math.max(preview ? 50 : 30, rowFloor());
+    const ownHeight = Math.max(preview ? 44 : 32, rowFloor());
     if (!host().isSessionChildrenExpanded(row)) {
       return { height: ownHeight, signature: [preview] };
     }
@@ -50,11 +47,9 @@ export function createSidebarSessionWindow(
     return {
       height:
         ownHeight +
-        2 +
         children.reduce((height, child) => height + child.height, 0) +
-        Math.max(0, children.length - 1) * 2 +
-        (children.length < row.children.length ? 30 : 0) +
-        (row.loadingChildren && children.length === 0 ? 30 : 0),
+        (children.length < row.children.length ? 28 : 0) +
+        (row.loadingChildren && children.length === 0 ? 32 : 0),
       signature: [preview, children.map((child) => child.signature), row.loadingChildren, errors],
     };
   };
@@ -96,21 +91,30 @@ export function createSidebarSessionWindow(
   const restoreAnchor = scroll.readAnchor();
   const anchorAt = (top: number) =>
     top < 0 || top >= totalHeight ? undefined : positions.findLast((item) => item.top <= top);
+  const windowAt = (offset: number) => {
+    const top = offset - margin;
+    const first = positions.findIndex((item) => item.top + item.height > top);
+    const beyond = positions.findIndex((item) => item.top >= top + viewportHeight);
+    const start = first < 0 ? positions.length : Math.max(0, first - 2);
+    // A section below the viewport has no visible rows to overscan.
+    const end =
+      beyond < 0 ? positions.length : beyond === 0 ? 0 : Math.min(positions.length, beyond + 2);
+    // Scroll can precede geometry's retention update after selection or focus.
+    return positions.filter(
+      (item, index) =>
+        (index >= start && index < end) ||
+        current[index]!.retained ||
+        retained(item.row, focusedKey()),
+    );
+  };
   const publish = () => {
     const scroller = scroll.element();
     if (!scroller) {
       return;
     }
-    const top = scroller.scrollTop - margin;
-    const first = positions.findIndex((item) => item.top + item.height > top);
-    const beyond = positions.findIndex((item) => item.top >= top + viewportHeight);
-    const start = first < 0 ? positions.length : Math.max(0, first - 2);
-    const end = beyond < 0 ? positions.length : Math.min(positions.length, beyond + 2);
-    const items = positions.filter(
-      (_, index) => (index >= start && index < end) || current[index]!.retained,
-    );
+    const items = windowAt(scroller.scrollTop);
     setView((previous) =>
-      previous.height === totalHeight &&
+      previous?.height === totalHeight &&
       previous.items.length === items.length &&
       previous.items.every(
         (item, index) =>
@@ -126,16 +130,16 @@ export function createSidebarSessionWindow(
   const rebuild = () => {
     const scroller = scroll.element();
     const anchor = scroller && anchorAt(scroller.scrollTop - margin);
-    const offset = anchor && scroller ? scroller.scrollTop - margin - anchor.top : 0;
+    const offset = anchor ? scroller.scrollTop - margin - anchor.top : 0;
     let top = 0;
     positions = current.map((input, index) => {
       const known = measured.get(input.row.key);
       const height = known?.signature === input.signature ? known.height : input.height;
       const item = { row: input.row, index, top, height };
-      top += height + 2;
+      top += height;
       return item;
     });
-    totalHeight = Math.max(0, top - 2);
+    totalHeight = top;
     const next = anchor && positions.find((item) => item.row.key === anchor.row.key);
     if (scroller && next && next.top !== anchor?.top) {
       scroller.scrollTop = margin + next.top + offset;
@@ -152,7 +156,7 @@ export function createSidebarSessionWindow(
       const style = getComputedStyle(scroller);
       // Unstyled hosts retain the estimate until CSS supplies the row minimum.
       const nextRowFloor =
-        Number.parseFloat(style.getPropertyValue("--sidebar-session-row-floor")) || 30;
+        Number.parseFloat(style.getPropertyValue("--sidebar-session-row-floor")) || 32;
       const nextLayout = [
         scroller.clientWidth,
         style.getPropertyValue("--control-ui-text-scale"),
@@ -166,6 +170,7 @@ export function createSidebarSessionWindow(
         scroller.scrollTop;
       // All layout reads precede the publication/scroll writes.
       return () => {
+        scroll.captureRowFloor(nextRowFloor);
         // This request still contains estimates for the previous CSS minimum.
         if (rowFloor() !== nextRowFloor) {
           setRowFloor(nextRowFloor);
@@ -245,15 +250,40 @@ export function createSidebarSessionWindow(
       }
     }),
   );
-  const items = createMemo(() => new Map(view().items.map((item) => [item.row.key, item])));
+  onSettled(() =>
+    // Snapshot capture samples the measured zero-offset range without layout reads.
+    scroll.registerWindow(() => {
+      const source = inputs();
+      if (source.length === 0) {
+        return [];
+      }
+      return view() && current === source ? windowAt(0).map((item) => item.row.key) : undefined;
+    }),
+  );
+  const items = createMemo(() => {
+    const ready = view();
+    // A zero-height measurement still belongs to the previous empty row set.
+    if (ready && (ready.height > 0 || inputs().length === 0)) {
+      return new Map(ready.items.map((item) => [item.row.key, item]));
+    }
+    const keys = new Set(host().sidebarSnapshot?.windowKeys);
+    let top = 0;
+    return new Map(
+      inputs().flatMap((input, index) => {
+        const item = { row: input.row, index, top, height: input.height };
+        top += input.height;
+        return keys.has(input.row.key) ? [[input.row.key, item] as const] : [];
+      }),
+    );
+  });
   const fullHeight = createMemo(() => {
     view();
     return Math.max(
       0,
       inputs().reduce((height, input) => {
         const known = measured.get(input.row.key);
-        return height + (known?.signature === input.signature ? known.height : input.height) + 2;
-      }, -2),
+        return height + (known?.signature === input.signature ? known.height : input.height);
+      }, 0),
     );
   });
   return {

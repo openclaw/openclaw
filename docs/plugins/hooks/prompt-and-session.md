@@ -33,7 +33,8 @@ Use the phase-specific hooks for new plugins:
   When provided, `fallbacksOverride` replaces the fallback chain for this run;
   `[]` disables model fallback, so a failed primary fails the run. A value that
   is not an array of strings is treated as `[]`. Omit it to preserve configured
-  fallback behavior.
+  fallback behavior. Results returned after the source run is canceled or
+  superseded are discarded before model preparation.
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
@@ -181,6 +182,14 @@ Treat `toolAuthority` as an ephemeral capability:
 
 - `allows(toolName)` checks a standard tool id against the finalized surface
   and also verifies that the capability is still active.
+- `list()` returns the same surface as frozen, normalized, deduplicated, sorted
+  tool names. For example, a policy plugin can select tool-specific prompt
+  guidance without maintaining its own catalog. It exposes no descriptions,
+  schemas, arguments, or tool handles, and grants no execution authority.
+  Like `allows()`, it verifies the host and dispatch are still active. The method
+  is optional for older-host compatibility: feature-detect with
+  `typeof authority.list === "function"` and fail closed if enumeration is required
+  but unavailable. Previously returned names are data, not live authorization.
 - `assertActive()` rejects after abort, cancellation, run replacement,
   lifecycle rotation, or hook dispatch completion. Call it after awaited work
   and before committing plugin-owned side effects.
@@ -295,6 +304,22 @@ cron, exec-event).
 older plugins. Core does not populate it; new channel-specific sender
 identities should live under `ctx.channelContext.sender` through module
 augmentation.
+
+`agent_end` reports what the finished run did:
+
+- `event.skillsUsed`: skills the run invoked by command or read from disk, each
+  with `name`, `source` (`bundled`, `workspace` or `unknown`) and `activation`
+  (`command` or `read`).
+- `event.modelIterations`: the number of model calls, when the runtime reports
+  it. Count assistant messages in `event.messages` when it is absent.
+- `ctx.toolNames`: the OpenClaw tools the model could call this turn, after
+  policy. Runtime-native tools, such as the Codex shell, are not listed. It is
+  absent for runtimes that cannot report it, such as CLI backends.
+- `ctx.completedTurn`: `{ sessionId, entryId }` of the transcript entry that
+  ended the turn. Pass it as `through` to `api.runtime.subagent.runForkedTurn`
+  to review the finished turn in the background. It is absent when the runtime
+  recorded no final entry, such as CLI backends or a turn superseded before it
+  finished.
 
 `agent_end` is an observation hook. Channel-backed paths generally run
 it fire-and-forget after the turn, while local one-shot paths can wait
@@ -413,7 +438,7 @@ runtime or Codex. Legacy V1 runtimes, including Copilot, return
 without queueing the guidance. The API does not automatically enqueue a later
 turn; use the explicit fallback below when needed.
 
-Steering requires `plugins.entries.<id>.hooks.allowPromptInjection` (enabled
+Steering requires `plugins.entries.<id>.hooks.allowPromptModification` (enabled
 unless explicitly set to `false`) and a live plugin instance. Disabled prompt
 injection returns `steered: false`; an expired plugin instance cannot dispatch.
 The host and guarded runtime recheck the plugin instance before dispatch,

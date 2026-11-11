@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, createProjection } from "solid-js";
 import type { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import type { OverlayPlacement } from "../../components/overlay-anchor.ts";
 import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { setQueryTokensForKey } from "./query.ts";
@@ -12,6 +13,7 @@ export function UsageQueryFilter(props: {
   queryDraft: string;
   queryTerms: ReturnType<typeof extractQueryTerms>;
   onQueryDraftChange: (value: string) => void;
+  placement?: OverlayPlacement;
 }) {
   const selected = createMemo(() => {
     const normalized = normalizeLowercaseStringOrEmpty(props.filterKey);
@@ -60,7 +62,7 @@ export function UsageQueryFilter(props: {
       label={`${props.label} ${selected().length > 0 ? selected().length : t("usage.filters.all")}`}
       class="usage-filter-select"
       triggerClass="usage-filter-trigger"
-      placement="bottom-start"
+      placement={props.placement ?? "bottom-start"}
       items={items}
       onSelect={(item) => {
         const value = item.id;

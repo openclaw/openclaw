@@ -1,5 +1,5 @@
 ---
-summary: "Connect a machine to an OpenClaw Gateway with one pasted command"
+summary: "Connect a device to an OpenClaw Gateway with one pasted command"
 read_when:
   - Pairing a new headless node with a Gateway
   - Installing a node host from a join URL or setup code
@@ -15,7 +15,7 @@ in the existing node-host state, and runs the same runtime as
 
 ## Create a join command
 
-On the Gateway host, use admin credentials to mint a single-use join URL:
+On the Gateway’s computer, use an admin account to mint a single-use join URL:
 
 ```bash
 openclaw devices join-code
@@ -241,6 +241,9 @@ A join code and a paired device have separate lifecycles:
 - Environment-managed `--ephemeral` nodes are removed automatically when their owning cloud environment is destroyed.
 
 ## Troubleshooting
+
+Startup failures show the redacted top-level reason. Use `--debug` when you need
+stack traces and nested error details.
 
 If the join URL reports that it is missing or expired, mint a new one with
 `openclaw devices join-code`. A used code intentionally returns the same result

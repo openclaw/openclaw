@@ -18,11 +18,35 @@ configured model metadata while other sessions remain available. Native metadata
 is refreshed when that row is next invalidated; an unchanged list read does not
 retry it.
 
+Conversation branch listing (`sessions.branches.list`) has a ten-second request
+deadline, including access checks and cold-transcript restoration. If it expires,
+the Gateway returns a retryable `UNAVAILABLE` error instead of an empty branch
+list. Retry after database preparation finishes. Required integrity checks and
+already-admitted storage cleanup keep their own lifetimes.
+
+Compressed transcript archives are decoded directly from their source files;
+history, discovery, usage, and memory indexing do not create plaintext copies in
+the temporary directory. History retains navigation metadata and reads selected
+byte ranges through a bounded-memory stream. An archive that
+would expand past 4 GiB fails with a visible error and remains unchanged.
+Archive publication verifies compressed output against the original plaintext byte
+count, preserving compression and disk-budget retention.
+Doctor reports the size of read-cache directories left by older versions.
+`openclaw doctor --fix` (also run during updates) removes recognized cache files
+and the directory if empty, preserving unrelated entries. Cleanup is best effort:
+files still open on Windows may remain until a later run; current readers do not
+use them.
+
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
 
 For turn ownership, queueing, stopping, and lifecycle mutation rules, see
 [Session controller](/concepts/session-controller).
+
+Retries with the same input key acknowledge an already committed input even after
+another turn has started. They do not append another user message or generate a
+second reply. Interrupted current turns can still resume; reusing a key for
+conflicting content or sender identity is refused.
 
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
@@ -57,6 +81,9 @@ commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
 Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
+In the Sessions page, enabling **Unknown** includes authorized unknown sessions
+owned by the selected agent. An agent-qualified key such as `agent:ops:unknown`
+is an ordinary session and remains visible when **Unknown** is off.
 Renaming, pinning, or editing session metadata retains the existing message
 preview without rereading the transcript. New messages, transcript replacements,
 completed transcript repairs, and cold-storage restoration refresh previews; changes to model selection
@@ -198,6 +225,8 @@ context, and replies to the source room remain unchanged.
 
 Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Finishing a turn does not close the thread, and activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
 
+Incognito agent turns use the same in-memory session owner from command preparation through execution, so the first turn can produce a reply without switching to the durable session store.
+
 <Warning>
 On the Codex runtime, the Codex app-server still writes each message you submit to its own diagnostic log database (`logs_2.sqlite` in that agent's Codex home), including messages in incognito threads. Codex currently offers no setting that turns this log off, so OpenClaw cannot prevent it. For conversations that must not reach disk, use an agent on the OpenClaw runtime.
 </Warning>
@@ -290,6 +319,9 @@ session, then aborts work promptly. A root is running when its agent loop, one o
 its descendant sub-agents, or one of its background processes is active. At startup,
 the Gateway clears the marker and sends one ordinary system input asking the agent
 to check current files, processes, sub-agents, and external actions before continuing.
+This includes channel threads and non-default agents; replies retain the session's
+recorded channel and thread. Marker persistence uses the process shutdown deadline.
+Shutdown and startup log per-agent marked/resumed counts and skip reasons.
 
 Running children stop quietly and do not resume independently. Their root requester
 receives the single resume input and can inspect results, send new instructions,
@@ -309,9 +341,13 @@ cannot be admitted gets an ordinary failed send and can resend. New messages dur
 the resumed run use normal steering and queue rules; they do not wait behind a
 special recovery predecessor.
 
-A crash or `SIGKILL` writes no markers, so nothing resumes automatically. The
-transcript stays available and a new message can continue the work. The agent must
-inspect uncertain effects before repeating them. The Control UI shows the ordinary
+A crash or `SIGKILL` writes no shutdown markers. Startup uses the existing persisted
+nonterminal run identity to resume an eligible root whose execution owner is gone.
+Successful chat commands do not create a running marker or trigger a recovery turn.
+Queued turns publish their running marker when execution starts, so a crash during
+their execution resumes that work once.
+Both sources produce one resume input per session. The agent must inspect uncertain
+effects before repeating them. The Control UI shows the ordinary
 conversation and resume turn without restart banners or interrupted-input notices.
 There is no manual `sessions.recover` method.
 
@@ -339,6 +375,8 @@ timestamps:
 
 - `sessionStartedAt`: when the current `sessionId` began; daily reset uses this.
 - `lastInteractionAt`: last user/channel interaction that extends idle lifetime.
+  Finalized user voice transcripts update this only with a new committed entry;
+  replayed, assistant-only, and rejected transcripts do not.
 - `updatedAt`: last store-row mutation; useful for listing and pruning, but not
   authoritative for daily/idle reset freshness.
 

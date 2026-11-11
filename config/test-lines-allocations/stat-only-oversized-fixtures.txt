@@ -1,0 +1,2 @@
+# Preserve oversized registry classification instead of accepting a malformed sparse-file result.
+3

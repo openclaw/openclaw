@@ -42,6 +42,12 @@ const ensurePortAvailableMock = vi.hoisted(() =>
 vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>()),
   ensurePortAvailable: ensurePortAvailableMock,
+  pathExistsSync: (filePath: string) => fs.existsSync(filePath),
+}));
+
+vi.mock("openclaw/plugin-sdk/path-existence-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/path-existence-runtime")>()),
+  executableFileExistsSync: (filePath: string) => fs.existsSync(filePath),
 }));
 
 vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
@@ -264,13 +270,6 @@ async function withMockChromeCdpServer(params: {
 describe("chrome.ts internal", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
-    vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
-      if (!fs.existsSync(candidate)) {
-        throw new Error("ENOENT");
-      }
-      return { isFile: () => true } as fs.Stats;
-    });
   });
 
   afterEach(() => {

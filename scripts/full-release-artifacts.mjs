@@ -43,7 +43,19 @@ function requireValue(condition, message) {
 }
 
 function api(repository, path) {
-  return JSON.parse(runReleaseToolingGh(["api", `repos/${repository}/${path}`]));
+  const args = ["api", `repos/${repository}/${path}`];
+  let response;
+  try {
+    response = runReleaseToolingGh(args);
+  } catch (error) {
+    if (!isRecord(error) || String(error.stderr).trim() !== "unexpected end of JSON input") {
+      throw error;
+    }
+    // Replay this GET once when gh could not decode its response; a successful
+    // command's invalid JSON and all producer identity failures remain fatal.
+    response = runReleaseToolingGh(args);
+  }
+  return JSON.parse(response);
 }
 
 function artifactRequest(env) {
@@ -698,24 +710,34 @@ function artifactAttemptJobs(request, runId, attempt, run) {
         response.total_count <= 1000,
       "Artifact producer job inventory is incomplete.",
     );
+    requireValue(
+      response.jobs.every(
+        (job) =>
+          String(job.run_id) === String(runId) &&
+          String(job.run_attempt) === String(attempt) &&
+          job.head_sha === request.toolingSha,
+      ),
+      "Artifact producer job identity changed.",
+    );
     jobs.push(...response.jobs);
     if (jobs.length === response.total_count) {
       break;
+    }
+    // A live reusable workflow can expose its expanded count before all jobs
+    // appear. Leave this observation pending; never admit a partial inventory.
+    if (
+      run &&
+      run.status !== "completed" &&
+      response.jobs.length < 100 &&
+      jobs.length < response.total_count
+    ) {
+      return [];
     }
     requireValue(
       response.jobs.length === 100 && page < 10 && jobs.length < response.total_count,
       "Artifact producer job inventory is incomplete.",
     );
   }
-  requireValue(
-    jobs.every(
-      (job) =>
-        String(job.run_id) === String(runId) &&
-        String(job.run_attempt) === String(attempt) &&
-        job.head_sha === request.toolingSha,
-    ),
-    "Artifact producer job identity changed.",
-  );
   return jobs;
 }
 

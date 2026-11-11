@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 
 const normalizeRepoPath = (value: string) => value.split(path.sep).join("/");
 const identity = (value: string) => value;
@@ -32,25 +33,31 @@ export function readJsonFile(filePath: fs.PathOrFileDescriptor) {
   return parsed;
 }
 
-export function validateVitestJsonReport(reportPath: fs.PathLike) {
+// Consumers use this admitted parse; rereading would validate one document and
+// consume another if the report changes between reads.
+export function readVitestJsonReport(
+  reportPath: fs.PathLike,
+): Result<Record<string, unknown>, string> {
   const displayPath = typeof reportPath === "string" ? reportPath : reportPath.toString();
   if (!fs.existsSync(reportPath)) {
-    return `missing Vitest JSON report: ${displayPath}`;
+    return err(`missing Vitest JSON report: ${displayPath}`);
   }
   try {
     const report = readJsonFile(reportPath);
     if (!isRecord(report)) {
-      return `invalid Vitest JSON report: ${displayPath} (report must be an object)`;
+      return err(`invalid Vitest JSON report: ${displayPath} (report must be an object)`);
     }
     if (!Array.isArray(report.testResults)) {
-      return `invalid Vitest JSON report: ${displayPath} (missing testResults array)`;
+      return err(`invalid Vitest JSON report: ${displayPath} (missing testResults array)`);
     }
+    return ok(report);
   } catch (error) {
-    return `invalid Vitest JSON report: ${displayPath} (${
-      error instanceof Error ? error.message : String(error)
-    })`;
+    return err(
+      `invalid Vitest JSON report: ${displayPath} (${
+        error instanceof Error ? error.message : String(error)
+      })`,
+    );
   }
-  return null;
 }
 
 function defaultVitestJsonReportPath(prefix: string) {
@@ -94,13 +101,13 @@ export function runVitestJsonReport({
     }
   }
 
-  const invalidReport = validateVitestJsonReport(resolvedReportPath);
-  if (invalidReport) {
-    console.error(`[test-report-utils] ${invalidReport}`);
+  const report = readVitestJsonReport(resolvedReportPath);
+  if (!report.ok) {
+    console.error(`[test-report-utils] ${report.error}`);
     process.exit(1);
   }
 
-  return resolvedReportPath;
+  return report.value;
 }
 
 /**

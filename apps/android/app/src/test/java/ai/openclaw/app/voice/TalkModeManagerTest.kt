@@ -1782,18 +1782,8 @@ class TalkModeManagerTest {
           }
         }
       val pipe = ParcelFileDescriptor.createPipe()
-      val type = Class.forName("ai.openclaw.app.voice.PushToTalkAudioSource")
-      val source =
-        type
-          .getDeclaredConstructor(
-            ParcelFileDescriptor::class.java,
-            ParcelFileDescriptor.AutoCloseOutputStream::class.java,
-            AudioRecord::class.java,
-          ).also { it.isAccessible = true }
-          .newInstance(pipe[0], ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]), recorder)
-      val finish = type.getDeclaredMethod("finishFromPump").also { it.isAccessible = true }
-      val close = type.getDeclaredMethod("close").also { it.isAccessible = true }
-      val finishing = async(Dispatchers.Default) { finish.invoke(source) }
+      val source = SpeechRecognitionAudioSource(pipe[0], ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]), recorder)
+      val finishing = async(Dispatchers.Default) { source.finishFromPump() }
       val closeStarted = CompletableDeferred<Unit>()
       var closing: kotlinx.coroutines.Deferred<*>? = null
       try {
@@ -1801,7 +1791,7 @@ class TalkModeManagerTest {
         closing =
           async(Dispatchers.Default) {
             closeStarted.complete(Unit)
-            close.invoke(source)
+            source.close()
           }
         closeStarted.await()
         assertNull(
@@ -1814,7 +1804,7 @@ class TalkModeManagerTest {
       } finally {
         finishRelease.countDown()
         finishing.await()
-        closing?.await() ?: close.invoke(source)
+        closing?.await() ?: source.close()
       }
       assertEquals(AudioRecord.STATE_UNINITIALIZED, recorder.state)
     }
@@ -1914,9 +1904,9 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun voiceModeChangeDetachesAcceptedConsultWhileTalkStopAbortsIt() =
+  fun voiceModeChangeAndEndTalkDetachAcceptedConsult() =
     runBlocking {
-      for ((trigger, disposition) in listOf("mode change" to "detach", "stop" to "abort")) {
+      for (trigger in listOf("mode change", "end talk")) {
         val closed = CompletableDeferred<JsonObject>()
         withNodeOwningRealtimePlayback(
           workDispatcher = Dispatchers.Unconfined,
@@ -1925,12 +1915,12 @@ class TalkModeManagerTest {
             false
           },
         ) { runtime, proof ->
-          if (trigger == "stop") runtime.setTalkModeEnabled(false) else runtime.setMicEnabled(true)
+          if (trigger == "end talk") runtime.setTalkModeEnabled(false) else runtime.setMicEnabled(true)
           assertFalse(proof.manager.isEnabled.value)
           proof.scheduler.runCurrent()
           val close = withContext(Dispatchers.Default) { withTimeout(5_000) { closed.await() } }
           assertEquals("playback-relay", close.getValue("sessionId").jsonPrimitive.content)
-          assertEquals(disposition, close["disposition"]?.jsonPrimitive?.content)
+          assertEquals("$trigger preserves accepted work", "detach", close["disposition"]?.jsonPrimitive?.content)
         }
       }
     }

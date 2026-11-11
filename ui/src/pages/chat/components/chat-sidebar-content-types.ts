@@ -94,7 +94,7 @@ export type SessionDiffScope =
 
 type SessionDiffLoader = (
   params: SessionDiffScope,
-  options?: { refresh?: boolean },
+  options?: { refresh?: boolean; summaryOnly?: boolean },
 ) => Promise<SessionsDiffResult>;
 
 type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
@@ -358,7 +358,7 @@ export type SidebarSelection = (
   | { kind: "loading" }
   // Keep failed opens attached to their selected surface instead of falling back
   // to unrelated content.
-  | { kind: "unavailable"; message: string }
+  | { kind: "unavailable"; message: string; permission?: true }
 ) & {
   fileTab?: { id: string; label: string; disposition?: "pinned" | "preview"; intent?: "navigate" };
 };

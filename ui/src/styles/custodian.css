@@ -122,6 +122,58 @@ openclaw-custodian-page {
   border-bottom: 0;
 }
 
+/* Phone: the top bar names the page and carries History, so the row goes.
+   The heading stays for assistive tech. */
+.custodian--actions-in-topbar .custodian__header {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.custodian--actions-in-topbar .custodian__identity {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A third action needs its side's floor, so the brand stays clear of it. */
+.topnav-shell:has(.custodian__history-toggle--topbar) {
+  grid-template-columns: minmax(40px, 1fr) auto minmax(max-content, 1fr);
+}
+
+.custodian__history-toggle--topbar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  color: var(--muted);
+}
+
+.custodian__history-toggle--topbar:hover {
+  border-color: color-mix(in srgb, var(--border-strong) 90%, transparent);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.custodian__history-toggle--topbar svg {
+  width: 16px;
+  height: 16px;
+}
+
+.shell--mobile-nav .topnav-shell__actions .custodian__history-toggle--topbar[aria-expanded="true"] {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text);
+}
+
 .custodian__identity {
   display: flex;
   align-items: center;
@@ -447,8 +499,9 @@ openclaw-custodian-page {
   width: 14px;
   height: 14px;
   margin: 6px auto;
-  border: 2px solid color-mix(in srgb, currentcolor 35%, transparent);
-  border-top-color: currentcolor;
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: var(--radius-full);
   animation: btn-spinner-spin 0.7s linear infinite;
 }

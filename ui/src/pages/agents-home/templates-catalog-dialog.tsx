@@ -5,10 +5,9 @@ import {
 import { action, createMemo, createOptimistic, createSignal, onSettled, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadSettings } from "../../app/settings.ts";
 import { FilePreviewModal } from "../../components/file-preview-modal.tsx";
+import { ModalDialog } from "../../components/modal-dialog.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
-import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
@@ -20,7 +19,6 @@ import {
   buildAgentMainSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { preparePaneSessionHandoff } from "../chat/chat-pane-shared.ts";
 import {
   applyTemplateAdd,
   readTemplateAddReviewPlan,
@@ -41,6 +39,7 @@ type TemplatesDialogProps = {
   onClose?: () => void;
   onAdded?: () => void;
   initialPackageName: string;
+  modal?: boolean;
 };
 
 class TemplatesCatalogModel {
@@ -191,7 +190,7 @@ class TemplatesCatalogModel {
     this.close();
   }
 
-  private openAgentChat(agentId: string, agentName: string, context: ApplicationContext) {
+  private openAgentChat(agentId: string, context: ApplicationContext) {
     const mainKey =
       resolveUiConfiguredMainKey({
         agentsList: context.agents.state.agentsList,
@@ -204,16 +203,6 @@ class TemplatesCatalogModel {
       sessionKey,
       agentId,
     });
-    preparePaneSessionHandoff(
-      context,
-      loadSettings().chatSplitLayout?.activePaneId ?? "p1",
-      sessionKey,
-      {
-        draft: `${agentName}, what can you do?`,
-        attachments: [],
-        send: true,
-      },
-    );
     selectApplicationSession({
       selection: context.agentSelection,
       gateway: context.gateway,
@@ -247,7 +236,7 @@ class TemplatesCatalogModel {
           const agent = roster?.agents.find((entry) => entry.id === agentId);
           if (agent) {
             this.props.onAdded?.();
-            this.openAgentChat(agentId, normalizeAgentLabel(agent), context);
+            this.openAgentChat(agentId, context);
             return;
           }
         } catch {
@@ -392,6 +381,8 @@ class TemplatesCatalogModel {
       basePath: this.context.basePath,
       selected: this.selected,
       detail: this.detail,
+      preview: this.preview,
+      onClosePreview: () => this.closePreview(),
       installedPluginPackages: this.installedPluginPackages,
       addError: this.addError,
       applying: this.applying,
@@ -494,7 +485,7 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
         if (isCurrent()) {
           const entry = entries.find((candidate) => candidate.packageName === packageName);
           if (!entry) {
-            throw new Error(t("templatesCatalog.empty"));
+            throw new Error(t("templatesCatalog.unavailable"));
           }
           model.select(entry);
         }
@@ -551,22 +542,42 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
       ? []
       : [{ path: previewPath(), size: "", contents: current.content }];
   };
+  const content = (
+    <TemplatesCatalogView
+      {...view()}
+      modal={props.modal}
+      readPreview={readFile}
+      readEntries={entries}
+      catalogRequest={catalogRequest()}
+      readDetail={detail}
+      detailRequest={detailRequest()}
+      onRetryCatalog={() => loadCatalog()}
+      applying={applying() && view().applying}
+      onConfirm={() => mutate(view().onConfirm)}
+      onConfirmConsent={() => mutate(view().onConfirmConsent)}
+      onConfirmReview={() => mutate(view().onConfirmReview)}
+      onRetryOpenChat={() => mutate(view().onRetryOpenChat)}
+    />
+  );
   return (
     <openclaw-templates-catalog-dialog>
-      <TemplatesCatalogView
-        {...view()}
-        readEntries={entries}
-        catalogRequest={catalogRequest()}
-        readDetail={detail}
-        detailRequest={detailRequest()}
-        onRetryCatalog={() => loadCatalog()}
-        applying={applying() && view().applying}
-        onConfirm={() => mutate(view().onConfirm)}
-        onConfirmConsent={() => mutate(view().onConfirmConsent)}
-        onConfirmReview={() => mutate(view().onConfirmReview)}
-        onRetryOpenChat={() => mutate(view().onRetryOpenChat)}
-      />
-      <Show when={preview()}>
+      <Show when={props.modal} fallback={content}>
+        <ModalDialog
+          label={t("templatesCatalog.review")}
+          open
+          style={{ "--openclaw-modal-width": "960px" }}
+          onModal-cancel={(event: Event) => {
+            if (model.applying) {
+              event.preventDefault();
+            } else {
+              props.onClose?.();
+            }
+          }}
+        >
+          {content}
+        </ModalDialog>
+      </Show>
+      <Show when={!props.modal && preview()}>
         {(current) => (
           <FilePreviewModal
             label={

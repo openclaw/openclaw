@@ -13,9 +13,11 @@ import {
   parseUsageCostTranscriptRecord,
   needsUsageCostEstimate,
   applyUsageCostEstimate,
+  usageCostEstimateUsesPricing,
 } from "./session-cost-usage-pricing.js";
 import {
   USAGE_COST_ROLLUP_VERSION,
+  USAGE_COST_UNPRICED_FINGERPRINT,
   type UsageCostJsonlCheckpoint,
   type UsageCostSqliteCheckpoint,
   type UsageCostRollupEntry,
@@ -49,11 +51,15 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
   const rollup = previous?.rollup ?? createSessionUsageRollupData();
   let countedRecords = 0;
   let parsedRecords = 0;
+  // Catalog prices are inputs only for turns without a recorded cost.
+  let priced =
+    previous !== undefined && previous.pricingFingerprint !== USAGE_COST_UNPRICED_FINGERPRINT;
   return {
     async addEntries(entries: Iterable<ParsedTranscriptEntry>): Promise<void> {
       let batch: ParsedTranscriptEntry[] = [];
       const flush = async () => {
         const estimated = batch.filter(needsUsageCostEstimate);
+        priced ||= estimated.some(usageCostEstimateUsesPricing);
         const costs = await params.resolveCosts(
           estimated.map(({ provider, model }) => ({ provider, model })),
         );
@@ -112,7 +118,7 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
     finish(checkpoint: UsageCostJsonlCheckpoint | UsageCostSqliteCheckpoint): UsageCostRollupEntry {
       return {
         version: USAGE_COST_ROLLUP_VERSION,
-        pricingFingerprint: params.pricingFingerprint,
+        pricingFingerprint: priced ? params.pricingFingerprint : USAGE_COST_UNPRICED_FINGERPRINT,
         checkpoint,
         scannedAt: Date.now(),
         parsedRecords: (previous?.parsedRecords ?? 0) + parsedRecords,

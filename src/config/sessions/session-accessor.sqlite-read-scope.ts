@@ -220,11 +220,12 @@ export async function prepareSqliteTranscriptReadScope(
 /** Resolve custom physical ownership in the existing read worker. */
 export async function prepareSqliteScope(
   scope: SqliteScopeInput & { sessionKey: string },
+  signal?: AbortSignal,
 ): Promise<ResolvedSqliteScope> {
   const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const captured = { ...scope, env };
-  return resolveSqliteScope(captured, undefined, await prepareSqliteScopeTarget(captured));
+  return resolveSqliteScope(captured, undefined, await prepareSqliteScopeTarget(captured, signal));
 }
 
 export async function prepareSqliteScopeTarget(scope: SqliteScopeInput, signal?: AbortSignal) {

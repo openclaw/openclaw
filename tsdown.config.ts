@@ -241,6 +241,44 @@ function createBashParserAssetsPlugin(): TsdownPlugin {
   };
 }
 
+function createHighlightRuntimeChunkPlugin(): TsdownPlugin {
+  const runtimePath = fs.realpathSync(path.resolve("src/agents/utils/syntax-highlight.ts"));
+  const load = 'createRequire(import.meta.url)("highlight.js")';
+  return {
+    name: "openclaw:highlight-runtime-chunk",
+    transform(code, id) {
+      if (path.normalize(id) !== runtimePath) {
+        return undefined;
+      }
+      if (!code.includes(load)) {
+        this.error("highlight.js loader changed; update the packaged highlighter transform");
+      }
+      const require = createRequire(import.meta.url);
+      const entryPath = require.resolve("highlight.js");
+      const licensePath = path.join(
+        path.dirname(require.resolve("highlight.js/package.json")),
+        "LICENSE",
+      );
+      this.addWatchFile(licensePath);
+      // npm would otherwise install the package's 1,580 files, mostly unused ES,
+      // CSS, and SCSS copies. Keep the lazy synchronous load as one bundled chunk.
+      const runtime = this.emitFile({ type: "chunk", id: entryPath, name: "highlight-runtime" });
+      this.emitFile({
+        type: "asset",
+        fileName: "highlight.js.LICENSE",
+        source: fs.readFileSync(licensePath),
+      });
+      return {
+        code: `import { fileURLToPath as highlightRuntimePath } from "node:url";\n${code.replace(
+          load,
+          `createRequire(import.meta.url)(highlightRuntimePath(import.meta.ROLLUP_FILE_URL_${runtime})).default`,
+        )}`,
+        map: null,
+      };
+    },
+  };
+}
+
 function nodeBuildConfig(
   config: UserConfig,
   declarations: UserConfig["dts"] = TSDOWN_DECLARATIONS,
@@ -256,6 +294,9 @@ function nodeBuildConfig(
       typeof declarations === "object" && declarations.emitDtsOnly
         ? undefined
         : createBashParserAssetsPlugin(),
+      typeof declarations === "object" && declarations.emitDtsOnly
+        ? undefined
+        : createHighlightRuntimeChunkPlugin(),
       typeof declarations === "object" && declarations.emitDtsOnly
         ? undefined
         : createPublicSessionCardAssetsPlugin(),
@@ -510,6 +551,7 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
+    "runtime-artifacts": "src/runtime-artifacts.ts",
     "gateway-prewarm": "src/gateway/server-start.ts",
     "infra/package-lifecycle": "src/infra/package-lifecycle.ts",
     "commands/doctor-update-schema-guard": "src/commands/doctor-update-schema-guard.ts",
@@ -530,6 +572,7 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
+    "infra/device-identity": "src/infra/device-identity.ts",
     "config/sessions/session-transcript-reconcile":
       "src/config/sessions/session-transcript-reconcile.ts",
     ...createRootRuntimeProcessBuildEntries(pluginIds),
@@ -797,12 +840,12 @@ function buildUnifiedDeclarationGroups(
     })),
   );
   // Runtime entrypoints include workers, lazy loaders, and private implementation
-  // sidecars. Only the library root, typed SDK, and plugin contracts own declarations.
+  // sidecars. Only public library entrypoints, typed SDK, and plugin contracts own declarations.
   const sortedEntries = Object.entries(entries)
     .filter(([name]) =>
       name.startsWith("plugin-sdk/")
         ? shouldBuildPrivateQaEntries || publicPluginSdkEntryNames.has(name)
-        : name === "index" || Object.hasOwn(pluginContracts, name),
+        : name === "index" || name === "runtime-artifacts" || Object.hasOwn(pluginContracts, name),
     )
     .toSorted(([left], [right]) => left.localeCompare(right));
   // These entrypoints share most of their compiler inputs. Partitioning them

@@ -152,7 +152,7 @@ function eventEnvelope(value: unknown): XPostEnvelope | undefined {
 }
 
 async function receiveStream(
-  options: XReceiveOptions & { onBudgetPause: (until: number) => void },
+  options: XReceiveOptions & { onBudgetPause: (until: number) => void; onConnected: () => void },
   backfillMs: number,
 ): Promise<void> {
   const controller = new AbortController();
@@ -168,14 +168,22 @@ async function receiveStream(
   let receiveError: Error | undefined;
   let wakeReader: (() => void) | undefined;
   let wakeConsumer: (() => void) | undefined;
+  let wakeCapacity: (() => void) | undefined;
   let chargesSettled = Promise.resolve();
-  const batches: { events: unknown[]; charged: Promise<void> }[] = [];
+  // Pause the reader once a slow onPost retains this many batches or this much
+  // event text. The pending-line guard below does not cover batches already queued.
+  const queuedBatchLimit = 32;
+  const queuedCharLimit = 1_048_576;
+  let queuedChars = 0;
+  const batches: { events: unknown[]; charged: Promise<void>; chars: number }[] = [];
+  const backlogFull = () => batches.length >= queuedBatchLimit || queuedChars >= queuedCharLimit;
   const cancelOnAbort = () => {
     void reader?.cancel().catch(() => {});
   };
   const requestDrain = () => {
     drainRequested = true;
     wakeReader?.();
+    wakeCapacity?.();
   };
   const pause = (until: number) => {
     budgetPaused = true;
@@ -200,12 +208,21 @@ async function receiveStream(
   const unsubscribe = options.api.spend.subscribe(() => {
     void checkBudget().catch((error: unknown) => controller.abort(error));
   });
-  const armIdleTimer = () => {
+  const disarmIdleTimer = () => {
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(
-      () => controller.abort(new Error("X activity stream idle timeout")),
-      25_000,
-    );
+    idleTimer = undefined;
+  };
+  const armIdleTimer = () => {
+    disarmIdleTimer();
+    const timer = setTimeout(() => {
+      // After a local stall, let buffered socket reads run before declaring X idle.
+      setImmediate(() => {
+        if (idleTimer === timer) {
+          controller.abort(new Error("X activity stream idle timeout"));
+        }
+      });
+    }, 25_000);
+    idleTimer = timer;
   };
   const receiveBatches = async (source: ReadableStreamDefaultReader<Uint8Array>) => {
     const decoder = new TextDecoder();
@@ -213,6 +230,24 @@ async function receiveStream(
     try {
       for (;;) {
         options.signal.throwIfAborted();
+        if (!drainRequested && !controller.signal.aborted && backlogFull()) {
+          // Stay paused until the consumer drains below the bound, or drain/abort.
+          // The idle timer stays disarmed: this wait is local backpressure, not a dead stream.
+          await new Promise<void>((resolve) => {
+            const finish = () => {
+              options.signal.removeEventListener("abort", finish);
+              controller.signal.removeEventListener("abort", finish);
+              if (wakeCapacity === finish) {
+                wakeCapacity = undefined;
+              }
+              resolve();
+            };
+            wakeCapacity = finish;
+            options.signal.addEventListener("abort", finish, { once: true });
+            controller.signal.addEventListener("abort", finish, { once: true });
+          });
+          continue;
+        }
         const read = source.read();
         let ready = false;
         void read.then(
@@ -235,7 +270,7 @@ async function receiveStream(
             });
           } finally {
             wakeReader = undefined;
-            clearTimeout(idleTimer);
+            disarmIdleTimer();
           }
         }
         if (drainRequested && !ready) {
@@ -262,6 +297,7 @@ async function receiveStream(
           throw new Error("X activity stream event exceeded 1 MiB");
         }
         const events: unknown[] = [];
+        let chars = 0;
         let boundary: number;
         while ((boundary = pending.indexOf("\n")) !== -1) {
           const line = pending.slice(0, boundary).trim();
@@ -269,6 +305,7 @@ async function receiveStream(
           if (!line) {
             continue;
           }
+          chars += line.length;
           try {
             events.push(JSON.parse(line));
           } catch {
@@ -285,7 +322,8 @@ async function receiveStream(
           // The spend owner serializes charges; its latest receipt joins every earlier charge.
           chargesSettled = charged.catch(fail);
         }
-        batches.push({ events, charged });
+        queuedChars += chars;
+        batches.push({ events, charged, chars });
         wakeConsumer?.();
       }
     } catch (error) {
@@ -295,7 +333,7 @@ async function receiveStream(
     } finally {
       receiveDone = true;
       wakeConsumer?.();
-      clearTimeout(idleTimer);
+      disarmIdleTimer();
     }
   };
   try {
@@ -313,7 +351,8 @@ async function receiveStream(
     if (signal.aborted) {
       cancelOnAbort();
     }
-    clearTimeout(idleTimer);
+    disarmIdleTimer();
+    options.onConnected();
     options.onStatus?.({
       eventMode: "stream",
       streamConnected: true,
@@ -377,6 +416,8 @@ async function receiveStream(
         wakeConsumer = undefined;
         continue;
       }
+      queuedChars -= batch.chars;
+      wakeCapacity?.();
       await batch.charged;
       for (const value of batch.events) {
         options.signal.throwIfAborted();
@@ -440,7 +481,7 @@ async function receiveStream(
   } finally {
     closed = true;
     unsubscribe();
-    clearTimeout(idleTimer);
+    disarmIdleTimer();
     controller.abort();
     await backfill;
     signal.removeEventListener("abort", cancelOnAbort);
@@ -528,7 +569,13 @@ export async function runXEvents(
       }
       try {
         await receiveStream(
-          { ...options, onBudgetPause: pauseStream },
+          {
+            ...options,
+            onBudgetPause: pauseStream,
+            onConnected: () => {
+              backoffMs = 1_000;
+            },
+          },
           Math.max(60, (options.pollSeconds ?? 60) * 4) * 1000,
         );
       } catch (error) {

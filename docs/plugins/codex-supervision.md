@@ -109,7 +109,7 @@ tokens in its auth store. Supervision honors explicit `appServer` connection set
 instead of replacing them with its local user-home default.
 
 New ChatGPT sign-ins offered by automatic setup use an isolated OpenClaw agent
-home. To switch a reused native login to a separate login, open **Model Setup**
+home. To switch a reused native login to a separate login, open **Models**
 and sign in with ChatGPT or enter an OpenAI API key. Completing sign-in selects
 `plugins.entries.codex.config.appServer.homeScope: "agent"` automatically.
 The separate login does not share native Codex threads or configuration.

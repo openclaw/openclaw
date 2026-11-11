@@ -27,6 +27,9 @@ export function assertStatusUsageAgentScope(opts: StatusJsonCommandOptions): voi
   if (opts.agent !== undefined && opts.usage !== true) {
     throw new Error("--agent is only valid with --usage");
   }
+  if (opts.agent !== undefined && !opts.agent.trim()) {
+    throw new Error("--agent must not be blank");
+  }
 }
 
 export async function runStatusJsonCommand(params: {
@@ -105,7 +108,7 @@ export async function runStatusJsonCommand(params: {
     ...scan.summary,
     recoveryCopies:
       scan.recoveryCopies ??
-      collectRecoveryDiskUsage({ cfg: scan.cfg, env: scan.env ?? process.env }),
+      (await collectRecoveryDiskUsage({ cfg: scan.cfg, env: scan.env ?? process.env })),
     os: scan.osSummary,
     update: surface.update,
     updateChannel: channelInfo.channel,

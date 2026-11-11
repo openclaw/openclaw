@@ -283,7 +283,7 @@ suite.define(() => {
 
       const overview = page.locator(".security-page");
       const browserSwitchRole = overview.getByRole("switch", {
-        name: "Browser enabled",
+        name: "Browser tools",
         exact: true,
       });
       await browserSwitchRole.waitFor();

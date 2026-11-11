@@ -12,13 +12,18 @@ import {
 } from "./run-end-lifecycle.js";
 import type { WorktreeRemovalDeferral } from "./types.js";
 
-export function isWorktreeRemovalTimeout(error: unknown): boolean {
+export async function removalDeferralReason(error: unknown): Promise<string | undefined> {
+  const { OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX } =
+    await import("../../gateway/worker-environments/workspace-manifest-comparison.js");
   for (let cause = error; cause instanceof Error; cause = cause.cause) {
     if (cause instanceof GitCommandTimeoutError) {
-      return true;
+      return "Git removal timed out; cleanup deferred";
+    }
+    if (cause.message.startsWith(OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX)) {
+      return "Workspace snapshot exceeds its byte limit; cleanup deferred";
     }
   }
-  return false;
+  return undefined;
 }
 
 /** Keep a failed attempt with the registry revision that still owns its checkout. */

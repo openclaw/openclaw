@@ -71,6 +71,7 @@ const mocks = vi.hoisted(() => {
     activeRuntime: {
       invoke: vi.fn(async () => {}),
       handleInput: vi.fn(),
+      setLocalMcpAllowed: vi.fn(),
       cancel: vi.fn(),
       cancelAll: vi.fn(async () => {}),
       tryPauseForUpdate: vi.fn(async () => true),

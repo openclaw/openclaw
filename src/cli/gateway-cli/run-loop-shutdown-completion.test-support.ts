@@ -107,6 +107,8 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
             (await f.acquireGatewayLock.mock.results[0]?.value)?.release,
           ).toHaveBeenCalledOnce();
           expectUncalled(f.restartGatewayProcessWithFreshPid, f.respawnGatewayProcessForUpdate);
+          // Settled cleanup still bounds a leaked handle that would outlive the loop.
+          expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(10_000);
         }, true);
       } finally {
         closing.release();
@@ -334,6 +336,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       expectCallCount(0, runtime.exit, f.cancelShutdownHardExitWatchdog);
       await vi.advanceTimersByTimeAsync(GATEWAY_SHUTDOWN_TIMEOUT_MS);
       await expect(exited).resolves.toBe(1);
+      expect(f.requestSettledExitWatchdog).not.toHaveBeenCalled();
     }, true);
   });
 }

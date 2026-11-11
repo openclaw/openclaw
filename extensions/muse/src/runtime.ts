@@ -249,6 +249,9 @@ export class MusePool {
     try {
       const host = await handshake.initialize({
         clientInfo: { name: "openclaw", version: musePackage.version },
+        // OpenClaw never presents or answers userInput/request, and MSP treats an
+        // absent flag as capable, so a Muse question would block the turn until timeout.
+        capabilities: { userInputDialogs: false },
       });
       signal.throwIfAborted();
       const runtime: MuseRuntime = {

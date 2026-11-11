@@ -11,10 +11,21 @@ who contributed, with links to the source changes.
 
 <!-- Keep releases newest first, with a short summary on every card. -->
 
+### November 2026
+
+<CardGroup cols={2}>
+  <Card title="v2026.11.1" href="/releases/2026.11.1">
+    Patch fixes for updates, conversations, apps and model connections
+  </Card>
+</CardGroup>
+
 ### October 2026
 
 <CardGroup cols={2}>
-  <Card title="v2026.10.9 (latest)" href="/releases/2026.10.9">
+  <Card title="v2026.10.10" href="/releases/2026.10.10">
+    Chat Details, experimental Advisor, split speech mode for browser Talk, and other improvements and fixes.
+  </Card>
+  <Card title="v2026.10.9" href="/releases/2026.10.9">
     Security remediations and fixes for updates, database recovery, workspace restrictions, and sessions.
   </Card>
   <Card title="v2026.10.8" href="/releases/2026.10.8">

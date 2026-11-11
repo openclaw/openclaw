@@ -584,11 +584,15 @@ public enum OpenClawChatGatewayRequests {
         limit: Int? = nil,
         maxChars: Int? = nil,
         inputRunIDs: [String]? = nil,
+        cursor: String? = nil,
+        maxBytes: Int? = nil,
         timeoutMs: Int? = nil) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey")
         params["limit"] = limit.map(AnyCodable.init)
         params["maxChars"] = maxChars.map(AnyCodable.init)
+        params["cursor"] = cursor.map(AnyCodable.init)
+        params["maxBytes"] = maxBytes.map(AnyCodable.init)
         if let inputRunIDs, !inputRunIDs.isEmpty {
             params["inputRunIds"] = AnyCodable(inputRunIDs)
         }
@@ -739,10 +743,16 @@ public enum OpenClawChatGatewayRequests {
         return OpenClawChatGatewayRequest(
             method: "chat.send",
             params: params,
-            // Admission includes audio transcription; zero waits until the
-            // captured connection closes, the caller cancels, or the ACK arrives.
-            timeoutMs: Double(requestTimeoutMs ??
-                (attachments.contains { $0.mimeType.lowercased().hasPrefix("audio/") } ? 0 : 30000)))
+            timeoutMs: Double(requestTimeoutMs ?? self.sendTimeoutMs(attachments)))
+    }
+
+    private static func sendTimeoutMs(_ attachments: [OpenClawChatAttachmentPayload]) -> Int {
+        // Admission includes audio transcription; zero waits until the
+        // captured connection closes, the caller cancels, or the ACK arrives.
+        if attachments.contains(where: { $0.mimeType.lowercased().hasPrefix("audio/") }) { return 0 }
+        // URLSession completes a WebSocket send once the frame is buffered, so the
+        // deadline also covers the upload: allow 32 bytes/ms (256 kbit/s) for it.
+        return 30000 + attachments.reduce(0) { $0 + $1.content.utf8.count } / 32
     }
 
     public static func agentWait(

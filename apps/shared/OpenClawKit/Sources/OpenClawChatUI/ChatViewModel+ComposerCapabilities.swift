@@ -13,7 +13,7 @@ extension OpenClawChatViewModel {
     }
 
     public func selectVerboseLevel(_ level: String) {
-        guard self.composerEffortMutationAvailable else { return }
+        guard self.composerVerboseMutationAvailable else { return }
         self.performSelectVerboseLevel(level)
     }
 
@@ -60,6 +60,10 @@ extension OpenClawChatViewModel {
 
     var composerEffortMutationAvailable: Bool {
         !self.supportsComposerCapabilities || self.composerCapabilityCatalog.effortMutationAvailable
+    }
+
+    public var composerVerboseMutationAvailable: Bool {
+        !self.supportsComposerCapabilities || self.composerCapabilityCatalog.verboseMutationAvailable
     }
 
     var composerCapabilitiesLoading: Bool {
@@ -220,7 +224,7 @@ extension OpenClawChatViewModel {
 
     var composerWebSearchEnabled: Bool {
         self.composerCapabilityCatalog.webSearchAvailable &&
-            (self.composerToolOverrides.webSearch ?? self.composerCapabilityCatalog.webSearchBaseEnabled)
+            self.composerCapabilityCatalog.webSearchBaseEnabled && self.composerToolOverrides.webSearch != false
     }
 
     func composerSkillEnabled(_ skill: OpenClawChatComposerSkill) -> Bool {

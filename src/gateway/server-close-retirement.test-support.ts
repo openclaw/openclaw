@@ -1,20 +1,27 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { createCliLiveSessionCapability } from "../agents/cli-runner/cli-live-session-registry.js";
+import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { CliBackendLiveSessionHandle } from "../plugins/cli-backend.types.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "../plugins/services.js";
 import {
   createServiceRegistration,
   startPluginServices,
 } from "../plugins/services.test-support.js";
+import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.types.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { formatGatewayPendingCloseSteps } from "./restart-trace.js";
 import type {
   createGatewayCloseTestHandlerFactory,
   GatewayCloseParams,
@@ -28,6 +35,7 @@ export function registerGatewayResourceRetirementTests(
   {
     mocks,
     sharedStateLifecycle,
+    createHeldCloseSource,
   }: {
     mocks: Pick<
       typeof import("./server-close.mocks.test-support.js").mocks,
@@ -35,21 +43,28 @@ export function registerGatewayResourceRetirementTests(
       | "disposeAllBundleLspRuntimes"
       | "drainRetainedEmbeddingProviders"
       | "closeProviderTransportDispatcherPool"
+      | "disposeAgentHarnesses"
+      | "triggerInternalHook"
     >;
-    sharedStateLifecycle: ReadonlyMap<string, boolean>;
+    sharedStateLifecycle: Map<string, boolean>;
+    createHeldCloseSource: (runId: string) => Promise<{
+      source: RpcSourceRef;
+      release: (() => void) | undefined;
+    }>;
   },
 ): void {
-  it("joins cron cleanup that settles after its grace before retiring shared state", async () => {
+  it("joins cron persistence past both grace warnings and then retires shared state", async () => {
     vi.useFakeTimers();
     const cronCleanup = createDeferredCore();
     const stopAndDrain = vi.fn(() => cronCleanup.promise);
     const close = createGatewayCloseHandler({
       cron: { stop: vi.fn(), stopAndDrain },
-      lifecycleUnsub: () => cronCleanup.resolve(),
     });
     const closing = close({ reason: "late cron cleanup", exitAfterClose: true });
     try {
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(sharedStateLifecycle.has("open")).toBe(true);
+      cronCleanup.resolve();
       const result = await closing;
       expect(stopAndDrain).toHaveBeenCalledOnce();
       expect(result.warnings).toContain("cron");
@@ -99,20 +114,25 @@ export function registerGatewayResourceRetirementTests(
         restartExpectedMs: 1_500,
         exitAfterClose: true,
       });
-      const failure = closing.catch((error: unknown) => error);
+      let closed = false;
+      void closing
+        .finally(() => {
+          closed = true;
+        })
+        .catch(() => {});
       await vi.advanceTimersByTimeAsync(5_000);
       expect(sharedStateLifecycle.has("open")).toBe(true);
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(isGatewayCleanupRetainedError(await failure)).toBe(true);
+      expect(closed).toBe(false);
       expect(stopChannel).toHaveBeenCalledWith("discord");
       expect(sharedStateLifecycle.has("open")).toBe(true);
       expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
       expect(getActivePluginRegistry()).toBe(registry);
       expect(stop).toHaveBeenCalledOnce();
       cleanup.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(sharedStateLifecycle.has("open")).toBe(true);
-      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+      await closing;
+      expect(sharedStateLifecycle.has("open")).toBe(false);
+      expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
     } finally {
       cleanup.resolve();
       await Promise.allSettled([strictStopping, closing]);
@@ -132,9 +152,10 @@ export function registerGatewayResourceRetirementTests(
       const close = createGatewayCloseHandler({
         httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
       });
-      const closePromise = close({ reason: "test shutdown", exitAfterClose: true }).catch(
-        (error: unknown) => error,
-      );
+      let closed = false;
+      const closePromise = close({ reason: "test shutdown", exitAfterClose: true }).finally(() => {
+        closed = true;
+      });
       try {
         if (label === "bundle-mcp") {
           await vi.advanceTimersByTimeAsync(0);
@@ -143,9 +164,9 @@ export function registerGatewayResourceRetirementTests(
             mocks.disposeAllBundleLspRuntimes.mock.invocationCallOrder[0]!,
           );
         }
-        // Disposal, the retained-work join, and the final cleanup join each have a grace.
+        // Late disposal must retain state without preventing independent transport cleanup.
         await vi.advanceTimersByTimeAsync(15_000);
-        expect(isGatewayCleanupRetainedError(await closePromise)).toBe(true);
+        expect(closed).toBe(false);
         expect(httpClose).toHaveBeenCalledOnce();
         expect(sharedStateLifecycle.has("open")).toBe(true);
         expect(mocks.closeProviderTransportDispatcherPool).not.toHaveBeenCalled();
@@ -153,7 +174,7 @@ export function registerGatewayResourceRetirementTests(
         cleanup.resolve();
         await closePromise;
       }
-      expect(mocks.closeProviderTransportDispatcherPool).not.toHaveBeenCalled();
+      expect(mocks.closeProviderTransportDispatcherPool).toHaveBeenCalledOnce();
     },
   );
 
@@ -277,4 +298,131 @@ export function registerGatewayResourceRetirementTests(
       await actor.release();
     }
   });
+
+  it.each(["shutdown", "pre-restart", "harness", "sdk", "session"] as const)(
+    "retains shared SQLite through actual %s cleanup after grace",
+    async (owner) => {
+      const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+      const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } =
+        await import("../state/openclaw-state-db.js");
+      const hooks = await vi.importActual<typeof import("../hooks/internal-hooks.js")>(
+        "../hooks/internal-hooks.js",
+      );
+      const state = await createOpenClawTestState({ label: "shutdown-actual-sqlite" });
+      const database = openOpenClawStateDatabase({ env: state.env });
+      const sdkDatabase = new DatabaseSync(":memory:");
+      const preparedDatabase = new DatabaseSync(":memory:");
+      const unregisterPrepared = registerPreparedModelRuntimeClose(async () => {
+        preparedDatabase.close();
+        unregisterPrepared();
+      });
+      const sdkHost = new LegacyPluginSdkResourceHost();
+      const inspection = new PluginRegistryInspectionResources(async () => {});
+      inspection.attach(createEmptyPluginRegistry());
+      const sdkDisposalReads: unknown[] = [];
+      inspection.register("sdk-provider", {
+        id: "native-sdk-borrow",
+        dispose: () => {
+          sdkDisposalReads.push(database.db.prepare("SELECT 42 AS value").get());
+          sdkDatabase.close();
+        },
+      });
+      sdkHost.adopt(inspection, inspection.retain());
+      await inspection.release();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const reads: unknown[] = [];
+      const failures: unknown[] = [];
+      const cleanup = vi.fn(async () => {
+        entered.resolve();
+        try {
+          await release.promise;
+          reads.push(database.db.prepare("SELECT 1 AS value").get());
+          for (const db of [sdkDatabase, preparedDatabase]) {
+            expect(db.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
+          }
+        } catch (error) {
+          failures.push(error);
+        }
+      });
+      const eventKey = `gateway:${owner === "pre-restart" ? "pre-restart" : "shutdown"}`;
+      if (owner === "session") {
+        const { source, release: releaseSource } = await createHeldCloseSource("retained-session");
+        source.input.abortSignal.addEventListener(
+          "abort",
+          () => void cleanup().then(releaseSource),
+        );
+      } else if (owner === "sdk") {
+        await sdkHost.track(async () => {
+          void trackAsyncWork(cleanup);
+        });
+      } else if (owner === "harness") {
+        const harnesses = await vi.importActual<typeof import("../agents/harness/registry.js")>(
+          "../agents/harness/registry.js",
+        );
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        harnesses.registerAgentHarness({
+          id: "cleanup-sqlite-fixture",
+          label: "Cleanup SQLite fixture",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("The cleanup fixture does not run attempts");
+          },
+          dispose: cleanup,
+        });
+        mocks.disposeAgentHarnesses.mockImplementation(harnesses.disposeRegisteredAgentHarnesses);
+      } else {
+        hooks.registerInternalHook(eventKey, cleanup);
+        mocks.triggerInternalHook.mockImplementation(hooks.triggerInternalHook);
+      }
+      const close = createGatewayCloseHandler({
+        closeSdkResources: () => sdkHost.close(),
+        drainSdkWork: () => sdkHost.drainWork(),
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let closed = false;
+      const closing = close({
+        exitAfterClose: true,
+        ...(owner === "pre-restart" ? { restartExpectedMs: 1000 } : {}),
+      })
+        .catch((error: unknown) => error)
+        .finally(() => {
+          closed = true;
+        });
+      try {
+        await entered.promise;
+        // Advance the owner's grace and both retained-work joins.
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(closed).toBe(owner === "sdk");
+        if (owner === "sdk") {
+          expect(isGatewayCleanupRetainedError(await closing)).toBe(true);
+        }
+        if (owner === "session") {
+          expect(formatGatewayPendingCloseSteps()).toContain("session-admissions");
+        }
+        expect(database.db.isOpen).toBe(true);
+        expect([sdkDatabase.isOpen, preparedDatabase.isOpen]).toEqual([true, true]);
+        expect(sdkDisposalReads).toEqual([]);
+        expect(sharedStateLifecycle.has("open")).toBe(true);
+      } finally {
+        release.resolve();
+        await cleanup.mock.results[0]?.value;
+        await closing;
+        await sdkHost.close().catch(() => undefined);
+        unregisterPrepared();
+        for (const db of [sdkDatabase, preparedDatabase]) {
+          if (db.isOpen) {
+            db.close();
+          }
+        }
+        hooks.unregisterInternalHook(eventKey, cleanup);
+        vi.useRealTimers();
+        await closeOpenClawStateDatabaseAsync();
+        await state.cleanup();
+        sharedStateLifecycle.clear();
+      }
+      expect(failures).toEqual([]);
+      expect(reads).toEqual([{ value: 1 }]);
+    },
+  );
 }

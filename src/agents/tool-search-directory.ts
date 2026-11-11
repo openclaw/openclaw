@@ -15,10 +15,12 @@ import {
   TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type CatalogVisibilityOptions,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
   type ToolSearchMode,
-  type ToolSearchToolContext,
+} from "./tool-search-protocol.js";
+import type {
+  ToolSearchCatalogEntry,
+  ToolSearchCatalogRef,
+  ToolSearchToolContext,
 } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 

@@ -99,7 +99,7 @@ describe("native hook relay CLI", () => {
         relayId: "relay-1",
         generation: "generation-1",
         event: "pre_tool_use",
-        rawPayload,
+        rawPayload: { ...rawPayload, openclaw_inexact_number_paths: "[]" },
       },
       timeoutMs: expect.any(Number),
       signal: expect.any(AbortSignal),

@@ -1,6 +1,6 @@
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { ClientToolDefinition } from "../command/shared-types.js";
 import type { AgentTool } from "../runtime/index.js";
-import type { ClientToolDefinition } from "./run/params.js";
 
 /**
  * OpenClaw built-in tools that remain present in the embedded runtime even when

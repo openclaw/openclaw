@@ -30,7 +30,7 @@ import {
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
-import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import type { ClientToolDefinition } from "./command/shared-types.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import { ToolInputError } from "./tools/common.js";

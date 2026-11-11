@@ -21,6 +21,8 @@ type BuildPreparedModelCatalogSnapshot =
 type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
 type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
+type PrepareStaticCatalog =
+  typeof import("./models-config.providers.implicit.js").prepareImplicitProviderStaticCatalog;
 
 const materializationChanges = vi.hoisted<{
   onChange?: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void;
@@ -82,7 +84,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     modelsJsonContents: null,
     pluginCatalogs: [],
   })),
-  prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({ entries: [] })),
+  prepareStaticCatalog: vi.fn<PrepareStaticCatalog>(async () => ({ entries: [] })),
   runPreparedModelCatalogWorker: vi.fn(
     async (_providerIds?: readonly string[]): Promise<ModelCatalogSnapshot> => ({
       entries: [],
@@ -161,11 +163,8 @@ vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
   },
 }));
 
-vi.mock("./model-catalog.js", async () => ({
-  findModelCatalogEntry: (await import("./model-catalog-lookup.js")).findModelCatalogEntry,
-  loadManifestModelCatalog: (
-    await vi.importActual<typeof import("./model-catalog.js")>("./model-catalog.js")
-  ).loadManifestModelCatalog,
+vi.mock("./model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-catalog.js")>()),
   buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
     preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
 }));
@@ -395,8 +394,9 @@ vi.mock("./models-config.js", () => ({
     preparedModelRuntimeMocks.planOpenClawModelsJsonSource(...args),
 }));
 
+// mock-isolation: lifecycle fixtures supply prepared catalog facts without loading provider discovery.
 vi.mock("./models-config.providers.implicit.js", () => ({
-  prepareImplicitProviderStaticCatalog: (...args: unknown[]) =>
+  prepareImplicitProviderStaticCatalog: (...args: Parameters<PrepareStaticCatalog>) =>
     preparedModelRuntimeMocks.prepareStaticCatalog(...args),
 }));
 

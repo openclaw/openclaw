@@ -189,7 +189,10 @@ suite.define(() => {
             const dialog = page.locator("openclaw-modal-dialog");
             await dialog.getByRole("button", { name: "Retry update", exact: true }).waitFor();
             expect(await dialog.textContent()).toContain("ENOSPC");
-            await dialog.getByRole("button", { name: "Close", exact: true }).click();
+            await dialog
+              .locator("openclaw-modal-actions")
+              .getByRole("button", { name: "Close", exact: true })
+              .click();
           }
           const diagnose = page.getByRole("button", { name: "Diagnose update", exact: true });
           await diagnose.waitFor();

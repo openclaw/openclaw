@@ -183,6 +183,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
   it.each([
     { missingProfile: false, policyFailure: false, sessionChanged: false },
     { unstarted: true },
+    { unstarted: true, stateContention: true, flattenedStartup: true },
     { stateContention: true },
     { restartFailure: true },
     { missingProfile: true, policyFailure: false, sessionChanged: false },
@@ -197,6 +198,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       stateContention,
       restartFailure,
       unstarted,
+      flattenedStartup,
     }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         setRuntimeConfigSnapshot({});
@@ -299,6 +301,27 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           markGatewayRestartDraining();
         }
         try {
+          if (flattenedStartup) {
+            const diagnostic =
+              "Wrapped startup cleanup failed | database is locked | ERR_SQLITE_ERROR";
+            expect(() => lifecycle.captureUnstartedFailure(failure)).toThrow(failure);
+            await lifecycle.recordUnstartedFailure({ error: diagnostic });
+            const notices = (await loadTranscriptEvents(target)).filter(
+              (entry) => isRecord(entry) && entry.type === "custom_message",
+            );
+            expect(notices).toEqual([
+              expect.objectContaining({
+                content: "Your request couldn't be completed.",
+                details: {
+                  runId,
+                  error: diagnostic,
+                  desktopNotice: "The request was interrupted because OpenClaw storage is busy.",
+                },
+              }),
+            ]);
+            await lifecycle.finalize();
+            return;
+          }
           await lifecycle.handleError(failure);
           expect(previewGroup?.signal.aborted).toBe(false);
           await lifecycle.finalize();

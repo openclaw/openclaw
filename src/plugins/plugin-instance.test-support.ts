@@ -1,5 +1,3 @@
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, onTestFinished } from "vitest";
 import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -33,11 +31,6 @@ export function selectRegistry(record: PluginRecord, label: string, marker: obje
 
 export const readRegistryLabel = () =>
   getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0];
-
-export async function expectLiveObjects(constructor: Function, count: number) {
-  await setImmediate();
-  expect(queryObjects(constructor)).toBe(count);
-}
 
 /** Release ordinary fixtures even when an assertion fails; protocol waits stay in their tests. */
 export function createTestInstance(...args: ConstructorParameters<typeof PluginInstance>) {

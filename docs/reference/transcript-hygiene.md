@@ -80,6 +80,12 @@ Direct Anthropic Messages append-only replay also keeps failed and recovered
 assistant frames separate, along with consecutive user turns. Strict routes
 retain their role-merging behavior.
 
+User-row merging happens at submission, after the current input is resolved.
+Runtime-context carriers and operator updates remain separate from user input,
+preserving their authority and cache boundaries. Bedrock Converse still merges
+all adjacent user rows to satisfy its alternation requirement, including `/btw`
+requests. History limits count adjacent input rows as one turn on merging routes.
+
 ## Global rule: runtime context is not user transcript
 
 Runtime/system context can be added to the model prompt for a turn, but it is
@@ -150,13 +156,14 @@ Implementation:
 - `sanitizeContentBlocksImages` in `src/agents/tool-images.ts`
 - Max image side is configurable via `agents.defaults.imageMaxDimensionPx`
   (default: `1200`)
-- Unsigned blank text blocks are removed while this pass walks replay content.
+- Unsigned blank user and assistant text blocks are removed during replay.
   Blank assistant text with a provider replay signature is retained byte-for-byte,
   including whitespace-only messages, so later reasoning keeps its
   original request prefix and item order.
   Assistant turns that become empty are dropped unless they own opaque
-  provider replay state; user and tool-result turns that become empty receive
-  a non-empty omitted-content placeholder.
+  provider replay state; user turns that become empty receive a non-empty
+  omitted-content placeholder. Tool-result text, including blank blocks, is
+  preserved for each provider's transport to encode consistently across turns.
 
 ---
 

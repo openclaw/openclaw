@@ -65,6 +65,7 @@ import {
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  applyProviderPayloadHook,
   buildAssistantMessage,
   coerceTransportToolCallArguments,
   describeToolResultMediaPlaceholder,
@@ -424,8 +425,11 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         system: buildSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
         inferenceConfig: {
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
+          // Grok 4.6 Converse profiles reject temperature rather than ignoring it.
           ...(options.temperature !== undefined &&
-            !sendsAdaptiveThinking && { temperature: options.temperature }),
+            !sendsAdaptiveThinking &&
+            model.id !== "us.xai.grok-4.6" &&
+            model.id !== "global.xai.grok-4.6" && { temperature: options.temperature }),
         },
         toolConfig,
         additionalModelRequestFields,
@@ -434,11 +438,8 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
           : {}),
         ...(options.requestMetadata !== undefined && { requestMetadata: options.requestMetadata }),
       };
-      const nextCommandInput = await options?.onPayload?.(commandInput, model);
-      options.signal?.throwIfAborted();
-      if (nextCommandInput !== undefined) {
-        commandInput = nextCommandInput as typeof commandInput;
-      }
+      const nextCommandInput = await applyProviderPayloadHook(options, commandInput, model);
+      commandInput = nextCommandInput as typeof commandInput;
       const command = new ConverseStreamCommand(commandInput);
 
       const response = await client.send(command, { abortSignal: options.signal });

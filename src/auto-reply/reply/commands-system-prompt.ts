@@ -68,7 +68,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
   };
   const { classificationAgentId: sandboxAgentId, sandboxed } = sandboxRuntime;
   const executionWorkspace = resolveSessionSkillExecutionWorkspace(
-    targetSessionEntry?.worktree?.canonicalWorkspaceDir,
+    targetSessionEntry,
     workspaceDir,
   );
   const existingSkillsSnapshot: SkillSnapshot | undefined = targetSessionEntry?.skillsSnapshot;
@@ -185,7 +185,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     agentId: sessionAgentId,
     workspaceDir,
   });
-  const systemPrompt = buildConfiguredAgentSystemPrompt({
+  const systemPrompt = await buildConfiguredAgentSystemPrompt({
     preparedTtsPreferences: params.opts?.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     config: params.cfg,
     preparedModelRuntime,

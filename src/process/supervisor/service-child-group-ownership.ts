@@ -10,6 +10,8 @@ export type ProcessCommand =
       argv: string[];
       executable?: string;
       serviceMarker?: string;
+      /** A JS runtime whose environment Darwin could not bound; argv still classifies. */
+      serviceMarkerUnavailable?: true;
       uid?: number;
       owner?: "same" | "different" | "unknown";
     }
@@ -194,7 +196,11 @@ export function* readProcessGroupMembers(
             : commandInspection?.readDarwinCommand(member.pid, member.owner)
           : undefined;
       } catch (error) {
-        if (!(error instanceof ProcSafeError) || error.code !== "incomplete") {
+        // One unparseable argument image (Intel layout-mismatch) leaves only that PID unknown.
+        if (
+          !(error instanceof ProcSafeError) ||
+          (error.code !== "incomplete" && error.code !== "layout-mismatch")
+        ) {
           throw error;
         }
         // Preserve unknown custody for this PID without dropping later observations.

@@ -34,7 +34,7 @@ const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
 const listProviderPolicyOwners = vi.hoisted(() =>
   vi.fn<(provider: string, registry: PluginManifestRegistry) => Array<{ id: string }>>(),
 );
-const loadProviderPolicyArtifacts = vi.hoisted(() =>
+const loadProviderPolicyArtifactsAsync = vi.hoisted(() =>
   vi.fn<
     (owners: Array<{ id: string }>) => {
       owner: { id: string };
@@ -97,9 +97,10 @@ vi.mock("../plugins/plugin-registry.js", () => ({ loadPluginManifestRegistryForP
 // mock-isolation: Fixtures select the installed-provider policy outcome explicitly.
 vi.mock("../plugins/manifest-owner-policy.js", () => ({ resolveManifestOwnerBasePolicyBlock }));
 
+// mock-isolation: Memory health fixtures select policy hooks without executing installed plugins.
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   listProviderPolicyOwners,
-  loadProviderPolicyArtifacts,
+  loadProviderPolicyArtifactsAsync,
 }));
 
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
@@ -218,7 +219,7 @@ beforeEach(() => {
   getMissingLocalMemoryEmbeddingProviderMessage.mockClear();
   inspectConfiguredEmbeddingProviderSetup.mockReset().mockResolvedValue(null);
   listProviderPolicyOwners.mockReset().mockReturnValue([{ id: "llama-cpp" }]);
-  loadProviderPolicyArtifacts.mockReset().mockImplementation((owners) => {
+  loadProviderPolicyArtifactsAsync.mockReset().mockImplementation((owners) => {
     const owner = owners[0];
     return owner
       ? {
@@ -340,7 +341,7 @@ it("uses the memory-core recovery message when the local provider plugin is miss
 });
 
 it("updates a legacy installed provider that has no setup policy artifact", async () => {
-  loadProviderPolicyArtifacts.mockReturnValueOnce({
+  loadProviderPolicyArtifactsAsync.mockReturnValueOnce({
     owner: { id: "llama-cpp" },
     surface: null,
   });
@@ -384,7 +385,7 @@ it.each([
     "openclaw plugins install @openclaw/llama-cpp-provider",
     "openclaw plugins update llama-cpp",
   );
-  expect(loadProviderPolicyArtifacts).not.toHaveBeenCalled();
+  expect(loadProviderPolicyArtifactsAsync).not.toHaveBeenCalled();
 });
 
 it("reports global plugin disablement before the inactive memory-runtime gate", async () => {
@@ -403,7 +404,7 @@ it("reports global plugin disablement before the inactive memory-runtime gate", 
   );
   expectFirstNoteExcludes("No active memory plugin is registered");
   expect(resolveActiveMemoryBackendConfig).not.toHaveBeenCalled();
-  expect(loadProviderPolicyArtifacts).not.toHaveBeenCalled();
+  expect(loadProviderPolicyArtifactsAsync).not.toHaveBeenCalled();
 });
 
 it("uses the policy owner selected after an earlier disabled owner", async () => {
@@ -425,7 +426,7 @@ it("uses the policy owner selected after an earlier disabled owner", async () =>
   expect(resolveManifestOwnerBasePolicyBlock).toHaveBeenCalledWith(
     expect.objectContaining({ plugin: selectedOwner }),
   );
-  expect(loadProviderPolicyArtifacts).toHaveBeenCalledWith([selectedOwner]);
+  expect(loadProviderPolicyArtifactsAsync).toHaveBeenCalledWith([selectedOwner]);
   expectFirstNoteContains("Selected provider needs setup", "Configure the selected provider");
   expectFirstNoteExcludes("openclaw plugins enable a-disabled");
 });

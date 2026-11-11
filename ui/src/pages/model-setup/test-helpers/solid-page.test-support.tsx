@@ -36,10 +36,11 @@ export function createPage(context: ApplicationContext): TestModelSetupPage {
   ] as const) {
     Object.defineProperty(root, key, {
       get: () => props[key],
-      set: (value) =>
+      set: (value) => {
         setProps((draft) => {
           Object.assign(draft, { [key]: value });
-        }),
+        });
+      },
     });
   }
   Object.defineProperty(root, "updateComplete", {

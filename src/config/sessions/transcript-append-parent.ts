@@ -1,21 +1,21 @@
 /** Storage adapters supply ancestry from their admitted transcript. */
 export function resolveTranscriptAppendParent(params: {
-  tailId: string | null;
+  readTailId(): string | null;
   parentId: string | null | undefined;
   appendIntent?: "active-branch";
   isAncestor(leafId: string, candidateId: string | null): boolean;
 }): string | null {
-  if (params.parentId === undefined) {
-    return params.tailId;
-  }
-  if (
-    params.appendIntent !== "active-branch" ||
-    params.tailId === params.parentId ||
-    params.tailId === null
-  ) {
+  if (params.parentId !== undefined && params.appendIntent !== "active-branch") {
     return params.parentId;
   }
-  return params.isAncestor(params.tailId, params.parentId) ? params.tailId : params.parentId;
+  const tailId = params.readTailId();
+  if (params.parentId === undefined) {
+    return tailId;
+  }
+  if (tailId === params.parentId || tailId === null) {
+    return params.parentId;
+  }
+  return params.isAncestor(tailId, params.parentId) ? tailId : params.parentId;
 }
 
 export const PREPARED_ASSISTANT_MAX_NEWER_MESSAGES = 256;

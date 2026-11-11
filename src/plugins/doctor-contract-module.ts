@@ -48,7 +48,7 @@ export type PluginDoctorStateMigrationContext = {
   repairCronJobs?: (
     inventory: PluginDoctorCronInventory,
     changes: readonly PluginDoctorCronChange[],
-  ) => Promise<{ changed: number; backupPath?: string }>;
+  ) => Promise<{ changed: number; backupPath?: string; warnings?: string[] }>;
   /** Non-creating canonical ACP claims for this backend, including incomplete evidence. */
   inspectAcpSessionClaims?: () => Promise<{
     claims: PluginDoctorAcpSessionClaim[];

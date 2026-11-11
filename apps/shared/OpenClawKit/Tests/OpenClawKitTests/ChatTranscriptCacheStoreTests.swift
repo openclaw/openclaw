@@ -690,6 +690,26 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #expect(cached.historyMarker == message.historyMarker)
     }
 
+    @Test
+    func `cache projection keeps patch input for a tool bridged over MCP`() throws {
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "toolCall", id: "patch", name: "mcp__openclaw__apply_patch",
+                    arguments: AnyCodable(["input": "*** Begin Patch\n*** End Patch", "ignored": "drop"])),
+                OpenClawChatMessageContent(
+                    type: "toolCall", id: "exec", name: "mcp__openclaw__exec",
+                    arguments: AnyCodable(["command": "drop"])),
+            ],
+            timestamp: 1)
+
+        let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        #expect(cached.content[0].name == "mcp__openclaw__apply_patch")
+        #expect(cached.content[0].arguments == AnyCodable(["input": "*** Begin Patch\n*** End Patch"]))
+        #expect(cached.content[1].arguments == nil)
+    }
+
     @Test(arguments: ["dispatch_action", "tool_call"])
     func `cache projection preserves dispatcher IDs and only inner patch input`(dispatcher: String) throws {
         let message = OpenClawChatMessage(

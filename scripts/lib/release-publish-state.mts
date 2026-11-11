@@ -189,6 +189,7 @@ export async function observeReleaseNpmState(input: {
             timeoutMs: 15_000,
             attempts: 2,
             redirect: "manual",
+            exactVersion: pkg.version,
           });
           if (
             registry.status !== 404 &&
@@ -286,9 +287,6 @@ export async function observeReleaseNpmState(input: {
       .filter((result) => result.published)
       .map((result) => result.pkg),
     unknownPackages: observed.results.filter((result) => !result.known).map((result) => result.pkg),
-    corePublished: observed.results.some(
-      (result) => result.pkg.packageName === "openclaw" && result.published,
-    ),
   };
 }
 

@@ -8,6 +8,7 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { fileKindForPath } from "../../../components/file-kind.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
@@ -339,13 +340,13 @@ export function MobileWorkspaceContents(props: {
       },
     };
     const workspaceList = workspace.list;
-    const searchQuery = workspace.browserSearch.trim().toLowerCase();
+    const searchQuery = workspace.browserSearch.trim();
     // The server echo check below stays byte-exact; local candidate matching compares NFC.
-    const matchQuery = searchQuery.normalize("NFC");
+    const matchQuery = foldSearchCase(searchQuery).normalize("NFC");
     const browserPath = workspace.browserPath;
     const listed = workspaceList?.browser;
     const browser = searchQuery
-      ? listed?.search?.trim().toLowerCase() === searchQuery
+      ? listed?.search?.trim().toLowerCase() === searchQuery.toLowerCase()
         ? listed
         : undefined
       : listed && !listed.search && listed.path === browserPath
@@ -353,7 +354,10 @@ export function MobileWorkspaceContents(props: {
         : workspace.cachedBrowser;
     const matches = (...values: (string | undefined)[]) =>
       !searchQuery ||
-      values.some((value) => value?.toLowerCase().normalize("NFC").includes(matchQuery));
+      values.some(
+        (value) =>
+          value !== undefined && foldSearchCase(value).normalize("NFC").includes(matchQuery),
+      );
     const groups: SessionWorkspaceMobileGroup[] = [];
     const expandedGroups = workspace.mobileNavigation?.expandedGroups;
     if (!browserPath) {

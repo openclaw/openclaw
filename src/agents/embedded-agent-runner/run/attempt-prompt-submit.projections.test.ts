@@ -269,10 +269,10 @@ describe("durable model prompt projection at provider dispatch", () => {
     });
   });
 
-  it("preserves image-bearing request prefixes across retries, later turns, and reopen", async () => {
+  it("preserves resized image request prefixes after an aborted turn, retries, and reopen", async () => {
     await withOpenClawTestState({ label: "model-prompt-projection" }, async (state) => {
       const imagePath = path.join(state.workspaceDir, "prompt-image.png");
-      const imageBuffer = createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 });
+      const imageBuffer = createSolidPngBuffer(3064, 2228, { r: 12, g: 34, b: 56 });
       await fs.writeFile(imagePath, imageBuffer);
       const target = await prepareTarget(state, "model-prompt-projection");
       const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
@@ -296,6 +296,7 @@ describe("durable model prompt projection at provider dispatch", () => {
                 workspaceDir: state.workspaceDir,
                 model: { input: ["text", "image"] },
                 workspaceOnly: true,
+                imageSessionKey: state.workspaceDir,
               },
             ),
           );
@@ -305,10 +306,7 @@ describe("durable model prompt projection at provider dispatch", () => {
         requests.push(structuredClone(buildOpenAIResponsesParams(model, context, undefined)));
         return createAssistantResultStream(
           requests.length === 1
-            ? {
-                ...createAssistant(model, [{ type: "text", text: "Partial answer" }], "error"),
-                errorMessage: "HTTP 503 interrupted response",
-              }
+            ? createAssistant(model, "Partial answer", "aborted")
             : createAssistant(model, [{ type: "text", text: "done" }]),
         );
       });
@@ -366,7 +364,7 @@ describe("durable model prompt projection at provider dispatch", () => {
       await send(reopened, 3);
       expect(requests).toHaveLength(4);
       for (const request of requests) {
-        expect(JSON.stringify(request).match(/"type":"input_image"/g)).toHaveLength(1);
+        expect(JSON.stringify(request).match(/"type":"input_image"/g) ?? []).toHaveLength(1);
       }
       for (let index = 1; index < requests.length; index++) {
         const previous = requests[index - 1]!;

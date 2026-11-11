@@ -53,6 +53,7 @@ import {
   resolveCodeExecutionEnabled,
 } from "./src/code-execution-config.js";
 import {
+  hasXaiSubscriptionToolAuth,
   isXaiToolEnabled,
   resolveFallbackXaiAuth,
   type XaiToolAuthContext,
@@ -223,15 +224,14 @@ function classifyXaiFailoverReason({
   if (XAI_RATE_LIMIT_RE.test(errorMessage)) {
     return "rate_limit" as const;
   }
-  if (
-    status === undefined &&
+  return status === undefined &&
     code === undefined &&
-    errorType === undefined &&
-    XAI_PROVIDER_INTERNAL_ERROR_RE.test(errorMessage)
-  ) {
-    return "server_error" as const;
-  }
-  return undefined;
+    (errorType === undefined
+      ? XAI_PROVIDER_INTERNAL_ERROR_RE.test(errorMessage)
+      : errorType === "error" &&
+        /^internal error during token generation$/i.test(errorMessage.trim()))
+    ? ("server_error" as const)
+    : undefined;
 }
 
 function isCodeExecutionEnabled(
@@ -301,8 +301,27 @@ function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {
   );
 }
 
+/**
+ * Grok OAuth runs x_search on the user's SuperGrok/X Premium subscription, so a known
+ * non-xAI model needs no cross-provider billing opt-in. Execution then uses only that
+ * OAuth credential; an explicit `enabled: false` still wins.
+ */
+function canExposeXSearchWithSubscription(ctx: OpenClawPluginToolContext): boolean {
+  const enabled = resolveEffectiveXSearchConfig(ctx.runtimeConfig ?? ctx.config)?.enabled;
+  return (
+    Boolean(ctx.activeModel?.provider?.trim()) &&
+    enabled === undefined &&
+    hasXaiSubscriptionToolAuth(ctx)
+  );
+}
+
 function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
-  if (!canExposeXaiBilledTool(ctx, resolveEffectiveXSearchConfig, isXSearchEnabled)) {
+  const subscriptionOnly = !canExposeXaiBilledTool(
+    ctx,
+    resolveEffectiveXSearchConfig,
+    isXSearchEnabled,
+  );
+  if (subscriptionOnly && !canExposeXSearchWithSubscription(ctx)) {
     return null;
   }
 
@@ -314,6 +333,7 @@ function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
       config: ctx.config as never,
       runtimeConfig: (ctx.runtimeConfig as never) ?? null,
       auth: ctx,
+      subscriptionOnly,
     });
     if (!tool) {
       return jsonResult(buildMissingXSearchApiKeyPayload());

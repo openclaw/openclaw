@@ -63,13 +63,10 @@ async function readErrorDetail(
   }
 }
 
-async function readJson(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch {
-    throw new Error("X API returned an unreadable JSON response");
-  }
-}
+const readJson = async (response: Response): Promise<unknown> =>
+  (await import("openclaw/plugin-sdk/provider-http")).readProviderJsonResponse(response, "X API", {
+    malformedResponseError: "X API returned an unreadable JSON response",
+  });
 
 export function parseXPost(input: unknown) {
   const row = record(input);

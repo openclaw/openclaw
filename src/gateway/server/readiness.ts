@@ -21,6 +21,7 @@ type ReadinessResult = {
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
   agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
+  agentDeletions?: readonly AgentDatabaseAdmissionRefusal[];
   stateDatabase?: { reason: string };
 };
 
@@ -210,13 +211,16 @@ export function createReadinessChecker(
     return { ...cachedState, uptimeMs };
   };
   return () => {
-    const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
+    const refusals = deps.getAgentDatabaseAdmissionRefusals?.();
+    const agentDatabases = refusals?.filter(({ code }) => code !== "agent-deletion");
+    const agentDeletions = refusals?.filter(({ code }) => code === "agent-deletion");
     const result = readReadiness(agentDatabases);
     const getEventLoopHealth = deps.getEventLoopHealth;
     const eventLoop = getEventLoopHealth?.();
     return {
       ...result,
       ...(agentDatabases?.length ? { agentDatabases } : {}),
+      ...(agentDeletions?.length ? { agentDeletions } : {}),
       ...(eventLoop ? { eventLoop } : {}),
     };
   };

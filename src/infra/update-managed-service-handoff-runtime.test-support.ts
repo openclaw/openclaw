@@ -9,6 +9,7 @@ import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import { prepareManagedServiceRecoveryClockPreload } from "./update-managed-service-handoff-command.test-support.js";
+import { prepareInterruptedManagedServiceFixture } from "./update-managed-service-handoff-interrupted.test-support.js";
 import {
   prepareManagedServiceTriageClockPreload,
   type ManagedServiceManagerBoundaryResult,
@@ -22,7 +23,8 @@ export async function prepareManagedServiceRuntimeFixture({
   validationReleasePath,
   activationGatePath,
   activationReleasePath,
-  ledger,
+  runId,
+  root,
   options,
 }: {
   recoveryModulePath: string;
@@ -31,10 +33,16 @@ export async function prepareManagedServiceRuntimeFixture({
   validationReleasePath: string;
   activationGatePath: string;
   activationReleasePath: string;
-  ledger: boolean;
+  runId?: string;
+  root: string;
   options?: Pick<
     ManagedServiceBoundaryOptions,
-    "replaceLedgerWriter" | "requester" | "cancelAtActivation"
+    | "replaceLedgerWriter"
+    | "requester"
+    | "cancelAtActivation"
+    | "interruptedUpdate"
+    | "updaterStopped"
+    | "pluginCohort"
   >;
 }) {
   const appendRuntime = (source: string) => fs.appendFile(recoveryModulePath, source);
@@ -46,13 +54,26 @@ export async function prepareManagedServiceRuntimeFixture({
   const ledgerRuntimeImport = `
     const ledger = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)});
   `;
-  if (ledger) {
+  if (runId) {
     await appendRuntime(`
       ${ledgerRuntimeImport}
-      export const { adoptUpdateRun, getUpdateRun, recordUpdateRunStep, recordUpdateRunVerification } = ledger;
+      export const { adoptUpdateRun, getUpdateRun, listUpdateRuns, recordUpdateRunStep, recordUpdateRunVerification } = ledger;
       ${options?.replaceLedgerWriter ? 'export function finishUpdateRun() { throw new Error("the previous runtime must not finalize the candidate"); }' : "export const { finishUpdateRun } = ledger;"}
     `);
   }
+  const interrupted =
+    options?.interruptedUpdate && runId
+      ? await prepareInterruptedManagedServiceFixture({
+          root,
+          statePath,
+          recoveryModulePath,
+          ledgerRuntimeImport,
+          runId,
+          cut: options.interruptedUpdate,
+          updaterStopped: options.updaterStopped,
+          pluginCohort: options.pluginCohort,
+        })
+      : undefined;
   if (options?.requester) {
     await fs.writeFile(statePath, "{}");
     if (options.requester.authorizationSource?.startsWith("profile:")) {
@@ -60,7 +81,7 @@ export async function prepareManagedServiceRuntimeFixture({
         const requesterRuntime = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.requester).href)});
         export const { prepareManagedUpdateRequesterIdentity } = requesterRuntime;
       `);
-      return { sourceRuntimeImport, ledgerRuntimeImport };
+      return { sourceRuntimeImport, ledgerRuntimeImport, interrupted };
     }
     await fs.writeFile(
       configPath,
@@ -87,7 +108,7 @@ export async function prepareManagedServiceRuntimeFixture({
       }
     `);
   }
-  return { sourceRuntimeImport, ledgerRuntimeImport };
+  return { sourceRuntimeImport, ledgerRuntimeImport, interrupted };
 }
 
 export async function prepareManagedServiceSpawn(

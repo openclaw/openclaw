@@ -51,6 +51,7 @@ import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
+import { buildThinkingCatalog } from "../model-thinking-default-core.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
@@ -355,20 +356,26 @@ export async function prepareAgentCommandExecution(
         }
       : {}),
   };
-  const thinkingLevelsHint = formatThinkingLevels(
-    configuredModel.provider,
-    configuredModel.model,
-    ", ",
-    configuredThinkingCatalog.length > 0 ? configuredThinkingCatalog : undefined,
-    configuredThinkingRuntime,
-  );
+  // Built only for the error, since it loads the selected model's bundled row.
+  const formatThinkingLevelsHint = () =>
+    formatThinkingLevels(
+      configuredModel.provider,
+      configuredModel.model,
+      ", ",
+      buildThinkingCatalog({
+        cfg,
+        provider: configuredModel.provider,
+        model: configuredModel.model,
+      }),
+      configuredThinkingRuntime,
+    );
   const thinkOverride = normalizeThinkLevel(opts.thinking);
   const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
   if (opts.thinking && !thinkOverride) {
-    throw new Error(`Invalid thinking level. Use one of: ${thinkingLevelsHint}.`);
+    throw new Error(`Invalid thinking level. Use one of: ${formatThinkingLevelsHint()}.`);
   }
   if (opts.thinkingOnce && !thinkOnce) {
-    throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
+    throw new Error(`Invalid one-shot thinking level. Use one of: ${formatThinkingLevelsHint()}.`);
   }
   const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
   const worktreeSource = await resolveWorktreeForPath({

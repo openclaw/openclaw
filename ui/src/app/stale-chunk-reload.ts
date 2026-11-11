@@ -15,6 +15,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
+import { trackForegroundActivity } from "./foreground-activity.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
 const RENDER_RELOAD_STORAGE_KEY = "openclaw.controlUi.renderErrorReloadAttempted";
@@ -63,7 +64,7 @@ export async function retryControlUiImport<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   try {
-    return await load();
+    return await trackForegroundActivity(Promise.resolve(load()));
   } catch (error) {
     if (!isStaleChunkImportError(error)) {
       throw error;
@@ -85,7 +86,7 @@ export async function retryControlUiImport<T>(
     // Chromium can retain the first failed import in its module map. A persistent
     // failure now reaches the route error surface and its guarded reload owner.
     try {
-      return await load();
+      return await trackForegroundActivity(Promise.resolve(load()));
     } catch (retryError) {
       if (isStaleChunkImportError(retryError)) {
         routeImportErrors.add(retryError);
@@ -307,12 +308,12 @@ async function waitForReachableControlUiDocument(
   isCurrent: () => boolean,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  const deadline = Date.now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
+  const deadline = performance.now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
   for (let attempt = 0; ; attempt += 1) {
     if (signal?.aborted || !isCurrent()) {
       return false;
     }
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (attempt > 0 && remaining <= 0) {
       return false;
     }
@@ -328,7 +329,7 @@ async function waitForReachableControlUiDocument(
     if (reachable) {
       return true;
     }
-    const remainingWait = deadline - Date.now();
+    const remainingWait = deadline - performance.now();
     if (remainingWait <= 0) {
       return false;
     }

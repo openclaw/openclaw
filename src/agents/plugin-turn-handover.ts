@@ -56,7 +56,9 @@ export function captureTurnHandoverRequest(
     const pinning = reserved.filter((pluginId) => !pluginHandsOverTurns(held, pluginId));
     if (!reserved.length || pinning.length) {
       if (pinning.length) {
-        log.info(`reload of ${pinning.join(", ")} waits for the turn: no reload.turnHandover`);
+        log.info(
+          `reload of ${pinning.join(", ")} keeps running turns on their admitted generations`,
+        );
       }
       return;
     }

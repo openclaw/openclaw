@@ -102,9 +102,7 @@ suite.define(() => {
     const checkoutTrigger = page.locator("#new-session-checkout-trigger");
     await expectLabel(projectTrigger, "openclaw");
     await projectTrigger.click();
-    await pollLocatorText(projectSelect.locator(".new-session-page__menu-title").first()).toBe(
-      "Projects",
-    );
+    await pollLocatorText(projectSelect.locator(".header-search__title").first()).toBe("Projects");
     await button(projectSelect, "Browse folders").click();
     await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
     await expectValue(page.locator("input.new-session-page__browser-path"), PICKED);
@@ -352,7 +350,7 @@ suite.define(() => {
     await gateway.waitForRequest("fs.listDir", { match: { path: PICKED } });
     await expectValue(input, PICKED);
     await input.fill(`${WORKSPACE}/zzz`);
-    await place.getByText("No matching folders", { exact: true }).waitFor();
+    await place.getByText("No folders match your search.", { exact: true }).waitFor();
   });
 
   it("returns from the browse root to the place menu", async () => {

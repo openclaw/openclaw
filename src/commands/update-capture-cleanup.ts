@@ -11,7 +11,8 @@ import { isNeverActivatedFailedUpdate } from "../infra/update-run-activation.js"
 import { getUpdateRun, listUpdateRuns } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
-import { loadUpdateRecovery } from "../infra/update-run-recovery.js";
+import { inspectUpdateRecoveries, loadUpdateRecovery } from "../infra/update-run-recovery.js";
+import { isUpdateRunVerificationConfirmed } from "../infra/update-run-verification.js";
 import {
   parseUpdateRecoveryBackupManifest,
   type UpdateRecoveryBackupManifest,
@@ -24,10 +25,18 @@ type CaptureIdentity = { dev: bigint; ino: bigint };
 /** A rollback original is superseded only after a later update succeeded. */
 export function readCompletedUpdateHistory(env: NodeJS.ProcessEnv) {
   try {
-    const [latest] = listUpdateRuns({ limit: 1, succeeded: true }, { env });
+    const completed = listUpdateRuns({ limit: 100, succeeded: true }, { env });
+    const [latest] = completed;
+    const verified = completed.find(
+      (run) => run.finishedAtMs !== null && isUpdateRunVerificationConfirmed(run.verification),
+    );
     return {
       runs: listUpdateRuns({ limit: 100 }, { env }),
       latestCompletedStartedAt: latest && latest.finishedAtMs !== null ? latest.createdAtMs : 0,
+      latestVerifiedStartedAt: verified?.createdAtMs ?? 0,
+      hasPendingRecovery: inspectUpdateRecoveries({ env }).some(({ record }) =>
+        isUpdateRecoveryPending(record),
+      ),
     };
   } catch {
     // Missing/unreadable update history cannot release rollback originals.
@@ -48,6 +57,7 @@ function classifyCapture(
   directory: string,
   run: UpdateRunRecord,
   latestCompletedStartedAt: number,
+  latestVerifiedStartedAt: number,
   env: NodeJS.ProcessEnv,
 ): Pick<RecoveryCleanupArtifact, "outcome" | "reason"> {
   if (run.status === "running" || run.finishedAtMs === null) {
@@ -76,8 +86,13 @@ function classifyCapture(
   ) {
     return { outcome: "protected", reason: "unresolved-failed-update" };
   }
-  if (!(latestCompletedStartedAt > run.finishedAtMs)) {
-    return { outcome: "protected", reason: "awaiting-later-completed-update" };
+  // An incomplete copy may still contain the only pre-failure bytes. A bare
+  // success label without Gateway verification cannot supersede that evidence.
+  if (!((sealed ? latestCompletedStartedAt : latestVerifiedStartedAt) > run.finishedAtMs)) {
+    return {
+      outcome: "protected",
+      reason: sealed ? "awaiting-later-completed-update" : "awaiting-later-verified-update",
+    };
   }
   return {
     outcome: "candidate",
@@ -91,6 +106,7 @@ export function collectUpdateCaptureInventory(params: {
   env: NodeJS.ProcessEnv;
   scan?: RecoveryInventoryScan;
   readHistory?: boolean;
+  measureBytes?: boolean;
 }) {
   const artifacts: RecoveryCleanupArtifact[] = [];
   const identities = new Map<string, CaptureIdentity>();
@@ -113,6 +129,7 @@ function collectCaptureRootInventory(params: {
   env: NodeJS.ProcessEnv;
   scan?: RecoveryInventoryScan;
   readHistory?: boolean;
+  measureBytes?: boolean;
 }) {
   const root = resolveUpdateCaptureRoot(params.stateDir);
   const artifacts: RecoveryCleanupArtifact[] = [];
@@ -156,7 +173,6 @@ function collectCaptureRootInventory(params: {
     const directory = path.join(root, entry.name);
     const item: RecoveryCleanupArtifact = {
       kind: "update-capture",
-      captureSource: entry.name.startsWith("doctor-") ? "doctor" : "update",
       path: directory,
       runs: [],
       bytes: 0,
@@ -168,7 +184,12 @@ function collectCaptureRootInventory(params: {
       item.bytes = entry.isFile() ? fs.lstatSync(directory).size : 0;
       continue;
     }
-    item.bytes = params.scan ? params.scan.logicalBytes(directory) : logicalBytes(directory);
+    item.bytes =
+      params.measureBytes === false
+        ? 0
+        : params.scan
+          ? params.scan.logicalBytes(directory)
+          : logicalBytes(directory);
     // The producer names each capture by run id and marks it before staging any payload.
     if (
       !/^[a-zA-Z0-9_-]{1,128}$/u.test(entry.name) ||
@@ -178,6 +199,7 @@ function collectCaptureRootInventory(params: {
     ) {
       continue;
     }
+    item.captureSource = entry.name.startsWith("doctor-") ? "doctor" : "update";
     if (!history) {
       item.reason = "unreadable-update-history";
       continue;
@@ -188,11 +210,26 @@ function collectCaptureRootInventory(params: {
         getUpdateRun(entry.name, { env: params.env });
       const doctor = standalone.get(directory);
       if (!run && !doctor) {
-        // Doctor owns its namespace, including incomplete or unrecognized captures.
-        if (
-          entry.name.startsWith("doctor-") ||
-          fs.existsSync(path.join(directory, "manifest.json.partial"))
-        ) {
+        const incomplete =
+          !fs.existsSync(path.join(directory, "manifest.json")) ||
+          fs.existsSync(path.join(directory, "manifest.json.partial"));
+        if (incomplete) {
+          item.detail =
+            "No matching run; explicit retirement requires a later verified successful update and settled recovery.";
+          // Missing history is not success. Explicit retirement needs a verified
+          // successor newer than the capture, with no recovery still pending.
+          if (
+            !history.hasPendingRecovery &&
+            history.latestVerifiedStartedAt > fs.lstatSync(directory).mtimeMs
+          ) {
+            item.reason = "superseded-unsealed-capture";
+            item.detail =
+              "Historical incomplete capture superseded by a later verified successful update. Retire only with an explicit --include-unmanifested path.";
+          }
+          continue;
+        }
+        // Sealed standalone originals remain under Doctor's retention policy.
+        if (entry.name.startsWith("doctor-")) {
           continue;
         }
         if (params.scan && !params.scan.metadata(path.join(directory, "manifest.json"))) {
@@ -217,7 +254,13 @@ function collectCaptureRootInventory(params: {
         item,
         doctor
           ? { outcome: doctor.eligible ? "candidate" : "protected", reason: doctor.reason }
-          : classifyCapture(directory, run!, history.latestCompletedStartedAt, params.env),
+          : classifyCapture(
+              directory,
+              run!,
+              history.latestCompletedStartedAt,
+              history.latestVerifiedStartedAt,
+              params.env,
+            ),
       );
       if (item.outcome === "candidate") {
         item.detail = doctor ? "standalone Doctor capture" : `update ${run!.status}`;

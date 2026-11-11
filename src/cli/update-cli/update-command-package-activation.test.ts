@@ -373,6 +373,16 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
       await fixtures.stopChild(child, closed);
     }
   });
+  it("admits an unpublished prepared update after boot-time lease loss", async () => {
+    const f = await fixtures.prepare();
+    preparePreview(f);
+    fs.unlinkSync(handoffLease.resolveManagedUpdateLeaseDatabasePath());
+    await settle(f);
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Retired unpublished prepared package update"),
+    );
+    expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+  });
   it.each([
     { lease: "missing", live: "candidate" },
     { lease: "missing", live: "previous" },

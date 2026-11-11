@@ -1010,7 +1010,7 @@ jobs:
     if: ${{ always() && !cancelled() && github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && (needs.publish_openclaw_npm.outputs.openclaw_publication != '' || needs.publish_openclaw_npm.outputs.gateway_protocol_publication != '') }}
     continue-on-error: true
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:

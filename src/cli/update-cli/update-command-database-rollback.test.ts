@@ -6,17 +6,18 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/io.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as serviceMembership from "../../daemon/service-process-membership.js";
 import { buildBackupArchivePath } from "../../infra/backup-archive-path-policy.js";
+import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import * as schemas from "../../infra/update-candidate-state.js";
 import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
@@ -25,6 +26,7 @@ import {
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import {
   isolateGitIdentity,
@@ -34,10 +36,19 @@ import { updateGitCheckout } from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../../test-utils/port-claims.js";
-import { leaveExitedWriterWalFamily } from "./update-command-database-rollback.test-support.js";
-import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import {
+  candidateRows,
+  createIndependentPluginRollbackWitness,
+  createRollbackDatabases,
+  leaveExitedWriterWalFamily,
+  prepareRollbackRuntime,
+  readDatabase,
+  readVersion,
+  resolveRollbackWorkerInputs,
+} from "./update-command-database-rollback.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 
 const { bindExecutionGuards, executionParams, mocks } =
@@ -114,19 +125,14 @@ const { executeMutableUpdate } = await import("./update-command-execution.js");
 const { withUpdateCommandExecutor } = await import("./update-command-executor.js");
 const { runPackageUpdateDoctor } = await import("./update-command-package.js");
 const { finishUpdate } = await import("./update-command-post-update.js");
-const { UpdateCommandFailure } = await import("./update-command-result.js");
+const { withUpdateCommandTerminalResult } = await import("./update-command-terminal.js");
+const { UpdateCommandFailure, UpdateCommandPendingRecoveryFailure } =
+  await import("./update-command-result.js");
 const readiness = await import("./update-command-readiness.js");
 const { runUpdateFinalizationDoctorInFreshProcess } =
   await import("./update-command-fresh-doctor.js");
 const { withOwnedManagedUpdateEnv } = await import("./update-command-service-env.js");
-const gatewayLockUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.gatewayLock);
-const databaseGenerationsUrl = resolveRuntimeWorkerUrl(
-  updateExecutorNativeEntrypoints.databaseGenerations,
-);
-const sourceLoader = gatewayLockUrl.pathname.endsWith(".ts")
-  ? `process.env.TSX_TSCONFIG_PATH=${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))};
-     await import(${JSON.stringify(new URL("../../../scripts/tsx.mjs", import.meta.url).href)});`
-  : "";
+const { gatewayLockUrl, databaseGenerationsUrl, sourceLoader } = resolveRollbackWorkerInputs();
 
 beforeEach(() => {
   vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
@@ -172,30 +178,13 @@ async function startService() {
   }
 }
 
-function readDatabase(file: string) {
-  using db = new DatabaseSync(file, { readOnly: true });
-  return {
-    version: db.prepare("PRAGMA user_version").get()?.user_version,
-    rows: db.prepare("SELECT rowid, value FROM payload ORDER BY rowid").all(),
-    columns: db
-      .prepare("PRAGMA table_info(payload)")
-      .all()
-      .map((column) => column.name),
-  };
-}
-
 const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
 const expectMissing = (file: string) =>
   expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-const readVersion = async (root: string) =>
-  JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")).version;
-const candidateRows = [
-  { rowid: 7, value: "candidate" },
-  { rowid: 42, value: "candidate" },
-];
 
 it.each([
   "package",
+  "relative-node",
   "exited-writer",
   "git",
   "git-edited",
@@ -208,9 +197,13 @@ it.each([
   "post-migration-write",
   "schema-neutral-write",
   "config-refused",
+  "independent-plugin",
+  "independent-migration",
 ] as const)(
   "restores pre-migration databases only before settled activation: %s",
   async (scenario) => {
+    const independentPlugin = scenario.startsWith("independent-");
+    const sharedVersion = independentPlugin ? OPENCLAW_STATE_SCHEMA_VERSION : 15;
     const gitInstall = scenario === "git" || scenario === "git-edited";
     const outsideWrite = [
       "git-edited",
@@ -220,12 +213,17 @@ it.each([
     ].includes(scenario);
     const preservesMigrated = outsideWrite && scenario !== "git-edited";
     const candidateSchemas =
-      scenario === "schema-neutral-write" ? { state: 15, agent: 21 } : { state: 18, agent: 23 };
-    const migratedVersions = scenario === "schema-neutral-write" ? [15, 21] : [18, 23];
+      scenario === "schema-neutral-write"
+        ? { state: 15, agent: 21 }
+        : { state: independentPlugin ? OPENCLAW_STATE_SCHEMA_VERSION : 18, agent: 23 };
+    const migratedVersions = [candidateSchemas.state, candidateSchemas.agent];
     const initialFailure = !["convergence", "started", "unsettled"].includes(scenario);
     const restores =
       scenario !== "serving" && !outsideWrite && (initialFailure || scenario === "convergence");
     const base = await fs.realpath(dirs.make("update-database-rollback-"));
+    // Candidate code moves between stage/live; its qualified test dependencies
+    // stay in their common ancestor, outside each retained package identity.
+    await fs.symlink(path.resolve("node_modules"), path.join(base, "node_modules"), "junction");
     const swapFixture = await createPackageSwapFixture(base);
     packageRoot = swapFixture.packageRoot;
     const stateDir = path.join(base, "service-state");
@@ -254,7 +252,7 @@ it.each([
       OPENCLAW_AGENT_DIR: undefined,
       PI_CODING_AGENT_DIR: undefined,
     };
-    const config = {
+    const config: OpenClawConfig = {
       gateway: { mode: "local" },
       plugins: { enabled: false },
       agents: { entries: { unused: {} } },
@@ -265,21 +263,27 @@ it.each([
       observe: false,
       pluginValidation: "skip",
     }).readConfigFileSnapshot();
-    for (const [file, version] of [
-      [shared, 15],
-      [agent, 21],
-    ] as const) {
-      using db = new DatabaseSync(file);
-      db.exec(
-        `PRAGMA user_version=${version}; CREATE TABLE payload(value TEXT); INSERT INTO payload(rowid,value) VALUES(7,'first'),(42,'retained');`,
-      );
-      if (file === shared) {
-        db.exec("CREATE TABLE agent_databases(path TEXT)");
-        db.prepare("INSERT INTO agent_databases VALUES (?)").run(agent);
-      }
+    await createRollbackDatabases({ env: serviceEnv, shared, agent, sharedVersion });
+    const independent = createIndependentPluginRollbackWitness({
+      stateDir,
+      env: serviceEnv,
+      config,
+      mode: scenario === "independent-migration" ? "migration" : "index",
+    });
+    if (independentPlugin) {
+      await independent.seedBaseline();
     }
     const before = readState();
     let retainedSnapshotDirectory = "";
+    let cohortTransactionId: string | undefined;
+    const observePluginCohort = () => {
+      const pair = loadPluginCohortRecovery(run.runId, {
+        env: serviceEnv,
+        allowNativeRead: true,
+      });
+      assert(pair, "The real transaction must retain its plugin cohort before publication");
+      cohortTransactionId = pair.cohort.transactionId;
+    };
     const doctorEvidence = path.join(base, "doctor-observed.json");
     const initialDoctor = path.join(base, "initial-doctor.json");
     // Model package IPC with real fingerprints and physical maintenance custody.
@@ -324,7 +328,9 @@ it.each([
         } else {
           for (const [index,file] of files.entries()) {
             const db = new DatabaseSync(file);
-            try { db.exec("BEGIN; ALTER TABLE payload ADD COLUMN migrated TEXT; UPDATE payload SET value='candidate' WHERE rowid IN (7,42); PRAGMA user_version=" + ${JSON.stringify(migratedVersions)}[index] + '; COMMIT;'); }
+            try { db.exec("BEGIN; ALTER TABLE payload ADD COLUMN migrated TEXT; UPDATE payload SET value='candidate' WHERE rowid IN (7,42); PRAGMA user_version=" + ${JSON.stringify(migratedVersions)}[index] + ';');
+              if(index===0) db.prepare("UPDATE schema_meta SET schema_version=? WHERE meta_key='primary'").run(${JSON.stringify(migratedVersions)}[index]);
+              db.exec('COMMIT;'); }
             finally { db.close(); }
           }
           if (${scenario !== "schema-neutral-write"}) {
@@ -345,7 +351,7 @@ it.each([
       const {version}=manifest;
       assert(version==='1.0.0'||${preservesMigrated},'only the compatible candidate may serve preserved writes');
       const custody=await acquireCustody('gateway',Number(process.argv[3]));
-      assert.deepEqual(files.map(file=>read(file).version),version==='1.0.0'?[15,21]:${JSON.stringify(migratedVersions)},'runtime must match the retained state');
+      assert.deepEqual(files.map(file=>read(file).version),version==='1.0.0'?${JSON.stringify([sharedVersion, 21])}:${JSON.stringify(migratedVersions)},'runtime must match the retained state');
       const server=http.createServer((request,response)=>{
         if(request.url==='/commit') for(const file of files) {const db=new DatabaseSync(file);db.exec("INSERT INTO payload(rowid,value) VALUES(99,'after-capture')");db.close();}
         response.setHeader('content-type','application/json');response.end(JSON.stringify({version,databases:files.map(read)}));
@@ -357,9 +363,10 @@ it.each([
     }
   `;
     for (const [root, version, versions] of [
-      [packageRoot, "1.0.0", { state: 15, agent: 21 }],
+      [packageRoot, "1.0.0", { state: sharedVersion, agent: 21 }],
       [swapFixture.params.stage.packageRoot, "2.0.0", candidateSchemas],
     ] as const) {
+      const actualWorker = await prepareRollbackRuntime(root);
       await writeJson(path.join(root, "package.json"), {
         name: "openclaw",
         packageManager: "pnpm@12.0.0",
@@ -378,7 +385,11 @@ it.each([
         .relative(path.dirname(worker), path.join(root, "dist/index.js"))
         .split(path.sep)
         .join("/");
-      await fs.writeFile(worker, `import ${JSON.stringify(entry)};\n`);
+      await fs.writeFile(
+        worker,
+        `if(process.argv[2]==='--doctor') await import(${JSON.stringify(entry)});
+         else await import(${JSON.stringify(actualWorker)});\n`,
+      );
     }
     let beforeGitSha: string | undefined;
     const writeGitRuntime = async (root: string) => {
@@ -444,7 +455,10 @@ it.each([
               inspectGitTarget: params.inspectGitTarget,
               beforeGitMutation: params.beforeGitMutation,
               validateCandidate: params.validateCandidate,
-              onTransaction: params.onTransaction,
+              onTransaction: async (transaction) => {
+                await params.onTransaction?.(transaction);
+                observePluginCohort();
+              },
               runGitDoctor: async (root, results) => {
                 const step = await runPackageUpdateDoctor({
                   ...params,
@@ -546,6 +560,10 @@ it.each([
               await leaveExitedWriterWalFamily(agent, path.join(base, "exited-writer"));
             }
             await params.onTransaction?.(transaction);
+            observePluginCohort();
+            if (independentPlugin) {
+              await independent.publish(opts.run!);
+            }
             retainedSnapshotDirectory = `${transaction.backupRoot}.databases`;
             if (scenario === "intervening") {
               await startService();
@@ -574,7 +592,7 @@ it.each([
             return step;
           },
         });
-        assert(swap.postVerifyStep);
+        assert(swap.postVerifyStep, JSON.stringify(swap.step));
         expect([swap.postVerifyStep.exitCode, swap.postVerifyStep.advisory]).toEqual([
           initialFailure && scenario !== "verification" ? 1 : 0,
           undefined,
@@ -690,234 +708,308 @@ it.each([
       };
       return { ok: true, score: 7, summary: "Fixture retained runtime serves restored data" };
     });
+    let verifySettledHistory: (() => void) | undefined;
     try {
-      await withUpdateCommandExecutor(run.runId, async (executor) => {
-        mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admit) =>
-          admit(await executor.enter(packageRoot)),
-        );
-        const params = {
-          ...executionParams(gitInstall ? "git" : "package"),
-          root: packageRoot,
-          packageInstallTarget: swapFixture.params.installTarget,
-          opts,
-          startedAt: Date.now(),
-          invocationCwd: base,
-          packageTargetSchemaVersions: candidateSchemas,
-          shouldRestart: scenario !== "serving",
-        };
-        const execution = await executeMutableUpdate(await bindExecutionGuards(params));
-        assert(execution);
-        databaseBackup = execution.databaseBackup;
-        executionResult = execution.result;
-        if (gitInstall) {
-          assert(databaseBackup, "Git update must capture pre-migration databases");
-          retainedSnapshotDirectory = databaseBackup.directory;
-        }
-        if (scenario === "exited-writer") {
-          // Capture under maintenance custody must not rebuild the source WAL index.
-          const captured = execution.result.steps.find((step) => step.name === "database snapshot");
-          expect(captured?.warnings ?? []).toEqual([]);
-          expect(databaseBackup?.sourceGenerations[agent]).toEqual(expect.any(String));
-        }
-        const expectedReason = outsideWrite
-          ? "state-migrated-no-rollback"
-          : scenario === "verification"
-            ? "runtime-verification-failed"
-            : initialFailure
-              ? "doctor-failed"
-              : undefined;
-        expect(execution.result.reason).toBe(expectedReason);
-        const observedStart = vi.fn();
-        const finalize = () =>
-          finishUpdate(
-            {
-              ...execution,
-              root: packageRoot,
-              ownedManagedUpdateEnv: serviceEnv,
-              opts: params.opts,
-              shouldRestart: true,
-              updateStepTimeoutMs: 30_000,
-              installKindChanged: false,
-              configSnapshot,
-              requestedChannel: null,
-              storedChannel: "stable",
-              channel: "stable",
-              downgradeRisk: false,
-              preUpdatePluginInstallRecords: {},
-              startedAt: params.startedAt,
-              controlPlaneUpdateSentinelMeta: null,
-            },
-            { onGatewayStartAttempted: observedStart },
-          );
-        if (outsideWrite) {
-          const reason =
-            scenario === "git-edited"
-              ? "Git checkout changed after activation"
-              : scenario === "intervening"
-                ? "databases changed after snapshot capture"
-                : "restoring the backup would discard later writes";
-          expect(starts).toEqual(scenario === "intervening" ? ["1.0.0", "1.0.0"] : ["1.0.0"]);
-          const rollback = execution.result.steps.find((step) => step.name === "database rollback");
-          expect(rollback).toMatchObject({ exitCode: 1, cwd: retainedSnapshotDirectory });
-          for (const file of files) {
-            if (scenario === "git-edited") {
-              expect(readDatabase(file).rows).toEqual(candidateRows);
-            } else {
-              expect(readDatabase(file).rows).toContainEqual({
-                rowid: 99,
-                value: scenario === "intervening" ? "after-capture" : "after-migration",
-              });
-            }
-            expect(readDatabase(file).version).toBe(migratedVersions[file === shared ? 0 : 1]);
-            await expectNoMigratedFile(file);
-            expectSnapshot(file);
-          }
-          const preserved = readState();
-          if (preservesMigrated) {
-            expect(execution.result.recovery).toMatchObject({
-              serviceRestartSafe: false,
-              dataAtRisk: "state-migrated-no-rollback",
-            });
-          }
-          await expect(finalize()).rejects.toMatchObject({
-            result: {
-              reason: preservesMigrated ? "post-update-failed" : "state-migrated-no-rollback",
-            },
-          });
-          expect(readState()).toEqual(preserved);
-          expect(await readVersion(packageRoot)).toBe("2.0.0");
-          if (scenario === "git-edited") {
-            expect(await git(packageRoot, "diff", "--name-only")).toBe("package.json");
-            expect(await git(packageRoot, "rev-parse", "HEAD")).not.toBe(beforeGitSha);
-          }
-          expect(restart).not.toHaveBeenCalled();
-          if (preservesMigrated) {
-            expect(await readServing()).toMatchObject({ version: "2.0.0" });
-          } else {
-            expect(observedStart).not.toHaveBeenCalled();
-            expect(service).toBeUndefined();
-          }
-          const record = getUpdateRun(run.runId, { env });
-          assert(record);
-          expect(rollback?.stderrTail).toContain(reason);
-          expect(renderUpdateRunReport(record).lines.join("\n")).toContain(reason);
-          if (preservesMigrated) {
-            expect(record).toMatchObject({
-              status: "failed",
-              reason: "post-update-failed",
-              verification: {
-                serviceRunning: true,
-                readyz: true,
-                runningVersion: "2.0.0",
-                recovery: { serviceRestartSafe: true, service: "healthy", version: "2.0.0" },
-              },
-            });
-            expect(record.verification.recovery).not.toHaveProperty("dataAtRisk");
-            expect(renderUpdateRunReport(record).lines.join("\n")).toContain(
-              "running on the retained state",
+      const operation = withUpdateCommandTerminalResult(
+        (registerRun) => {
+          registerRun(run);
+          return withUpdateCommandExecutor(run.runId, async (executor) => {
+            mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admit) =>
+              admit(await executor.enter(packageRoot)),
             );
-          }
-          return;
-        }
-        if (scenario === "serving") {
-          for (const file of files) {
-            expect(readDatabase(file).rows).toContainEqual({ rowid: 99, value: "after-capture" });
-            await expectNoMigratedFile(file);
-            expectSnapshot(file);
-          }
-          expect(execution.databaseBackup).toBeUndefined();
-          const captured = execution.result.steps.find((step) => step.name === "database snapshot");
-          expect(captured?.warnings).toEqual([
-            expect.stringContaining("Automatic database restoration is disabled"),
-          ]);
-          expect(execution.result.steps.some((step) => step.name === "database rollback")).toBe(
-            false,
-          );
-          expect(service).toBeUndefined();
-          return;
-        }
-        expect(readState()).toEqual(before);
-        expect(execution.databaseBackup?.missingPaths).toContain(missing);
-        expect(starts).toEqual(["1.0.0"]);
-        const finishFailure = await finalize().catch((error: unknown) => error);
-        expect(
-          JSON.parse(await fs.readFile(doctorEvidence, "utf8")).map(
-            (entry: { version: number }) => entry.version,
-          ),
-        ).toEqual([18, 23]);
-        if (scenario === "config-refused") {
-          assert(finishFailure instanceof UpdateCommandFailure);
-          expect(finishFailure.result.reason).toBe("state-migrated-no-rollback");
-          expect(restart).not.toHaveBeenCalled();
-          expect(observedStart).not.toHaveBeenCalled();
-          expect(service).toBeUndefined();
-          expect(starts).toEqual(["1.0.0"]);
-          expect([
-            await readVersion(packageRoot),
-            await readVersion(execution.packageTransaction!.backupRoot),
-          ]).toEqual(["2.0.0", "1.0.0"]);
-          expect(readState()).toEqual(before);
-          expect(
-            files.map((file) => readDatabase(`${file}.migrated-${run.runId}`).version),
-          ).toEqual([18, 23]);
-          expect(JSON.parse(await fs.readFile(serviceEnv.OPENCLAW_CONFIG_PATH!, "utf8"))).toEqual({
-            ...config,
-            gateway: { ...config.gateway, port },
-          });
-          expect(finishFailure.result.steps).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ name: "database rollback", exitCode: 0 }),
-              expect.objectContaining({ name: "config-rollback", exitCode: 1 }),
-            ]),
-          );
-          return;
-        }
-        if (!restores) {
-          if (scenario === "unsettled") {
-            expect(finishFailure).toBe(unsettled);
-            expect(restart).not.toHaveBeenCalled();
-            expect(observedStart).not.toHaveBeenCalled();
-          } else {
-            expect(finishFailure).toBeInstanceOf(UpdateCommandFailure);
+            const params = {
+              ...executionParams(gitInstall ? "git" : "package"),
+              root: packageRoot,
+              packageInstallTarget: swapFixture.params.installTarget,
+              opts,
+              startedAt: Date.now(),
+              invocationCwd: base,
+              packageTargetSchemaVersions: candidateSchemas,
+              ...(scenario === "relative-node" && {
+                packageUpdateNodeRunner: "node",
+                packageActivationRuntime: capturePackageActivationRuntime("node", process.execPath),
+              }),
+              shouldRestart: scenario !== "serving",
+            };
+            const execution = await executeMutableUpdate(await bindExecutionGuards(params));
+            assert(execution);
+            databaseBackup = execution.databaseBackup;
+            executionResult = execution.result;
+            if (independentPlugin) {
+              return;
+            }
+            expect(cohortTransactionId, JSON.stringify(execution.result)).toEqual(
+              expect.any(String),
+            );
+            expect(
+              loadPluginCohortRecovery(run.runId, { env: serviceEnv, allowNativeRead: true })
+                ?.cohort.transactionId,
+            ).toBe(cohortTransactionId);
+            if (gitInstall) {
+              assert(databaseBackup, "Git update must capture pre-migration databases");
+              retainedSnapshotDirectory = databaseBackup.directory;
+            }
+            if (scenario === "exited-writer") {
+              // Capture under maintenance custody must not rebuild the source WAL index.
+              const captured = execution.result.steps.find(
+                (step) => step.name === "database snapshot",
+              );
+              expect(captured?.warnings ?? []).toEqual([]);
+              expect(databaseBackup?.sourceGenerations[agent]).toEqual(expect.any(String));
+            }
+            const expectedReason = outsideWrite
+              ? "state-migrated-no-rollback"
+              : scenario === "verification"
+                ? "runtime-verification-failed"
+                : initialFailure
+                  ? "doctor-failed"
+                  : undefined;
+            expect(execution.result.reason, JSON.stringify(execution.result.steps)).toBe(
+              expectedReason,
+            );
+            const observedStart = vi.fn();
+            const finalize = () =>
+              finishUpdate(
+                {
+                  ...execution,
+                  root: packageRoot,
+                  ownedManagedUpdateEnv: serviceEnv,
+                  opts: params.opts,
+                  shouldRestart: true,
+                  updateStepTimeoutMs: 30_000,
+                  installKindChanged: false,
+                  configSnapshot,
+                  requestedChannel: null,
+                  storedChannel: "stable",
+                  channel: "stable",
+                  downgradeRisk: false,
+                  preUpdatePluginInstallRecords: {},
+                  startedAt: params.startedAt,
+                  controlPlaneUpdateSentinelMeta: null,
+                },
+                { onGatewayStartAttempted: observedStart },
+              );
+            if (outsideWrite) {
+              const reason =
+                scenario === "git-edited"
+                  ? "Git checkout changed after activation"
+                  : scenario === "intervening"
+                    ? "databases changed after snapshot capture"
+                    : "restoring the backup would discard later writes";
+              expect(starts).toEqual(scenario === "intervening" ? ["1.0.0", "1.0.0"] : ["1.0.0"]);
+              const rollback = execution.result.steps.find(
+                (step) => step.name === "database rollback",
+              );
+              expect(rollback).toMatchObject({ exitCode: 1, cwd: retainedSnapshotDirectory });
+              for (const file of files) {
+                if (scenario === "git-edited") {
+                  expect(readDatabase(file).rows).toEqual(candidateRows);
+                } else {
+                  expect(readDatabase(file).rows).toContainEqual({
+                    rowid: 99,
+                    value: scenario === "intervening" ? "after-capture" : "after-migration",
+                  });
+                }
+                expect(readDatabase(file).version).toBe(migratedVersions[file === shared ? 0 : 1]);
+                await expectNoMigratedFile(file);
+                expectSnapshot(file);
+              }
+              const preserved = readState();
+              if (preservesMigrated) {
+                expect(execution.result.recovery).toMatchObject({
+                  serviceRestartSafe: false,
+                  dataAtRisk: "state-migrated-no-rollback",
+                });
+              }
+              await expect(finalize()).rejects.toMatchObject({
+                result: {
+                  reason: preservesMigrated ? "post-update-failed" : "state-migrated-no-rollback",
+                },
+              });
+              expect(readState()).toEqual(preserved);
+              expect(await readVersion(packageRoot)).toBe("2.0.0");
+              if (scenario === "git-edited") {
+                expect(await git(packageRoot, "diff", "--name-only")).toBe("package.json");
+                expect(await git(packageRoot, "rev-parse", "HEAD")).not.toBe(beforeGitSha);
+              }
+              expect(restart).not.toHaveBeenCalled();
+              if (preservesMigrated) {
+                expect(await readServing()).toMatchObject({ version: "2.0.0" });
+              } else {
+                expect(observedStart).not.toHaveBeenCalled();
+                expect(service).toBeUndefined();
+              }
+              expect(rollback?.stderrTail).toContain(reason);
+              verifySettledHistory = () => {
+                const record = getUpdateRun(run.runId, { env });
+                assert(record);
+                expect(renderUpdateRunReport(record).lines.join("\n")).toContain(reason);
+                if (preservesMigrated) {
+                  expect(record).toMatchObject({
+                    status: "failed",
+                    reason: "post-update-failed",
+                    verification: {
+                      serviceRunning: true,
+                      readyz: true,
+                      runningVersion: "2.0.0",
+                      recovery: { serviceRestartSafe: true, service: "healthy", version: "2.0.0" },
+                    },
+                  });
+                  expect(record.verification.recovery).not.toHaveProperty("dataAtRisk");
+                  expect(renderUpdateRunReport(record).lines.join("\n")).toContain(
+                    "running on the retained state",
+                  );
+                }
+              };
+              return;
+            }
+            if (scenario === "serving") {
+              for (const file of files) {
+                expect(readDatabase(file).rows).toContainEqual({
+                  rowid: 99,
+                  value: "after-capture",
+                });
+                await expectNoMigratedFile(file);
+                expectSnapshot(file);
+              }
+              expect(execution.databaseBackup).toBeUndefined();
+              const captured = execution.result.steps.find(
+                (step) => step.name === "database snapshot",
+              );
+              expect(captured?.warnings).toEqual([
+                expect.stringContaining("Automatic database restoration is disabled"),
+              ]);
+              expect(execution.result.steps.some((step) => step.name === "database rollback")).toBe(
+                false,
+              );
+              expect(service).toBeUndefined();
+              return;
+            }
+            expect(readState()).toEqual(before);
+            expect(execution.databaseBackup?.missingPaths).toContain(missing);
+            expect(starts).toEqual(["1.0.0"]);
+            const finishFailure = await finalize().catch((error: unknown) => error);
+            expect(
+              JSON.parse(await fs.readFile(doctorEvidence, "utf8")).map(
+                (entry: { version: number }) => entry.version,
+              ),
+            ).toEqual([18, 23]);
+            if (scenario === "config-refused") {
+              assert(finishFailure instanceof UpdateCommandFailure);
+              expect(finishFailure.result.reason).toBe("state-migrated-no-rollback");
+              expect(restart).not.toHaveBeenCalled();
+              expect(observedStart).not.toHaveBeenCalled();
+              expect(service).toBeUndefined();
+              expect(starts).toEqual(["1.0.0"]);
+              expect([
+                await readVersion(packageRoot),
+                await readVersion(execution.packageTransaction!.backupRoot),
+              ]).toEqual(["2.0.0", "1.0.0"]);
+              expect(readState()).toEqual(before);
+              expect(
+                files.map((file) => readDatabase(`${file}.migrated-${run.runId}`).version),
+              ).toEqual([18, 23]);
+              expect(
+                JSON.parse(await fs.readFile(serviceEnv.OPENCLAW_CONFIG_PATH!, "utf8")),
+              ).toEqual({
+                ...config,
+                gateway: { ...config.gateway, port },
+              });
+              expect(finishFailure.result.steps).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({ name: "database rollback", exitCode: 0 }),
+                  expect.objectContaining({ name: "config-rollback", exitCode: 1 }),
+                ]),
+              );
+              return;
+            }
+            if (!restores) {
+              if (scenario === "unsettled") {
+                expect(finishFailure).toBe(unsettled);
+                expect(restart).not.toHaveBeenCalled();
+                expect(observedStart).not.toHaveBeenCalled();
+              } else {
+                expect(finishFailure).toBeInstanceOf(UpdateCommandFailure);
+                expect(restart).toHaveBeenCalledOnce();
+                expect(observedStart).toHaveBeenCalledOnce();
+              }
+              expect(starts).toEqual(["1.0.0"]);
+              for (const [file, version] of [
+                [shared, 18],
+                [agent, 23],
+              ] as const) {
+                expect(readDatabase(file).version).toBe(version);
+                expect(readDatabase(file).rows).toEqual(candidateRows);
+                await expectNoMigratedFile(file);
+              }
+              return;
+            }
+            expect(
+              readState(),
+              JSON.stringify({
+                failure: finishFailure instanceof Error ? finishFailure.stack : finishFailure,
+                history: getUpdateRun(run.runId, { env }),
+              }),
+            ).toEqual(before);
+            expect(
+              finishFailure,
+              JSON.stringify({
+                failure: finishFailure instanceof Error ? finishFailure.stack : finishFailure,
+                steps: execution.result.steps,
+              }),
+            ).toBeInstanceOf(UpdateCommandFailure);
             expect(restart).toHaveBeenCalledOnce();
             expect(observedStart).toHaveBeenCalledOnce();
-          }
-          expect(starts).toEqual(["1.0.0"]);
-          for (const [file, version] of [
-            [shared, 18],
-            [agent, 23],
-          ] as const) {
-            expect(readDatabase(file).version).toBe(version);
-            expect(readDatabase(file).rows).toEqual(candidateRows);
-            await expectNoMigratedFile(file);
-          }
-          return;
-        }
-        expect(readState()).toEqual(before);
-        expect(finishFailure).toBeInstanceOf(UpdateCommandFailure);
-        expect(restart).toHaveBeenCalledOnce();
-        expect(observedStart).toHaveBeenCalledOnce();
-        expect(starts).toEqual(["1.0.0", "1.0.0"]);
-        if (beforeGitSha) {
-          expect(await git(packageRoot, "rev-parse", "HEAD")).toBe(beforeGitSha);
-          expect(await git(packageRoot, "status", "--porcelain")).toBe("");
-        }
-        const record = getUpdateRun(run.runId, { env });
-        expect(record).toMatchObject({
-          status: "rolled-back",
-          verification: { serviceRunning: true, runningVersion: "1.0.0", versionMatch: true },
+            expect(starts).toEqual(["1.0.0", "1.0.0"]);
+            expect(
+              loadPluginCohortRecovery(run.runId, { env: serviceEnv, allowNativeRead: true }),
+            ).toBeUndefined();
+            if (beforeGitSha) {
+              expect(await git(packageRoot, "rev-parse", "HEAD")).toBe(beforeGitSha);
+              expect(await git(packageRoot, "status", "--porcelain")).toBe("");
+            }
+            verifySettledHistory = () => {
+              const record = getUpdateRun(run.runId, { env });
+              expect(record).toMatchObject({
+                status: "rolled-back",
+                verification: { serviceRunning: true, runningVersion: "1.0.0", versionMatch: true },
+              });
+              assert(record);
+              const report = renderUpdateRunReport(record).lines.join("\n");
+              expect(report).toContain("Databases snapshotted at");
+              expect(report).toContain("Migrated database file retained");
+            };
+            expect(await fs.readFile(swapFixture.launcher, "utf8")).toBe("old launcher\n");
+            for (const entry of execution.databaseBackup!.databases) {
+              using retained = new DatabaseSync(`${entry.path}.migrated-${run.runId}`, {
+                readOnly: true,
+              });
+              expect(readSqliteUserVersion(retained)).toBe(
+                entry.path === shared ? 18 : entry.path === agent ? 23 : entry.userVersion,
+              );
+            }
+          });
+        },
+        { json: true },
+      );
+      if (independentPlugin) {
+        const settled = independent.observeSettlement(operation);
+        await expect(settled).rejects.toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
+        await independent.expectPendingRecovery(settled);
+        await independent.expectPreserved({
+          doctorEvidence,
+          migratedVersions,
+          runId: run.runId,
+          transactionId: cohortTransactionId,
+          readState,
+          packageRoot,
+          starts,
+          readService: () => service,
         });
-        assert(record);
-        const report = renderUpdateRunReport(record).lines.join("\n");
-        expect(report).toContain("Databases snapshotted at");
-        expect(report).toContain("Migrated database file retained");
-        expect(await fs.readFile(swapFixture.launcher, "utf8")).toBe("old launcher\n");
-        for (const entry of execution.databaseBackup!.databases) {
-          expect(readDatabase(`${entry.path}.migrated-${run.runId}`).version).toBe(
-            entry.path === shared ? 18 : 23,
-          );
-        }
-      });
+      } else {
+        await operation;
+      }
+      verifySettledHistory?.();
     } finally {
       await opts.run?.sourceArtifactLock?.release();
     }

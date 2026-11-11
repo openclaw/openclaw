@@ -13,7 +13,19 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { EmbeddingProvider } from "./embeddings.js";
+import type { EmbeddingProvider, EmbeddingProviderRuntime } from "./embeddings.js";
+import type { MemoryEmbeddingBatchConfig } from "./manager-sync-base.js";
+
+export function resolveMemoryIndexConcurrency(
+  batch: Pick<MemoryEmbeddingBatchConfig, "enabled" | "concurrency">,
+  runtime?: EmbeddingProviderRuntime,
+): number {
+  if (batch.enabled) {
+    return batch.concurrency;
+  }
+  const declared = runtime?.inlineIndexConcurrency;
+  return declared !== undefined && Number.isSafeInteger(declared) && declared > 0 ? declared : 4;
+}
 
 export function embedMemoryQuery(
   provider: EmbeddingProvider,
@@ -147,7 +159,7 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 // rejects a batch by its aggregate token count and asks for more batches;
 // that exact phrase is splittable while a per-input token limit is not.
 const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
-  /(too many tokens overall,?\s*split into more batches|request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b|\binput array max\s+\d+(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*\d+\s*条)/i;
+  /(^memory embeddings batch timed out\b|too many tokens overall,?\s*split into more batches|request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b|\binput array max\s+\d+(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*\d+\s*条)/i;
 
 const SHORT_MEMORY_EMBEDDING_RETRY_BUDGET = {
   attempts: 3,
@@ -215,6 +227,10 @@ function resolveMemoryEmbeddingRetryBudget(
   }
   const fields = asOptionalRecord(error);
   const message = embeddingRetryMessage(error);
+  // The watchdog exhausted this request's budget; let indexing try smaller batches.
+  if (message.startsWith("memory embeddings batch timed out")) {
+    return undefined;
+  }
   const cooldown = fields?.retryAfterMs;
   const retryAfterMs =
     typeof cooldown === "number" && Number.isSafeInteger(cooldown) && cooldown >= 0

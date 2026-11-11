@@ -158,6 +158,7 @@ export async function prepareAndAdmitChatSend(
     session,
     onAdmissionOwned,
     hasCurrentClientAuthority,
+    sessionMutationAuthorization,
     withPreparedCurrent: sessionMutationAuthorization?.withPreparedCurrent,
     followRegistration: sessionMutationAuthorization?.followRegistration,
     diagnostics,

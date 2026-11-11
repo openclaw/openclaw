@@ -6,6 +6,7 @@ import {
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   asPositiveFiniteNumber,
   finiteSecondsToTimerSafeMilliseconds,
@@ -22,11 +23,13 @@ import type { SessionControllerWatchdogAttempt } from "../../../sessions/session
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
 import { getLastToolActivityMs, onToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { abortable, createAbortableError } from "./abortable.js";
+import { EMBEDDED_ABORT_SETTLE_TIMEOUT_MS } from "./attempt-subscription-cleanup.js";
 
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 const SELF_HOSTED_LLM_IDLE_TIMEOUT_MS = 300_000;
@@ -56,9 +59,7 @@ function isLocalProviderHostname(hostname: string): boolean {
   if (
     host === "localhost" ||
     host === "0.0.0.0" ||
-    host === "::1" ||
-    host === "::ffff:7f00:1" ||
-    host === "::ffff:127.0.0.1" ||
+    isLoopbackIpAddress(host) ||
     host.endsWith(".local")
   ) {
     return true;
@@ -76,9 +77,8 @@ function isLocalProviderHostname(hostname: string): boolean {
     return false;
   }
   const [a, b] = octets;
-  // Include all of 127/8, RFC 1918, and shared CGNAT/Tailscale addresses.
+  // Include RFC 1918 and shared CGNAT/Tailscale addresses.
   return (
-    a === 127 ||
     a === 10 ||
     (a === 172 && b !== undefined && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
@@ -401,11 +401,25 @@ export function streamWithIdleTimeout(
         let watchdogLastProgressAt = Date.now();
         let rejectIdleTimeout: ((error: Error) => void) | undefined;
         const pendingAborts = new Set<(error: Error) => void>();
+        let restartAbortTimer: NodeJS.Timeout | undefined;
+        let restartAbortExpired = false;
         const abortIteration = () => {
-          if (sourceSignal) {
-            for (const reject of pendingAborts) {
-              reject(createAbortableError(sourceSignal));
+          if (!sourceSignal) {
+            return;
+          }
+          // Allow the terminal partial reply, but never refresh this grace on chunks
+          // or heartbeats: a provider ignoring cancellation must not keep next() alive.
+          if (isAgentRunRestartAbortReason(sourceSignal.reason) && !restartAbortExpired) {
+            if (!settled) {
+              restartAbortTimer ??= setTimeout(() => {
+                restartAbortExpired = true;
+                abortIteration();
+              }, EMBEDDED_ABORT_SETTLE_TIMEOUT_MS).unref();
             }
+            return;
+          }
+          for (const reject of pendingAborts) {
+            reject(createAbortableError(sourceSignal));
           }
         };
         sourceSignal?.addEventListener("abort", abortIteration, { once: true });
@@ -496,6 +510,8 @@ export function streamWithIdleTimeout(
             return;
           }
           settled = true;
+          // A completed native producer may still have a queued terminal reply.
+          clearTimeout(restartAbortTimer);
           rejectIdleTimeout = undefined;
           clearTimers();
           unsubscribeLlmActivity();
@@ -510,6 +526,7 @@ export function streamWithIdleTimeout(
         let iteratorFinished = false;
         const releaseAbortListener = () => {
           if (iteratorFinished && pendingAborts.size === 0) {
+            clearTimeout(restartAbortTimer);
             sourceSignal?.removeEventListener("abort", abortIteration);
           }
         };
@@ -533,12 +550,12 @@ export function streamWithIdleTimeout(
                     pendingAborts.add(reject);
                   }
                   armTimer(false);
-                  // Cancellation rejects this wait synchronously, before a provider's
+                  // Ordinary cancellation rejects this wait before a provider's
                   // mirrored-signal rejection can replace the caller's abort reason.
                   pendingNext = streamIterator.next();
                   void pendingNext.then(resolve, reject);
                   if (sourceSignal?.aborted) {
-                    reject(createAbortableError(sourceSignal));
+                    abortIteration();
                   }
                 },
               );

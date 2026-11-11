@@ -1,0 +1,2 @@
+# Registered computer command recovery and close after failed resource initialization.
+69

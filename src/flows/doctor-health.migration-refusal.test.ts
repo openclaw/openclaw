@@ -1,6 +1,7 @@
 import "./doctor-health.test-support.js";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
 import * as nocow from "../commands/doctor-sqlite-nocow.js";
@@ -12,6 +13,7 @@ import {
   acquireStateDatabaseSchemaLease,
 } from "../infra/gateway-state-owner.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import {
   collectUpdateDoctorFailureFacts,
@@ -365,7 +367,7 @@ describe("Doctor maintenance admission", () => {
       [false, true].map((updating) => ({ owner, updating })),
     ),
   )(
-    "preserves the live $owner owner before snapshots (updating=$updating)",
+    "preserves the live $owner owner before repair snapshots (updating=$updating)",
     async ({ owner, updating }) => {
       const resultPath = updating ? createUpdatePostInstallDoctorResultPath() : undefined;
       const env = {
@@ -385,6 +387,11 @@ describe("Doctor maintenance admission", () => {
         }
         closeOpenClawStateDatabaseByPath(database.path);
         const before = readConfig(state.configPath);
+        const readDatabaseFamily = () =>
+          resolveSqliteDatabaseFilePaths(database.path).map((file) =>
+            fs.existsSync(file) ? fs.readFileSync(file) : null,
+          );
+        const familyBefore = readDatabaseFamily();
         const stateOwner =
           owner === "gateway"
             ? acquireGatewayStateOwner({ databasePath: database.path })
@@ -403,10 +410,35 @@ describe("Doctor maintenance admission", () => {
           const result = resultPath
             ? await consumeUpdatePostInstallDoctorResult(resultPath)
             : undefined;
+          const readImages = snapshotProcesses.execFile.mock.calls.flatMap((call) => {
+            const args = call[1];
+            if (!Array.isArray(args)) {
+              return [];
+            }
+            const childIndex = args.indexOf(SQLITE_READONLY_CHILD_ARG);
+            return childIndex < 0 ? [] : [args.slice(childIndex + 1)];
+          });
+          if (owner === "agent") {
+            // Inspect current WAL leases in a private shared-state image before refusing repair.
+            for (const [mode, source, temporaryRoot] of readImages) {
+              expect(mode).toBe("sync");
+              expect(source).toBe(database.path);
+              expect(temporaryRoot).toBeTypeOf("string");
+              if (typeof temporaryRoot !== "string") {
+                throw new Error("Lease inspection did not identify its temporary image");
+              }
+              expect(path.dirname(temporaryRoot)).toBe(mocks.runtimeTmpDir());
+              expect(path.basename(temporaryRoot)).toMatch(/^openclaw-sqlite-readonly-v2-/);
+              expect(fs.existsSync(temporaryRoot)).toBe(false);
+            }
+          } else {
+            expect(readImages).toEqual([]);
+          }
+          expect(readDatabaseFamily()).toEqual(familyBefore);
           expect(
-            snapshotProcesses.execFile.mock.calls.filter(
-              (call) => Array.isArray(call[1]) && call[1].includes(SQLITE_READONLY_CHILD_ARG),
-            ),
+            fs
+              .readdirSync(path.dirname(database.path))
+              .filter((entry) => entry.includes(".pre-startup-migration-")),
           ).toEqual([]);
           if (updating) {
             expect(failure).toBeUndefined();

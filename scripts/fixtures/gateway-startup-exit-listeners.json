@@ -1,0 +1,4 @@
+{
+  "plugins": { "allow": ["openai"] },
+  "secrets": { "egressProxy": { "enabled": true } }
+}

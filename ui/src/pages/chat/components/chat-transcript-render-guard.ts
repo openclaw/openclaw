@@ -36,6 +36,11 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
       item.key,
       outcome.kind,
       outcome.kind === "completed" ? outcome.actionOwner : null,
+      item.fragment?.first,
+      item.fragment?.last,
+      item.fragment?.firstBubbleKey,
+      item.fragment?.representative,
+      item.fragment?.source.parts,
       ...item.parts.flatMap(itemDependencies),
     ];
   }
@@ -45,17 +50,24 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
 export function transcriptContextDependencies(
   item: ChatRenderItem,
   loadedSources: ReadonlyMap<string, LoadedReplySource>,
-  props: Pick<ChatThreadProps, "onRetryRun" | "failureActionsRunId" | "modelCatalog">,
+  props: Pick<
+    ChatThreadProps,
+    "onRetryRun" | "failedMessageEditSource" | "failureActionsRunId" | "modelCatalog"
+  >,
 ): unknown[] {
   if (item.kind === "notice") {
     return [
       props.onRetryRun,
+      props.failedMessageEditSource,
       props.failureActionsRunId,
       item.modelChange ? props.modelCatalog : undefined,
     ];
   }
   const dependencies: unknown[] = [];
-  for (const group of chatItemGroups(item)) {
+  // The first fragment presents the final answer's reply attribution above the run.
+  const replySource =
+    item.kind === "agent-run-frame" && item.fragment?.first ? item.fragment.source : item;
+  for (const group of chatItemGroups(replySource)) {
     for (const source of group.messages) {
       if (source.replyTarget?.kind === "id") {
         const loaded = loadedSources.get(source.replyTarget.id);

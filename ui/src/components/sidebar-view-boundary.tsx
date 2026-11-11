@@ -4,6 +4,7 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../app/stale-chunk-reload.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 
 function SidebarViewError(props: { error: unknown; reset: () => void }) {
   let active = true;
@@ -11,7 +12,7 @@ function SidebarViewError(props: { error: unknown; reset: () => void }) {
     active = false;
   });
   return (
-    <div class="sidebar-view-loading sidebar-session-error callout danger" role="alert">
+    <InlineAlert tone="danger" class="sidebar-view-loading sidebar-session-error" role="alert">
       <span>{t("lazyView.errorTitle")}</span>
       <button
         class="btn btn--sm"
@@ -24,7 +25,7 @@ function SidebarViewError(props: { error: unknown; reset: () => void }) {
       >
         {t(isStaleChunkImportError(props.error) ? "common.reload" : "common.retry")}
       </button>
-    </div>
+    </InlineAlert>
   );
 }
 

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import { prepareRuntimePluginsConfig } from "../plugins/config-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
   cloneEnvWithPlatformSemantics,
@@ -18,6 +19,7 @@ import {
   captureRuntimeConfigWithSource,
   type CapturedRuntimeConfigRead,
   getRuntimeConfigCapture,
+  recordPublishedRuntimeConfigSource,
 } from "./runtime-config-capture-state.js";
 import { runtimeConfigPublication } from "./runtime-config-publication.js";
 import { configSnapshotsMatch } from "./runtime-config-snapshot-match.js";
@@ -204,10 +206,10 @@ function publishRuntimeConfigSnapshot(
       : runtimeConfigSourceSnapshot !== null &&
         runtimeSourceConfigValueFact !== null &&
         matchesRuntimeSourceConfigValueFact(sourceConfig, runtimeSourceConfigValueFact);
-  // Compare with what the previous publication recorded, since its object may have been edited
-  // in place; withhold only a distinct object matching that record, or a proven no-op.
+  // Mutable same-object setters still invalidate. An immutable publication can reuse
+  // its capture, but provenance and source edits must pass the same recorded-fact checks.
   const matchesPublished =
-    runtimeConfigSnapshot !== config &&
+    (runtimeConfigSnapshot !== config || isDeeplyFrozenPlainData(config)) &&
     runtimeConfigSnapshotMetadata?.fingerprint === configFact.fingerprint &&
     isDeepStrictEqual(runtimeConfigValueFact?.facts, facts);
   if (
@@ -246,6 +248,7 @@ function publishRuntimeConfigSnapshot(
   runtimeConfigSnapshot = config;
   runtimeConfigCapturedSnapshot = captured;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
+  recordPublishedRuntimeConfigSource(config, sourceConfig ?? config);
   runtimeConfigSnapshotMetadata = metadata;
   if (
     runtimeModelConfigCacheKey === null ||

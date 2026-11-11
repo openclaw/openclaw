@@ -146,7 +146,7 @@ describe("config field required semantics", () => {
     );
     for (const { container, onPatch } of [direct, inherited]) {
       for (const kind of Object.keys(fieldTypes)) {
-        expectRequired(control(container, kind), false);
+        expectRequired(control(container, kind === "json" ? "JSON" : kind), false);
       }
       expect(onPatch).not.toHaveBeenCalled();
     }

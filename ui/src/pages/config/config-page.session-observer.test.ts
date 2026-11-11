@@ -146,7 +146,7 @@ describe("ConfigPage navigation", () => {
 
   it.each([
     { profile: undefined, writes: 1 },
-    { profile: "full", writes: 0 },
+    { profile: "minimal", writes: 1 },
   ])("Security Full preserves an explicit choice from $profile", async ({ profile, writes }) => {
     const baseContext = routeContext();
     const patchForm = vi.fn();
@@ -164,15 +164,19 @@ describe("ConfigPage navigation", () => {
 
     expect(patchForm).not.toHaveBeenCalled();
     expect(removeFormValue).not.toHaveBeenCalled();
-    const full = element(page, '.settings-segmented__input[value="full"]');
-    expect(page.querySelectorAll(".settings-segmented__input")).toHaveLength(4);
-    expect(page.querySelectorAll(".settings-segmented__btn--active")).toHaveLength(profile ? 1 : 0);
-    full.click();
+    const select = element(page, ".security-page select") as HTMLSelectElement;
+    expect(select.options).toHaveLength(5);
+    expect(select.value).toBe(profile ?? "");
+    select.value = "full";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(patchForm).toHaveBeenCalledTimes(writes);
-    if (writes > 0) {
-      expect(patchForm).toHaveBeenCalledWith(["tools", "profile"], "full");
-    }
+    expect(patchForm).toHaveBeenCalledWith(["tools", "profile"], "full");
     expect(removeFormValue).not.toHaveBeenCalled();
+
+    // Default clears the setting rather than writing a value the Gateway would have to interpret.
+    select.value = "";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(removeFormValue).toHaveBeenCalledWith(["tools", "profile"]);
   });
 
   it("keeps the config owner through a pending subpage loader in the real outlet", async () => {

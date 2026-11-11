@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { registerAgentDatabaseReaderCloser } from "../infra/agent-database-readers.js";
 import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
 import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -13,7 +14,6 @@ import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { isSqlitePathOnBtrfs } from "../infra/sqlite-wal-filesystem.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -156,9 +156,9 @@ it("refuses a store opened after copying before the real exchange", async () => 
   expect(fixture.exchanges).toBe(0);
 });
 
-it.skipIf(process.platform !== "linux")(
-  "rewrites shared and agent stores after Doctor drains native and admission descriptors",
-  async () => {
+it.skipIf(process.platform !== "linux").each([false, true])(
+  "rewrites stores after Doctor drains native, admission and retained reader descriptors (close fails: %s)",
+  async (closeFails) => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "doctor-nocow-owner" },
       async () => {
@@ -170,6 +170,7 @@ it.skipIf(process.platform !== "linux")(
           root: null,
           runtime: { log() {}, error() {}, exit() {} },
         });
+        let unregister = () => {};
         try {
           const paths = await maintenance!.run(async () => {
             const state = openOpenClawStateDatabase();
@@ -187,25 +188,24 @@ it.skipIf(process.platform !== "linux")(
               .paths;
           });
           expect(paths).toHaveLength(4);
-          const handleCounts: number[] = [];
-          const toolRunner = vi.mocked(spawnSync).getMockImplementation()!;
-          vi.mocked(spawnSync).mockImplementation((command, args, options) => {
-            if (command === "fuser") {
-              for (const pathname of paths) {
-                handleCounts.push(readSqliteReaderDiagnosticsForPath(pathname).connectionCount);
-              }
+          // Stands in for a worker pool's cached reader, which only the shared reader close releases.
+          using retained = new DatabaseSync(paths[1]!, { readOnly: true });
+          unregister = registerAgentDatabaseReaderCloser((candidates) => {
+            if (closeFails || !candidates.some((candidate) => candidate.path === paths[1])) {
+              throw new Error(closeFails ? "synthetic reader close failure" : "unselected reader");
             }
-            return toolRunner(command, args, options);
+            retained.close();
           });
           const originals = paths.map((pathname) => fs.statSync(pathname).ino);
           await maintenance!.repairSqliteNoCow(paths);
-          expect(maintenance!.warnings).toEqual([]);
-          expect(handleCounts.length).toBeGreaterThan(0);
-          expect(handleCounts.every((count) => count === 0)).toBe(true);
+          expect(maintenance!.warnings.join("\n")).toMatch(
+            closeFails ? /synthetic reader close failure[\s\S]*store files are open/u : /^$/u,
+          );
           expect(
-            paths.every((pathname, index) => fs.statSync(pathname).ino !== originals[index]),
-          ).toBe(true);
+            paths.filter((pathname, index) => fs.statSync(pathname).ino === originals[index]),
+          ).toEqual(closeFails ? [paths[1]] : []);
         } finally {
+          unregister();
           await maintenance?.release();
         }
       },
@@ -538,10 +538,10 @@ describe("Doctor NOCOW recovery identities", () => {
     return readTarget().plannedMoves[0]!.archivePath;
   }
 
-  function retire() {
+  async function retire() {
     return retireSessionSqliteRecovery({
       env,
-      preview: inspectSessionSqliteRecovery({ cfg: {}, env }),
+      preview: await inspectSessionSqliteRecovery({ cfg: {}, env }),
       readConfig: async () => ({}),
       confirm: async () => true,
     });
@@ -558,6 +558,8 @@ describe("Doctor NOCOW recovery identities", () => {
     vi.spyOn(updateCaptureCleanup, "readCompletedUpdateHistory").mockReturnValue({
       runs: [],
       latestCompletedStartedAt: Date.now() + 86_400_000,
+      latestVerifiedStartedAt: 0,
+      hasPendingRecovery: false,
     });
   });
 

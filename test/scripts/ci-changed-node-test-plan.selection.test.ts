@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveChangedNodeTestTargets } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -13,6 +15,44 @@ function fixture(files: Record<string, string> | string[]) {
 
 const select = (cwd: string, paths: string[], selectionMode: Mode = "aggressive") =>
   resolveChangedNodeTestTargets(paths, { cwd, selectionMode });
+
+it.each(["aggressive", "full"] as const)(
+  "retains indirect workflow fixture consumers beside a busy hub in %s mode",
+  (selectionMode) => {
+    const helper = "test/scripts/ci-workflow.test-support.ts";
+    const bridge = "test/scripts/ci-workflow-manifest.test-support.ts";
+    const indirect = ["ci-workflow-native-generated", "ci-workflow-ui-full"].map(
+      (name) => `test/scripts/${name}.test.ts`,
+    );
+    const family = [
+      "ci-workflow-complete",
+      "ci-workflow-cost",
+      "ci-workflow-evidence",
+      "ci-workflow-guards",
+      "ci-workflow-planning",
+      "ci-workflow.test-support",
+      "ci-swift-cache-lifetime",
+    ].map((name) => `test/scripts/${name}.test.ts`);
+    const direct = Array.from({ length: 30 }, (_, i) => `test/scripts/other-${i}.test.ts`);
+    const native = "test/scripts/macos-native-test-launch.test.ts";
+    const cwd = fixture({
+      [helper]: "export {};",
+      [bridge]: 'import "./ci-workflow.test-support.js";',
+      [native]: "export {};",
+      ...Object.fromEntries(
+        [...family, ...direct].map((file) => [file, 'import "./ci-workflow.test-support.js";']),
+      ),
+      ...Object.fromEntries(
+        indirect.map((file) => [file, 'import "./ci-workflow-manifest.test-support.js";']),
+      ),
+    });
+    const files = select(cwd, [helper], selectionMode);
+    expect(files.toSorted()).toEqual(
+      [...family, ...direct, ...indirect, ...(selectionMode === "full" ? [native] : [])].toSorted(),
+    );
+    expect(select(cwd, [family[0]!], selectionMode)).toEqual([family[0]]);
+  },
+);
 
 it.each(["aggressive", "full"] as const)(
   "routes skill node:test and Python files through their Vitest owner in %s mode",
@@ -132,3 +172,46 @@ it.each(["aggressive", "full"] as const)(
     expect(select(cwd, [optIn], selectionMode)).not.toContain(optIn);
   },
 );
+
+it.each(
+  ["packages", "extensions"].flatMap((root) => [false, true].map((deleted) => ({ root, deleted }))),
+)("selects resolved $root subpaths independently (deleted: $deleted)", ({ root, deleted }) => {
+  const changed = `${root}/subject/src/value.ts`;
+  const companion = `${root}/subject/src/value.test.ts`;
+  const manifest = `${root}/subject/package.json`;
+  const cwd = fixture({
+    [manifest]: JSON.stringify({
+      name: "@fixture/subject",
+      exports: {
+        "./value": "./src/value.ts",
+        "./other": "./src/other.ts",
+        ".": "./src/index.ts",
+      },
+    }),
+    [changed]: "export const value = 1;",
+    [companion]: 'import "./value.js";',
+    [`${root}/subject/src/value.test-support.ts`]: "export {};",
+    [`${root}/subject/scripts/generate.mjs`]: "export {};",
+    [`${root}/subject/src/other.ts`]: "export const other = 1;",
+    [`${root}/subject/src/index.ts`]: 'export * from "./bridge.js";',
+    [`${root}/subject/src/bridge.ts`]: 'export * from "./value.js";',
+    "src/readers/value.test.ts": 'import "@fixture/subject/value";',
+    "src/readers/barrel.test.ts": 'import "@fixture/subject";',
+    "src/readers/other.test.ts": 'import "@fixture/subject/other";',
+    "src/readers/unknown.test.ts": 'import "@fixture/subject/generated";',
+    "src/readers/types.test.ts": 'import type { Other } from "@fixture/subject/other";',
+  });
+  const expected = ["barrel", "unknown", "value"].map((name) => `src/readers/${name}.test.ts`);
+  if (deleted) {
+    fs.unlinkSync(path.join(cwd, changed));
+  }
+  expect(select(cwd, [changed])).toEqual([companion, ...expected]);
+  expect(select(cwd, [changed, companion])).toEqual([companion, ...expected]);
+  const all = [...expected, "src/readers/other.test.ts"].toSorted();
+  expect(select(cwd, [manifest])).toEqual(all);
+  expect(select(cwd, [changed, `${root}/subject/src/value.test-support.ts`])).toEqual([
+    companion,
+    ...all,
+  ]);
+  expect(select(cwd, [`${root}/subject/scripts/generate.mjs`])).toEqual(all);
+});

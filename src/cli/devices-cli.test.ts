@@ -5,7 +5,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectText } from "../test-utils/text-assertions.js";
 import { registerDevicesCli } from "./devices-cli.js";
-import { ExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 
 const mocks = vi.hoisted(() => ({
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn(), writeJson: vi.fn() },

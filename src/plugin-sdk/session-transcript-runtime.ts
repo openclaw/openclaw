@@ -56,6 +56,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLegacySessionTranscriptCatalogTitle } from "../gateway/session-transcript-catalog.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import type { PluginNotice } from "../shared/plugin-notice.js";
+import { PLUGIN_NOTICE_KIND } from "../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "./agent-core.js";
 import { withProjectedSessionTranscriptWriteLock } from "./session-transcript-lock-runtime.js";
 import {
@@ -261,7 +263,8 @@ export type SessionTranscriptStrictMessageAppendResult<TMessage> =
 
 export type SessionTranscriptAssistantMirrorAppendParams = SessionTranscriptReadParams & {
   config?: OpenClawConfig;
-  deliveryMirror?: SessionTranscriptDeliveryMirror;
+  /** A plugin notice keeps the row out of model replay; clients may render its data natively. */
+  deliveryMirror?: SessionTranscriptDeliveryMirror | PluginNotice;
   expectedLifecycleRevision?: string;
   expectedWriterRunId?: string;
   idempotencyKey?: string;
@@ -463,8 +466,11 @@ export async function appendAssistantMirrorMessageByIdentity(
     if (params.sessionId && currentEntry.sessionId !== params.sessionId) {
       return { ok: false, reason: "session changed", code: "session-rebound" };
     }
+    // A plugin notice is identified by its data, not its text, so it never folds into a match.
     const latestEquivalentAssistantId =
-      !params.idempotencyKey && isDeliveryMirrorAssistantMessage(message)
+      !params.idempotencyKey &&
+      params.deliveryMirror?.kind !== PLUGIN_NOTICE_KIND &&
+      isDeliveryMirrorAssistantMessage(message)
         ? findLatestEquivalentAssistantMessageId(
             selectVisibleTranscriptEvents(await locked.readEvents()),
             message,
@@ -703,8 +709,22 @@ export async function withSessionTranscriptWrite<T>(
   );
 }
 
+/** Copies only the marker's known fields; caller objects may carry more. */
+function projectDeliveryMirrorMarker(
+  marker: SessionTranscriptDeliveryMirror | PluginNotice,
+): Record<string, unknown> {
+  if (marker.kind === PLUGIN_NOTICE_KIND) {
+    return { kind: marker.kind, pluginId: marker.pluginId, type: marker.type, data: marker.data };
+  }
+  return {
+    kind: marker.kind,
+    ...(marker.sourceMessageId !== undefined ? { sourceMessageId: marker.sourceMessageId } : {}),
+    ...(marker.kind === "channel-final-suppressed" ? { reason: marker.reason } : {}),
+  };
+}
+
 function createAssistantMirrorMessage(params: {
-  deliveryMirror?: SessionTranscriptDeliveryMirror;
+  deliveryMirror?: SessionTranscriptDeliveryMirror | PluginNotice;
   idempotencyKey?: string;
   mediaUrls?: string[];
   text: string;
@@ -721,17 +741,7 @@ function createAssistantMirrorMessage(params: {
     timestamp: Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.deliveryMirror
-      ? {
-          openclawDeliveryMirror: {
-            kind: params.deliveryMirror.kind,
-            ...(params.deliveryMirror.sourceMessageId !== undefined
-              ? { sourceMessageId: params.deliveryMirror.sourceMessageId }
-              : {}),
-            ...(params.deliveryMirror.kind === "channel-final-suppressed"
-              ? { reason: params.deliveryMirror.reason }
-              : {}),
-          },
-        }
+      ? { openclawDeliveryMirror: projectDeliveryMirrorMarker(params.deliveryMirror) }
       : {}),
   };
   return recordAssistantManagedMediaUrls(message, params.mediaUrls);

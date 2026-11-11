@@ -489,7 +489,10 @@ Streaming reads `post.mention.create` events from X's `data.payload` envelope,
 checks that the post addresses the bot, and ignores blank keep-alives. Other
 event types do not create inbound turns; delivered `post.*` events still count
 toward the budget. It reconnects with backoff after a stalled or disconnected
-stream.
+stream. Reconnect delays start at one second and double up to 60 seconds for
+consecutive failed connections; a successful connection resets the delay. The
+25-second idle check lets buffered reads run after a local event-loop stall
+before disconnecting the stream.
 Each connection runs a mentions backfill with the user token from the saved
 cursor, then repeats it every `events.pollSeconds × 4`
 (minimum 60 seconds, default 240 seconds) while streaming. This safety backfill

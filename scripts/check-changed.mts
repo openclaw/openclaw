@@ -15,6 +15,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
+  detectChangedLanes,
   detectChangedLanesForPaths,
   getChangedCoreTestPaths,
   hasConfigDocInput,
@@ -33,7 +34,11 @@ import {
   parseFlagArgs,
   stringFlag,
 } from "./lib/arg-utils.mts";
-import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
+import {
+  getChangedPathFacts,
+  isTestLineAllocationPath,
+  normalizeChangedPath,
+} from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
@@ -118,9 +123,9 @@ type TargetedLintCommand = NonNullable<ReturnType<typeof createTargetedOxlintCom
 const NPM_LOCK_POLICY_PATH_RE =
   /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/(?:generate-npm-package-lock\.mts|lib\/(?:npm-lock-package-selection|record-shared)\.(?:mjs|d\.mts))|(?:extensions|packages)\/[^/]+(?:\/.*)?\/package\.json)$/u;
 const PROMPT_SNAPSHOT_CHECK_PATH_RE =
-  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
 const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
-  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts)$/u;
 const RUNTIME_SIDECAR_BASELINE_PATH_RE =
   /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
 // Doctor-contract declaration truth depends on arbitrary plugin source (artifacts
@@ -1382,7 +1387,11 @@ export async function createChangedCiLintPlan(
   result: ChangedLaneResult,
   { runnerProfile }: { runnerProfile: string },
 ) {
-  const commands = createChangedCheckPlan(result, { lintOnly: true }).commands;
+  // Budget records retain their guards and formatting, but cannot affect lint inputs.
+  const lintPaths = result.paths.filter((file) => !isTestLineAllocationPath(file));
+  const lintResult =
+    lintPaths.length === result.paths.length ? result : detectChangedLanes(lintPaths);
+  const commands = createChangedCheckPlan(lintResult, { lintOnly: true }).commands;
   if (
     result.paths.some((file) => path.basename(file) === "package.json") ||
     commands.some(({ args }) =>
@@ -1411,6 +1420,7 @@ export async function createChangedCiLintPlan(
     coreStripes: [],
     extensionStripes: [],
     groups: [],
+    fullGroups: [],
     central: true,
   };
   const core: { stripe: number; lint_selection_json: string }[] = [];
@@ -1942,24 +1952,6 @@ export async function main(argv = process.argv.slice(2)) {
         head: args.head,
         staged: args.staged,
       });
-      let typecheckResult: ChangedLaneResult | undefined;
-      if (
-        !args.staged &&
-        !args.noChanges &&
-        args.paths.length === 0 &&
-        !argv.includes("--") &&
-        args.head === "HEAD"
-      ) {
-        const { findTypecheckInertPaths } = await import("./lib/typecheck-inert.mts");
-        const inert = new Set(findTypecheckInertPaths({ paths, base: args.base ?? "origin/main" }));
-        if (inert.size) {
-          typecheckResult = detectChangedLanesForPaths({
-            paths: paths.filter((file) => !inert.has(file)),
-            base: args.base ?? "origin/main",
-            head: args.head,
-          });
-        }
-      }
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
           result,
@@ -1980,6 +1972,28 @@ export async function main(argv = process.argv.slice(2)) {
         }
         process.exitCode = delegated.exitCode;
       } else {
+        // Only the executing branch needs trivia classification; remote children
+        // classify their own source instead of discarding a native compiler run here.
+        let typecheckResult: ChangedLaneResult | undefined;
+        if (
+          !args.staged &&
+          !args.noChanges &&
+          args.paths.length === 0 &&
+          !argv.includes("--") &&
+          args.head === "HEAD"
+        ) {
+          const { findTypecheckInertPaths } = await import("./lib/typecheck-inert.mts");
+          const inert = new Set(
+            findTypecheckInertPaths({ paths, base: args.base ?? "origin/main" }),
+          );
+          if (inert.size) {
+            typecheckResult = detectChangedLanesForPaths({
+              paths: paths.filter((file) => !inert.has(file)),
+              base: args.base ?? "origin/main",
+              head: args.head,
+            });
+          }
+        }
         process.exitCode = await runChangedCheck(result, {
           ...args,
           typecheckResult,

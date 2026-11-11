@@ -22,6 +22,7 @@ import {
 import { chunkString } from "../../src/agents/bash-tools.shared.js";
 import { createStreamingBinaryOutputSanitizer } from "../../src/agents/shell-utils.js";
 import { createProcessSupervisor } from "../../src/process/supervisor/supervisor.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 // Measures the production decoder, supervisor, sanitizer and output registry, without a
@@ -183,12 +184,7 @@ try {
   loop.enable();
   await delay(10);
   if (values.phase === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, samplingInterval);
   }
   if (startAt) {
     assert(startAt > Date.now(), "preparation missed the shared start deadline");

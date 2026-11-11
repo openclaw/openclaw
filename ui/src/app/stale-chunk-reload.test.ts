@@ -988,15 +988,18 @@ describe("retryStaleChunkReloadWhenReachable deadline enforcement", () => {
   });
 });
 
-it("never starts another probe once the wait carried past the deadline", async () => {
+it("keeps probing past a wall-clock step before the wait deadline", async () => {
   const reload = vi.fn();
   const probe = stubDocumentFetch(new Response(null, { status: 503 }));
   const pending = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 5_000 });
   await vi.advanceTimersByTimeAsync(0);
+  expect(probe).toHaveBeenCalledOnce();
   // Wall time can move ahead while the tab is suspended, before its scheduled retry runs.
+  // The process-local wait window must survive the step; only its own deadline ends it.
   vi.setSystemTime(Date.now() + 10_000);
   await vi.advanceTimersByTimeAsync(1_000);
+  expect(probe.mock.calls.length).toBeGreaterThan(1);
+  await vi.advanceTimersByTimeAsync(5_000);
   await expect(pending).resolves.toBe(false);
-  expect(probe).toHaveBeenCalledOnce();
   expect(reload).not.toHaveBeenCalled();
 });

@@ -1,5 +1,6 @@
 /** Control-plane provider discovery helpers that keep runtime imports lazy until catalog hooks run. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { runProviderIsolated } from "../agents/provider-failure-isolation.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -11,6 +12,8 @@ import {
 } from "./provider-catalog-result.js";
 import type { ProviderCatalogContext, ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import { PROVIDER_CATALOG_ORDERS as DISCOVERY_ORDER } from "./provider-catalog.types.js";
+import type { PluginRegistry } from "./registry-types.js";
+import type { PluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 const providerRuntimeLoader = createLazyImportLoader(
@@ -20,11 +23,17 @@ const providerRuntimeLoader = createLazyImportLoader(
 type PreparedProviderStaticCatalogEntry = Readonly<{
   provider: ProviderPlugin;
   providerConfigs: Readonly<Record<string, ModelProviderConfig>>;
+  /** The static run failed: its providers are unavailable, not empty. */
+  failed?: true;
 }>;
 
 export type PreparedProviderStaticCatalog = Readonly<{
   /** Provider handles captured for this config/workspace generation. */
   providers?: readonly ProviderPlugin[];
+  runtimeProvenance?: Readonly<{
+    registry: WeakRef<PluginRegistry>;
+    loadContext: WeakRef<PluginRuntimeLoadContextState>;
+  }>;
   entries: readonly PreparedProviderStaticCatalogEntry[];
 }>;
 
@@ -203,15 +212,28 @@ export async function prepareProviderStaticCatalog(params: {
       if (!provider.staticCatalog) {
         continue;
       }
-      const result = await runProviderStaticCatalog({
-        provider,
-        signal: params.signal,
-        providerIds: params.providerIds,
-      });
+      let failed = false;
+      const result = await runProviderIsolated(
+        {
+          providerIds: [provider.id],
+          stage: "static catalog",
+          signal: params.signal,
+          reportCatalogOutcome: () => {
+            failed = true;
+          },
+        },
+        async () =>
+          await runProviderStaticCatalog({
+            provider,
+            signal: params.signal,
+            providerIds: params.providerIds,
+          }),
+      );
       params.signal?.throwIfAborted();
       entries.push({
         provider,
         providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
+        ...(failed ? { failed: true as const } : {}),
       });
     }
   }

@@ -95,15 +95,11 @@ suite.define(() => {
         );
       }
 
-      await expectText(page.locator(".workspace-link")).toContain(writerWorkspace);
-      const modelDescription = page
-        .locator(".settings-kv dt")
-        .filter({ hasText: "Primary Model" })
-        .locator("xpath=following-sibling::dd[1]");
-      const displayedModel = expectedFallbacks.length
-        ? `${primaryModel} (+${expectedFallbacks.length} fallback)`
-        : primaryModel;
-      await expectText(modelDescription).toContain(displayedModel);
+      await expectText(page.locator(".agent-overview__workspace")).toContain(writerWorkspace);
+      const primaryTrigger = page.locator(
+        'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"]) .picker-select__trigger',
+      );
+      await expectText(primaryTrigger).toContain(primaryModel);
 
       const fallbacks = page.locator("openclaw-multi-select.agent-fallbacks");
       await fallbacks.waitFor({ timeout: 10_000 });

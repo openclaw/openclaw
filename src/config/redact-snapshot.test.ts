@@ -38,6 +38,29 @@ function expectProjections(result: ReturnType<typeof redactConfigSnapshot>, expe
 }
 
 describe("redactConfigSnapshot", () => {
+  it.each(["synthetic-inline-credential", 'synthetic-line-one\n"synthetic-line-two"'])(
+    "protects inline environment values in every public projection and restores them: %j",
+    (credential) => {
+      const hints = buildConfigSchemaCore().uiHints;
+      const vars = {
+        AZURE_OPENAI_KEY: credential,
+        DATABASE_URL: "postgres://example:synthetic@example.invalid/db",
+        REFERENCE: "${REDACTION_TEST_REFERENCE}",
+        EMPTY: "",
+      };
+      const config = { env: { vars } };
+      const redacted = {
+        env: {
+          vars: { ...vars, AZURE_OPENAI_KEY: REDACTED_SENTINEL, DATABASE_URL: REDACTED_SENTINEL },
+        },
+      };
+      const result = redactConfigSnapshot(makeSnapshot(config), hints);
+      expectProjections(result, redacted);
+      expect(result.raw).toBe(credential.includes("\n") ? null : JSON.stringify(redacted));
+      expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+    },
+  );
+
   it("redacts whole serviceAccount objects without schema hints", () => {
     const serviceAccount = {
       type: "service_account",
@@ -308,13 +331,12 @@ describe("redactConfigSnapshot", () => {
 });
 
 describe("restoreRedactedValues", () => {
-  it("keeps array truncation warnings during raw validation", async () => {
-    const snapshot = makeSnapshot({ plugins: { allow: ["source"] } });
-    const runtimeConfig = { plugins: { allow: ["source", "runtime-default"] } };
+  it("warns when a write restores a truncated array", async () => {
+    const incoming = { plugins: { allow: ["source"] } };
+    const original = { plugins: { allow: ["source", "second"] } };
     const warnLogs = createWarnLogCapture("openclaw-config-redaction-array-test");
     try {
-      const result = redactConfigSnapshot({ ...snapshot, config: runtimeConfig, runtimeConfig });
-      expect(result.raw).toBe(snapshot.raw);
+      expect(restoreRedactedValues(incoming, original)).toEqual(incoming);
       expect(await warnLogs.findText("Redacted config array key plugins.allow[]")).toContain(
         "has been truncated",
       );

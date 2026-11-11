@@ -1,6 +1,6 @@
 import {
   mintMcpLoopbackClientGrant,
-  revokeMcpLoopbackClientGrant,
+  revokeMintedMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
 import { resolveCliMcpMemoryAudience } from "./mcp-memory-audience.js";
 
@@ -41,7 +41,7 @@ export async function mintCliMcpClientGrant(
         return;
       }
       revoked = true;
-      revokeMcpLoopbackClientGrant(grant.token);
+      revokeMintedMcpLoopbackClientGrant(grant);
       release();
     },
   };

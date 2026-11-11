@@ -21,6 +21,7 @@ import {
   parseNodeEventPayload,
   pruneBoundedTimestampMap,
 } from "./server-node-event-source.js";
+import { withNodeExecPathPrependWarning } from "./server-node-events-exec-path.js";
 import type {
   NodeEventContext,
   NodeEventHandlerOptions,
@@ -102,6 +103,7 @@ export async function handleNodeExecEvent(
   const authorization = typeof auth === "object" ? auth : undefined;
   const release = authorization?.release;
   if (
+    authorization?.resultDelivered ||
     cfg.tools?.exec?.notifyOnExit === false ||
     obj.suppressNotifyOnExit === true ||
     event === "exec.denied"
@@ -133,6 +135,7 @@ export async function handleNodeExecEvent(
     if (compactOutput) {
       text += `\n${compactOutput}`;
     }
+    text = withNodeExecPathPrependWarning(text, cfg, agentId);
   }
 
   const notify = async () => {

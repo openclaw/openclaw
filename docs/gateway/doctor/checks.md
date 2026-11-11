@@ -77,9 +77,10 @@ full behavior and rationale of each numbered check, follow the links under
 
   </Accordion>
   <Accordion title="Workspace and shell">
-    - Partial or shallow registry-owned project clone warnings, with manual repair commands for every detected partial-clone key and shallow history.
+    - Shallow registry-owned project clone warnings; `--fix` fetches full history while retaining blob filtering, skips busy clones, and reports per-clone outcomes without repacking or pruning.
     - systemd linger check on Linux.
     - Workspace bootstrap file size check (truncation/near-limit warnings for context files).
+    - Memory provenance check: root `MEMORY.md`, `USER.md`, or personal `users/<profile-id>/USER.md` recorded as `untrusted` and therefore excluded from automatic context, with the last recorded tracked write.
     - Skills readiness checks for every configured agent; missing local binaries produce warnings and leave skills enabled because paired nodes may provide them. `--fix` can still disable skills with other missing requirements when no configured agent can use them. Updates leave optional skills enabled.
     - Shell completion status check and auto-install/upgrade.
     - Memory search embedding provider readiness check (local model or remote API key).

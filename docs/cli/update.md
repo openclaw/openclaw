@@ -75,6 +75,11 @@ still follow their own checks. Explicit package artifacts and installation
 rebinding can still require replacement even when version strings match.
 These admission checks require an updated installed updater.
 
+Already-current updates also preview supported legacy config repairs through
+Doctor, even without `--channel`. After admission, the normal config writer saves
+the repair with a backup before plugin maintenance. Unknown fields and repairs
+that cannot produce a valid config still refuse with Doctor guidance.
+
 For a global npm installation, OpenClaw prints a short manual alternative
 (`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
 `openclaw doctor --fix`, then `openclaw gateway restart`); it does not run it
@@ -91,8 +96,18 @@ update continues with a warning; only a confirmed ownership match skips replacem
 A missing package-manager executable is reported as unavailable, without database
 recovery instructions. For pacman (including Arch-based distributions), update
 with `sudo pacman -Syu` or your AUR helper. For FreeBSD,
-use the owning pkg or Ports deployment. Then run `openclaw doctor --fix` and restart
-the Gateway through its service owner; see
+use the owning pkg or Ports deployment. Then restart the Gateway through its
+service owner. For other service managers, run `openclaw doctor --fix` first.
+On Linux, an OpenClaw-managed systemd Gateway backs up and migrates
+supported older databases during activation, including after an OS image update
+or an `ExecStart` drop-in selects a new source build. Healthy restarts skip this
+repair. The running service keeps its existing account, environment, and state
+selection; Doctor does not stop or restart the unit from inside it.
+
+Newer, unreadable, or foreign-owned databases remain protected. If activation
+refuses state, stop the service and run `openclaw doctor --fix` to inspect the
+reported problem before starting it again. Ordinary foreground Gateway commands
+continue to require explicit Doctor repair. See
 [System-package and image-based installs](/install/updating/update-methods#system-package-and-image-based-installs).
 Older updaters must receive this fix through that system package manager first;
 a candidate cannot repair an updater that fails before staging it.
@@ -711,6 +726,10 @@ the usual pre-mutation error and JSON output. History records the checks in a
 `candidate-admission` step. The installed updater continues to own the update
 after admission, including every mutation.
 
+Without `--timeout`, the candidate's allowance grows with the measured size of the
+SQLite state it inspects, capped by the update step deadline, so a large state
+database does not fall back merely because admission took longer than a small one.
+
 If the marker is absent or invalid, the updater uses its installed admission
 checks and records `update-admission-unsupported-target`. If the candidate times
 out, crashes, or returns no valid protocol-1 verdict, it records
@@ -743,6 +762,31 @@ verdict. It rejects inherited update authority variables with exit `2`, allowing
 the supervisor to fall back. It does not perform managed-service ancestry checks.
 The default admission budget is 120 seconds and follows the canary timeout
 budget resolution.
+
+### External supervisor readiness
+
+Candidates that declare `openclaw.updatePreflightProtocol: 1` in `package.json`
+support the hidden `openclaw update preflight --json` command. An external
+supervisor can run this candidate before stopping its serving Gateway, using the
+serving profile's environment and `--source-root <absolute-package-root>` for its
+bundled plugin paths. `--timeout <seconds>` controls the candidate check budget.
+The command rejects inherited update and service continuation authority.
+
+Preflight reuses the isolated candidate rehearsal: copy state, run candidate
+Doctor and validation, then probe a private Gateway's startup and readiness.
+It does not repair the live profile, stop its service, or admit an update run.
+Stdout contains one JSON receipt with `protocol: 1`, `mode: "preflight"`,
+`candidateVersion`, `status`, and `coverage: "isolated-core-startup"`. Exit `0`
+means `ready`, `3` means `blocked`, and `2` means `unverified`. Missing runtime
+support, inconclusive probes, cancellation, and execution failures never mean
+ready. Diagnostic output goes to stderr; the receipt follows child cleanup.
+
+This proves isolated core startup against copied state. Plugin downloads and
+convergence remain deferred to finalization; channels, providers, sidecars, and
+production listener and authentication settings are not exercised. A ready
+receipt does not guarantee finalization or production service readiness.
+Candidates without this capability retain their supervisor's legacy upgrade
+and rollback flow.
 
 Run JSON includes `run.admission` with `owner: "candidate"` or `"installed"`,
 and optional `protocol`, `candidateVersion`, `checks`, and `fallbackReason`.

@@ -49,7 +49,7 @@ vi.mock("./server-methods/session-scoped-read.js", () => ({
   retainSessionScopedRead: () => undefined,
 }));
 // mock-isolation: File handles use a fixture workspace without opening real session storage.
-vi.mock("./server-methods/sessions-files.js", () => ({
+vi.mock("./server-methods/session-files-root.js", () => ({
   prepareLocalSessionWorkspaceRoot: async () => {
     const root = state.root;
     return {

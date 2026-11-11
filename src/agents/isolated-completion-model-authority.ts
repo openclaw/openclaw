@@ -1,11 +1,16 @@
 import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { Model } from "../llm/types.js";
+import { assertProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import {
   bindOperatorModelExecution,
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
-import type { AgentHarness, AgentHarnessIsolatedCompletionParamsV2 } from "./harness/types.js";
+import type {
+  AgentHarness,
+  AgentHarnessIsolatedCompletionParamsV2,
+  AgentHarnessIsolatedCompletionAuthorization,
+} from "./harness/types.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
@@ -81,8 +86,17 @@ export function createIsolatedCompletionModelAuthority(params: {
       }
     | undefined;
   return {
-    bind(model: ModelRef | undefined): { abortSignal?: AbortSignal; assertCurrent?: () => void } {
-      params.assertCurrent();
+    bind(
+      model: ModelRef | undefined,
+      authorization?: AgentHarnessIsolatedCompletionAuthorization,
+    ): { abortSignal?: AbortSignal; assertCurrent: () => void } {
+      const assertCurrent = () => {
+        params.assertCurrent();
+        if (authorization?.owner === "host") {
+          assertProviderAuthAuthority(authorization.auth);
+        }
+      };
+      assertCurrent();
       if (
         !bound ||
         bound.model?.provider !== model?.provider ||
@@ -94,7 +108,7 @@ export function createIsolatedCompletionModelAuthority(params: {
           params.mapOperatorAuthorizationError,
         );
         if (!execution) {
-          return {};
+          return { assertCurrent };
         }
         resources.defer(execution.release);
         bound = { model: model ? { ...model } : undefined, execution };
@@ -106,7 +120,7 @@ export function createIsolatedCompletionModelAuthority(params: {
           ? AbortSignal.any([params.abortSignal, execution.signal])
           : execution.signal,
         assertCurrent: () => {
-          params.assertCurrent();
+          assertCurrent();
           execution.assertCurrent();
         },
       };

@@ -1,15 +1,25 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { migrateLegacyDesktopStreamOptOuts } from "../infra/device-pairing-node-desktop-migration.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { dropPostgresTestSchemas } from "../infra/postgres-sync/schema-cleanup.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resetLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -32,11 +42,13 @@ import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import { createWorkerStartupRuntime } from "./server-worker-environment-startup.runtime.test-support.js";
+import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const DSN_ENV = "OPENCLAW_PGPREP_BOOTSTRAP_DSN";
-const PREFIX = "pgprep_boot";
+const PREFIX = `pgprep_boot_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
 const PREFS_PATH = "/synthetic/postgres-bootstrap";
 
 type Anchor = { storeId: string; namespace: string };
@@ -121,10 +133,9 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
     resetConfigRuntimeState();
     await closeStateDatabaseForTest();
     try {
-      const anchor = state && (await readAnchor(state));
-      if (anchor) {
-        await client.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(anchor.namespace)} CASCADE`);
-      }
+      // Real agent turns also create agent namespaces; drain owners before removing either family.
+      await state?.restoreEnv();
+      await dropPostgresTestSchemas(client, PREFIX);
     } finally {
       await state?.cleanup();
       state = undefined;
@@ -240,7 +251,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const initialResolutions = await fs.readFile(callsPath, "utf8");
       expect(initialResolutions).toContain("resolved\n");
       expect(await fs.readFile(current.configPath, "utf8")).not.toContain(connection);
-      expect(anchor.namespace).toMatch(/^pgprep_boot_state_[a-f0-9]{16}$/u);
+      expect(anchor.namespace).toMatch(new RegExp(`^${PREFIX}_state_[a-f0-9]{16}$`, "u"));
       const metadata = await queryRows(
         `SELECT store_id FROM ${quoteIdentifier(anchor.namespace)}.openclaw_schema_meta WHERE store = $1`,
         ["state"],
@@ -309,6 +320,120 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       );
       expect(persisted).toEqual([{ value_json: JSON.stringify(PREFS_PATH) }]);
     }));
+
+  it(
+    "finishes a retained one-shot through Gateway RPC and persists its disabled state",
+    { timeout: 90_000 },
+    async () => {
+      const current = await fixture();
+      Object.assign(current.envVars, {
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      });
+      current.applyEnv();
+      const prompt = "Report the retained one-shot result.";
+      const summary = "Retained one-shot completed.";
+      const requests: string[] = [];
+      await using resources = new AsyncDisposableStack();
+      const providerServer = createServer((request, response) => {
+        void (async () => {
+          if (request.method !== "POST" || request.url !== "/v1/responses") {
+            response.writeHead(404).end();
+            return;
+          }
+          requests.push(await readRequestText(request));
+          writeOpenAiResponsesText(response, {
+            text: summary,
+            messageId: "retained-one-shot-message",
+            responseId: "retained-one-shot-response",
+          });
+        })().catch((error: unknown) => {
+          response.writeHead(500).end(String(error));
+        });
+      });
+      const providerUrl = await listenLoopback(providerServer);
+      resources.defer(() => closeHttpServer(providerServer));
+      const provider = buildMockOpenAiResponsesProvider(`${providerUrl}/v1`);
+      const config: OpenClawConfig = {
+        ...JSON.parse(await fs.readFile(current.configPath, "utf8")),
+        agents: {
+          defaults: {
+            workspace: current.workspaceDir,
+            skipBootstrap: true,
+            model: { primary: provider.modelRef },
+            models: {
+              [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
+            },
+          },
+          entries: { main: {} },
+        },
+        models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
+      };
+      const gateway = await startGatewayWithClient({
+        cfg: config,
+        configPath: current.configPath,
+        token: "postgres-bootstrap-synthetic-token",
+        clientDisplayName: "vitest-postgres-cron",
+      });
+      resources.defer(() => gateway.server.close({ reason: "PostgreSQL cron test complete" }));
+      resources.defer(() => disconnectGatewayClient(gateway.client));
+      const job = await gateway.client.request<{ id: string }>("cron.add", {
+        name: "retained-one-shot",
+        agentId: "main",
+        enabled: true,
+        deleteAfterRun: false,
+        // Automatic dispatch stays disabled; a due occurrence belongs to this manual run.
+        schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: prompt },
+        delivery: { mode: "none" },
+      });
+      const run = await gateway.client.request<{ runId: string }>(
+        "cron.run",
+        { id: job.id, mode: "force", waitTimeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      );
+      expect(run).toMatchObject({
+        enqueued: true,
+        run: { status: "ok", completionStatus: "succeeded", summary },
+      });
+      expect(requests.some((body) => body.includes(prompt))).toBe(true);
+      await expect(
+        gateway.client.request("cron.runs", { id: job.id, runId: run.runId, limit: 1 }),
+      ).resolves.toMatchObject({
+        entries: [{ runId: run.runId, status: "ok", completionStatus: "succeeded", summary }],
+      });
+      await expect(gateway.client.request("cron.get", { id: job.id })).resolves.toMatchObject({
+        id: job.id,
+        enabled: false,
+      });
+      await resources.disposeAsync();
+      await closeStateDatabaseForTest();
+      const anchor = await readAnchor(current);
+      if (!anchor) {
+        throw new Error("Gateway cron did not persist its PostgreSQL anchor");
+      }
+      const jobs = await queryRows<{ enabled: string; job_json: string }>(
+        `SELECT enabled, job_json FROM ${quoteIdentifier(anchor.namespace)}.cron_jobs WHERE job_id = $1`,
+        [job.id],
+      );
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]?.enabled).toBe("0");
+      expect(JSON.parse(jobs[0]!.job_json)).toMatchObject({ id: job.id, enabled: false });
+      const runs = await queryRows<{
+        status: string;
+        terminal_summary: string;
+        detail_json: string;
+      }>(
+        `SELECT status, terminal_summary, detail_json FROM ${quoteIdentifier(anchor.namespace)}.task_runs WHERE runtime = 'cron' AND source_id = $1`,
+        [job.id],
+      );
+      expect(runs).toEqual([
+        { status: "succeeded", terminal_summary: summary, detail_json: expect.any(String) },
+      ]);
+      expect(JSON.parse(runs[0]!.detail_json)).toMatchObject({ runId: run.runId });
+    },
+  );
 
   it("refuses existing SQLite data and directs the operator to the port command", async () => {
     const current = await fixture();

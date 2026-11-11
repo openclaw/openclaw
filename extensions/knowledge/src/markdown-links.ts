@@ -257,7 +257,9 @@ function resolveHref(
   }
   let target: string;
   try {
-    target = decodeURIComponent(wiki ? href.slice(6) : href).split("#")[0]!;
+    target = wiki
+      ? decodeURIComponent(href.slice(6)).split("#")[0]!
+      : decodeURIComponent(href.split("#")[0]!);
   } catch {
     target = "";
   }

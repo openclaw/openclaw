@@ -27,6 +27,7 @@ import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 import { pluginSyncResult } from "./update-cli/update-cli-config.test-support.js";
 import { recoveryVerificationStep } from "./update-cli/update-cli-failure-recovery.test-support.js";
+import * as postCore from "./update-cli/update-command-post-core.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -74,6 +75,7 @@ describe("update-cli", () => {
   it.each(["config-change", "legacy-config-change", "invalid"] as const)(
     "validates the staged candidate without inference while the previous gateway serves (%s)",
     async (outcome) => {
+      await setup.useFileBackedConfig();
       const valid = outcome !== "invalid";
       const legacyConfigChange = outcome === "legacy-config-change";
       const { nodeModules, pkgRoot, entryPath } = await setup.setupInstalledPackageAtNodeModules(
@@ -115,6 +117,7 @@ describe("update-cli", () => {
         });
       }
       const events: string[] = [];
+      const postCoreCalls = vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess");
       mocks.spawn.mockImplementationOnce((_node, _argv, options: { env: NodeJS.ProcessEnv }) => {
         const resultPath = options.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
         if (!resultPath) {
@@ -135,7 +138,8 @@ describe("update-cli", () => {
               await resumePostCoreUpdate({
                 root: pkgRoot,
                 channel: "stable",
-                opts: { yes: true, json: true },
+                // This in-process child must retain the real parent's update authority.
+                opts: assert.requireValue(postCoreCalls.mock.lastCall?.[0].opts, "post-core owner"),
                 timeoutMs: 30_000,
               });
             },

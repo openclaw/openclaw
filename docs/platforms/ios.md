@@ -26,6 +26,7 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired Gateway: cold opens paint the last known transcript immediately and refresh once the Gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect without duplicating sends on retries, remain durable until saved history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
 - Send text while a reply is running: tapping Send uses the Gateway's configured queue mode, and `/steer` works as a normal slash command. Touch and hold Send to use the opposite action for that message: **Steer now** when the default is Queue, or **Queue next** when it is Steer. Both choices appear if the Gateway uses another mode or does not report its default. The follow-up appears immediately with its delivery status while the current reply keeps streaming. A menu choice survives reconnect and does not change the session default. Attachments and local session reset/compact commands still wait for the current reply to finish.
+- **Stop response** stays available while you draft a follow-up, alongside Send. Stopping the response preserves your draft.
 - Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
 - Assistant reasoning is visible only with `/reasoning on` and the local **Show reasoning & tool activity** setting enabled. `/reasoning off` hides it after history reload and relaunch. Tool activity follows the local setting independently.
 - Sessions has **Active**, **Snoozed**, **Automations**, and **Archived** scopes. Snoozed sessions stay out of the active sidebar and Overview until they wake.
@@ -36,7 +37,7 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - Dictation shows when it is starting and listening, a live microphone waveform, and the words recognized so far. Tap **Done** to add the transcript to your draft or **Cancel** to discard it. Attachments show **Preparing attachments…** while loading and **Sending attachments…** during delivery; failed photo loads show an error so you can select them again.
 - Preserves Markdown paragraph breaks, including before lists and while responses are streaming.
 - Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
-- Long-press a message or open its actions menu and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
+- Long-press a message and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
 - **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
@@ -67,6 +68,16 @@ and Gateway permissions are unchanged.
 
 Open **Settings** in the sidebar to use the same Dashboard settings pages as the
 web and macOS apps. A connected operator session with `operator.admin` is required.
+The toolbar's **Device** button opens local appearance, notification delivery,
+camera access, keep-awake, Health summaries, Voice & Talk, and permission controls.
+These controls also appear under **Device Settings** at the top of the native
+fallback when offline, connected with Limited access, or using native Cloudflare
+Access authorization that cannot open the embedded Dashboard. They use the same
+native preferences, consent, and iOS permission prompts as the Dashboard; local
+access does not grant Gateway scopes or expose Gateway credentials.
+
+Access comes from the current connection's accepted scopes, including when
+authenticated ingress does not issue a reusable Gateway token.
 The toolbar's **Gateway** button opens the native connection screen, including
 setup, paired Gateways, manual connection, and advanced connection options.
 The sidebar footer also provides Gateway access: **Add Gateway** when none are
@@ -101,6 +112,11 @@ Gateway protocol; the native authentication path does not persist it in page sto
 
 The **This iPhone** or **This iPad** page contains appearance, notification
 delivery, camera access, keep-awake behavior, and optional Health summaries.
+QR scanning requests camera permission on first use. If access was denied, the
+scanner offers **Open Settings**; allow **Camera** for OpenClaw, then return to
+the scanner. Screen Time or device-management restrictions must be changed by
+the person who manages those restrictions.
+
 Its **Permissions** page shows notification, camera, microphone, speech, location,
 contacts, calendars, reminders, and photo access. Permission requests use native
 iOS prompts; Precise Location shows the system's current state and links to iOS
@@ -118,14 +134,15 @@ that share. These changes do not remove the Gateway's `talk.speechLocale` option
 **This iPhone** and **This iPad** also open native **Apple Watch**, **Diagnostics**,
 **Licenses**, and **About** screens. When disconnected, connected without admin
 access, or running in demo or screenshot mode, Settings shows a native fallback:
-the Gateway connection controls followed by those four rows in a **Device**
-section. Connection and these device screens remain available without loading
-the Dashboard.
+a **Device** section with **Device Settings** and those four rows, followed by
+the Gateway connection controls. These local screens remain available without
+loading the Dashboard. Connected admins can still use Dashboard settings normally.
 
 Channels (`/settings/channels`) and Skills (`/skills`) are managed in the
-Dashboard. Appearance, notifications, privacy, permissions, and Voice & Talk
-settings also use the Dashboard pages; the separate native settings screens and
-system-agent settings chat have been removed. Agent selection and read-only
+Dashboard. Local device settings are also available natively without duplicating
+Gateway work pages. Provider, voice, speech language, and other Gateway
+configuration remain owned by the Dashboard and keep their existing admin gates.
+The system-agent settings chat remains removed. Agent selection and read-only
 Files browsing remain native.
 
 The sidebar opens these Gateway pages in the embedded Dashboard without web
@@ -144,6 +161,12 @@ navigation chrome:
 These pages require the same connected `operator.admin` session as Settings.
 Without that access, they show the native Gateway connection guidance. Instances
 opens **Devices**, the Dashboard owner of paired nodes and connected clients.
+
+If the Gateway answers Settings or one of these pages with a plain-text or JSON
+HTTP error (for example `gateway.controlUi.enabled: false`, or while Control UI
+assets are being prepared), the app shows **Dashboard unavailable** with the
+HTTP status and **Reload** instead of the raw response. HTML error pages, such
+as a proxy's sign-in page, still load in the Dashboard.
 
 The native **New Thread** agent picker shows configured names or agent IDs as
 soon as the roster arrives. Resolved identities update each choice without
@@ -185,11 +208,26 @@ expires while you are signing in, scan a fresh code. An
 invalid or used setup code is a Gateway pairing error and does not require a new
 Access login.
 
-Native pairing, chat, and authenticated media use the Access session. Embedded
-Dashboard pages and widgets display an explanation with native Gateway settings
-available; browser-session support for those surfaces is separate. The share
-extension asks you to send from OpenClaw for an Access-protected Gateway. Access
-credentials are not exported to Apple Watch or cloud workers.
+Native pairing, chat, and authenticated media use the Access session. When the
+native Gateway is connected with operator admin access, embedded Dashboard pages
+reuse the current Access session and native Gateway authorization. The Gateway's
+Control UI must support native app sign-in; update the Gateway if the Dashboard
+cannot connect, or open native Gateway settings to recover the connection. Access
+sign-in alone does not grant operator admin access or replace Gateway pairing.
+The share extension asks you to send from OpenClaw for an Access-protected
+Gateway. Access credentials are not exported to Apple Watch or cloud workers.
+
+## Share request admission
+
+The share extension shows **Sent** only after the Gateway explicitly accepts the
+request for agent dispatch, not after the agent finishes. Rejected messages and
+attachments leave the draft in the sheet with an error so you can correct it.
+The Gateway limits share message text to 20,000 UTF-16 code units.
+
+Older Gateways return an acknowledgement without confirming admission. The
+extension keeps the draft and asks you to check OpenClaw before retrying and
+update the Gateway. That request might already have been accepted: retries are
+not deduplicated, so do not resend it without checking the destination session.
 
 ## Sessions
 
@@ -197,7 +235,8 @@ Choose **All Sessions…** in the sidebar to browse **Active**, **Snoozed**,
 **Automations**, or **Archived** sessions. Automation-created sessions stay out of
 ordinary browsing, including pinned rows, unless selected. Open **Automations**
 to find their transcripts; sidebar search also includes matching automation sessions.
-Saved pins are preserved.
+Archived and snoozed chats stay out of the sidebar even when pinned or selected;
+their open conversations stay open. Saved pins are preserved.
 
 Long-press an eligible session and choose **Snooze**:
 **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, only when more than
@@ -300,7 +339,7 @@ Gateway has not been configured yet, run `openclaw onboard` first so setup-code
 creation has a token or password auth path.
 
 2. Open the [Control UI](/web/control-ui), select **Nodes**, and click
-   **Pair device** on the **Devices** page. Full access is recommended
+   **Connect a device** on the **Devices** page. Full access is recommended
    and selected by default; choose Limited access only when you want to omit
    administrative Gateway controls, then click **Create setup code**.
 
@@ -325,6 +364,19 @@ creation has a token or password auth path.
    limited for bearer-token safety. If it is limited, configure `wss://` or
    Tailscale Serve, scan a new full-access code from Control UI or `openclaw qr`,
    then reconnect to enable settings and upgrades.
+
+   Full-access connections also prepare the **OpenClaw Share** extension
+   automatically, so sharing a photo or link does not require a second device
+   approval. The extension keeps its own Gateway-scoped, node-only credential;
+   it does not receive the app's administrative credential. Existing Share
+   credentials are not automatically replaced, including after revocation.
+   After upgrading, reconnecting an already full-access app also prepares Share
+   if it has no credential yet. Existing identities and credentials are reused;
+   reconnecting does not restore revoked or removed Share access. To restore it,
+   set up the app again with a new full-access code; a revoked Share identity
+   then needs `openclaw devices approve`.
+   Limited connections still require separate Share approval. Cloudflare Access
+   Gateways continue to require sending from the foreground app.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered Gateway in the iOS app (or enable
@@ -789,7 +841,7 @@ same iOS limits as Talk started inside the app.
 
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (camera/screen commands require it).
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
-- `Gateway setup incomplete`: the Gateway did not provide both node and operator credentials. Generate a new iPhone setup code from **Devices -> Pair device** in the Control UI or `openclaw qr`, then scan it in **Settings -> Gateway**. Automatic reconnect stays paused until you retry setup; this is not a device-storage error.
+- `Gateway setup incomplete`: the Gateway did not provide both node and operator credentials. Generate a new iPhone setup code from **Devices -> Connect a device** in the Control UI or `openclaw qr`, then scan it in **Settings -> Gateway**. Automatic reconnect stays paused until you retry setup; this is not a device-storage error.
 - If setup cannot safely replace the Gateway's offline data, it stops before applying the replacement credentials. The setup code and manual endpoint stay available. Resolve the device-storage problem, then retry.
 - Watch shows no iPhone state: confirm the iPhone reports `watchPaired: true`
   and `watchAppInstalled: true` in `watch.status`. If pairing is false, pair the

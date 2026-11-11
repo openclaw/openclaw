@@ -21,6 +21,15 @@ it.each([
   ["admin", "pairing", true],
   ["write", "read", true],
   ["write", "talk", true],
+  ["admin", "cron", true],
+  ["write", "cron", true],
+  ["cron", "cron", true],
+  ["cron", "write", false],
+  ["cron", "read", false],
+  ["cron", "admin", false],
+  ["read", "cron", false],
+  ["sessions.write", "cron", false],
+  ["talk", "cron", false],
   ["write", "sessions.read", true],
   ["write", "sessions.write", true],
   ["read", "sessions.read", true],
@@ -62,6 +71,8 @@ it.each([
   [["sessions.write"], ["read"], ["sessions.read"]],
   [[], ["sessions.write"], []],
   [["write"], ["write"], ["write"]],
+  [["write"], ["cron"], ["cron"]],
+  [["cron"], ["write"], ["cron"]],
 ])("intersects operator grants %j with ceiling %j", (grants, ceiling, expected) => {
   expect(intersect(operator(grants), operator(ceiling))).toEqual(operator(expected));
 });

@@ -7,6 +7,7 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import * as pidAlive from "../../shared/pid-alive.js";
@@ -108,18 +109,28 @@ describe("worktree run lease", () => {
   }
 
   it("shares concurrent runs with SQL-free admission and refcounted Git custody", async () => {
+    // A running Gateway already has an ordered cleanup group before its first worktree turn.
+    const unregister = registerProcessExitCleanup(() => {});
+    const exitListeners = process.listenerCount("exit");
     let parent: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
     let child: typeof parent;
     try {
       [parent, child] = await withoutHostSql(() => Promise.all([acquire(), acquire()]));
+      expect(process.listenerCount("exit")).toBe(exitListeners);
       await expectCustody(true);
       await withoutHostSql(() => parent!.release());
       await expectCustody(true);
 
       await child.release();
       await expectCustody(false);
+      for (let turn = 0; turn < 8; turn++) {
+        const lease = await acquire();
+        await lease.release();
+        expect(process.listenerCount("exit")).toBe(exitListeners);
+      }
     } finally {
       await Promise.all([parent?.release(), child?.release()]);
+      unregister();
     }
   });
 

@@ -264,12 +264,15 @@ describe("ordinary steering isolated-gateway proof", () => {
         details: { stage: "steer" },
       });
       expect(report.durationMs).toBeGreaterThanOrEqual(clock);
+      expect(runIds).toContain(report.details?.runId);
       await waitForDiagnosticEventsDrained();
+      // Queue entry can precede this nested span; the parent duration owns the injected delay.
       const settlement = phases.find(
-        (event) => event.name === "chat.send.detail.run_admission.steer_settlement",
+        (event) =>
+          event.name === "chat.send.detail.run_admission.steer_settlement" &&
+          event.details?.runId === report.details?.runId,
       );
       expect(settlement).toMatchObject({ details: { stage: "steer" } });
-      expect(settlement?.durationMs).toBeGreaterThanOrEqual(clock);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       retireSessionControllerInput(older);

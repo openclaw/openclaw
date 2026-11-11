@@ -1,4 +1,3 @@
-// Real built UI, Gateway persistence, queue admission and OpenAI plugin; only external I/O is synthetic.
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
@@ -39,6 +38,7 @@ const unentitledKey = "sk-synthetic-unentitled-fixture";
 const held = new Map<number, ServerResponse>();
 let holdNext = false;
 let inferenceRequests = 0;
+const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proof: Record<string, unknown> = {
   externalIO: "synthetic authenticated catalog and Responses fixture",
   productionEntitlement: false,
@@ -218,6 +218,7 @@ globalThis.__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__ = { ...undici, fetch: globalThi
         agents: {
           defaults: {
             model: "openai/gpt-6.1-sol",
+            utilityModel: "", // Keep background utility calls out of chat dispatch receipts.
             models: {
               "openai/gpt-6.1-sol": {
                 agentRuntime: { id: "openclaw" },
@@ -367,16 +368,18 @@ suite.define(() => {
             .poll(() => picker.getByRole("switch", { name: "Daybreak", exact: true }).count())
             .toBe(advertised?.some((program) => program !== "standard") ? 1 : 0);
           expect(inferenceRequests).toBe(inferenceCount);
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            picker.locator(".chat-controls__effort-menu"),
-            [],
-            { animations: "disabled" },
-          );
-          await writeFile(
-            path.join(dir, "configured-key-" + (advertised?.at(-1) ?? "unknown") + ".png"),
-            frame.png,
-          );
+          if (capture) {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              picker.locator(".chat-controls__effort-menu"),
+              [],
+              { animations: "disabled" },
+            );
+            await writeFile(
+              path.join(dir, "configured-key-" + (advertised?.at(-1) ?? "unknown") + ".png"),
+              frame.png,
+            );
+          }
         }
         const picker = page.locator(".chat-controls__effort-picker").first();
         const toggle = picker.getByRole("switch", { name: "Daybreak", exact: true });
@@ -630,6 +633,9 @@ suite.define(() => {
           await menu.waitFor();
         };
         const snapshot = async (stage: string) => {
+          if (!capture) {
+            return;
+          }
           const frame = await takeControlUiScreenshotFrame(page, menu, [], {
             animations: "disabled",
           });

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate as nextTurn, setTimeout as nextTimer } from "node:timers/promises";
-import { queryObjects } from "node:v8";
+import { setTimeout as nextTimer } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
@@ -19,14 +18,17 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import type { GenerationWorkerInput } from "./plugin-generation-worker-contract.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
+import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import {
   nativeAdmissionStateFor,
   preparePluginNativeAdmissions,
@@ -86,6 +88,48 @@ function sourceFixture(version?: string) {
   });
   return { root, source, entry };
 }
+
+it("transports source acquisition classification and errno after worker cleanup", async () => {
+  const root = temp.make("plugin-worker-unavailable-");
+  const missing = path.join(root, "missing");
+  await withStorage(root, async () => {
+    let failure: unknown;
+    try {
+      await preparePluginGenerationArtifact({
+        rootDir: missing,
+        source: path.join(missing, "index.cjs"),
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ name: "Error", code: "ENOENT" });
+    expect(isPluginSourceAcquisitionError(failure)).toBe(true);
+    expect(workersActive()).toBe(false);
+  });
+});
+
+it.each(["missing", "directory"] as const)(
+  "classifies an owned %s entry preparation call after initial capture",
+  async (kind) => {
+    const { root, source, entry } = sourceFixture();
+    writeTree(source, { "directory.cjs/index.cjs": "module.exports = {};" });
+    await withStorage(root, async () => {
+      const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
+      let failure: unknown;
+      try {
+        const target = path.join(source, `${kind}.cjs`);
+        prepared.artifact.prepareModule(prepared.artifact.resolve(target));
+      } catch (error) {
+        failure = error;
+      } finally {
+        await prepared.artifact.disposeAsync();
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect(isPluginSourceAcquisitionError(failure)).toBe(true);
+      expect(workersActive()).toBe(false);
+    });
+  },
+);
 
 it("signals posted source-mapping callbacks before their worker task can finish", async () => {
   const { root, source, entry } = sourceFixture();
@@ -221,6 +265,32 @@ it("keeps a native-only recovery fork after its worker and admission cache retir
       await recovery.disposeAsync();
       await prepared.artifact.disposeAsync();
     }
+    expect(fs.existsSync(captured)).toBe(false);
+  });
+});
+
+it("keeps a prepared child's native bytes after its source custody retires", async () => {
+  await withWorkerFixture("worker-child-native-custody", async ({ fixture, cache }) => {
+    const companion = path.join(fixture.root, "companion.txt");
+    fs.writeFileSync(companion, "retained native companion");
+    preparePluginNativeAdmissions(fixture.index, cache);
+    let prepared: Awaited<ReturnType<typeof prepare>> | undefined;
+    let captured = "";
+    try {
+      await withPluginGenerationSourceCustody(async () => {
+        prepared = await prepare(fixture);
+      });
+      expect(workersActive()).toBe(true);
+      captured = fs.realpathSync(prepared!.artifact.resolve(fixture.filename));
+      const capturedCompanion = prepared!.artifact.resolve(companion);
+      expectBytes(captured, fixture);
+      expect(fs.readFileSync(capturedCompanion, "utf8")).toBe("retained native companion");
+      expectSource(prepared!.artifact, fixture.entry);
+    } finally {
+      await prepared?.artifact.disposeAsync();
+      await retirePluginCache(cache);
+    }
+    expect(workersActive()).toBe(false);
     expect(fs.existsSync(captured)).toBe(false);
   });
 });
@@ -448,11 +518,7 @@ it.each(["capture", "custody", "fork"] as const)(
         }
         expectSource(artifact, entry, "42");
         await artifact.disposeAsync();
-        const control = new WeakRef({});
-        await nextTurn();
-        queryObjects(WeakRef);
-        expect(control.deref()).toBeUndefined();
-        const moduleFactsReleased = moduleFactCallbacks?.every((callback) => !callback.deref());
+        await expectCollected(...(moduleFactCallbacks ?? []));
         expectSource(recovery, entry, "42");
         const recoveredEntry = recovery.resolve(entry);
         await recovery.disposeAsync();
@@ -461,9 +527,6 @@ it.each(["capture", "custody", "fork"] as const)(
         expect(() => recovery.resolve(path.join(root, "outside.js"))).toThrow(
           "Plugin recovery entry is outside its captured source package",
         );
-        if (moduleFactCallbacks) {
-          expect(moduleFactsReleased).toBe(true);
-        }
       }),
     );
   },

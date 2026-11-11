@@ -22,8 +22,9 @@ const boundary = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Inject worker outcomes and close failures without creating real publication owners.
 vi.mock("../state/openclaw-agent-worker-store.js", () => ({
-  openOpenClawAgentSqliteWorkerStore: async () => ({
+  openOpenClawAgentSqliteWorkerStoreV2: async () => ({
     async run<T>(
       operation: (scope: Pick<SqliteWorkerStore<BoardWriteOperations>, "execute">) => Promise<T>,
       assertCurrent: () => void,

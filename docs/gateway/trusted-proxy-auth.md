@@ -99,6 +99,14 @@ read_when:
 
 **Forwarded-header evidence overrides loopback locality for local-direct fallback.** If a request arrives on loopback but carries a `Forwarded`, any `X-Forwarded-*`, or `X-Real-IP` header, that evidence disqualifies it from local-direct password fallback and device-identity gating, even though it still fails trusted-proxy auth as loopback.
 
+The same restriction always applies to Tailscale identity headers. While OpenClaw ID
+is on (`gateway.openclawId.enabled`), it also applies to Cloudflare Access identity
+headers, `Remote-User`, `X-Remote-User`, and the configured `userHeader` or
+`requiredHeaders`: an identity-only request without a usable forwarded client
+address is rejected, not treated as the local operator. This protects OpenClaw
+ID's local-only linking; see [access coexistence](/gateway/remote#openclaw-id-alongside-existing-access).
+With OpenClaw ID off, those headers do not change loopback locality.
+
 `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 
 Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. For browser access, omit `gateway.controlUi.allowedOrigins` to use `gateway.publicOrigin` as the default, or configure an explicit list that overrides it.

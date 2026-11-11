@@ -456,7 +456,14 @@ describe("shared worktree receipt observation", () => {
           status,
         });
         expect(await fs.readFile(databasePath)).toEqual(bytes);
-        expect(await fs.readdir(path.dirname(databasePath))).toEqual(files);
+        // Live readers may create WAL/SHM; historical rows and other artifacts stay unchanged.
+        expect(
+          (await fs.readdir(path.dirname(databasePath))).filter(
+            (name) =>
+              name !== `${path.basename(databasePath)}-wal` &&
+              name !== `${path.basename(databasePath)}-shm`,
+          ),
+        ).toEqual(files);
         expect(observer).not.toHaveBeenCalled();
         expectNoPublicationWork();
       }

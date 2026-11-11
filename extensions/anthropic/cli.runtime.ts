@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/cli-backend";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { OwnedStdioCleanupError } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
@@ -27,6 +28,7 @@ const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
  */
 export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
   assertPrivateInputCurrent?: () => void;
+  prepareCredentialUse?: () => Promise<void>;
 };
 type ClaudeCliTurn = {
   context: ClaudeCliExecuteContext;
@@ -360,6 +362,21 @@ async function emitHeldInterimResult(turn: ClaudeCliTurn) {
 
 async function acceptMessage(session: ClaudeCliSession, message: Record<string, unknown>) {
   if (message.type === "system" && message.subtype === "init") {
+    const openClawServer = Array.isArray(message.mcp_servers)
+      ? message.mcp_servers.find(
+          (server): server is Record<string, unknown> =>
+            isRecord(server) && server.name === "openclaw",
+        )
+      : undefined;
+    if (openClawServer && openClawServer.status !== "connected") {
+      closeSession(
+        session,
+        new Error(
+          `Claude Code started without the OpenClaw MCP server (status ${String(openClawServer.status)}). The CLI process was retired; retry the request to start a fresh process.`,
+        ),
+      );
+      return;
+    }
     session.hasInputLifecycle =
       Array.isArray(message.capabilities) && message.capabilities.includes("msg_lifecycle_v1");
   }
@@ -371,31 +388,12 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     const input = turn && (!session.hasInputLifecycle || turn.inputStarted) ? turn : undefined;
     const inputUuid = input?.inputUuid ?? "";
     if (message.subtype === "background_tasks_changed") {
-      if (Array.isArray(message.tasks)) {
-        for (const task of message.tasks) {
-          if (!isRecord(task)) {
-            continue;
-          }
-          const id = tasks.recordTaskOwnership(session, task, inputUuid);
-          const parentTaskId = id ? session.runningDescendants.get(id) : undefined;
-          if (
-            id &&
-            input &&
-            !input.interrupted &&
-            session.taskOwners.get(id) === input.inputUuid &&
-            // Only children of held background work extend the input; foreground
-            // descendants still retire with their parent turn.
-            (parentTaskId === undefined ||
-              input.pendingBackgroundTaskIds.has(parentTaskId) ||
-              input.pendingBackgroundTaskIds.has(id)) &&
-            (task.task_type === "local_agent" ||
-              task.task_type === "local_workflow" ||
-              (task.task_type === "local_bash" && input.foregroundTaskIds.has(id)))
-          ) {
-            // Disappearing from a snapshot does not acknowledge the queued answer.
-            input.pendingBackgroundTaskIds.add(id);
-          }
-        }
+      const snapshot = Array.isArray(message.tasks) ? message.tasks.filter(isRecord) : [];
+      for (const task of snapshot) {
+        tasks.recordTaskOwnership(session, task, inputUuid);
+      }
+      if (input && !input.interrupted) {
+        tasks.acquireBackgroundTaskHolds(session, input, snapshot);
       }
     } else {
       taskId = tasks.recordTaskOwnership(session, message, inputUuid);
@@ -582,8 +580,11 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
       isIdle: () => !session.closed && !session.currentTurn,
       close: (_reason, error) => closeSession(session, error),
       waitForExit: async () => {
-        const transport = session.transport ?? (await session.transportStartup);
-        await transport?.waitForExit();
+        // The turn owns launch errors; only unconfirmed startup cleanup blocks replacement.
+        const startup = session.transportStartup?.catch((error: unknown) =>
+          error instanceof OwnedStdioCleanupError ? Promise.reject(error) : undefined,
+        );
+        await (session.transport ?? (await startup))?.waitForExit();
       },
     },
   };
@@ -706,6 +707,7 @@ export async function* executeClaudeCli(
         }
         await transport.initialize();
       }
+      await context.prepareCredentialUse?.();
       context.assertCurrent?.();
       context.assertPrivateInputCurrent?.();
       if (session.closed || session.currentTurn !== turn) {

@@ -27,7 +27,12 @@ afterEach(runtimeConfig.clearRuntimeConfigSnapshot);
 it.each([null, "retired-node"])(
   "resolves only node-backed placement requirements (%s)",
   async (nodeDeviceId) => {
-    const environment = { ...environmentBase, providerId: "crabbox", nodeDeviceId };
+    const environment = {
+      ...environmentBase,
+      providerId: "crabbox",
+      nodeDeviceId,
+      profileSnapshot: { ...environmentBase.profileSnapshot, machineClass: "large", os: "linux" },
+    };
     const requirement = { requiredNodeCommands: [], consumesWorkerSlot: true };
     const resolveRequirement = vi.fn(async () => requirement);
     const dispatch = vi.fn<Parameters<typeof createWorkerPlacementRedispatch>[0]["dispatch"]>(
@@ -41,6 +46,7 @@ it.each([null, "retired-node"])(
     await expect(redispatch(placement, dispatchOptions)).resolves.toBe(ACTIVE_PLACEMENT);
     const request = dispatch.mock.calls[0]?.[0];
     expect(request).not.toHaveProperty("deviceId");
+    expect(request).toMatchObject({ machineClass: "large", os: "linux" });
     if (nodeDeviceId) {
       expect(request?.devicePlacement).toEqual(requirement);
     } else {
@@ -63,5 +69,29 @@ it.each([
     dispatch,
   });
   await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(reason);
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
+it("does not redispatch after authority is revoked during node requirement resolution", async () => {
+  let current = true;
+  const dispatch = vi.fn();
+  const redispatch = createWorkerPlacementRedispatch({
+    placements: reader({ ...environmentBase, nodeDeviceId: "paired-node" }),
+    dispatch,
+    resolveDevicePlacementRequirement: async () => {
+      await Promise.resolve();
+      current = false;
+      return { requiredNodeCommands: [], consumesWorkerSlot: true };
+    },
+  });
+  await expect(
+    redispatch(placement, {
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("recovery revoked");
+        }
+      },
+    }),
+  ).rejects.toThrow("recovery revoked");
   expect(dispatch).not.toHaveBeenCalled();
 });

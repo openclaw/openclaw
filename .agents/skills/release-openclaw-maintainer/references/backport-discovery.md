@@ -4,6 +4,10 @@ Use this before selecting backports for any OpenClaw release line: regular
 beta/stable, extended-stable, or a release-repair branch. It is an audit before the candidate is
 mutated, not a title search and not permission to expand a frozen release.
 
+For an individual fix-status check or a verified cumulative source count, use
+[fix-inclusion tracing](fix-inclusion.md). Keep its source-to-carrier mapping in
+this inventory, not a second release-state store.
+
 ## Start from the shared ledger
 
 Start with [shared candidates and assessments](hotfix-ledger-management.md),

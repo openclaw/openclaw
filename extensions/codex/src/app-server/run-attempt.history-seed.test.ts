@@ -2,6 +2,8 @@ import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
 import { buildCodexSelectedHistoryItems } from "./context-engine-history-items.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
@@ -413,5 +415,35 @@ it.each([undefined, 0, -1, Number.NaN, Infinity])(
       }),
     ).rejects.toThrow(/budget|allowance/i);
     expect(prepareFileContext).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  ["keeps it when before_prompt_build replaces systemPrompt", true],
+  ["rejects it when the OpenClaw base stays", false],
+] as const)(
+  "budgets history just over the base-inclusive allowance: %s",
+  async (_case, replaced) => {
+    const { params, assemble } = seedParams();
+    // About 2.5k tokens of OpenClaw base and policy separate these two allowances.
+    params.authoredContextTokenCap = 40_000;
+    params.contextTokenBudget = 40_000;
+    assemble.mockResolvedValue({
+      messages: [userMessage(`REPLACED_BASE_HISTORY${"h".repeat(54_000)}`, 1)],
+      estimatedTokens: 13_500,
+    });
+    if (replaced) {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_prompt_build", handler: () => ({ systemPrompt: "" }) },
+        ]),
+      );
+    }
+    const turn = runTurn(params, selectedHarness(), "replaced-base");
+    if (!replaced) {
+      await expect(turn).rejects.toThrow("exceed their rendered allowance");
+      return;
+    }
+    expect(JSON.stringify(selectedItems(await turn))).toContain("REPLACED_BASE_HISTORY");
   },
 );

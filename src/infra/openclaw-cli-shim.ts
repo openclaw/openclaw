@@ -9,6 +9,7 @@ import { renderCmdSetAssignment } from "../daemon/cmd-set.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { writeTextAtomic } from "./json-files.js";
 import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
+import { resolveStableNodePath } from "./stable-node-path.js";
 
 const AGENT_CLI_BIN_DIR = path.join("tmp", "agent-cli");
 const GATEWAY_AGENT_CLI_STATE_KEY = Symbol.for("openclaw.gatewayAgentCliShim");
@@ -28,6 +29,10 @@ export async function prepareGatewayAgentCliShim(): Promise<void> {
   const env = process.env;
   const platform = process.platform;
   const invocation = resolveCurrentOpenClawCliInvocation([]);
+  // The launcher outlives this process: a version-pinned interpreter (Homebrew
+  // Cellar) is removed by the next runtime upgrade and strands every shim call
+  // until the Gateway restarts, so prefer an upgrade-stable path when one exists.
+  const command = await resolveStableNodePath(invocation.command);
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
   const binDir = path.join(resolveStateDir(env), AGENT_CLI_BIN_DIR);
   const executablePath = path.join(binDir, platform === "win32" ? "openclaw.cmd" : "openclaw");
@@ -45,13 +50,13 @@ export async function prepareGatewayAgentCliShim(): Promise<void> {
           "@echo off",
           "setlocal DisableDelayedExpansion",
           ...environment,
-          `${[invocation.command, ...args].map((arg) => quoteCmdScriptArg(arg, context)).join(" ")} %*`,
+          `${[command, ...args].map((arg) => quoteCmdScriptArg(arg, context)).join(" ")} %*`,
           "",
         ].join("\r\n")
       : `#!/bin/sh
 set -eu
 ${environment.join("\n")}
-exec ${[invocation.command, ...args].map(quoteCliArg).join(" ")} "$@"
+exec ${[command, ...args].map(quoteCliArg).join(" ")} "$@"
 `;
 
   await fs.mkdir(binDir, { recursive: true, mode: 0o700 });

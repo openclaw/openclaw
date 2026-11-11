@@ -23,6 +23,7 @@ export const SUPPORTED_LOCALES = [
   "fa",
   "ru",
   "sv",
+  "ca",
 ] as const;
 
 export type Locale = (typeof SUPPORTED_LOCALES)[number];

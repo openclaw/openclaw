@@ -492,10 +492,11 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       ),
       limit: optionalPositiveIntegerSchema({
         maximum: CRON_TOOL_LIST_MAX_LIMIT,
-        description: 'Maximum jobs returned by action="list"',
+        description: 'Maximum jobs or runs returned by action="list" or action="runs"',
       }),
       offset: optionalNonNegativeIntegerSchema({
-        description: 'Job offset for action="list"; use nextOffset to load the next page',
+        description:
+          'Offset for action="list" or action="runs"; use nextOffset to load the next page',
       }),
       job: managementOnly ? Type.Optional(Type.Omit(job, ["declarationKey", "owner"])) : job,
       toolsAllowMode: Type.Optional(

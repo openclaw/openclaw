@@ -33,13 +33,13 @@ import {
 } from "./lib/vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import {
   VITEST_INFRASTRUCTURE_EXIT_CODE,
   vitestInfrastructureExitCode,
 } from "./lib/vitest-outcome.mts";
 import {
   resolveVitestProcessEnv,
-  resolveVitestNodeArgs,
   resolveRunVitestSpawnEnv,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestNoOutputHeartbeatMs,
@@ -1034,7 +1034,7 @@ export async function runVitest(
     }
     return;
   }
-  if (argv.some((arg) => arg === "--isolated-image" || arg.startsWith("--isolated-image="))) {
+  if (argv.some((arg) => /^--isolated-(?:image|runtime)(?:=|$)/u.test(arg))) {
     const { parseIsolatedVitestArgs, runIsolatedVitest } =
       await import("./lib/vitest-isolated.mts");
     const isolated = parseIsolatedVitestArgs(argv);
@@ -1044,6 +1044,7 @@ export async function runVitest(
         isolated.image,
         isolated.args,
         env,
+        isolated.runtime,
       );
       return;
     }

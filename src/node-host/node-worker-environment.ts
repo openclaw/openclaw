@@ -1,6 +1,76 @@
 import path from "node:path";
 import { NODE_SERVICE_KIND, resolveNodeLaunchAgentLabel } from "../daemon/constants.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+
+/** Node-local provider custody; never part of a Gateway launch or durable worker descriptor. */
+export type NodeWorkerManagedIdentityTransport = Readonly<{ endpoint: string; header: string }>;
+
+const PLATFORM_TRUST_KEYS = [
+  "REQUESTS_CA_BUNDLE",
+  "SSL_CERT_FILE",
+  "NODE_EXTRA_CA_CERTS",
+  "NODE_USE_SYSTEM_CA",
+] as const;
+export type NodeWorkerPlatformTrust = Readonly<
+  Pick<NodeJS.ProcessEnv, (typeof PLATFORM_TRUST_KEYS)[number]>
+>;
+
+/** Existing trust settings captured by the dedicated node owner, never caller overrides. */
+export function captureNodeWorkerPlatformTrust(source: NodeJS.ProcessEnv): NodeWorkerPlatformTrust {
+  return Object.freeze({
+    REQUESTS_CA_BUNDLE: source.REQUESTS_CA_BUNDLE,
+    SSL_CERT_FILE: source.SSL_CERT_FILE,
+    NODE_EXTRA_CA_CERTS: source.NODE_EXTRA_CA_CERTS,
+    NODE_USE_SYSTEM_CA: source.NODE_USE_SYSTEM_CA,
+  });
+}
+
+/** Restore admitted node trust after sanitization, replacing any caller-selected paths. */
+export function applyNodeWorkerPlatformTrust(
+  env: NodeJS.ProcessEnv,
+  trust: NodeWorkerPlatformTrust,
+): void {
+  for (const key of PLATFORM_TRUST_KEYS) {
+    delete env[key];
+    if (trust[key] !== undefined) {
+      env[key] = trust[key];
+    }
+  }
+}
+
+export function captureNodeWorkerManagedIdentityTransport(
+  source: NodeJS.ProcessEnv,
+): NodeWorkerManagedIdentityTransport | undefined {
+  const endpoint = source.IDENTITY_ENDPOINT;
+  const header = source.IDENTITY_HEADER;
+  if (endpoint === undefined && header === undefined) {
+    return undefined;
+  }
+  if (!endpoint?.trim() || !header?.trim()) {
+    throw new Error("Worker managed-identity transport is incomplete");
+  }
+  registerSecretValueForRedaction(header);
+  return Object.freeze({ endpoint, header });
+}
+
+/** Only an admitted dedicated host supplies provider transport after generic sanitization. */
+export function snapshotNodeWorkerExecutionEnv(
+  source: NodeJS.ProcessEnv,
+  transport?: NodeWorkerManagedIdentityTransport,
+  platformTrust?: NodeWorkerPlatformTrust,
+  homeDir?: string,
+): NodeJS.ProcessEnv {
+  const snapshot = snapshotNodeWorkerEnv(source, homeDir);
+  if (platformTrust) {
+    applyNodeWorkerPlatformTrust(snapshot, platformTrust);
+  }
+  if (transport) {
+    snapshot.IDENTITY_ENDPOINT = transport.endpoint;
+    snapshot.IDENTITY_HEADER = transport.header;
+  }
+  return snapshot;
+}
 
 const POSIX_WORKER_ENV_KEYS = new Set([
   "PATH",

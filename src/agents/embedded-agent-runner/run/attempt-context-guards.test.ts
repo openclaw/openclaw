@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
+import { forceFullGc } from "../../../test-utils/retention.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -130,7 +130,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
     });
     const control = new WeakRef({});
     await nextTurn();
-    queryObjects(WeakRef);
+    forceFullGc();
     expect(control.deref()).toBeUndefined();
     expect(completed.filter(({ continuation }) => continuation.deref())).toHaveLength(0);
     for (const { callback } of completed) {
@@ -146,10 +146,16 @@ describe("installEmbeddedAttemptContextGuards", () => {
       context: { messages: [{ role: "user" as const, content: "x".repeat(8_000), timestamp: 1 }] },
     };
     input.activeSession[agentSessionDeferThresholdCompaction] = true;
-    expect(() => guards.checkMidTurnPrecheck(request)).not.toThrow();
+    await expect(
+      guards.checkMidTurnPrecheck({
+        context: { messages: [{ role: "user", content: "x".repeat(3_200), timestamp: 1 }] },
+      }),
+    ).resolves.toBeLessThan(1_024);
     expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
+    await expect(guards.checkMidTurnPrecheck(request)).rejects.toThrow(MidTurnPrecheckSignal);
+    expect(guards.takePendingMidTurnPrecheckRequest()?.promptBudgetBeforeReserve).toBe(1_024);
     input.activeSession[agentSessionDeferThresholdCompaction] = false;
-    expect(() => guards.checkMidTurnPrecheck(request)).toThrow(MidTurnPrecheckSignal);
+    await expect(guards.checkMidTurnPrecheck(request)).rejects.toThrow(MidTurnPrecheckSignal);
     expect(guards.takePendingMidTurnPrecheckRequest()).toMatchObject({
       route: "compact_only",
       promptBudgetBeforeReserve: 960,

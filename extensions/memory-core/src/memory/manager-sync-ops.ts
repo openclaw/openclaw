@@ -226,7 +226,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         : null;
       const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
       hasTargetArchiveFiles = targetArchiveFiles !== null;
-      if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
+      if (
+        (params?.reason === "cli" || params?.reason === "cli-search") &&
+        !params.force &&
+        !hasTargetArchiveFiles
+      ) {
         await this.markSessionStartupCatchupDirtyFiles();
       }
       const syncProviderKey = this.syncProviderGeneration

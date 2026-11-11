@@ -147,6 +147,7 @@ export async function startCronScheduler(
         monotonicMs: performance.now(),
         skipJobIds: [...skipJobIds],
         deferAgentWork: true,
+        liveSinceMs: state.liveSinceMs,
         paused: state.schedulingPaused,
         requests: getCronRunQueueRequests(state),
       },

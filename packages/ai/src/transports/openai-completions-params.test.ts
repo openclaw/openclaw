@@ -196,6 +196,7 @@ describe("OpenAI completions output budgets", () => {
         { maxTokens: 0 },
       ),
       64_000,
+      "max_tokens",
     );
     expectBudget(
       request(
@@ -229,6 +230,7 @@ describe("OpenAI completions output budgets", () => {
         emptyContext("你好世界".repeat(1_000)),
       ),
       4_999,
+      "max_tokens",
     );
     expectBudget(
       request(proxy, undefined, {

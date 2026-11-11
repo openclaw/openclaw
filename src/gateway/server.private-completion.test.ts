@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { prepareEmbeddedSessionState } from "../agents/command/session-preparation.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import type { EmbeddedAgentRunResult } from "../agents/embedded-agent.js";
@@ -43,6 +44,7 @@ import {
 import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
 import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
+import { classifySessionStateActor } from "../sessions/session-state-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -310,6 +312,23 @@ describe("private subagent completion processing receipts", () => {
       await command.onExecutionStarted?.();
       const text = command.privateCompletion ? privateText : publicText;
       const currentRunId = expectDefined(command.runId, "Expected admitted run id");
+      // The embedded command re-registers its admitted run before model events.
+      await prepareEmbeddedSessionState({
+        cfg: gatewayContext().getRuntimeConfig(),
+        opts: command,
+        sessionKey,
+        sessionId: command.sessionId ?? sessionId,
+        storePath,
+        sessionAgentId: "main",
+        lifecycleGeneration: expectDefined(command.lifecycleGeneration, "admitted lifecycle"),
+        runId: currentRunId,
+        executionWorkspaceDir: expectDefined(command.workspaceDir, "admitted workspace"),
+        watchSkills: false,
+        isNewSession: false,
+        isSubagentLaneTurn: false,
+        suppressVisibleSessionEffects: command.sessionEffects === "internal",
+        sessionStateActor: classifySessionStateActor(command),
+      });
       const operationalRunInstance = expectDefined(
         command.operationalRunInstance,
         "Expected admitted operational instance",

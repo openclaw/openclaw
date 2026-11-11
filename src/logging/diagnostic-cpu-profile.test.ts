@@ -185,7 +185,7 @@ describe("diagnostic CPU profile owner", () => {
     expect((await capture()).status).toBe("complete");
     expect(native.start).toHaveBeenCalledTimes(2);
   });
-  it("reports synchronous start blocking separately from awaited capture time", async () => {
+  it("reports elapsed capture time including native startup and stop completion", async () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     native.post.mockImplementation((method: string) => {
@@ -204,7 +204,7 @@ describe("diagnostic CPU profile owner", () => {
     });
     expect(await capture()).toMatchObject({
       status: "complete",
-      result: { startBlockedMs: 2_100, actualDurationMs: 5_500 },
+      result: { startBlockedMs: 2_100, actualDurationMs: 7_820 },
     });
   });
   it("returns a complete sanitized graph only after native cleanup", async () => {
@@ -215,7 +215,6 @@ describe("diagnostic CPU profile owner", () => {
     }
     expect(outcome.result).toMatchObject({
       requestedDurationMs: 5_000,
-      actualDurationMs: 5_500,
       samplingIntervalMicros: 10_000,
       sampleLossCount: null,
       redactedNodeCount: 1,
@@ -680,7 +679,7 @@ const pid = process.pid;
 const outcome = await captureDiagnosticCpuProfile({ signal: new AbortController().signal, hasAuthority: () => true });
 assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
 const result = outcome.result;
-assert.ok(result.actualDurationMs > 0);
+assert.ok(result.actualDurationMs >= result.requestedDurationMs - 1_000);
 assert.ok(result.profile.samples.length > 0);
 assert.equal(result.profile.samples.length, result.profile.timeDeltas.length);
 assert.ok(result.profile.timeDeltas.every(delta => Number.isFinite(delta)));

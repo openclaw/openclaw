@@ -37,10 +37,14 @@ vi.mock("../infra/telemetry.js", () => ({
   checkTelemetryUpdate: checkTelemetryUpdateMock,
 }));
 
-// mock-isolation: Worker-free timers mock GC and reject accidental default worktree access.
+// mock-isolation: Worker-free timers accept pool subscription but reject storage operations.
 vi.mock("../agents/worktrees/service.js", () => ({
   WORKTREE_GC_INTERVAL_MS: 60 * 60_000,
-  managedWorktrees: { gc: () => forbiddenDefaultAdapter("worktree GC") },
+  managedWorktrees: {
+    gc: () => forbiddenDefaultAdapter("worktree GC"),
+    onWarmPoolNeeded: () => () => {},
+    prewarm: () => forbiddenDefaultAdapter("worktree warm pool"),
+  },
 }));
 
 // mock-isolation: Worker-free timers reject accidental default manifest database sweeps.

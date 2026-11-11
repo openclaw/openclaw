@@ -22,18 +22,20 @@ const answers: Record<string, unknown> = {
 function mount(held: string[] = [], failing: string[] = []) {
   const calls: string[] = [];
   const gates = new Map(held.map((name) => [name, Promise.withResolvers<void>()]));
-  const request = vi.fn(async (method: string, params?: { actionId?: string }) => {
-    const name = method === "cron.list" ? "scribes" : (params?.actionId ?? method);
-    calls.push(name);
-    await gates.get(name)?.promise;
-    gates.delete(name);
-    if (method !== "plugins.sessionAction") {
-      return method === "cron.list" ? { jobs: [] } : { sessions: [] };
-    }
-    return name in answers && !failing.includes(name)
-      ? { ok: true, result: answers[name] }
-      : { ok: false, error: `${name} failed` };
-  });
+  const request = vi.fn(
+    async (method: string, params?: { actionId?: string; payload?: unknown }) => {
+      const name = method === "cron.list" ? "scribes" : (params?.actionId ?? method);
+      calls.push(name);
+      await gates.get(name)?.promise;
+      gates.delete(name);
+      if (method !== "plugins.sessionAction") {
+        return method === "cron.list" ? { jobs: [] } : { sessions: [] };
+      }
+      return name in answers && !failing.includes(name)
+        ? { ok: true, result: answers[name] }
+        : { ok: false, error: `${name} failed` };
+    },
+  );
   const registerPage = vi.fn<(page: UI.ControlUiPage) => () => void>(() => () => {});
   const controller = new AbortController();
   const host = {
@@ -62,7 +64,7 @@ function mount(held: string[] = [], failing: string[] = []) {
     document.body.replaceChildren();
   });
   const release = (name: string) => gates.get(name)?.resolve();
-  return { calls, release, gates };
+  return { calls, release, gates, request };
 }
 
 const $ = (selector: string) => document.querySelector<HTMLElement>(selector);
@@ -74,8 +76,11 @@ const shows = (text: string) =>
   vi.waitFor(() => expect($(".knowledge-content")!.textContent).toContain(text));
 
 it("checks status beside store facts and shows both tab counts at once", async () => {
-  const { calls, release } = mount(["stores_snapshot", "status", "scribes"]);
+  const { calls, release, request } = mount(["stores_snapshot", "status", "scribes"]);
   await vi.waitFor(() => expect(calls.toSorted()).toEqual(["status", "stores_snapshot"]));
+  expect(
+    request.mock.calls.find(([, params]) => params?.actionId === "stores_snapshot")?.[1]?.payload,
+  ).toEqual({ includeRecordCounts: false });
   expect($(".knowledge-status")!.hidden).toBe(true);
   expect($(".knowledge-copy-pending")).not.toBeNull();
   release("stores_snapshot");

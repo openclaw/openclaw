@@ -1,4 +1,3 @@
-import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { markdownSessionPublicOrigin } from "../../components/markdown-session-links.ts";
@@ -16,7 +15,32 @@ import {
 
 export function createChatPaneResourceProps() {
   const widgetLayout = createChatWidgetLayout();
+  let artifactDownload:
+    | { state: ChatPageHost; resolve: NonNullable<ChatProps["resolveArtifactDownload"]> }
+    | undefined;
   return (state: ChatPageHost, context: ApplicationContext) => {
+    // Equivalent pane frames keep the same download owner for pending file transfers.
+    if (artifactDownload?.state !== state) {
+      artifactDownload = {
+        state,
+        resolve: async (params, signal) => {
+          const { client, connectionEpoch } = state;
+          if (!state.connected || !client || signal?.aborted) {
+            return null;
+          }
+          const { resolveArtifactDownloadSource } = await import("../../api/artifact-download.ts");
+          if (
+            !state.connected ||
+            state.client !== client ||
+            state.connectionEpoch !== connectionEpoch ||
+            signal?.aborted
+          ) {
+            return null;
+          }
+          return resolveArtifactDownloadSource(state, params, signal);
+        },
+      };
+    }
     const mediaReadAllowed = state.connected && !state.isRouteSessionPending?.();
     const target = {
       sessionKey: state.sessionKey,
@@ -44,8 +68,7 @@ export function createChatPaneResourceProps() {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       fetchLinkFavicon: mediaReadAllowed ? resolveChatLinkFaviconFetcher(state) : undefined,
       assistantAttachmentAuthToken: mediaReadAllowed ? resolveControlUiAuthToken(state) : null,
-      resolveArtifactDownload: (params, signal) =>
-        resolveArtifactDownloadSource(state, params, signal),
+      resolveArtifactDownload: artifactDownload.resolve,
       basePath: state.basePath,
       sessionPublicOrigin: markdownSessionPublicOrigin(context),
       resourceBasePath: state.resourceBasePath,

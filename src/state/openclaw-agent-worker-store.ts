@@ -464,7 +464,7 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
         getGatewayRestartDrainSignal().aborted &&
         !cleanupSignal.aborted
       ) {
-        // Keep one lease during grace; cleanup releases retention independently of the marker.
+        // Keep one lease through marker persistence; shutdown cleanup releases retention.
         const previous = drainExecution;
         drainExecution = execution;
         releasing = previous;

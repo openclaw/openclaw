@@ -164,9 +164,25 @@ describe("visitor-access plugin lifecycle", () => {
 
   function registerPlugin(
     contextOverrides: Partial<OpenClawPluginToolContext<2>> = {},
-    config: OpenClawConfig = gatewayConfig,
+    initialConfig: OpenClawConfig = gatewayConfig,
     githubProfiles: Parameters<typeof visitorProfileFixture>[1] = [],
   ) {
+    let config: OpenClawConfig = {
+      ...initialConfig,
+      plugins: {
+        entries: {
+          "visitor-access": {
+            enabled: true,
+            config: {
+              accountId: "test-account",
+              appId: "test-app",
+              apiToken: TOKEN,
+              ...initialConfig.plugins?.entries?.["visitor-access"]?.config,
+            },
+          },
+        },
+      },
+    };
     const tools = new Map<string, AnyAgentTool>();
     const backgroundTasks: Promise<unknown>[] = [];
     const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
@@ -181,7 +197,7 @@ describe("visitor-access plugin lifecycle", () => {
     };
     const api = createTestPluginApi({
       id: "visitor-access",
-      pluginConfig: { accountId: "test-account", appId: "test-app", apiToken: TOKEN },
+      pluginConfig: config.plugins?.entries?.["visitor-access"]?.config,
       logger,
       on,
       registerService: (service) => services.push(service),
@@ -217,6 +233,9 @@ describe("visitor-access plugin lifecycle", () => {
     };
     plugin.register(api);
     const service = services[0];
+    if (!service || service.apiVersion === 2 || service.apiVersion === 3) {
+      throw new Error("Expected service API version 1");
+    }
     assert(service, "Plugin did not register its expiry service");
     const accessPolicy = accessPolicies[0];
     assert(accessPolicy, "Plugin did not register its Gateway access policy");
@@ -246,6 +265,9 @@ describe("visitor-access plugin lifecycle", () => {
       return result;
     };
     return {
+      publishConfig(next: OpenClawConfig) {
+        config = next;
+      },
       execute,
       invite: (input: Record<string, unknown>) => execute("visitor_invite", input),
       revoke: (input: Record<string, unknown>) => execute("visitor_revoke", input),
@@ -282,6 +304,53 @@ describe("visitor-access plugin lifecycle", () => {
     vi.stubGlobal("fetch", policy.fetcher);
     return { ...registerPlugin(...args), policy };
   }
+
+  it("applies visitor limits to the running service without revoking retained grants", async () => {
+    const configured = (
+      maxVisitors: number | undefined,
+      defaultTtlDays?: number,
+    ): OpenClawConfig => ({
+      ...gatewayConfig,
+      plugins: {
+        entries: {
+          "visitor-access": {
+            enabled: true,
+            config: {
+              accountId: "test-account",
+              appId: "test-app",
+              apiToken: TOKEN,
+              maxVisitors,
+              defaultTtlDays,
+            },
+          },
+        },
+      },
+    });
+    const owner = registerWithPolicy([], {}, configured(1));
+    await owner.start();
+    await owner.settle();
+    await expectOutcome(owner.invite({ email: "first@example.test" }), "invited");
+    const authority = owner.authorize(visitorProfile(["first@example.test"]));
+    assert(authority);
+    await expect(owner.invite({ email: "second@example.test" })).resolves.toMatchObject({
+      details: { error: true },
+      content: textContaining("Visitor limit (1) reached"),
+    });
+    owner.publishConfig(configured(2, 3));
+    await expectOutcome(owner.invite({ email: "second@example.test" }), "invited");
+    expect(await owner.store.lookup("second@example.test")).toMatchObject({
+      expiresAt: START_MS + 3 * DAY_MS,
+    });
+    owner.publishConfig(configured(1));
+    expect((await owner.list()).details).toMatchObject({ grants: [expect.anything()], omitted: 1 });
+    owner.publishConfig(configured(undefined));
+    await expectOutcome(owner.invite({ email: "third@example.test" }), "invited");
+    expect(await owner.store.lookup("third@example.test")).toMatchObject({
+      expiresAt: START_MS + 14 * DAY_MS,
+    });
+    expect(authority.signal.aborted).toBe(false);
+    expect(() => authority.assertCurrent()).not.toThrow();
+  });
 
   it("persists invitation metadata and a CAS session reservation across restart and renewal", async () => {
     const publicOrigin = "https://team.example.com";

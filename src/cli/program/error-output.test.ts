@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isConfigMachineOutput } from "../config-output-mode.js";
 import { createCronOutputCommand, isCronMachineOutput } from "../cron-cli/output-mode.js";
 import { isDevicesMachineOutput } from "../devices-output-mode.js";
-import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 import {
   isJsonOutputModeActive,
   withConsoleLogsRoutedToStderrForJson,

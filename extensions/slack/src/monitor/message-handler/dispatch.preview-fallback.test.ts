@@ -896,6 +896,7 @@ it("finalizes Block Kit work links with bounded labels and numbered fallbacks", 
 });
 
 it("completes native sources with one visible work session before final text", async () => {
+  const draft = useDraftStream();
   const session = workSession(1, "Review");
   await dispatchNativeProgressScenario(
     [
@@ -940,7 +941,7 @@ it("completes native sources with one visible work session before final text", a
   expect(sourceCall).toBeGreaterThanOrEqual(0);
   expect(finalCall).toBeGreaterThan(sourceCall);
   expect(stopSlackStreamMock).toHaveBeenCalledOnce();
-  expectNoCalls(deliverRepliesMock, createSlackDraftStreamMock);
+  expectNoCalls(deliverRepliesMock, draft.update);
 });
 it.each([
   { agents: ["alice", "bob"], withMedia: true },

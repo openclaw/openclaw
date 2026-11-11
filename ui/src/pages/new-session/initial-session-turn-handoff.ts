@@ -3,15 +3,11 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiErrorDetails } from "../../lib/format-error.ts";
 import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import {
-  cloneChatAttachmentsForIndependentOwner,
-  releaseChatAttachmentPayloads,
-} from "../chat/attachment-payload-store.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
 import { retainCreatedComposer } from "./creation-composer-registry.ts";
 import type { CreationComposer } from "./creation-composer.ts";
@@ -60,7 +56,6 @@ export async function completeInitialSessionTurn(
     completeInBackground: (key: string, runId?: string) => boolean;
     finishNavigation: () => void;
     onAccepted?: () => void;
-    onRejectedPrompt?: (error: string) => void;
   },
 ) {
   const { context, client, agentId, result, instant } = options;
@@ -96,18 +91,7 @@ export async function completeInitialSessionTurn(
       : undefined;
   const retry = restriction ? createDeferredCore<boolean>() : undefined;
   try {
-    if (initialRun.status === "rejected" && options.onRejectedPrompt) {
-      // The launcher and destination retain separate owners of a rejected prompt.
-      const attachments = cloneChatAttachmentsForIndependentOwner(options.turn.attachments);
-      const handedOff = retainInitialSessionTurn(
-        { ...options, turn: { ...options.turn, attachments } },
-        retry?.promise,
-      );
-      if (!handedOff) {
-        releaseChatAttachmentPayloads(attachments);
-      }
-      options.onRejectedPrompt(initialRun.error);
-    } else if (clearing) {
+    if (clearing) {
       if (instant) {
         context.chatSubmissions.retain(acceptedSubmission);
       }
@@ -166,7 +150,9 @@ export async function completeInitialSessionTurn(
       } catch (error) {
         if (canDispatch()) {
           showToast({
-            message: t("chat.nativeRuntimeRecovery.failed", { error: formatUiError(error) }),
+            severity: "error",
+            message: t("chat.nativeRuntimeRecovery.failed", { error: "" }).trim(),
+            detail: formatUiErrorDetails(error),
           });
         }
       }

@@ -67,7 +67,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
-
 it("destroys the client after an aborted Bedrock request", async () => {
   const controller = new AbortController();
   const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(() => {
@@ -82,6 +81,20 @@ it("destroys the client after an aborted Bedrock request", async () => {
 
   expect(result).toMatchObject({ stopReason: "aborted", errorMessage: "synthetic abort" });
   expectDestroyedClient(send, destroy);
+});
+
+it("aborts before send while the payload hook is pending", async () => {
+  const controller = new AbortController();
+  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send");
+  const result = streamBedrockForTest(bedrockModel({}), userContext(), {
+    signal: controller.signal,
+    onPayload: () => {
+      queueMicrotask(() => controller.abort());
+      return Promise.withResolvers<undefined>().promise;
+    },
+  }).result();
+  await expect(result).resolves.toMatchObject({ stopReason: "aborted" });
+  expect(send).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -127,32 +140,33 @@ it("rejects malformed base64 and decodes a valid PNG without Node Buffer", async
   expect(input.messages?.[0]?.content?.[0]?.image?.source?.bytes?.byteLength).toBeGreaterThan(0);
 });
 
-it("resolves a GovCloud inference-profile ARN ahead of the ambient region", async () => {
-  vi.stubEnv("AWS_PROFILE", "");
-  vi.stubEnv("AWS_REGION", "us-east-1");
-  const send = mockStream();
-  await streamBedrockForTest(
+it.each([
+  [
+    "us-gov-west-1",
     bedrockModel({
       id: "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:application-inference-profile/profile-abc",
     }),
-    userContext(),
-  ).result();
-  const client = send.mock.contexts[0] as BedrockRuntimeClient;
-  await expect(client.config.region()).resolves.toBe("us-gov-west-1");
-});
-
-it("lets configured profiles own standard endpoint resolution", async () => {
-  const send = mockStream();
-
-  await streamBedrockForTest(
-    bedrockModel({ baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com" }),
-    userContext(),
+    {},
+  ],
+  [
+    "us-west-2",
+    bedrockModel({
+      id: "us.xai.grok-4.6",
+      baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
+    }),
     { profile: "prod-bedrock", region: "us-west-2" },
-  ).result();
-
-  const client = send.mock.contexts.at(-1) as BedrockRuntimeClient;
+  ],
+] as const)("resolves %s ahead of the ambient region", async (region, model, options) => {
+  vi.stubEnv("AWS_PROFILE", "");
+  vi.stubEnv("AWS_REGION", "us-east-1");
+  const send = mockStream();
+  await streamBedrockForTest(model, userContext(), { ...options, temperature: 0.2 }).result();
+  const client = send.mock.contexts[0] as BedrockRuntimeClient;
   expect(client.config.endpoint).toBeUndefined();
-  await expect(client.config.region()).resolves.toBe("us-west-2");
+  await expect(client.config.region()).resolves.toBe(region);
+  if (region === "us-west-2") {
+    expect(send.mock.calls[0]?.[0]).not.toHaveProperty("input.inferenceConfig.temperature");
+  }
 });
 it.each([
   [BedrockStopReason.STOP_SEQUENCE, "stop", undefined],
@@ -251,6 +265,13 @@ describe("Bedrock thinking request composition", () => {
     ["explicit request cap", adaptive, { reasoning: "high", maxTokens: 32_000 }, 32_000, "high"],
     ["native cap with thinking off", adaptive, { reasoning: "off" }, 128_000, undefined],
     ["descriptive profile name", named, { reasoning: "xhigh" }, undefined, "xhigh"],
+    [
+      "authored 32768 cap",
+      { ...named, maxTokens: 32_768 },
+      { reasoning: "xhigh" },
+      32_768,
+      "xhigh",
+    ],
     ["native alias", nativeAlias, { reasoning: "xhigh", temperature: 0.2 }, undefined, "xhigh"],
     ["clamped alias", clampedAlias, { reasoning: "max", temperature: 0.2 }, undefined, "high"],
   ] as const)(
@@ -283,12 +304,7 @@ describe("Bedrock Fable contract", () => {
     expect(input).toMatchObject({
       modelId: "production-fable",
       inferenceConfig: {},
-      messages: [
-        {
-          role: "user",
-          content: [{ text: "Reply briefly." }, { cachePoint: { type: "default" } }],
-        },
-      ],
+      messages: [wireUser(wireText("Reply briefly."), checkpoint)],
       toolConfig: { toolChoice: { auto: {} } },
       additionalModelRequestFields: adaptiveFields("high"),
       additionalModelResponseFieldPaths: ["/stop_details"],

@@ -16,6 +16,7 @@ import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
+  captureUiProof,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -76,7 +77,7 @@ suite.define(() => {
       expect(await page.locator(".shell > .sr-only[role=status]").textContent()).toBe("Connected");
     }));
 
-  it("retains My sessions through transport and client replacement without exposing other owners", async () => {
+  it("retains My sessions and avatar presentation through disconnect and client replacement", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:owned-reconnect";
@@ -90,7 +91,21 @@ suite.define(() => {
       sessions: [
         ...ownKeys.map((key, index) => ({
           ...sessionRow(key, "Owned row " + index, Date.parse("2026-07-01T16:00:00.000Z") - index),
-          owner: { actor: { type: "human" as const, id: "reader" } },
+          owner: {
+            actor: {
+              type: "human" as const,
+              id: "reader",
+              identity: { type: "profile" as const, id: "reader" },
+            },
+          },
+          ...(index === 1
+            ? {
+                participants: [
+                  { identity: { type: "profile" as const, id: "other" }, label: "Other" },
+                ],
+                participantCount: 1,
+              }
+            : {}),
         })),
         {
           ...sessionRow(
@@ -98,7 +113,13 @@ suite.define(() => {
             "Foreign row",
             Date.parse("2026-07-01T15:59:00.000Z"),
           ),
-          owner: { actor: { type: "human" as const, id: "other" } },
+          owner: {
+            actor: {
+              type: "human" as const,
+              id: "other",
+              identity: { type: "profile" as const, id: "other" },
+            },
+          },
         },
         {
           ...sessionRow(
@@ -118,9 +139,25 @@ suite.define(() => {
       const ownerFilter = sidebar.locator("#sidebar-session-owner-title");
       await expect.poll(() => ownerFilter.getAttribute("aria-label")).toBe("Owners: My sessions");
       await expect.poll(() => rows.count()).toBe(2);
+      const solo = sidebar.locator(`[data-session-key="${sessionKey}"]`);
+      const shared = sidebar.locator(`[data-session-key="${ownKeys[1]}"]`);
+      const soloOwners = solo.locator("openclaw-session-owner-chip");
+      const sharedOwners = shared.locator("openclaw-session-owner-chip");
+      await expect.poll(() => sharedOwners.count()).toBe(1);
+      expect(await soloOwners.count()).toBe(0);
+      const capture = (state: string) =>
+        captureUiProof(
+          suite,
+          page,
+          `sidebar-avatars-${process.env.OPENCLAW_SIDEBAR_PROOF_STAGE ?? "proof"}-${state}.png`,
+        );
+      await capture("connected");
       const socketCount = await gateway.getSocketCount();
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
+      await capture("reconnecting");
+      expect.soft(await soloOwners.count()).toBe(0);
+      expect.soft(await sharedOwners.count()).toBe(1);
       await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
       const reconnectSocketCount = await gateway.getSocketCount();
       await replaceGatewayClient(page);
@@ -133,10 +170,14 @@ suite.define(() => {
       expect(await ownerFilter.getAttribute("aria-label")).toBe("Owners: My sessions");
       expect(await sidebar.locator('[data-session-key="agent:main:foreign"]').count()).toBe(0);
       expect(await sidebar.locator('[data-session-key="agent:main:agent-owned"]').count()).toBe(0);
+      expect.soft(await soloOwners.count()).toBe(0);
+      expect.soft(await sharedOwners.count()).toBe(1);
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect.poll(() => rows.count()).toBe(2);
       expect(await ownerFilter.getAttribute("aria-label")).toBe("Owners: My sessions");
+      expect(await soloOwners.count()).toBe(0);
+      await expect.poll(() => sharedOwners.count()).toBe(1);
     } finally {
       await context.close();
     }

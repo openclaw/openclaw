@@ -41,6 +41,13 @@ describe("renderAssistantRequestFailureCopy", () => {
     expect(isAuthErrorMessage(errorMessage)).toBe(false);
   });
 
+  it("keeps structured failure guidance when error text is missing", () => {
+    expect(renderRecordedAssistantFailureCopy({ errorCode: "context_overflow" })).toBe(
+      "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+    );
+    expect(renderRecordedAssistantFailureCopy({})).toBeUndefined();
+  });
+
   it.each([
     [
       { errorMessage: "Invalid session transcript entry: model_change PRIVATE_CANARY" },

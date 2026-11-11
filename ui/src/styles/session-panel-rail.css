@@ -194,17 +194,6 @@
   gap: 8px;
 }
 
-.session-panel-rail .session-panel-rail__title {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-size: inherit;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* Menu triggers wrap their glyph in a label; remove its text baseline so it
    centers like the neighboring direct-icon buttons. */
 :is(.session-panel-rail, .sidebar-file-mobile__rail) .oc-menu-trigger > .oc-menu-item__label {

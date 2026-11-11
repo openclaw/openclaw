@@ -157,6 +157,32 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     },
   );
 
+  it("restores profile overrides while operator defaults are still loading", async () => {
+    const { context, owner, snapshot, request, refreshTheme } =
+      createProfileAppearanceGateway("profile-owner");
+    const { readStarted, reply } = holdProfileAppearanceRead(request);
+    const config = createDeferred();
+    Object.assign(context.runtimeConfig.state, { configSnapshot: null });
+    vi.spyOn(context.runtimeConfig, "ensureDisplayLoaded").mockImplementation(async () => {
+      await config.promise;
+      Object.assign(context.runtimeConfig.state, {
+        configSnapshot: { config: { ui: { prefs: { theme: "knot" } } } },
+      });
+    });
+    patchSettings({ theme: "claw", accent: "#112233" });
+    const ready = owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    await readStarted.promise;
+    const applied = createDeferred();
+    refreshTheme.mockImplementationOnce(applied.resolve);
+    reply.resolve(profileAppearanceReply("#336699"));
+    await applied.promise;
+    expect(loadSettings()).toMatchObject({ theme: "claw", accent: "#336699", sidebarEntries: [] });
+    config.resolve();
+    await ready;
+    expect(loadSettings()).toMatchObject({ theme: "knot", accent: "#336699", sidebarEntries: [] });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("reconciles a profile read retired by a theme commit without reusing its pending source", async () => {
     const { context, owner, snapshot } = createProfileAppearanceGateway("profile-owner");
     const writeStarted = createDeferred();
@@ -237,7 +263,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     expect(loadSettings().accent).toBe("#445566");
   });
 
-  it("refuses profile hydration from a superseded config snapshot", async () => {
+  it("applies the current config when an independent profile read finishes", async () => {
     const { context, owner, snapshot, request, refreshTheme, invalidate } =
       createProfileAppearanceGateway("profile-owner");
     const { readStarted, reply } = holdProfileAppearanceRead(request);
@@ -246,12 +272,14 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     // Initial identity adoption published its navigation reset before the held profile read.
     expect(refreshTheme).toHaveBeenCalledOnce();
     refreshTheme.mockClear();
-    Object.assign(context.runtimeConfig.state, { configSnapshot: { config: {} } });
+    Object.assign(context.runtimeConfig.state, {
+      configSnapshot: { config: { ui: { prefs: { theme: "knot" } } } },
+    });
     reply.resolve(profileAppearanceReply("#336699"));
     await ready;
-    expect(loadSettings().accent).not.toBe("#336699");
-    expect(refreshTheme).not.toHaveBeenCalled();
-    expect(invalidate).not.toHaveBeenCalled();
+    expect(loadSettings()).toMatchObject({ theme: "knot", accent: "#336699" });
+    expect(refreshTheme).toHaveBeenCalledOnce();
+    expect(invalidate).toHaveBeenCalledOnce();
   });
 
   it("loads current agent discovery when hello lands", async () => {

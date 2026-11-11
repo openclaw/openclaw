@@ -89,6 +89,9 @@ function runtimeFixture() {
   > = {};
   return {
     alive: true,
+    // The kernel task entry outlives the `/proc/<pid>/stat` read: the reaping
+    // window that makes an exit unverifiable rather than settled.
+    procEntryLingers: false,
     processTicks: 101,
     shutdownCommitted: false,
     loseCommittedReply: false,
@@ -236,6 +239,25 @@ beforeEach(() => {
       return generation;
     }
     return readlink(file, ...args);
+  });
+  // Stopped-process verification lstats `/proc/<pid>` to tell a reaped process
+  // from an unverifiable exit, so that probe belongs to the fixture too: a
+  // runner that already owns pid 43210 otherwise reports the exited Gateway as
+  // still present.
+  const lstat = fs.lstatSync;
+  vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
+    if (String(args[0]) !== `/proc/${pid}`) {
+      return lstat(...args);
+    }
+    if (f.alive || f.procEntryLingers) {
+      return lstat(root);
+    }
+    if (args[1]?.throwIfNoEntry === false) {
+      return undefined;
+    }
+    throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '/proc/${pid}'`), {
+      code: "ENOENT",
+    });
   });
   mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
     request.onHelloOk?.(gatewayHello(f.bootId));
@@ -480,6 +502,18 @@ test("settles exit between host commitment and native dispatch", async () => {
   expect(f.events.filter((event) => event === "host:committed")).toHaveLength(1);
   expect(f.events.filter((event) => event === "effect:StopUnit")).toEqual([]);
   expect(f.events.at(-1)).toBe("stop:settled");
+});
+
+test("refuses an exit whose proc entry outlives the start-time read", async () => {
+  f.beforeDispatch = () => {
+    f.alive = false;
+    f.procEntryLingers = true;
+  };
+  const outcome = await stopWithLiveDrain().catch((error: unknown) => error);
+  expect(outcome).toBeInstanceOf(Error);
+  expect(String(outcome)).toContain("exit could not be verified");
+  expect(f.events.filter((event) => event === "host:committed")).toHaveLength(1);
+  expect(f.events).not.toContain("stop:settled");
 });
 
 test("preserves a process replacing the committed host", async () => {

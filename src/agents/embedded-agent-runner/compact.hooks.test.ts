@@ -93,7 +93,7 @@ import {
   registerQueuedProviderRefreshTest,
 } from "./compact.hooks.memory-refresh.test-support.js";
 import {
-  createCompactHooksPreparedModelRuntime,
+  createCompactHooksPreparedModelRuntimeLease,
   createCompactHooksResolvedModel,
   type CompactHooksQueuedCompaction,
 } from "./compact.hooks.metadata.test-support.js";
@@ -447,7 +447,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     createOpenClawCodingToolsMock.mockReturnValue(
       ["read", "exec"].map((name) => compactionTool(name, {})),
     );
-    buildConfiguredAgentSystemPromptMock.mockImplementation((params) =>
+    buildConfiguredAgentSystemPromptMock.mockImplementation(async (params) =>
       JSON.stringify({
         promptMode: params.promptMode,
         skillsPrompt: params.skillsPrompt ?? null,
@@ -893,17 +893,14 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       }),
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
     };
-    const preparedModelRuntime = createCompactHooksPreparedModelRuntime({
+    const preparedModelRuntimeLease = createCompactHooksPreparedModelRuntimeLease({
       agentId: "main",
       agentDir: join(TEST_WORKSPACE_DIR, "agents/main/agent"),
       config: { tools: { profile: "coding" } },
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
       metadataSnapshot,
-    }) as never;
-    acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
-      snapshot: preparedModelRuntime,
-      [Symbol.asyncDispose]: vi.fn(async () => {}),
     });
+    acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce(preparedModelRuntimeLease);
     createOpenClawCodingToolsMock.mockReturnValueOnce([
       compactionTool(toolName, {
         parameters: { type: "object", properties: {}, additionalProperties: false },

@@ -5,7 +5,7 @@ import { en } from "./en.ts";
 const enAgentsHome = {
   agentsHome: {
     pinnedAgents: "Pinned agents",
-    noAssistantMessage: "No assistant reply yet",
+    noAssistantMessage: "No agent reply yet",
     viewSessions: "Sessions",
     deleteAgentConfirm: "Delete {agent}?",
     deleteAgentDetails:
@@ -14,7 +14,7 @@ const enAgentsHome = {
     working: "Working now",
   },
   templatesDraft: {
-    title: "Create Template",
+    title: "Create template",
   },
 } satisfies TranslationMap;
 

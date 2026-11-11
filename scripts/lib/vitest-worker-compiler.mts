@@ -7,6 +7,7 @@ import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entry
 import { resolveBuildInfo } from "../write-build-info.ts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
+import { vitestWorkerRuntimeAssets } from "./package-root-modules.mts";
 import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
 import { createPublicSessionLocalesPlugin } from "./public-session-locales.mts";
 import { runtimeProcessBuildEntries } from "./runtime-process-build-entries.mts";
@@ -32,7 +33,6 @@ import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
 import {
   runtimeProcessDeclarationEntries,
   vitestWorkerDeclarationEntries,
-  vitestWorkerRuntimeAssets,
 } from "./vitest-worker-declarations.mts";
 import type { VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 
@@ -157,11 +157,12 @@ async function compileVitestWorkerArtifacts(
         generateBundle(_options, bundle) {
           for (const input of Object.keys(inputs)) {
             let packageDirectory = path.dirname(input);
-            if (packageDirectories.has(packageDirectory)) {
-              continue;
-            }
-            packageDirectories.add(packageDirectory);
             while (packageDirectory.startsWith(root)) {
+              // A visited ancestor already contributed its nearest package manifest.
+              if (packageDirectories.has(packageDirectory)) {
+                break;
+              }
+              packageDirectories.add(packageDirectory);
               const manifest = path.join(packageDirectory, "package.json");
               if (fs.existsSync(manifest)) {
                 recordInput(manifest);
@@ -182,6 +183,9 @@ async function compileVitestWorkerArtifacts(
   const commonPlugins = createInputPlugins("");
   const sourceHostWorkerEntries = new Set(
     [
+      runtimeProcessEntrypoints.preparedModelCatalog,
+      runtimeProcessEntrypoints.sqliteStore,
+      runtimeProcessEntrypoints.sharedStateStore,
       runtimeProcessEntrypoints.doctorDatabaseEngineInspection,
       runtimeProcessEntrypoints.databaseBackup,
       runtimeProcessEntrypoints.databasePortCommand,

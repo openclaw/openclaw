@@ -27,7 +27,12 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
+  withCurrentOpenClawStateReadScope,
+} from "../state/openclaw-state-db-readonly.js";
 import type { RecoveryInventoryScan } from "./recovery-inventory-scan.js";
 import {
   collectUpdateCaptureInventory,
@@ -301,7 +306,14 @@ export function collectRecoveryInventory(params: {
       if (
         !isMigrationArchiveArtifactName(entry.name) &&
         !entry.name.includes(".pre-doctor-") &&
-        !/^.+\.pre-startup-migration-.+\.bak$/.test(entry.name)
+        !/^.+\.pre-startup-migration-.+\.bak$/.test(entry.name) &&
+        // Older cron repairs had no manifest. Naming reveals an original, never completion.
+        !(
+          directory === path.join(root, "state") &&
+          /^openclaw\.sqlite\.doctor-cron-\d{13}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.bak$/.test(
+            entry.name,
+          )
+        )
       ) {
         continue;
       }
@@ -490,39 +502,54 @@ export function summarizeRecoveryCleanup(
 }
 
 /** Update cleanup also reviews original-state captures; Doctor's session repair does not. */
-export function collectUpdateCleanupInventory(params: {
+function readUpdateCleanupInventory(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   scan?: RecoveryInventoryScan;
   readHistory?: boolean;
 }) {
-  return withSynchronousArtifactPreservingStateSnapshot(
-    () => {
-      const inventory = collectRecoveryInventory(params);
-      const captures = collectUpdateCaptureInventory({
-        stateDir: inventory.report.stateDir,
-        env: params.env,
-        scan: params.scan,
-        readHistory: params.readHistory,
-      });
-      return {
-        ...inventory,
-        captureIdentities: captures.identities,
-        report: summarizeRecoveryCleanup(
-          inventory.report.stateDir,
-          [...inventory.report.artifacts, ...captures.artifacts],
-          "preview",
-          inventory.report.missingOriginals,
-        ),
-      };
-    },
-    { current: { env: params.env } },
-  );
+  const inventory = collectRecoveryInventory(params);
+  const captures = collectUpdateCaptureInventory({
+    stateDir: inventory.report.stateDir,
+    env: params.env,
+    scan: params.scan,
+    readHistory: params.readHistory,
+  });
+  return {
+    ...inventory,
+    captureIdentities: captures.identities,
+    report: summarizeRecoveryCleanup(
+      inventory.report.stateDir,
+      [...inventory.report.artifacts, ...captures.artifacts],
+      "preview",
+      inventory.report.missingOriginals,
+    ),
+  };
 }
 
-export function inspectSessionSqliteRecovery(params: {
+/** Descriptive reads share their image; effect guards request current rows outside that image. */
+export async function collectUpdateCleanupInventoryAsync(
+  params: Parameters<typeof readUpdateCleanupInventory>[0] & { current?: true },
+) {
+  if (params.readHistory === false) {
+    return readUpdateCleanupInventory(params);
+  }
+  const read = () =>
+    withArtifactPreservingStateReads(() =>
+      withOpenClawStateDatabaseReadSnapshot(
+        async () => {
+          await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: params.env });
+          return readUpdateCleanupInventory(params);
+        },
+        { env: params.env },
+      ),
+    );
+  return params.current ? withCurrentOpenClawStateReadScope({ env: params.env }, read) : read();
+}
+
+export async function inspectSessionSqliteRecovery(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): RecoveryCleanupReport {
-  return collectUpdateCleanupInventory(params).report;
+}): Promise<RecoveryCleanupReport> {
+  return (await collectUpdateCleanupInventoryAsync({ ...params, current: true })).report;
 }

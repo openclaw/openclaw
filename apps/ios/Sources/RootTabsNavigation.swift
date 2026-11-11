@@ -143,20 +143,18 @@ extension RootTabs {
         session.boardFace == "dashboard" ? .dashboard : .chat
     }
 
-    static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {
-        windowSize ?? contentSize
-    }
-
-    /// A content budget, not an OS-defined breakpoint. Keep phones and accessibility
-    /// text in one column even when their window is wider than the tablet threshold.
+    /// The sidebar needs regular space in both axes and enough usable detail width.
+    /// Keyboard avoidance changes height, not this width budget or the size classes.
     static func sidebarLayoutMode(
         containerSize: CGSize,
-        isPad: Bool,
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        verticalSizeClass: UserInterfaceSizeClass?,
         usesAccessibilityText: Bool = false) -> SidebarLayoutMode
     {
-        !isPad || usesAccessibilityText || containerSize.width < self.sidebarPersistentWidthThreshold
-            ? .drawer
-            : .split
+        horizontalSizeClass == .regular && verticalSizeClass == .regular &&
+            !usesAccessibilityText && containerSize.width >= self.sidebarPersistentWidthThreshold
+            ? .split
+            : .drawer
     }
 
     static func sidebarVisibility(layoutMode: SidebarLayoutMode, splitPreference: Bool?) -> Bool {

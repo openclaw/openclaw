@@ -123,11 +123,22 @@ identity from [validation](validation.md) and `$release-openclaw-ci`. Stable
 promotion needs stable/full evidence even when its beta was green. Preserve
 C/Q/P, exact attempts, immutable artifacts, and mandatory prepush/source gates.
 
-Keep one watcher for the active run. Collect failures as selected jobs finish,
-classify each with evidence, and start independent investigations/fix reviews
-while other lanes drain. Batch confirmed repairs before the next candidate;
-do not launch a replacement parent for each newly observed failure. Do not
-cancel useful surviving work merely because another lane failed.
+Follow the [FRV wall-time loop](../../release-openclaw-ci/SKILL.md#keep-frv-off-the-idle-path).
+Keep one watcher for the active run and start repairs as failures arrive, not
+when Diagnostic Drain ends. Aim to have all drained failures fixed on the branch
+by drain completion, so the next cycle can start with little downtime. Include
+all known non-flake fixes affecting that run rather than fixing one per cycle;
+this is not a demand to rule out undiscovered failures. Keep useful surviving
+diagnostics running while repairs proceed.
+
+While a long lane or operator decision is pending, keep either the active FRV
+or a named blocker/proof lane in flight. Pre-stage the next eligible FRV inputs
+and run independent proofs, but do not dispatch a duplicate parent. If an
+approved port is expected to land within about 15 minutes, wait for it before
+dispatching so the run can qualify the resulting candidate. Ask decisions in a
+non-blocking update with a recommended reversible default while independent
+work continues. If the question remains unanswered, send one notification;
+do not re-arm a watcher that has no new transition or work.
 
 Apply the existing blocker/flake policy: diagnose first, repair the owner,
 retry the affected surface within its budget, and retain successful exact-input

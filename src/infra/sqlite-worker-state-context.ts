@@ -1,6 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../state/artifact-preserving-state-reads.js";
 import type { OpenClawStateIntegrityAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
 import {
@@ -29,6 +32,7 @@ export type SqliteWorkerStateContext = {
   gatewayServiceInstallation?: GatewayServiceInstallation;
   stateIntegrity?: OpenClawStateIntegrityAdmission;
   artifactPreservingReads?: true;
+  liveStateReads?: true;
   /** Actor-owned exclusion for autonomous WAL work, never write authority. */
   scheduledMaintenanceSuspension?: SharedArrayBuffer;
 };
@@ -50,6 +54,7 @@ export function captureSqliteWorkerStateContext(
     gatewayServiceInstallation: context.gatewayServiceInstallation,
     ...(context.stateIntegrity ? { stateIntegrity: context.stateIntegrity } : {}),
     artifactPreservingReads: context.artifactPreservingReads,
+    liveStateReads: context.liveStateReads,
     ...(context.scheduledMaintenanceSuspension
       ? { scheduledMaintenanceSuspension: context.scheduledMaintenanceSuspension }
       : {}),
@@ -149,9 +154,11 @@ export function runWithSqliteWorkerStateContext<T>(
           : withExistingOpenClawStateSchema({ path: context.existingSchemaPath }, operation),
       ),
     );
-  return context.artifactPreservingReads
-    ? withArtifactPreservingStateReads(run, { agentDatabases: true })
-    : run();
+  const inspect = () =>
+    context.artifactPreservingReads
+      ? withArtifactPreservingStateReads(run, { agentDatabases: true })
+      : run();
+  return context.liveStateReads ? withLiveStateReads(inspect) : inspect();
 }
 
 export function getSqliteWorkerStateContext(): SqliteWorkerStateContext {

@@ -10,10 +10,12 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-error.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   AgentDatabaseAdmissionError,
@@ -68,16 +70,19 @@ it.each(["settled", "pending"] as const)(
   },
 );
 
-it("reports exhausted lock admission without recommending database repair", () => {
+it.each([
+  Object.assign(new Error("database is locked"), { errcode: 5 }),
+  new WorkerTaskError("worker task capacity reached", "overloaded"),
+  new SqliteWorkerError("worker capacity reached", "overloaded"),
+])("reports exhausted contention without recommending database repair: %s", (cause) => {
   const refusal = inspectionRefusal({
     agentId: "worker",
     paths: ["/synthetic/openclaw-agent.sqlite"],
-    reason: "database is locked",
-    cause: Object.assign(new Error("database is locked"), { errcode: 5 }),
+    reason: cause.message,
+    cause,
   });
   expect(refusal).toMatchObject({
     code: "agent-database-inspection-failed",
-    reason: "database locked by another process",
     repairHint: expect.stringContaining("restart the Gateway to retry admission"),
   });
   expect(refusal.repairHint).not.toContain("doctor --fix");

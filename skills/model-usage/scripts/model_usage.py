@@ -60,6 +60,8 @@ def load_payload(input_path: Optional[str], provider: str) -> Dict[str, Any]:
         data = run_codexbar_cost(provider)
 
     if isinstance(data, dict):
+        if data.get("provider", provider) != provider:
+            raise RuntimeError(f"Provider '{provider}' not found in codexbar payload.")
         return data
 
     if isinstance(data, list):

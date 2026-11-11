@@ -1,7 +1,9 @@
+import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -200,6 +202,73 @@ function runProgram(
   processes.set(child, done);
   return { child, done, output: () => stdout };
 }
+
+it.each(["commit", "disconnect"])(
+  "keeps a resumed node unstarted until its launcher %s",
+  async (handoff) => {
+    const staged = await fixture("report({ entered: true });");
+    const child = spawn(
+      process.execPath,
+      [
+        path.join(staged.base, "openclaw.mjs"),
+        "--openclaw-node-host-resume-child",
+        "device-test",
+        "node",
+        "run",
+        "--ephemeral",
+        "--resume-device",
+        "device-test",
+      ],
+      {
+        cwd: staged.base,
+        env: {
+          ...process.env,
+          HOME: staged.root,
+          OPENCLAW_STATE_DIR: staged.stateDir,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+        },
+        stdio: ["pipe", "pipe", "pipe", "ipc"],
+      },
+    );
+    let output = "";
+    let stderr = "";
+    assert(child.stderr);
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    assert(child.stdout);
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    // Locally disconnecting IPC need not emit the aggregate child "close" event.
+    const exited = once(child, "exit");
+    const joined = Promise.all([exited, finished(child.stdout), finished(child.stderr)]);
+    try {
+      const ready = await Promise.race([
+        once(child, "message").then(([message]) => message),
+        exited.then(([code]) => ({ exitedBeforeHandoff: code })),
+      ]);
+      expect(ready, stderr).toEqual({
+        type: "openclaw.node.resume-ready",
+        deviceId: "device-test",
+      });
+      expect(output).toBe("");
+      if (handoff === "commit") {
+        child.send({ type: "openclaw.node.resume-commit", deviceId: "device-test" });
+      } else {
+        child.disconnect();
+      }
+      const [[code]] = await joined;
+      expect(code).toBe(handoff === "commit" ? 0 : 1);
+      expect(output).toBe(handoff === "commit" ? '{"entered":true}\n' : "");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await joined;
+    }
+  },
+);
 
 const requestUpdate = "await ready(); await restartAndExit();";
 const restartingRuntime = (onRepeat: string) => `

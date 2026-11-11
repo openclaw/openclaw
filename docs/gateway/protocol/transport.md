@@ -42,7 +42,9 @@ that supervise the Gateway as a child process, see
   for shared-NAT behavior and the environment override.
 - Pre-connect frames are capped at 64 KiB (`MAX_PREAUTH_PAYLOAD_BYTES`). After
   handshake, follow `hello-ok.policy.maxPayload` and
-  `hello-ok.policy.maxBufferedBytes`. With diagnostics enabled, oversized
+  `hello-ok.policy.maxBufferedBytes`. The reference SDK and Control UI reject
+  oversized requests locally with the serialized UTF-8 size and limit, keeping
+  the connection available for a smaller retry. With diagnostics enabled, oversized
   inbound frames and slow outbound buffers emit `payload.large` events before
   the gateway closes or drops the frame. These events carry `surface`, byte
   sizes, limits, and a safe reason code, never message bodies, attachment

@@ -1,4 +1,6 @@
+import { isFailoverError, readDirectErrorCode } from "../agents/failover/error.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { emitAgentEvent, emitAgentEventForOwner } from "../infra/agent-events.js";
@@ -35,6 +37,29 @@ export function reportSessionObserverDegradation(
     useUtilityModel: "required",
   });
   const modelLabel = selection ? ` "${selection.provider}/${selection.modelId}"` : "";
+  const failure = isFailoverError(error) ? error : undefined;
+  const attempts =
+    failure?.attempts ??
+    (selection && (failure?.reason ?? readDirectErrorCode(error)) === "model_not_found"
+      ? [{ provider: selection.provider, model: selection.modelId, reason: "model_not_found" }]
+      : []);
+  const missing = attempts
+    ?.filter((attempt) => attempt.reason === "model_not_found")
+    .map((attempt) => attempt.provider + "/" + attempt.model);
+  const details = [
+    ...(missing?.length
+      ? ["Unavailable model IDs: " + [...new Set(missing)].join(", ") + "."]
+      : []),
+    ...(attempts.length > 1
+      ? [
+          "Utility fallbacks exhausted (" +
+            attempts
+              .map((attempt) => attempt.provider + "/" + attempt.model + ": " + attempt.reason)
+              .join("; ") +
+            ").",
+        ]
+      : []),
+  ].join(" ");
   const notice = {
     runId: state.runId,
     sessionKey: state.sessionKey,
@@ -42,14 +67,17 @@ export function reportSessionObserverDegradation(
     stream: "notice",
     data: {
       phase: "warning",
-      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly. To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.`,
+      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly.${details ? ` ${details}` : ""} To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.`,
     },
   };
-  const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
-  if (owner) {
-    emitAgentEventForOwner(notice, owner);
-  } else {
-    emitAgentEvent(notice);
+  const utility = readUtilityModelSetting(cfg, state.agentId);
+  if (utility.kind === "explicit" || (utility.kind === "auto" && utility.fallbacks.length > 0)) {
+    const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
+    if (owner) {
+      emitAgentEventForOwner(notice, owner);
+    } else {
+      emitAgentEvent(notice);
+    }
   }
   observerLog.warn("session observer disabled after consecutive failures", {
     sessionKey: state.sessionKey,

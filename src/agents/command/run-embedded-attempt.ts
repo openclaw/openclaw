@@ -152,7 +152,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     },
   );
   const { suppressUserTurnPersistence, userTurnTranscriptRecorder } =
-    prepareCommandUserTurnTranscript(params, internalSessionTarget, sessionEntry);
+    prepareCommandUserTurnTranscript(params, internalSessionTarget, sessionEntry, runContext);
   const lifecycle = createAgentCommandLifecycle({
     runId,
     lifecycleGeneration: () => lifecycleGeneration,

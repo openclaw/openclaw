@@ -1,4 +1,5 @@
 import type { WorkerEnvironmentStartStatus } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -269,8 +270,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const bindPreparedWorkspace = async (
-    request: Parameters<NonNullable<WorkerEnvironmentAccessOptions["bindPreparedWorkspace"]>>[0],
+    request: Parameters<NonNullable<WorkerEnvironmentAccessOptions["bindPreparedWorkspace"]>>[0] & {
+      readNativeCredential?: GitHubCredentialReader;
+      retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
+    },
   ) => {
+    // Repository admission belongs to this host owner, not the node transport payload.
+    const { readNativeCredential, retainCredentialCleanup, ...binding } = request;
     const bind = options.bindPreparedWorkspace;
     const assertCurrent = () => {
       request.signal?.throwIfAborted();
@@ -305,6 +311,8 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       // a snapshot is reusable content, never a substitute for repository authority.
       repository = await prepareRepositoryWorkerProjectSource({
         expected: projectSnapshot,
+        readNativeCredential,
+        retainCredentialCleanup,
         namespace: options.projectNamespace,
         getConfig: options.getConfig,
         assertCurrent,
@@ -320,7 +328,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       repository?.assertCurrent();
     };
     assertBindingCurrent();
-    const prepared = await bind({ ...request, assertCurrent: assertBindingCurrent });
+    const prepared = await bind({ ...binding, assertCurrent: assertBindingCurrent });
     assertBindingCurrent();
     await repository?.revalidate(request.signal);
     assertBindingCurrent();

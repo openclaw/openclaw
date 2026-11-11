@@ -127,6 +127,13 @@ describe("buildProviderReplayFamilyHooks", () => {
   it("covers the replay family matrix", () => {
     const cases = [
       {
+        family: "mistral" as const,
+        ctx: { provider: "clawrouter", modelApi: "openai-completions", modelId: "mistral/large" },
+        match: { sanitizeToolCallIds: true, toolCallIdMode: "strict9" },
+        hasSanitizeReplayHistory: false,
+        reasoningMode: undefined,
+      },
+      {
         family: "openai-compatible" as const,
         ctx: {
           provider: "xai",

@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import type { SQLInputValue } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
+import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
 import { withCurrentProjectionSnapshot } from "../../config/sessions/session-accessor.sqlite-active-projection.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
@@ -16,6 +18,7 @@ import { prepareIncrementalSuffixIdempotencyMutation } from "../../config/sessio
 import { reconcileSessionTranscriptIndexInTransaction } from "../../config/sessions/session-transcript-index.js";
 import { createTranscriptEventInserter } from "../../config/sessions/transcript-payload.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
@@ -90,6 +93,85 @@ for (const engine of ["sqlite", "postgres"] as const) {
     `${engine} transcript portability`,
     () => {
       useMixedAgentPair(engine, engine);
+
+      it.runIf(engine === "postgres")(
+        "hydrates covered active facts without executing payload subplans",
+        () =>
+          withEngineStoreAdmission(() => {
+            const fixture = transcriptFixture(
+              "active-facts",
+              [
+                message("root", null, { role: "user", content: "Earlier question" }),
+                message("pending", "root", {
+                  provider: "openclaw",
+                  model: "automation-result",
+                  content: [{ type: "text", text: "Required background result" }],
+                  excludeFromContext: true,
+                  openclawModelPlacement: "pending",
+                }),
+                message("tail", "pending", { role: "user", content: "Latest question" }),
+              ],
+              false,
+            );
+            const db = fixture.database.db;
+            if (!isPostgresSqlConnection(db)) {
+              throw new Error("Expected PostgreSQL connection");
+            }
+            const observed: Array<{ sql: string; parameters: readonly SQLInputValue[] }> = [];
+            const query = db.query.bind(db);
+            const observer = vi
+              .spyOn(db, "query")
+              .mockImplementation((statementSql, parameters = []) => {
+                if (statementSql.includes("session_transcript_active_event_facts")) {
+                  observed.push({ sql: statementSql, parameters });
+                }
+                return query(statementSql, parameters);
+              });
+            const read = () =>
+              readSessionTranscriptBoundedActiveContextCore(fixture.scope, {
+                transaction: fixture.database,
+                maxEvents: 1,
+                maxBytes: 100_000,
+              });
+            try {
+              fixture.write(() => {
+                const covered = read();
+                expect(covered.events).toEqual([
+                  expect.objectContaining({ id: "pending" }),
+                  expect.objectContaining({ id: "tail" }),
+                ]);
+                const queries = observed.splice(0);
+                expect(queries).toHaveLength(2);
+                for (const statement of queries) {
+                  const plan = query(
+                    `EXPLAIN (ANALYZE, BUFFERS) ${statement.sql}`,
+                    statement.parameters,
+                  ).rows.map((row) => String(row["QUERY PLAN"]));
+                  const payloadPlans = plan.filter((line) =>
+                    / on transcript_events event(?:_\d+)? /u.test(line),
+                  );
+                  expect(payloadPlans.length).toBeGreaterThan(0);
+                  expect(payloadPlans.every((line) => line.includes("never executed"))).toBe(true);
+                }
+                db.exec("SAVEPOINT active_facts_control");
+                try {
+                  db.prepare(
+                    "DELETE FROM session_transcript_active_event_facts WHERE session_id = ? AND seq = 1",
+                  ).run(fixture.scope.sessionId);
+                  expect(read()).toEqual(covered);
+                  db.prepare(
+                    "DELETE FROM session_transcript_active_event_facts WHERE session_id = ?",
+                  ).run(fixture.scope.sessionId);
+                  expect(read()).toEqual(covered);
+                } finally {
+                  db.exec("ROLLBACK TO active_facts_control; RELEASE active_facts_control");
+                }
+              });
+            } finally {
+              observer.mockRestore();
+            }
+          }),
+      );
 
       it("rebases only transparent newer messages using first-member roles and exact booleans", () =>
         withEngineStoreAdmission(() => {

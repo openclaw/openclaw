@@ -12,13 +12,19 @@ import {
   composeReleaseAttemptJobs,
   validateReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { RELEASE_VALIDATION_WAIVERS } from "../../scripts/lib/release-validation-waivers.mjs";
+import {
+  RELEASE_VALIDATION_WAIVERS,
+  releaseQualificationExemptions,
+} from "../../scripts/lib/release-validation-waivers.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
   verifyNpmPreflightPublicationLineage,
 } from "../../scripts/npm-preflight-tooling-identity.mjs";
-import { validateReleaseRunEvidence } from "../../scripts/release-ci-summary.mjs";
+import {
+  validateParentManifest,
+  validateReleaseRunEvidence,
+} from "../../scripts/release-ci-summary.mjs";
 import { verifyQualificationAdmission } from "../../scripts/release-qualification-admission.mjs";
 import { authenticateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -91,6 +97,37 @@ function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
 }
 
 describe("candidate-owned publish consumer chain", () => {
+  it.each([false, true])(
+    "rejects a candidate-invented not-run exemption at both strict consumers (recorded=%s)",
+    async (recorded) => {
+      const f = candidatePublicationFixture();
+      const [exemption] = releaseQualificationExemptions("2026.9.37", "stable");
+      Object.assign(f.manifest.qualificationCoverage, { exemptions: [exemption] });
+      if (recorded) {
+        Object.assign(f.manifest.childRuns, {
+          productPerformance: {
+            disposition: "waived-not-run",
+            runId: "",
+            supportingEvidence: exemption!.supportingEvidence,
+          },
+        });
+      }
+      if (recorded) {
+        expect(() => validateParentManifest(f.manifest, { runId: f.runId })).not.toThrow();
+        Object.assign(f.manifest.childEvidence, { productPerformance: {} });
+        expect(() => validateParentManifest(f.manifest, { runId: f.runId })).toThrow(
+          /not candidate evidence/,
+        );
+        delete f.manifest.childEvidence.productPerformance;
+      } else {
+        expect(() => validateParentManifest(f.manifest, { runId: f.runId })).toThrow(
+          /must be recorded/,
+        );
+      }
+      await expect(consumers(f).npm()).rejects.toThrow();
+      await expect(consumers(f).docker()).rejects.toThrow();
+    },
+  );
   it.each([
     { scenario: "matching grant", parentConclusion: "success" },
     { scenario: "failed parent", parentConclusion: "failure" },
@@ -99,6 +136,8 @@ describe("candidate-owned publish consumer chain", () => {
     { scenario: "different version", parentConclusion: "success" },
     { scenario: "different role", parentConclusion: "success" },
     { scenario: "different job", parentConclusion: "success" },
+    { scenario: "different run", parentConclusion: "success" },
+    { scenario: "different attempt", parentConclusion: "success" },
     { scenario: "tooling revoked after verification", parentConclusion: "success" },
   ])(
     "authenticates waived FRV at npm and Docker admission: $scenario",
@@ -115,6 +154,7 @@ describe("candidate-owned publish consumer chain", () => {
         jobName:
           "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenAI)",
         reason: "Synthetic checked-in provider outage grant.",
+        evidence: { runId: planned.runId, runAttempt: 1 },
       };
       if (scenario !== "missing grant") {
         RELEASE_VALIDATION_WAIVERS.push({
@@ -122,6 +162,12 @@ describe("candidate-owned publish consumer chain", () => {
           ...(scenario === "different version" ? { targetVersion: "2026.8.29-beta.1" } : {}),
           ...(scenario === "different role" ? { childRole: "releaseChecksCandidate" } : {}),
           ...(scenario === "different job" ? { jobName: `${grant.jobName} extra` } : {}),
+          ...(scenario === "different run"
+            ? { evidence: { ...grant.evidence, runId: "999" } }
+            : {}),
+          ...(scenario === "different attempt"
+            ? { evidence: { ...grant.evidence, runAttempt: 2 } }
+            : {}),
         });
       }
       const [aggregate] = await f.client.getRunAttemptJobs(planned.runId);
