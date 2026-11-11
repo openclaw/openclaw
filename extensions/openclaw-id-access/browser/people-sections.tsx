@@ -15,6 +15,7 @@ import {
   memberRunning,
   personInitials,
 } from "./people-format.js";
+import type { PeopleMotion } from "./people-motion.js";
 import type { Invite, Member } from "./types.js";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -112,6 +113,7 @@ function RolePicker(props: {
 
 /** Invite one person with a role ceiling (operator at most); shows the link once. */
 export function InviteForm(props: {
+  motion: PeopleMotion;
   components: ControlUiHost["components"];
   disabled: boolean;
   busy?: boolean;
@@ -129,9 +131,11 @@ export function InviteForm(props: {
     const invitedRole = role();
     const made = await props.onCreate(email().trim().toLowerCase(), invitedRole);
     if (made) {
-      setCreated({ ...made, role: invitedRole });
-      setCopied(false);
-      setEmail("");
+      props.motion.update(() => {
+        setCreated({ ...made, role: invitedRole });
+        setCopied(false);
+        setEmail("");
+      });
       onSettled(() => inviteAgain.focus());
     }
   };
@@ -151,7 +155,7 @@ export function InviteForm(props: {
         Choose their access, then send them the link. You approve their request here. The link
         expires in 7 days.
       </p>
-      <div class="ocid-access__invite-card">
+      <div class="ocid-access__invite-card" ref={props.motion.group({ watchContent: true })}>
         <Show
           when={created()}
           keyed
@@ -211,8 +215,10 @@ export function InviteForm(props: {
                 type="button"
                 class="ocid-access__invite-again"
                 onClick={() => {
-                  setCreated(null);
-                  setRole("operator");
+                  props.motion.update(() => {
+                    setCreated(null);
+                    setRole("operator");
+                  });
                   onSettled(() => emailInput.focus());
                 }}
               >
@@ -251,6 +257,7 @@ export function InviteForm(props: {
 
 /** Pending requests: who is asking, from which device, with which invite. */
 export function PendingRequests(props: {
+  motion: PeopleMotion;
   invites: Invite[];
   /** Display fingerprint by device key, for the device each request comes from. */
   fingerprints: ReadonlyMap<string, string>;
@@ -271,10 +278,12 @@ export function PendingRequests(props: {
       class={[
         "ocid-access__section",
         {
+          "ocid-access__enter": props.invites.length > 0,
           "ocid-access__sr-only":
             props.invites.length === 0 && !props.error?.target.startsWith("request:"),
         },
       ]}
+      ref={props.motion.group()}
       aria-labelledby="ocid-access-pending"
     >
       <h3 id="ocid-access-pending">
@@ -303,13 +312,19 @@ export function PendingRequests(props: {
         when={props.invites.length > 0}
         fallback={<p class="ocid-access__empty">No one is waiting for approval.</p>}
       >
-        <ul class="ocid-access__list">
+        <ul class="ocid-access__list" ref={props.motion.group()}>
           <For each={props.invites} keyed={(invite) => invite.inviteId}>
             {(invite) => {
               const pending = () => invite().pending!;
               const who = () => pending().reported.email || "OpenClaw ID account";
               return (
-                <li class="ocid-access__row ocid-access__row--request">
+                <li
+                  class="ocid-access__row ocid-access__row--request"
+                  ref={[
+                    props.motion.group({ requestKey: () => invite().inviteId }),
+                    props.motion.enter(),
+                  ]}
+                >
                   <Avatar name={pending().reported.email || undefined} />
                   <div class="ocid-access__person">
                     <div class="ocid-access__title">{who()}</div>
@@ -359,7 +374,9 @@ export function PendingRequests(props: {
                     </div>
                   </Show>
                   <details class="ocid-access__details ocid-access__request-details">
-                    <summary>Request details</summary>
+                    <summary onClick={() => queueMicrotask(props.motion.prepare())}>
+                      Request details
+                    </summary>
                     <p class="ocid-access__hint">
                       Device ID:{" "}
                       <code>{props.fingerprints.get(pending().devicePub) ?? "unavailable"}</code>
@@ -388,6 +405,7 @@ export function PendingRequests(props: {
 
 /** One member row; Remove asks for confirmation and says what removal does. */
 function MemberRow(props: {
+  motion: PeopleMotion;
   member: Member;
   disabled: boolean;
   nowMs: number;
@@ -412,6 +430,7 @@ function MemberRow(props: {
       .join(" · ");
   return (
     <li
+      ref={[props.motion.group(), props.motion.enter()]}
       class={[
         "ocid-access__row ocid-access__row--member",
         { "ocid-access__row--confirming": latest(confirming) },
@@ -430,7 +449,7 @@ function MemberRow(props: {
             type="button"
             class="btn btn--sm ocid-access__remove"
             disabled={props.disabled}
-            onClick={() => setConfirming(true)}
+            onClick={() => props.motion.update(() => setConfirming(true))}
           >
             Remove
           </button>
@@ -450,7 +469,7 @@ function MemberRow(props: {
               type="button"
               class="btn btn--sm"
               disabled={props.disabled}
-              onClick={() => setConfirming(false)}
+              onClick={() => props.motion.update(() => setConfirming(false))}
             >
               Cancel
             </button>
@@ -476,6 +495,7 @@ function MemberRow(props: {
 
 /** Members: the owner, each member with devices and activity, and open invites. */
 export function Members(props: {
+  motion: PeopleMotion;
   members: Member[];
   invites: Invite[];
   ownerDevices: number;
@@ -503,7 +523,7 @@ export function Members(props: {
             : null
         }
       />
-      <ul class="ocid-access__list">
+      <ul class="ocid-access__list" ref={props.motion.group()}>
         <li class="ocid-access__row ocid-access__row--owner">
           <Avatar name="You" />
           <div class="ocid-access__person">
@@ -514,7 +534,7 @@ export function Members(props: {
         </li>
         <For each={open()} keyed={(invite) => invite.inviteId}>
           {(invite) => (
-            <li class="ocid-access__row ocid-access__row--invited">
+            <li class="ocid-access__row ocid-access__row--invited" ref={props.motion.enter()}>
               <Avatar name={invite().label} />
               <div class="ocid-access__person">
                 <div class="ocid-access__title">{invite().label}</div>
@@ -535,6 +555,7 @@ export function Members(props: {
                 </li>
               </Show>
               <MemberRow
+                motion={props.motion}
                 member={member()}
                 error={props.error}
                 readOnly={props.readOnly}

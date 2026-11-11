@@ -148,6 +148,7 @@
 
 .ocid-access__role-picker .picker-select__chevron {
   margin-inline-start: auto;
+  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .ocid-access__role-picker .picker-select__trigger[aria-expanded="true"] .picker-select__chevron {
@@ -244,6 +245,15 @@
   cursor: pointer;
   background: transparent;
   color: var(--muted);
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.ocid-access .ocid-access__invite-again:hover,
+.ocid-access__request-details summary:hover {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text-strong);
 }
 
 .ocid-access__link {
@@ -436,6 +446,9 @@
   padding: 0 7px;
   border-radius: 7px;
   list-style: none;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .ocid-access__request-details summary::-webkit-details-marker {
@@ -450,11 +463,12 @@
   border-right: 1px solid currentColor;
   border-bottom: 1px solid currentColor;
   transform: rotate(45deg);
+  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .ocid-access__request-details[open] summary::after {
-  margin-top: 3px;
-  transform: rotate(225deg);
+  /* Preserve both resting positions without changing the marker's layout. */
+  transform: translateY(3px) rotate(225deg);
 }
 
 .ocid-access__request-details p {
@@ -587,6 +601,7 @@
   .ocid-access__remove,
   .ocid-access__node-remove {
     opacity: 0;
+    transition: opacity 0.15s;
   }
 
   .ocid-access__row:hover .ocid-access__remove,
@@ -678,4 +693,59 @@
 .ocid-node-dialog__surface {
   padding-left: var(--space-5);
   overflow-wrap: anywhere;
+}
+
+.ocid-access__notice,
+.ocid-access__enter,
+.ocid-access__created,
+.ocid-access__confirmation,
+.ocid-access__error,
+.ocid-access > .ocid-access__empty,
+.ocid-access__request-details[open] > p {
+  animation: ocid-access-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes ocid-access-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.ocid-access__row.ocid-access__gone {
+  transition:
+    opacity 0.2s,
+    height 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+    padding 0.26s,
+    margin 0.26s;
+  opacity: 0;
+  padding-block: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ocid-access__notice,
+  .ocid-access__enter,
+  .ocid-access__created,
+  .ocid-access__confirmation,
+  .ocid-access__error,
+  .ocid-access > .ocid-access__empty,
+  .ocid-access__request-details[open] > p {
+    animation: none;
+  }
+
+  .ocid-access__row.ocid-access__gone {
+    transition: none;
+  }
+
+  .ocid-access__remove,
+  .ocid-access__node-remove,
+  .ocid-access__role-picker .picker-select__chevron,
+  .ocid-access .ocid-access__invite-again,
+  .ocid-access__request-details summary,
+  .ocid-access__request-details summary::after {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0.01ms;
+  }
 }

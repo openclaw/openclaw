@@ -5,6 +5,7 @@ import { render } from "@solidjs/web";
 import type * as UI from "openclaw/plugin-sdk/control-ui";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPeopleMotion } from "./people-motion.js";
 import { PeoplePage } from "./people-page.js";
 import { InviteForm } from "./people-sections.js";
 import type { Invite, StatusResult } from "./types.js";
@@ -186,6 +187,7 @@ describe("Access page", () => {
       .forEach((dispose) => dispose());
     document.body.replaceChildren();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it("registers no page while OpenClaw ID is off", async () => {
@@ -220,6 +222,7 @@ describe("Access page", () => {
       render(
         () => (
           <InviteForm
+            motion={createPeopleMotion()}
             components={hostFor([linked()]).host.components}
             disabled={false}
             locale="en-US"
@@ -379,8 +382,34 @@ describe("Access page", () => {
       }),
     );
     await vi.waitFor(() => expect(container.textContent).toContain("member@example.test"));
-    expect(container.textContent).toContain("No one is waiting for approval.");
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("No one is waiting for approval."),
+    );
   });
+
+  it.each([false, true])(
+    "finishes a decided row's exit before replacing it (reduced=%s)",
+    async (reduced) => {
+      vi.stubGlobal("matchMedia", () => ({ matches: reduced }));
+      const { container } = await mountPage([linked(), linked({ invites: [] })]);
+      await vi.waitFor(() => expect(button(container, "Deny")?.disabled).toBe(false));
+      const row = container.querySelector(".ocid-access__row--request")!;
+      vi.useFakeTimers();
+      button(container, "Deny")!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      if (!reduced) {
+        expect(row.isConnected).toBe(true);
+        expect(button(container, "Deny")?.disabled).toBe(true);
+        await vi.advanceTimersByTimeAsync(279);
+        expect(row.isConnected).toBe(true);
+        await vi.advanceTimersByTimeAsync(1);
+        flush();
+      }
+      expect(row.isConnected).toBe(false);
+      expect(container.textContent).toContain("No one is waiting for approval.");
+    },
+  );
 
   it("shows each member's devices and what they are running, and says what a removal cut", async () => {
     const member = {
@@ -717,6 +746,11 @@ describe("Access page", () => {
       await vi.waitFor(() =>
         expect(harness.container.querySelector('[role="alert"]')).not.toBeNull(),
       );
+      if (committed) {
+        await vi.waitFor(() =>
+          expect(harness.container.querySelector(".ocid-access__row--request")).toBeNull(),
+        );
+      }
       const alert = harness.container.querySelector('[role="alert"]')!;
       if (committed) {
         expect(alert.closest("li")).toBeNull();

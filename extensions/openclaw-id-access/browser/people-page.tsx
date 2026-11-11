@@ -21,6 +21,7 @@ import {
   type PeopleOperationError,
 } from "./people-error.js";
 import { memberName, removalNote } from "./people-format.js";
+import { createPeopleMotion } from "./people-motion.js";
 import { observePeople } from "./people-refresh.js";
 import {
   InviteForm,
@@ -60,6 +61,7 @@ function sessionTitleFrom(host: ControlUiHost) {
 export function PeoplePage(props: { host: ControlUiHost }) {
   // The host is fixed for the page's lifetime.
   const host = untrack(() => props.host);
+  const motion = createPeopleMotion();
   const [state, setState] = createSignal<StatusResult | null>(null);
   const [ownDevicePub, setOwnDevicePub] = createSignal<string | null>(null);
   const [fingerprints, setFingerprints] = createSignal<ReadonlyMap<string, string>>(new Map());
@@ -96,19 +98,31 @@ export function PeoplePage(props: { host: ControlUiHost }) {
       if (!isCurrent()) {
         return;
       }
-      setOwnDevicePub(own?.devicePub ?? null);
-      setFingerprints(nextFingerprints);
-      setNowMs(Date.now());
-      setState(next);
-      setReadError(null);
-      if (refreshedError) {
-        const previousError = refreshedError;
-        refreshedError = null;
-        setError((current) => (current === previousError ? null : current));
+      await motion.leaveRequests(
+        new Set(
+          (next.link.invites ?? [])
+            .filter((invite) => invite.status === "pending")
+            .map((invite) => invite.inviteId),
+        ),
+      );
+      if (!isCurrent()) {
+        return;
       }
+      motion.update(() => {
+        setOwnDevicePub(own?.devicePub ?? null);
+        setFingerprints(nextFingerprints);
+        setNowMs(Date.now());
+        setState(next);
+        setReadError(null);
+        if (refreshedError) {
+          const previousError = refreshedError;
+          refreshedError = null;
+          setError((current) => (current === previousError ? null : current));
+        }
+      });
     } catch (failure) {
       if (isCurrent()) {
-        setReadError(peopleError(failure, "load", host.redact));
+        motion.update(() => setReadError(peopleError(failure, "load", host.redact)));
       }
     }
   };
@@ -144,8 +158,10 @@ export function PeoplePage(props: { host: ControlUiHost }) {
     }
     actionsInFlight.add(operation);
     setPending(true);
-    setError(null);
-    setNotice(null);
+    motion.update(() => {
+      setError(null);
+      setNotice(null);
+    });
     try {
       const { link } = await host.request<{ link: Link }>("openclawId.people", {});
       if (disposed || !host.connection.connected || !host.connection.canAdmin) {
@@ -154,14 +170,16 @@ export function PeoplePage(props: { host: ControlUiHost }) {
       return await action(link);
     } catch (failure) {
       if (!disposed) {
-        setError({ target, ...peopleError(failure, kind, host.redact) });
+        motion.update(() => setError({ target, ...peopleError(failure, kind, host.redact) }));
       }
       return undefined;
     } finally {
       actionsInFlight.delete(operation);
       if (!disposed) {
-        setPending(false);
         await observer?.refresh();
+        if (!disposed) {
+          setPending(false);
+        }
       }
     }
   };
@@ -174,10 +192,12 @@ export function PeoplePage(props: { host: ControlUiHost }) {
     void run(`member:${member.accountId}`, async (link) => {
       const removal = await removeMember(host.request, link, member.accountId);
       if (!disposed) {
-        setNotice({
-          index,
-          message: removalNote(memberName(member), removal),
-        });
+        motion.update(() =>
+          setNotice({
+            index,
+            message: removalNote(memberName(member), removal),
+          }),
+        );
       }
     });
   };
@@ -230,6 +250,7 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                   </h2>
                   <Show when={latest(ownDevicePub)}>
                     <InviteForm
+                      motion={motion}
                       components={host.components}
                       disabled={!canManage() || latest(creatingInvite)}
                       busy={latest(creatingInvite)}
@@ -241,6 +262,7 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                     />
                   </Show>
                   <PendingRequests
+                    motion={motion}
                     invites={(current().link.invites ?? []).filter((i) => i.status === "pending")}
                     fingerprints={latest(fingerprints)}
                     error={latest(error)}
@@ -260,6 +282,7 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                     }
                   />
                   <Members
+                    motion={motion}
                     members={current().link.members ?? []}
                     error={latest(error)}
                     notice={latest(notice)}
