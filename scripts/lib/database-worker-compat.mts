@@ -1058,11 +1058,15 @@ export function inspectDatabaseWorkerBoundaries(
     return { file, source, references };
   });
   // Reference discovery is independent across files in this immutable snapshot.
-  // Resolve the full batch before classifying callers instead of one RPC per file.
-  symbolsAt(sourceReferences.flatMap(({ references }) => references));
+  // Shorthand properties use their value-symbol query during caller classification.
+  symbolsAt(
+    sourceReferences.flatMap(({ references }) =>
+      references.filter((node) => !ts.isShorthandPropertyAssignment(node.parent)),
+    ),
+  );
   session.checkpoint?.("reference-prefetch");
   for (const { file, source, references } of sourceReferences) {
-    const symbols = symbolsAt(references);
+    const symbols = references.map((node) => compilerSymbols.get(node));
     const pendingAccesses = new Set<ts.Expression>();
     const receiverBindings = new Map<ts.Node, ts.ObjectBindingPattern>();
     for (const [index, node] of references.entries()) {

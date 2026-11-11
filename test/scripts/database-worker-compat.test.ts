@@ -806,9 +806,14 @@ export function ${first}() { return read(); }`,
       "graph-classification",
       "close",
     ]);
-    expect(scan("readKernel(); missing(() => readKernel());").operations.has(kernelFile)).toBe(
+    expect(scan("readKernel(); missing(() => ({ readKernel }));").operations.has(kernelFile)).toBe(
       false,
     );
+    expect(
+      [...counts.keys()].some(
+        (node) => node.parent && ts.isShorthandPropertyAssignment(node.parent),
+      ),
+    ).toBe(false);
     expect(
       [...counts.keys()].filter((node) => node.getText() === "readKernel").length,
     ).toBeGreaterThan(1);

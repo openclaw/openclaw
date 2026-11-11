@@ -394,16 +394,47 @@ reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. Reusable
 live/E2E source admission and candidate evidence binding use the same label.
 Full Release Validation honors `OPENCLAW_RELEASE_RUNNER_GROUP`; the reusable
 workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
-and the nightly watcher keep their existing runner selection and 720-minute
-budgets; standard hosted runners cannot preserve that lifetime.
+and the nightly watcher keep their 720-minute budgets. When
+`OPENCLAW_CI_RUNNER_BACKEND=boat`, short hosted jobs provision separate Boat VMs
+and register ephemeral organization runners for those three jobs. Native Boat
+CI has a six-hour limit, so these watchers use regular VMs instead.
+
+This route requires the repository secrets `BOAT_API_KEY` and
+`BOAT_RUNNER_APP_PRIVATE_KEY`, plus the variables `BOAT_ORG`,
+`BOAT_RELEASE_RUNNER_GROUP`, and `BOAT_RUNNER_APP_ID`. Use a dedicated Boat runner
+GitHub App with organization self-hosted runner write access and a dedicated
+runner group. `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing
+hosted runners. App token creation must succeed before a VM is provisioned;
+a missing app ID or private key stops provisioning.
+The runner group must admit the nightly workflow on `main` and Full Release
+Validation on each immutable `release-ci/` transport ref. Install a Crabbox release supporting
+`actions register --receipt` and `actions unregister --receipt` before enabling
+the backend. The provisioning preflight rejects older clients before creating
+a VM.
+
+Each VM requests four CPUs, 8 GB RAM, and a 24-hour lifetime. Provisioning checks
+the granted deadline before registering a runner. Same-run job outputs carry
+only the VM creation identity and exact runner registration, without SSH keys or
+private Crabbox claims. Cleanup attempts deregistration and VM deletion
+independently, including after failed provisioning. A hard interruption before
+outputs reach GitHub can prevent automated cleanup; the provider expiry limits
+compute lifetime, but does not prove data deletion. An unconfirmed deletion
+reports its operation ID for reconciliation with `boat deletion status`.
 
 Mantis Discord and web UI actor authorization, request resolution, and ref
 validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime
 placement and deadlines.
 
 Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
-The QA controls honor their `runner_group` input. QA profile planning, builds,
-shards, aggregation, and live transport workloads keep their existing runners.
+The QA controls honor their `runner_group` input. Reusable live/E2E and QA
+profile runtime jobs are prepared to use Boat when
+`OPENCLAW_CI_RUNNER_BACKEND=boat`. Existing source and actor admission still
+apply. Live/E2E jobs using the xlarge selector and repo E2E jobs use
+`boat-xlarge` (16 vCPU, 32 GiB). Medium live/E2E and QA profile jobs use
+`boat` (4 vCPU, 8 GiB). Explicit hosted overrides and
+runner groups retain their precedence, and other backend settings retain their
+existing routes. Activation requires compatible Boat account policy; these
+selectors do not change that policy. Live transport placement remains separate.
 
 Ordinary iOS smoke CI builds the app and embedded Watch targets for the runner's
 architecture, using the same iPhone simulator for compilation and voice-cleanup
@@ -459,6 +490,14 @@ and other rows remain unchanged. Main-shaped qualification dispatches retain
 this exact-head SDK report alongside push coverage and use the admitted runner
 backend. They use the full validation tier; the main validation tier is reserved
 for ordinary same-revision manual or scheduled validation.
+
+### Android Store routing
+
+The standalone Android Store Release job selects `boat-xlarge` when
+`OPENCLAW_CI_RUNNER_BACKEND=boat`. Its 16-vCPU, 32-GiB shape applies to first
+attempts and retries. Other backend modes retain
+`blacksmith-8vcpu-ubuntu-2404`. Scheduled and manual releases keep their existing
+canonical-main admission, protected environments, commands, and 120-minute deadline.
 
 ### Hourly plugin routing
 
