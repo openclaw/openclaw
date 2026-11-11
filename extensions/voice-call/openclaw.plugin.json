@@ -326,7 +326,7 @@
       "id": "speech-and-audio",
       "title": "Speech and audio",
       "order": 70,
-      "properties": ["streaming", "realtime", "tts"]
+      "properties": ["streaming", "realtime", "tts", "bargeIn"]
     },
     {
       "id": "agent-responses",
@@ -946,6 +946,15 @@
                 }
               }
             }
+          }
+        }
+      },
+      "bargeIn": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "abortAgentRun": {
+            "type": "boolean"
           }
         }
       },

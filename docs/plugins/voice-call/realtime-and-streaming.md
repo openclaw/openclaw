@@ -279,6 +279,62 @@ When a host tool run reports cancellation, the realtime model receives a
 cancelled result and the phone call stays open. Timeouts and other tool failures
 remain errors; ending the phone session suppresses pending consult results.
 
+### Barge-in
+
+When the caller speaks over a reply, OpenClaw always clears the queued
+telephony audio and cancels the active reply. The obsolete spoken answer is
+already suppressed by that cancellation, but by default the OpenClaw agent run
+behind the turn keeps going, so the caller waits out work they already
+interrupted.
+
+`bargeIn.abortAgentRun` (default `false`) also aborts the in-flight agent run
+for that call. The abort is immediate rather than graceful: it does not wait for
+an in-flight tool call to finish, and a **foreground** exec tool call's child
+process is killed as soon as the run's abort signal fires. Commands the agent
+explicitly backgrounded are detached from the run and keep running.
+
+**Streaming calls only.** The flag is read where the streaming barge-in trigger
+lives. The realtime bridge does not consult it, so enabling it changes nothing
+for realtime agent consults. Streaming and realtime cannot both be enabled, so
+any one call is only ever on a single path. The option stays top level rather
+than under `realtime` so that scope can widen later without moving it.
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "voice-call": {
+        "config": {
+          "bargeIn": {
+            "abortAgentRun": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+| Option          | Default | Behavior                                                                                                                                                                       |
+| --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `abortAgentRun` | `false` | Streaming calls only. Abort the in-flight agent run on barge-in, killing in-flight foreground tool-call child processes immediately. Explicitly backgrounded commands survive. |
+
+History is preserved across the abort, so the next turn resumes rather than
+restarts:
+
+- Tool calls that already returned results stay in the transcript, so the next
+  run reads that work instead of repeating it.
+- Tool calls killed mid-flight are left without results; the existing
+  transcript-repair layer records them as `aborted` on the next run so the model
+  can see they did not complete.
+- The speech the caller barged in with becomes the next turn on its own. The
+  interrupted question is not resent; it is already in the session history.
+
+Leave `abortAgentRun` off for calls that dispatch long side-effecting work. An
+immediate abort kills that work wherever it happens to be, which is the right
+trade for conversational latency and the wrong one for a half-finished
+deployment or payment.
+
 ### Agent voice context
 
 On hosts with the shared context resolver, every realtime session includes an agent-context paragraph explaining that the

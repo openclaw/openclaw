@@ -193,6 +193,33 @@ const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "ultra",
 ]);
 
+/**
+ * Barge-in behaviour, shared by both call paths.
+ *
+ * The audio-side barge-in response (clearing queued telephony audio and
+ * cancelling the active reply) is always on. These options control the
+ * additional, opt-in agent-run abort described in the voice barge-in docs.
+ *
+ * Deliberately top-level rather than under `realtime`: the streaming path
+ * reads the same flag, and a `realtime.*` key silently governing streaming
+ * behaviour is a trap.
+ */
+const VoiceCallBargeInConfigSchema = z
+  .object({
+    /**
+     * Abort the in-flight OpenClaw agent run when the caller barges in.
+     *
+     * Off by default: aborting mid-run kills in-flight tool calls and their
+     * child processes immediately, which is the right trade for conversational
+     * latency but wrong for calls that dispatch long side-effecting work.
+     */
+    abortAgentRun: z.boolean().default(false),
+  })
+  .strict()
+  .default({
+    abortAgentRun: false,
+  });
+
 const VoiceCallRealtimeConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -329,6 +356,9 @@ const VoiceCallConfigSchema = z
     streaming: VoiceCallStreamingConfigSchema.default(VoiceCallStreamingConfigSchema.parse({})),
 
     realtime: VoiceCallRealtimeConfigSchema.default(VoiceCallRealtimeConfigSchema.parse({})),
+
+    /** Caller barge-in handling, including the opt-in agent-run abort. */
+    bargeIn: VoiceCallBargeInConfigSchema,
 
     /** Session memory scope for voice conversations. */
     sessionScope: VoiceCallSessionScopeSchema.default("per-phone"),

@@ -631,6 +631,15 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           yieldTimer = null;
         }
         if (!run.session.requestCancelled) {
+          // Without this line an operator sees the agent run abort but never
+          // learns which child process died with it. Identifiers only: no part
+          // of the command reaches the log. Raw command strings and derived
+          // command labels both retain arguments, and arguments carry
+          // credentials, so neither is safe for ordinary logging.
+          const abortedPid = run.pid ?? run.session.pid;
+          logInfo(
+            `exec: abort killed child session=${run.session.id} pid=${abortedPid ?? "unknown"}`,
+          );
           run.kill();
         }
       };

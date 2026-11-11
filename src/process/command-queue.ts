@@ -79,10 +79,14 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
 }
 
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
+  // An abort is a deliberate cancellation, not a task failure: voice barge-in
+  // and the TUI escape key both reach here. Logging it as a lane error wrote
+  // two error lines per interruption for work that was cancelled on purpose.
   return (
     (err instanceof Error &&
       (err.name === "LiveSessionModelSwitchError" ||
-        err.name === "MemoryFlushToolsUnavailableError")) ||
+        err.name === "MemoryFlushToolsUnavailableError" ||
+        err.name === "AbortError")) ||
     isExpectedRunCancellation(err)
   );
 }
