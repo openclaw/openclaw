@@ -161,6 +161,9 @@ it.each(["success", "failure"])(
 // Distinct from the captured-callback test above: this runs the real outer CLI,
 // exit finalization and nonempty resource owners after a real package swap.
 const compositionEntrypoint = resolveRuntimeWorkerUrl(cliRetainedCompositionEntrypoint);
+// Temporary diagnostic observation window, not a production deadline or passing latency claim.
+const compositionChildTimeoutMs =
+  process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS === "1" ? 180_000 : CLI_PROCESS_DEADLOCK_GUARD_MS;
 for (const runtime of ["node", "node-short-path"] as const) {
   describe.skipIf(runtime === "node-short-path" && process.platform !== "win32")(
     runtime + " retained CLI fixture",
@@ -247,7 +250,7 @@ for (const runtime of ["node", "node-short-path"] as const) {
                 TMP: directory,
                 TEMP: directory,
               },
-              timeoutMs: CLI_PROCESS_DEADLOCK_GUARD_MS,
+              timeoutMs: compositionChildTimeoutMs,
             }),
           );
           stage("child-settled");
@@ -307,7 +310,7 @@ for (const runtime of ["node", "node-short-path"] as const) {
           }
           console.log(line);
         },
-        getCliProcessTestTimeout(CLI_PROCESS_DEADLOCK_GUARD_MS),
+        getCliProcessTestTimeout(compositionChildTimeoutMs),
       );
     },
   );
