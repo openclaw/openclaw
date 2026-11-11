@@ -7,11 +7,11 @@ import {
   formatIrohEndpointKey,
   generateKitSecret,
   ROOT_EPOCH,
+  type RebindPreparation,
   type SignedStatement,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { authorizeOperatorScopesForMethod } from "../gateway/method-scopes.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
-import type { RebindPreparation } from "./id-cli-rebind.js";
 import { registerIdCli } from "./id-cli.js";
 
 vi.mock(import("./gateway-rpc.js"), async (importOriginal) => ({
