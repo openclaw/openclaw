@@ -6127,9 +6127,14 @@ describe("ci workflow guards", () => {
     ];
     const original = expectDefined(
       createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
-      "selected original eight-group workload",
+      "selected original workload",
     );
-    expect(original.flatMap((job) => job.groups)).toHaveLength(8);
+    const workspaceOwner = expectDefined(
+      original.find((job) =>
+        job.groups.some((group) => group.includePatterns?.includes(workspace)),
+      ),
+      "original workspace owner",
+    );
     const routed = routeBoatNodeTestJobs(original);
     const retained = routed
       .filter((job) => job.runner.startsWith("boat"))
@@ -6160,7 +6165,7 @@ describe("ci workflow guards", () => {
     expect([undefined, hosted.runner]).toContain(hosted.runner_label);
     expect(hosted).toMatchObject({
       runner: "ubuntu-24.04",
-      cpu_budget: 8,
+      cpu_budget: workspaceOwner.runner === "blacksmith-32vcpu-ubuntu-2404" ? 8 : 2,
       plan_concurrency: 1,
     });
     expect(rows.flatMap(files).toSorted()).toEqual(targets.toSorted());

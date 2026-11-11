@@ -273,6 +273,20 @@ and `null` means its boolean status is unavailable. A zero effect count does not
 mean the full admissions join has settled: it also waits for source, subagent, and
 terminal-persistence cleanup.
 
+Agent database native closes taking at least 500 ms append phase durations to the
+existing clean-close receipt: WAL-maintenance stop, checkpoint, native close, and
+lease release. A per-database resource drain taking at least 500 ms also emits one
+`agent database close settled` line on the same logger, separating resource join,
+native executor join, and remaining native-owner cleanup. Executor join includes
+accepted work, native receipt phases, and subsequent shared-state cleanup; these durations overlap
+and should not be added together. Native receipt totals also include preparation
+and identity checks outside the named phases. Both lines carry the agent ID, thread ID, and a
+short hash of the captured database path for correlation without printing the path.
+Different aliases of a path can have different hashes. Fast closes retain their
+existing logging. These diagnostics identify a slow owner without changing its
+receipts, deadlines, checkpoints, or durability. For an updated Gateway, collect
+them at the handoff **after** deployment: the outgoing release runs shutdown.
+
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
 Managed update handoffs keep their own stop handling.
@@ -290,9 +304,11 @@ close; the native shutdown watchdog kills the process if leaked handles keep it
 alive two seconds past the shutdown deadline. Its worker and main-thread fallback
 share one monotonic deadline, including worker startup time, and report retained
 cleanup owners before forcing exit. After a clean shutdown retires those
-watchdogs, the command waits ten seconds past its own final cleanup. If a leaked
-handle still keeps the process alive, the Gateway prints the active resource types
-to stderr. On Linux and macOS, a stop with exit status `0` then ends with `SIGTERM`,
+watchdogs, the Gateway command waits one second past its own final cleanup. If a
+leaked handle still keeps the process alive, it prints active resource and handle
+types to stderr, plus details for at most eight handles: stdout/stderr labels, TLS
+servername and remote address, or a child executable (without arguments). Endpoint
+names and executable strings are bounded to 255 characters and JSON escaped. On Linux and macOS, a stop with exit status `0` then ends with `SIGTERM`,
 which supervisors count as a clean stop. A non-zero status, which can be a
 supervisor restart instruction, and Windows keep the report only. A duplicate `SIGTERM` during shutdown is
 logged once and ignored. That signal exit is accepted, and the supervisor starts
