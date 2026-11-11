@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { message, nativeMessage, queued, signedText } from "./chat-thread-fixtures.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
@@ -109,7 +110,7 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
   },
 );
 
-it("leaves unphased answers and mixed-phase narration and final text in the transcript", () => {
+it("leaves unphased answers and mixed-phase narration and final text in the transcript", async () => {
   const container = createComposerContainer();
   renderChatInto(container, {
     runActive: true,
@@ -128,9 +129,11 @@ it("leaves unphased answers and mixed-phase narration and final text in the tran
       ),
     ],
   });
-  const text = content(container).join("\n");
-  expect(text).toContain("Unphased answer.");
-  expect(text).toContain("The result is ready.");
-  expect(text).toContain("Checking once more.");
-  expect(container.textContent?.match(/Checking once more\./g)).toHaveLength(1);
+  await waitForSolid(() => {
+    const text = content(container).join("\n");
+    expect(text).toContain("Unphased answer.");
+    expect(text).toContain("The result is ready.");
+    expect(text).toContain("Checking once more.");
+    expect(container.textContent?.match(/Checking once more\./g)).toHaveLength(1);
+  });
 });
