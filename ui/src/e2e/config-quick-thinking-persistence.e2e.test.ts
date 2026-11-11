@@ -45,8 +45,7 @@ const group = (page: Page, fast: boolean) => {
 const radio = (container: Locator, name: string) =>
   container.getByRole("radio", { name, exact: true });
 async function expectChecked(button: Locator) {
-  await button.waitFor();
-  expect(await button.isChecked()).toBe(true);
+  await expect.poll(() => button.isChecked()).toBe(true);
 }
 
 suite.define(() => {
@@ -109,18 +108,28 @@ suite.define(() => {
           frame.png,
         );
       }
+      await gateway.deferNext("config.patch");
       await radio(speed, "Fast").click();
       expect(requestRaw(await gateway.waitForRequest("config.patch"))).toMatchObject({
         agents: { defaults: { fastModeDefault: true } },
       });
+      const priorReads = (await gateway.getRequests("config.get")).length;
+      // The applied-config refresh must see the same snapshot as the save acknowledgment.
+      await gateway.setMethodResponse("config.get", snapshot(true, "speed-2"));
+      await gateway.resolveDeferred("config.patch");
+      await gateway.waitForRequest("config.get", { after: priorReads });
       await expectChecked(radio(speed, "Fast"));
       await gateway.setMethodResponse("config.patch", snapshot("ultrafast", "speed-3"));
+      await gateway.deferNext("config.patch");
       await radio(speed, "Ultrafast").click();
       await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(2);
       const requests = await gateway.getRequests("config.patch");
       expect(requestRaw(requests[1]!)).toMatchObject({
         agents: { defaults: { fastModeDefault: "ultrafast" } },
       });
+      await gateway.setMethodResponse("config.get", snapshot("ultrafast", "speed-3"));
+      await gateway.resolveDeferred("config.patch");
+      await expectChecked(radio(speed, "Ultrafast"));
       const fresh = await context.newPage();
       await installMockGateway(fresh, {
         models: speedModels,

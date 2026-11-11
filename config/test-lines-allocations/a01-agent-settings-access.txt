@@ -1,0 +1,4 @@
+# Agent Settings authorization regressions at the page boundary, typed denial/retry
+# classification, and accurate advertised-method fixtures for affected consumers.
+# Exact net test/helper LF growth for campaign A01.
+222

@@ -4,7 +4,7 @@
 
 .plugins-hub-header .page-title {
   margin: 0;
-  font-size: calc(26px * var(--control-ui-text-scale));
+  font-size: 26px;
 }
 
 .plugins-hub-header .hub-tabs--sub .hub-tab {
@@ -17,7 +17,7 @@
 
 @media (max-width: 768px) {
   .plugins-hub-header .page-title {
-    font-size: calc(22px * var(--control-ui-text-scale));
+    font-size: 22px;
   }
 }
 
@@ -765,7 +765,7 @@
 .plugins-detail__title h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(20px * var(--control-ui-text-scale));
+  font-size: 20px;
   font-weight: 680;
   letter-spacing: -0.02em;
 }
@@ -1081,7 +1081,7 @@
   min-width: 0;
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(clamp(24px, 3vw, 32px) * var(--control-ui-text-scale));
+  font-size: clamp(24px, 3vw, 32px);
   line-height: 1.05;
   overflow-wrap: anywhere;
 }

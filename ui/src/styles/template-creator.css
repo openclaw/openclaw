@@ -8,7 +8,7 @@
 
 .template-creator h2 {
   margin: 0;
-  font-size: calc(20px * var(--control-ui-text-scale));
+  font-size: 20px;
 }
 
 .template-creator__intro,
@@ -42,7 +42,7 @@
   align-items: center;
   gap: var(--space-2);
   margin: 0 0 var(--space-2);
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
 }
 
 .template-creator__section h3 span {
@@ -81,7 +81,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .template-creator openclaw-modal-actions {

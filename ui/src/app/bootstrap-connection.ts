@@ -15,7 +15,7 @@ import { finishBootFrame } from "./boot-composer.ts";
 import type { BootRecord } from "./boot-record.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { readCredentialBootRecord } from "./gateway-store.credentials.ts";
-import { isRemoteControlUiIngress } from "./remote-ingress.ts";
+import { hasEmbedderTransport, isRemoteControlUiIngress } from "./remote-ingress.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
@@ -111,8 +111,9 @@ export function prepareApplicationStartup() {
   // Focus documents render before the shell; starting the application router
   // would rewrite their reserved presentation route into an ordinary page.
   const startsApplicationRouter = documentMode === null && focusLocation === null;
-  // The live grant determines the person; a previous relay visitor's credential cannot warm-admit it.
-  const ownsWarmBoot = startsApplicationRouter && !isRemoteControlUiIngress();
+  // Relay and Loader admission belong to the live connection, not a prior visitor's boot record.
+  const ownsWarmBoot =
+    startsApplicationRouter && !isRemoteControlUiIngress() && !hasEmbedderTransport();
   const hasPendingGateway = startup.pendingGatewayUrl !== null;
   const readStartupBootRecord = () =>
     ownsWarmBoot && !hasPendingGateway
