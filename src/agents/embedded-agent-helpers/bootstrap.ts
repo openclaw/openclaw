@@ -405,13 +405,14 @@ export function buildBootstrapContextFiles(
       });
     };
     if (file.missing) {
-      // Missing markers are workspace-relative when rendered, so charge the budget
-      // with the basename-length marker regardless of the absolute path spelling.
-      const missingText = `[MISSING] Expected at: ${pathValue.split(/[\\/]/u).at(-1) ?? pathValue}`;
+      const missingText = `[MISSING] Expected at: ${pathValue}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
       if (!cappedMissingText) {
         break;
       }
+      // Keep the SDK contract on the absolute marker; prompt preparation
+      // (prepareContextFilesForPrompt) renders workspace-relative markers via
+      // the `missing` flag and owns the budget for the shortened spelling.
       appendContext(cappedMissingText, false, true);
       continue;
     }
