@@ -303,6 +303,56 @@ it("effective fingerprint changes for inherited/borrowed edits, not YAML key ord
   expect((await vault.scan()).ontology!.fingerprint).not.toBe(third);
 });
 
+it("layouts maps replace only layouts, nearest first, outside the fingerprint", () => {
+  const layout = (question: string) => ({
+    question,
+    sections: [{ heading: "Status", guidance: "where it stands." }],
+  });
+  const base = manifest("base", [page("project", { layout: layout("base?") }), page("note")]);
+  const plain = resolve(base);
+  const middle = manifest("middle", [], {
+    extends: "base",
+    layouts: { project: layout("middle?") },
+  });
+  const leaf = manifest("leaf", [], {
+    extends: "middle",
+    layouts: { project: layout("leaf?"), note: layout("note?"), gone: layout("gone?") },
+  });
+  const { ontology, issues } = resolve(base, middle, leaf);
+  const by = (name: string) => ontology!.definitions.find((d) => d.definition.name === name)!;
+  expect(by("project").definition.layout!.question).toBe("leaf?");
+  expect(by("project").layoutOverride).toBe(true);
+  expect(by("note").definition.layout!.question).toBe("note?");
+  // Only the layout changed: the definition stays the inherited one.
+  expect(by("project").definition.directory).toBe("project/");
+  expect(issues).toContainEqual(expect.objectContaining({ code: "ontology-layout-ignored" }));
+  // Names, versions and layouts do not reach the fingerprint.
+  expect(ontology!.fingerprint).toBe(plain.ontology!.fingerprint);
+  expect(resolve(manifest("other", [page("project"), page("note")])).ontology!.fingerprint).toBe(
+    plain.ontology!.fingerprint,
+  );
+  const inherited = resolve(base, manifest("middle", [], { extends: "base" }));
+  expect(inherited.ontology!.definitions[0]!.layoutOverride).toBeUndefined();
+  for (const invalid of [
+    manifest("local", [relation("x", { layout: layout("x?") })]),
+    manifest("local", [page("x", { layout: { question: "x?", sections: [] } })]),
+    manifest("local", [
+      page("x", { layout: { question: "x?", sections: [{ heading: "## X", guidance: "y" }] } }),
+    ]),
+    manifest("local", [page("x")], { layouts: { x: { question: "x?" } } }),
+  ]) {
+    expect(resolve(invalid).ontology).toBe(null);
+  }
+});
+
+it("the default vocabulary ships layouts for project, person, company and concept only", async () => {
+  const { vault } = await fixture();
+  const withLayouts = (await vault.scan())
+    .ontology!.definitions.filter((d) => d.definition.layout)
+    .map((d) => d.definition.name);
+  expect(withLayouts.toSorted()).toStrictEqual(["company", "concept", "person", "project"]);
+});
+
 it("invalid active ontology is inspectable, blocks dependent validation, and never changes files", async () => {
   const { root, vault } = await fixture();
   for (const raw of [

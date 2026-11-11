@@ -57,6 +57,8 @@ export type PageState = {
   timer: ReturnType<typeof setTimeout> | undefined;
   suggestGeneration: number;
   vocabulary: Awaited<ReturnType<typeof loadVocabulary>> | undefined;
+  /** Vocabulary type whose detail reopens after its layout was saved. */
+  openLayoutType: string;
   /** Agent whose Scribes tab count is shown; another agent's count is read again. */
   scribesCountAgent: string;
   /** Last committed content of recently left views, keyed by view key, shown again on return. */
@@ -119,6 +121,7 @@ export function createPageState(
     timer: undefined,
     suggestGeneration: 0,
     vocabulary: undefined,
+    openLayoutType: "",
     scribesCountAgent: "",
     retainedViews: new Map(),
     refreshing: false,

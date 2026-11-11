@@ -30,6 +30,36 @@ definitions:
         label: Role
         type: string
         required: false
+    layout:
+      question: what is their role, what are they working on, what do they believe and
+        prefer, how do they relate to the user, and what is open with them?
+      sections:
+        - heading: What They're Building
+          guidance: current projects and things shipped.
+        - heading: What They Believe
+          guidance: opinions, beliefs and positions, attributed.
+        - heading: What Motivates Them
+          guidance: ambition and career arc.
+        - heading: Hobby Horses
+          guidance: topics they keep returning to.
+        - heading: Communication Style
+          guidance: only what was observed directly or what they said about themselves;
+            label each line observed, self-described or inferred. One data point is
+            a source note, not a pattern.
+        - heading: Assessment
+          guidance: the user's assessment. Never overwrite it.
+        - heading: Trajectory
+          guidance: ascending, pivoting, plateauing.
+        - heading: Relationship
+          guidance: how they relate to the user.
+        - heading: Network
+          guidance: who they work with, amplify or argue with.
+        - heading: Contact
+          guidance: how to reach them, without email addresses or phone numbers.
+        - heading: Open Threads
+          guidance: commitments they made or are owed, with dates.
+      notes: A preference or decision a person states goes on their page; don't turn
+        it into a project or company policy.
   - name: company
     label: Company
     description: A business or organization. This broad type also includes products
@@ -54,6 +84,26 @@ definitions:
       extractable: false
       expert_routing: true
     fields: []
+    layout:
+      question: what does it do, how does it relate to the user's work, what is the
+        state of that relationship, and who are the contacts?
+      sections:
+        - heading: Relationship
+          guidance: how it relates to the user's work (partner, sponsor, vendor, customer,
+            competitor) and the state of any agreement, with amounts and dates as
+            the sources state them.
+        - heading: People
+          guidance: contacts and their roles.
+        - heading: Engagements
+          guidance: active joint work, linking each project page.
+        - heading: Open Threads
+          guidance: pending items, with owners and dates when known.
+      notes: >-
+        State covers what they do, stage and key numbers.
+
+
+        Joint work with its own history belongs on its project page, linked from
+        Engagements, not narrated here.
   - name: media
     label: Media
     description: Articles, books, videos, podcasts, and other content you consume.
@@ -170,6 +220,30 @@ definitions:
       extractable: true
       expert_routing: false
     fields: []
+    layout:
+      question: what does it mean, how does it work here, what is it not, and what
+        rules govern it?
+      sections:
+        - heading: How it works
+          guidance: the mechanism or practice as it operates now.
+        - heading: Distinctions
+          guidance: what it is easily confused with, and the difference.
+        - heading: Decisions and policies
+          guidance: adopted rules that govern it, with who decided and why. A proposal is
+            not a policy.
+        - heading: Examples
+          guidance: one or two concrete cases.
+        - heading: Open questions
+          guidance: what is unresolved, with who owns it.
+      notes: >-
+        Explain the concept as it stands, not the history of the discussions about
+        it.
+
+
+        A concept page never uses project headings (Key decisions, Milestones,
+        People, Commitments and deadlines). A dated run of the practice (one
+        release, one incident) is an event claim, or its own project page when it
+        qualifies; the concept page states the rule it established.
   - name: source
     label: Source
     description: Reference material or a transcript that other knowledge draws on.
@@ -356,6 +430,35 @@ definitions:
           - paused
           - completed
           - cancelled
+    layout:
+      question: what is it for, where does it stand, what shaped it, who is involved,
+        and what is due or undecided?
+      sections:
+        - heading: Key decisions
+          guidance: "decisions that still shape the project, newest first, one bullet
+            each: what was decided, who decided, when, and why. A decision a later
+            one replaced drops off; its claim keeps the history."
+        - heading: Milestones
+          guidance: "significant outcomes and targets with their dates: launched,
+            released, merged, deployed, and upcoming target dates. Not meetings,
+            reviews, CI runs or interim pull-request status, and not a log of
+            reports."
+        - heading: People
+          guidance: who leads it, who works on it and who has a stake, with each person's
+            role on this project.
+        - heading: Commitments and deadlines
+          guidance: open commitments with owner and due date when known. A finished
+            commitment moves to Milestones or drops off.
+        - heading: Open questions
+          guidance: unresolved decisions and risks, with who owns each.
+        - heading: Related
+          guidance: parent project, workstream pages and closely related pages, one line
+            each.
+      notes: State says where things stand. These sections hold the specifics State
+        would otherwise accumulate, so a fact belongs in one place, not both. A
+        workstream, component or phase of the project stays a State topic unless it
+        qualifies as its own page
+        ([splitting](profiles.md#the-default-is-no-change)).
   - name: note
     label: Note
     description: A thought, observation, or useful piece of knowledge to keep.

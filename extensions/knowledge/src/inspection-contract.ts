@@ -334,6 +334,9 @@ export const OntologyOutput = Type.Object(
           toTypes: Type.Optional(Type.Array(text(200), { maxItems: 100 })),
           pathPrefixes: Type.Optional(Type.Array(text(100), { maxItems: 100 })),
           behaviors: Definition.properties.behaviors,
+          layout: Definition.properties.layout,
+          // The active manifest's `layouts` map replaces the inherited layout.
+          layoutOverride: Type.Optional(Type.Boolean()),
           source: Type.Optional(text(500)),
           ontology: Type.Optional(text(64)),
           version: Type.Optional(text(40)),

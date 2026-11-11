@@ -403,6 +403,7 @@ export function leanOntology(o: OntologyOutput): Static<typeof LeanOntologyOutpu
             ...nonEmpty("toTypes", d.toTypes),
             ...nonEmpty("pathPrefixes", d.pathPrefixes),
             ...(d.behaviors ? { behaviors: d.behaviors } : {}),
+            ...(d.layout ? { layout: d.layout } : {}),
             ...(d.records ? { records: d.records.map(pageRow) } : {}),
             ...(d.recordsTruncated ? { recordsTruncated: true } : {}),
           })),

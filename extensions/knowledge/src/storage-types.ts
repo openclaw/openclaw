@@ -30,7 +30,8 @@ export type Plan = {
   actor: string;
   agentId?: string;
   scope: string;
-  record: LoadedRecord;
+  /** Absent only for ontology layout edits, which change no record. */
+  record?: LoadedRecord;
   records?: LoadedRecord[];
   source?: SourceIdentity;
   /** Records an undone supersession restores; publishing them lifts their supersession guards. */

@@ -51,15 +51,15 @@ forged content, so 64 bits of the content hash are enough.
 
 `knowledge_ontology` inspects the vocabulary of the effective store.
 
-| Task                 | Input                                                           | Output                                                                      |
-| -------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Discover vocabulary  | `{}`                                                            | Catalog: names, kinds, descriptions, and the fingerprint writes need        |
-| Prepare a page write | `{"view":"definitions","name":"project"}`                       | Structured fields, allowed values, filing, endpoint constraints, provenance |
-| Browse a kind        | `{"kind":"page","limit":20}`                                    | Filtered catalog with `nextOffset`                                          |
-| See examples         | `{"view":"definitions","name":"project","includeRecords":true}` | Up to 20 record summaries per type with `recordsTruncated`                  |
-| List source files    | `{"view":"sources"}`                                            | Authorized source paths, validity, and size                                 |
-| Read one manifest    | `{"view":"sources","sourcePath":"ontology.yaml"}`               | The selected YAML, 12,000 characters by default                             |
-| Diagnose activation  | `{"view":"diagnostics"}`                                        | Paginated issues and inheritance chain                                      |
+| Task                 | Input                                                           | Output                                                               |
+| -------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Discover vocabulary  | `{}`                                                            | Catalog: names, kinds, descriptions, and the fingerprint writes need |
+| Prepare a page write | `{"view":"definitions","name":"project"}`                       | Fields, allowed values, page layout, filing, endpoints, provenance   |
+| Browse a kind        | `{"kind":"page","limit":20}`                                    | Filtered catalog with `nextOffset`                                   |
+| See examples         | `{"view":"definitions","name":"project","includeRecords":true}` | Up to 20 record summaries per type with `recordsTruncated`           |
+| List source files    | `{"view":"sources"}`                                            | Authorized source paths, validity, and size                          |
+| Read one manifest    | `{"view":"sources","sourcePath":"ontology.yaml"}`               | The selected YAML, 12,000 characters by default                      |
+| Diagnose activation  | `{"view":"diagnostics"}`                                        | Paginated issues and inheritance chain                               |
 
 Definitions default to 10 per page; other views to 50. `limit` accepts 1–100.
 Follow `nextOffset` with unchanged view and filters, and compare fingerprints
@@ -67,6 +67,8 @@ across definition pages. Source text offsets count UTF-16 code units (`maxChars`
 256–65,536). Pages preserve surrogate pairs and may stop one unit before the cap;
 use the returned `nextOffset`. An offset inside a surrogate pair is refused.
 Raw YAML is for debugging a manifest; normal authoring uses `definitions`.
+A page type's `layout` (question, ordered sections with guidance, notes) appears
+only in `definitions`; the Knowledge skills read it before writing a page.
 See [Records and ontology](/plugins/knowledge/records-and-ontology).
 
 ## Reading records

@@ -63,6 +63,10 @@ const glyphs = {
     '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />',
   x: '<path d="M18 6 6 18" /> <path d="m6 6 12 12" />',
   arrowLeft: '<path d="m12 19-7-7 7-7" /> <path d="M19 12H5" />',
+  arrowUp: '<path d="m5 12 7-7 7 7" /> <path d="M12 19V5" />',
+  arrowDown: '<path d="M12 5v14" /> <path d="m19 12-7 7-7-7" />',
+  trash:
+    '<path d="M3 6h18" /> <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /> <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />',
 } as const;
 export type IconName = keyof typeof glyphs;
 export function icon(name: IconName, size = 16) {

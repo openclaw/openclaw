@@ -17,8 +17,8 @@ and don't reread one after compaction unless you are about to use it again:
 - [identity](references/identity.md): resolving a person, company or project
 - [writing](references/writing.md): before writing any page prose
 - [meeting page](references/meeting-page.md): writing the meeting page
-- [subject pages](references/profiles.md), plus only the layout for the
-  entity's type: creating or updating a profile or entity page
+- [subject pages](references/profiles.md), plus the layout for the entity's
+  type from the ontology: creating or updating a profile or entity page
 - [source notes](references/source-notes.md): the `attended` and `discusses` edges
 - [assertions](references/assertions.md): claims, attendance edges, reruns
 - [publish](references/publish.md): batch or page writes

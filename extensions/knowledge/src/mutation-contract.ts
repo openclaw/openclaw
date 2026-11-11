@@ -1,7 +1,17 @@
 import { Type, type Static } from "typebox";
 import { ExpectedHash } from "./hash-fence.js";
 import { BODY_INPUT_MAX_CHARS } from "./limits.js";
-import { text, name, Evidence, Envelope, id, strings, RecordAnnotations, Recall } from "./model.js";
+import {
+  text,
+  name,
+  Evidence,
+  Envelope,
+  id,
+  strings,
+  RecordAnnotations,
+  Recall,
+  Layout,
+} from "./model.js";
 import { PageBudget } from "./page-budget.js";
 export const requestId = Type.String({
   pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
@@ -383,6 +393,7 @@ export const Receipt = Type.Object(
         Type.Literal("extract"),
         Type.Literal("supersede"),
         Type.Literal("unsupersede"),
+        Type.Literal("layout"),
       ]),
     ),
     merge: Type.Optional(MergeReport),
@@ -417,6 +428,20 @@ export const Receipt = Type.Object(
   { additionalProperties: false },
 );
 export type Receipt = Static<typeof Receipt>;
+/** Save or reset one page type's layout in the vault's own ontology.yaml. */
+export const LayoutInput = Type.Object(
+  {
+    requestId,
+    expectedVaultId: Type.Optional(requestId),
+    type: name,
+    // The effective layout the editor started from; a different current layout rejects the save.
+    expectedLayout: Type.Union([Layout, Type.Null()]),
+    // null removes the vault's replacement, restoring the inherited layout.
+    layout: Type.Union([Layout, Type.Null()]),
+  },
+  { additionalProperties: false },
+);
+export type LayoutInput = Static<typeof LayoutInput>;
 export const HistoryEntry = Type.Object(
   {
     sequence: Type.Integer(),

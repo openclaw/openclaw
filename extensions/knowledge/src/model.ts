@@ -259,6 +259,27 @@ export const Field = Type.Object(
   },
   { additionalProperties: false },
 );
+const prose = (max: number) =>
+  Type.String({ minLength: 1, maxLength: max, pattern: "^(?=[\\s\\S]*\\S)[\\s\\S]+$" });
+/** How a page of one type is written after its introduction and State. Guidance only: page validation never reads it. */
+export const Layout = Type.Object(
+  {
+    question: prose(500),
+    sections: Type.Array(
+      Type.Object(
+        {
+          heading: Type.String({ minLength: 1, maxLength: 100, pattern: "^[^\\s#][^\\r\\n]*$" }),
+          guidance: prose(2000),
+        },
+        { additionalProperties: false },
+      ),
+      { minItems: 1, maxItems: 30 },
+    ),
+    notes: Type.Optional(prose(4000)),
+  },
+  { additionalProperties: false },
+);
+export type Layout = Static<typeof Layout>;
 export const Definition = Type.Object(
   {
     name,
@@ -292,6 +313,7 @@ export const Definition = Type.Object(
     ),
     from_types: Type.Optional(strings),
     to_types: Type.Optional(strings),
+    layout: Type.Optional(Layout),
   },
   { additionalProperties: false },
 );

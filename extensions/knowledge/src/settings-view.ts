@@ -445,7 +445,48 @@ export async function settings(ui: Page, n: number, settingsTarget: HTMLElement)
     if (!live(n)) {
       return;
     }
-    shell.slot.append(ontologyView(result, open, () => openSettings("status")));
+    // The editor belongs to the store this view showed; a changed agent or store refuses the save.
+    const shown = { agent: state.viewing, vault: state.expectedVault },
+      openType = state.openLayoutType;
+    state.openLayoutType = "";
+    shell.slot.append(
+      ontologyView(
+        result,
+        open,
+        () => openSettings("status"),
+        state.context.host.connection.canWrite
+          ? {
+              save: async (type, layout) => {
+                if (state.viewing !== shown.agent || state.expectedVault !== shown.vault) {
+                  return "The selected agent or store changed; reopen the layout to edit it.";
+                }
+                const receipt = await feature.invoke("ontology_layout", {
+                  requestId: crypto.randomUUID(),
+                  ...(/^[a-f0-9-]{36}$/.test(shown.vault) ? { expectedVaultId: shown.vault } : {}),
+                  type: type.name,
+                  // Fenced by the layout this view showed; a newer layout rejects the save.
+                  expectedLayout: type.layout ?? null,
+                  layout,
+                });
+                if (receipt.state !== "published") {
+                  return receipt.message;
+                }
+                if (state.viewing === shown.agent && state.expectedVault === shown.vault) {
+                  ui.announce(
+                    layout
+                      ? `Saved the ${type.label} layout.`
+                      : `Reset the ${type.label} layout to its default.`,
+                  );
+                  state.openLayoutType = type.name;
+                  void load();
+                }
+                return undefined;
+              },
+            }
+          : undefined,
+        openType,
+      ),
+    );
   } else {
     const [report, findings, history] = await Promise.all([
       feature.invoke("status", {}),

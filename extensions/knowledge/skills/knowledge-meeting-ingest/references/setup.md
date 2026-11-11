@@ -12,7 +12,8 @@
    vault UUID (`vault`) for `expectedVaultId`.
 2. Call `knowledge_ontology({})`, then
    `knowledge_ontology({view: "definitions", name: "<type>"})` for each type you
-   will write. Use the canonical type name and only its declared fields. Keep the
+   will write. Use the canonical type name and only its declared fields; its
+   `layout`, when present, is how pages of that type are written. Keep the
    fingerprint for `expectedOntologyFingerprint`. Every write receipt returns the
    current `ontologyFingerprint`; use the latest one for the next write instead
    of calling status or ontology again.

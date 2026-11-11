@@ -526,6 +526,11 @@ export function createKnowledgeService(
       })),
       record_detail: call("record"),
       ontology: call("ontology"),
+      // Layouts are edited from the Control UI; agents read them from definitions.
+      ontology_layout: (input, context) =>
+        context.source !== "session-action"
+          ? Promise.reject(new Error("Layouts are edited from the Knowledge settings."))
+          : call("saveLayout", true)(input, context),
       diagnostics: call("diagnostics", false, () => ({
         issues: [],
         total: 0,

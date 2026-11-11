@@ -38,14 +38,16 @@ Open **Knowledge** from the Control UI sidebar.
 | Section          | Shows                                                                                                                                                   |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Stores & sharing | Agents, their stores, membership changes, and conversation access; see [Stores](/plugins/knowledge/stores-and-access#manage-stores-from-the-control-ui) |
-| Vocabulary       | The effective ontology: page and relationship types, fields, counts, and examples                                                                       |
+| Vocabulary       | The effective ontology: page and relationship types, fields, page layouts, counts, and examples; operators who may write can edit page layouts          |
 | Vault status     | Store identity and status for the selected agent                                                                                                        |
 | Maintenance      | Schedule, next and last run, and per-store results                                                                                                      |
 
 Operator access needs `operator.read` (or higher) and `operatorRead: true`. A
 named operator role limits browsing to its agents, and a Gateway shared by
 several people requires `operator.admin`.
-Store membership changes need `operator.admin`. The page shows only private
+Store membership changes need `operator.admin`; page layout edits need
+`operator.write` ([page layouts](/plugins/knowledge/records-and-ontology#page-layouts)).
+The page shows only private
 partitions; conversation partitions are not browsable.
 
 Views refresh on change events, on reconnect, and every 30 seconds while

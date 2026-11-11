@@ -63,10 +63,11 @@ record page and returned by `knowledge_timeline` with `entity` and
 
 After State, a page uses its type's sections, in order, and only those the
 evidence supports. A thin page with an introduction and two State topics is
-fine. Read only the layout for the page you are writing:
-[project](layout-project.md), [person](layout-person.md),
-[company](layout-company.md), [concept](layout-concept.md). Other types use an
-introduction, State and the sections their ontology definition describes.
+fine. Read the layout for the page's type from the ontology:
+`knowledge_ontology({view: "definitions", name: "<type>"})` returns it as
+`layout`, with the question the page answers, its sections in order with
+guidance for each, and notes that apply to the whole page. A type without a
+layout uses an introduction, State and the sections its content needs.
 
 Individual pull requests, CI runs, commits, branches and benchmark numbers are
 claims, not page content, unless one is itself a decision, a milestone or a

@@ -15,9 +15,8 @@ and don't reread any after compaction unless you are about to use it again.
 - [identity](references/identity.md): resolving an entity; whether to create a page
 - [enrichment](references/enrichment.md): tiers, what to extract, external lookups, bulk runs
 - [subject pages](references/profiles.md): page rules, creating or updating
-- the layout for the entity's type, and only that one:
-  [project](references/layout-project.md), [person](references/layout-person.md),
-  [company](references/layout-company.md), [concept](references/layout-concept.md)
+- the layout for the entity's type, and only that one: its `layout` in
+  `knowledge_ontology({view: "definitions", name: "<type>"})`
 - [retire dated sections](references/retire-dated.md): only when the page has a
   written Timeline or a section named for a date or source
 - [source notes](references/source-notes.md): the entity's relationship with the source
