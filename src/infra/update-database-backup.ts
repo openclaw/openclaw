@@ -149,9 +149,10 @@ async function inspectRestorableDatabaseFiles(
     // Readers mutate/recreate the transient WAL index; only durable files fence capture.
     for (const suffix of ["", "-wal", "-journal"]) {
       const file = `${database}${suffix}`;
+      // Only sidecars may be absent; without a handler a missing main file still rejects.
       const info = await fs
         .lstat(file, { bigint: true })
-        .catch((error: unknown) => (suffix ? ignoreMissingPath(error) : Promise.reject(error)));
+        .catch(suffix ? ignoreMissingPath : undefined);
       if (!info) {
         continue;
       }

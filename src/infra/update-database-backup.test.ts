@@ -378,7 +378,6 @@ it("classifies maintenance-owned sources once for the backup worker", async () =
   await scope.run(() =>
     createUpdateDatabaseBackup({
       ...f.input,
-      preserveSourceArtifacts: true,
       backupRoot: path.join(f.root, "maintenance-owned"),
       acquisition: { mode: "maintenance-owner" },
     }),
@@ -387,15 +386,13 @@ it("classifies maintenance-owned sources once for the backup worker", async () =
     input.mode === "database-backup" ? [input.sourceEngines] : [],
   );
   const classified = Object.keys(engines ?? {});
-  expect(classified).not.toHaveLength(0);
+  const sqlite = { engine: "sqlite" } as const;
+  const sourceEngines = Object.fromEntries(classified.map((file) => [file, sqlite]));
+  expect(engines).toEqual(sourceEngines);
 
   // Each engine probe copies the whole source; the worker must not repeat the parent's.
   const probes = vi.spyOn(physicalStore, "readBackupEngine");
-  await f.capture({
-    preserveSourceArtifacts: true,
-    originalCaptureSourcePaths: classified,
-    sourceEngines: engines,
-  });
+  await f.capture({ originalCaptureSourcePaths: classified, sourceEngines });
   expect(probes.mock.calls.filter(([file]) => classified.includes(file))).toEqual([]);
 });
 
