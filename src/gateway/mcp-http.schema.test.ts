@@ -56,36 +56,51 @@ describe("buildMcpToolSchema", () => {
     ]);
   });
 
-  it("decides required keys per keyword when anyOf and oneOf are siblings", () => {
-    const [entry] = buildMcpToolSchema([
-      {
-        name: "proof_tool",
-        description: "proof",
-        parameters: {
-          anyOf: [
-            { type: "object", properties: { action: { type: "string" } }, required: ["action"] },
-          ],
-          oneOf: [{ type: "object", properties: { mode: { type: "string" } }, required: ["mode"] }],
-        },
-      } as never,
-    ]);
-
-    expect((entry?.inputSchema.required as string[] | undefined)?.toSorted()).toEqual([
-      "action",
-      "mode",
-    ]);
+  it("refuses an alternative that overlaps a root property", () => {
+    expect(() =>
+      buildMcpToolSchema([
+        {
+          name: "root_overlap",
+          parameters: {
+            properties: { action: { type: "string" } },
+            anyOf: [
+              { properties: { action: { const: "read" } } },
+              { properties: { action: { const: "write" } } },
+            ],
+          },
+        } as never,
+      ]),
+    ).toThrow('tool "root_overlap" input schema declares "anyOf" at the top level');
   });
 
-  it("drops an empty top-level union instead of publishing it", () => {
-    const [entry] = buildMcpToolSchema([
-      {
-        name: "proof_tool",
-        description: "proof",
-        parameters: { oneOf: [] },
-      } as never,
-    ]);
+  it("refuses an allOf that intersects a property across branches", () => {
+    expect(() =>
+      buildMcpToolSchema([
+        {
+          name: "all_of_overlap",
+          parameters: {
+            allOf: [
+              { properties: { action: { enum: ["read", "write"] } } },
+              { properties: { action: { enum: ["write", "delete"] } } },
+            ],
+          },
+        } as never,
+      ]),
+    ).toThrow('tool "all_of_overlap" input schema declares "allOf" at the top level');
+  });
 
-    expect(entry?.inputSchema).toEqual({ type: "object", properties: {}, required: [] });
+  it("refuses sibling anyOf and oneOf constraints", () => {
+    expect(() =>
+      buildMcpToolSchema([
+        {
+          name: "sibling_unions",
+          parameters: {
+            anyOf: [{ properties: { action: { type: "string" } }, required: ["action"] }],
+            oneOf: [{ properties: { mode: { type: "string" } }, required: ["mode"] }],
+          },
+        } as never,
+      ]),
+    ).toThrow('tool "sibling_unions" input schema declares "anyOf" at the top level');
   });
 
   it("passes a plain object schema through unchanged", () => {

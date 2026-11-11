@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { logWarn } from "../logger.js";
 import {
   findToolInputSchemaTopLevelUnionError,
   TOOL_INPUT_SCHEMA_TOP_LEVEL_UNION_KEYWORDS,
@@ -42,66 +41,34 @@ function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unkno
   }
 }
 
-// MCP clients vary in union-schema support. Merge only safe object variants and
-// report the ones that cannot merge, so generated forms stay usable and a lost
-// constraint is never silent. Returns one required-key set per merged variant.
+// MCP clients vary in union-schema support. This receives only prevalidated
+// alternative branches, so merging cannot silently lose a constraint. Returns
+// one required-key set per merged variant.
 function mergeVariantsIntoProperties(
   variants: readonly unknown[],
-  toolName: string,
   mergedProps: Record<string, boolean | Record<string, unknown>>,
 ): Set<string>[] {
   const requiredSets: Set<string>[] = [];
   for (const variant of variants) {
-    if (variant === true) {
-      requiredSets.push(new Set());
-      continue;
-    }
-    if (!isRecord(variant)) {
-      continue;
-    }
-    const props = isRecord(variant.properties) ? variant.properties : undefined;
-    if (props) {
-      for (const [key, schema] of Object.entries(props)) {
-        if (!isPropertySchema(schema)) {
-          warnSchemaOnce(
-            `${MCP_LOOPBACK_LOG_PREFIX}: malformed schema definition for "${toolName}.${key}", ignoring that variant`,
-          );
-          continue;
-        }
-        if (!Object.hasOwn(mergedProps, key)) {
-          mergedProps[key] = schema;
-          continue;
-        }
-        const existing = mergedProps[key]!;
-        if (existing === true || schema === true) {
-          mergedProps[key] = true;
-          continue;
-        }
-        if (existing === false) {
-          mergedProps[key] = schema;
-          continue;
-        }
-        if (schema === false) {
-          continue;
-        }
-        if (isDeepStrictEqual(existing, schema, { skipPrototype: true })) {
-          continue;
-        }
-        // A prior const merge becomes an enum. Treat both as one literal family
-        // so later union variants cannot silently disappear based on ordering.
-        const mergedLiterals = mergeLiteralSchemas(existing, schema);
-        if (mergedLiterals) {
-          mergedProps[key] = mergedLiterals;
-          continue;
-        }
-        warnSchemaOnce(
-          `${MCP_LOOPBACK_LOG_PREFIX}: conflicting schema definitions for "${toolName}.${key}", keeping the first variant`,
-        );
+    const safeVariant = readSafeObjectVariant(variant)!;
+    for (const [key, schema] of Object.entries(safeVariant.properties)) {
+      if (!Object.hasOwn(mergedProps, key)) {
+        mergedProps[key] = schema;
+        continue;
+      }
+      const existing = mergedProps[key]!;
+      if (existing === true || schema === true) {
+        mergedProps[key] = true;
+      } else if (existing === false) {
+        mergedProps[key] = schema;
+      } else if (
+        schema !== false &&
+        !isDeepStrictEqual(existing, schema, { skipPrototype: true })
+      ) {
+        mergedProps[key] = mergeLiteralSchemas(existing, schema)!;
       }
     }
-    requiredSets.push(
-      new Set(Array.isArray(variant.required) ? (variant.required as string[]) : []),
-    );
+    requiredSets.push(new Set(safeVariant.required));
   }
   return requiredSets;
 }
@@ -116,56 +83,138 @@ function hasTopLevelUnion(schema: Record<string, unknown>): boolean {
   );
 }
 
-// Collapses every top-level union keyword into the single object schema native
-// tool definitions require. `anyOf`/`oneOf` branches are alternatives, so only a
-// key required by every branch stays required; `allOf` branches all hold, so
-// their required keys are added. Sibling `properties`/`required` on the root are
-// kept rather than replaced, and an empty union list is reported instead of
-// being left in place for the provider to reject.
+function readObjectProperties(
+  value: unknown,
+): Record<string, boolean | Record<string, unknown>> | undefined {
+  if (value === undefined) {
+    // SAFETY: this null-prototype map is populated only with schemas validated below.
+    return Object.create(null) as Record<string, boolean | Record<string, unknown>>;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  // SAFETY: entries are accepted only after isPropertySchema validates each value.
+  const properties = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
+  for (const [key, schema] of Object.entries(value)) {
+    if (!isPropertySchema(schema)) {
+      return undefined;
+    }
+    properties[key] = schema;
+  }
+  return properties;
+}
+
+function isRequiredKeyList(value: unknown): value is string[] | undefined {
+  return (
+    value === undefined || (Array.isArray(value) && value.every((key) => typeof key === "string"))
+  );
+}
+
+function readSafeObjectVariant(
+  value: unknown,
+):
+  | { properties: Record<string, boolean | Record<string, unknown>>; required: string[] }
+  | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (
+    Object.keys(value).some(
+      (key) => key !== "type" && key !== "properties" && key !== "required",
+    ) ||
+    (value.type !== undefined && value.type !== "object") ||
+    !isRequiredKeyList(value.required)
+  ) {
+    return undefined;
+  }
+  const properties = readObjectProperties(value.properties);
+  return properties ? { properties, required: value.required ?? [] } : undefined;
+}
+
+function canMergeAlternativeProperties(
+  variants: readonly unknown[],
+  rootProperties: Record<string, boolean | Record<string, unknown>>,
+): boolean {
+  const merged = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
+  for (const variant of variants) {
+    const safeVariant = readSafeObjectVariant(variant);
+    if (!safeVariant) {
+      return false;
+    }
+    for (const [key, schema] of Object.entries(safeVariant.properties)) {
+      if (Object.hasOwn(rootProperties, key)) {
+        return false;
+      }
+      const existing = merged[key];
+      if (existing === undefined || isDeepStrictEqual(existing, schema, { skipPrototype: true })) {
+        merged[key] = schema;
+      } else if (existing === true || schema === true) {
+        merged[key] = true;
+      } else if (existing === false) {
+        merged[key] = schema;
+      } else if (schema === false) {
+        continue;
+      } else if (!mergeLiteralSchemas(existing, schema)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function canMergeAllOfProperties(
+  variants: readonly unknown[],
+  rootProperties: Record<string, boolean | Record<string, unknown>>,
+): boolean {
+  const seen = new Set(Object.keys(rootProperties));
+  return variants.every((variant) => {
+    const safeVariant = readSafeObjectVariant(variant);
+    if (!safeVariant) {
+      return false;
+    }
+    return Object.keys(safeVariant.properties).every((key) => {
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  });
+}
+
+// Native tool definitions cannot contain root unions. Flatten only one known
+// object composition when its properties can be copied without weakening a
+// constraint; otherwise leave it intact for the named publish-boundary error.
 function flattenTopLevelUnionSchema(
   raw: Record<string, unknown>,
-  toolName: string,
-): Record<string, unknown> {
-  const mergedProps = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
-  if (isRecord(raw.properties)) {
-    for (const [key, schema] of Object.entries(raw.properties)) {
-      if (isPropertySchema(schema)) {
-        mergedProps[key] = schema;
-      }
-    }
+): Record<string, unknown> | undefined {
+  const keywords = TOOL_INPUT_SCHEMA_TOP_LEVEL_UNION_KEYWORDS.filter((keyword) =>
+    Object.hasOwn(raw, keyword),
+  );
+  if (keywords.length !== 1) {
+    return undefined;
   }
+  const keyword = keywords[0]!;
+  const variants = readSchemaVariants(raw[keyword]);
+  const rootProperties = readObjectProperties(raw.properties);
+  if (!variants || variants.length === 0 || !rootProperties) {
+    return undefined;
+  }
+  if (
+    (keyword === "allOf" && !canMergeAllOfProperties(variants, rootProperties)) ||
+    (keyword !== "allOf" && !canMergeAlternativeProperties(variants, rootProperties))
+  ) {
+    return undefined;
+  }
+  const mergedProps = { ...rootProperties };
   // SAFETY: JSON Schema `required` is a string list; this mirrors the variant read above.
   const required = new Set<string>(Array.isArray(raw.required) ? (raw.required as string[]) : []);
-  for (const keyword of TOOL_INPUT_SCHEMA_TOP_LEVEL_UNION_KEYWORDS) {
-    const variants = readSchemaVariants(raw[keyword]);
-    if (!variants || variants.length > 0) {
-      continue;
-    }
-    warnSchemaOnce(
-      `${MCP_LOOPBACK_LOG_PREFIX}: dropping empty top-level "${keyword}" for "${toolName}", native tool schemas reject it`,
-    );
-  }
-  // Sibling anyOf and oneOf apply together, so each keyword's alternatives decide
-  // their own required keys instead of pooling branches into one alternative set.
-  for (const keyword of ["anyOf", "oneOf"] as const) {
-    const alternatives = readSchemaVariants(raw[keyword]) ?? [];
-    if (alternatives.length === 0) {
-      continue;
-    }
-    const requiredSets = mergeVariantsIntoProperties(alternatives, toolName, mergedProps);
-    for (const key of requiredSets[0] ?? []) {
-      if (requiredSets.every((set) => set.has(key))) {
+  const requiredSets = mergeVariantsIntoProperties(variants, mergedProps);
+  for (const set of requiredSets) {
+    for (const key of set) {
+      if (keyword === "allOf" || requiredSets.every((candidate) => candidate.has(key))) {
         required.add(key);
       }
-    }
-  }
-  for (const set of mergeVariantsIntoProperties(
-    readSchemaVariants(raw.allOf) ?? [],
-    toolName,
-    mergedProps,
-  )) {
-    for (const key of set) {
-      required.add(key);
     }
   }
   const { allOf: _allOf, anyOf: _anyOf, oneOf: _oneOf, ...rest } = raw;
@@ -181,18 +230,6 @@ function isPropertySchema(value: unknown): value is boolean | Record<string, unk
   return typeof value === "boolean" || isRecord(value);
 }
 
-// Deduplicate by tool, field, and reason across per-session schema cache misses.
-// Tool metadata stays stable until restart or explicit reload.
-const emittedSchemaWarnings = new Set<string>();
-
-function warnSchemaOnce(message: string) {
-  if (emittedSchemaWarnings.has(message)) {
-    return;
-  }
-  emittedSchemaWarnings.add(message);
-  logWarn(message);
-}
-
 export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry[] {
   return tools.flatMap((tool) => {
     const name = readMcpLoopbackToolName(tool);
@@ -204,7 +241,7 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
       return [];
     }
     if (hasTopLevelUnion(raw)) {
-      raw = flattenTopLevelUnionSchema(raw, name);
+      raw = flattenTopLevelUnionSchema(raw) ?? raw;
     }
     if (raw.type !== "object") {
       raw.type = "object";
