@@ -125,8 +125,7 @@ export async function buildTemplateAddPlan(params: {
       ),
     );
   }
-  const reservedAgentId = isReservedSystemAgentId(finalId);
-  if (reservedAgentId) {
+  if (isReservedSystemAgentId(finalId)) {
     blockers.push(
       blocker(
         "reserved_agent_id",
@@ -162,7 +161,7 @@ export async function buildTemplateAddPlan(params: {
     action: "create",
     target: `agents.entries[${JSON.stringify(finalId)}]`,
     details: { ...agentConfig, expectedState: "absent" },
-    blocked: agentBlocked || reservedAgentId || !AGENT_ID_PATTERN.test(finalId),
+    blocked: agentBlocked || isReservedSystemAgentId(finalId) || !AGENT_ID_PATTERN.test(finalId),
   });
   const agentCapability = templateAgentCapabilityChange(finalId, openClawAgentSettings);
   if (agentCapability) {
