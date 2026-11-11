@@ -515,7 +515,12 @@ describe("resolveModel", () => {
       );
       MODELS_JSON_STATE.costCache.clear();
       resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce(
-        makeProviderModelFixture({ provider: "google", id: "fresh-model" }),
+        makeProviderModelFixture({
+          provider: "google",
+          id: "fresh-model",
+          api: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        }),
       );
       const config = {};
       const result = await resolveWithoutDiscovery("google", "fresh-model", undefined, {
