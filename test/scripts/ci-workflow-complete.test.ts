@@ -211,7 +211,7 @@ function runChecks(job: string, name: string, env: Record<string, string> = {}) 
     }
     env() {
       while [ "$#" -gt 0 ]; do
-        case "$1" in -u) shift 2 ;; *=*) shift ;; *) break ;; esac
+        case "$1" in -u) shift 2 ;; *=*) printf 'ENV %s\n' "$1"; shift ;; *) break ;; esac
       done
       "$@"
     }
@@ -226,6 +226,7 @@ function runChecks(job: string, name: string, env: Record<string, string> = {}) 
         if [ "$FAIL_SCRIPT" != '' ] && [[ "$2" == *"$FAIL_SCRIPT"* ]]; then return 1; fi
       else
         printf 'CHECK node %s\n' "$*"
+        if [ "$1" = "$FAIL_SCRIPT" ]; then return 1; fi
       fi
     }
     nproc() { printf '8\n'; }
@@ -362,6 +363,29 @@ describe("CI check failure collection", () => {
     expect(result.status, result.stderr).toBe(1);
     expect(result.stdout.match(/^CHECK /gm)).toHaveLength(8);
     expect(result.stdout).toContain("scripts/check-protocol-since.mts");
+  });
+  it("runs both main-push regressions under both runtimes after a test failure", () => {
+    const result = runChecks(
+      "security-fast",
+      "Check main push shutdown and suppression regressions",
+      {
+        FAIL_SCRIPT: "scripts/run-vitest.mjs",
+      },
+    );
+    expect(result.status, result.stderr).toBe(1);
+    for (const runtime of ["node", "bun"]) {
+      expect(result.stdout.split(`ENV OPENCLAW_VITEST_RUNTIME=${runtime}\n`)).toHaveLength(3);
+      for (const label of ["shutdown", "lint-suppressions"]) {
+        expect(result.stdout).toContain(`::group::${runtime}-${label}`);
+      }
+    }
+    expect(result.stdout.match(/^CHECK /gm)).toHaveLength(4);
+    for (const file of [
+      "src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts",
+      "test/scripts/lint-suppressions.test.ts",
+    ]) {
+      expect(result.stdout.split(file)).toHaveLength(3);
+    }
   });
   it("finishes legacy native locale checks after a failed native check", () => {
     const result = runChecks("native-i18n", "Verify native app i18n source", {
