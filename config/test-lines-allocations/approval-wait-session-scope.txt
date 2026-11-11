@@ -1,0 +1,3 @@
+# Approval waits scoped to their source session: another session changed or created
+# (kept) against own session, bare key and unscoped changes (still rejected).
+17
