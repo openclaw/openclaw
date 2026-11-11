@@ -281,11 +281,7 @@ export function registerGatewayCli(program: Command) {
               : opts;
           const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(callOpts, command);
           const params = parseGatewayCallParams(String(opts.params ?? "{}"));
-          const reply = await callGatewayReadOnlyCliUnlessAborted(method, rpcOpts, params);
-          if (!reply) {
-            return;
-          }
-          const { result } = reply;
+          const result = await callGatewayReadOnlyCli(method, rpcOpts, params);
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
             return;

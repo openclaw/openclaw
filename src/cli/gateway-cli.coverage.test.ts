@@ -171,7 +171,6 @@ describe("gateway-cli coverage", () => {
 
   it.each([
     [["usage-cost"], "usage.cost", { days: 30 }],
-    [["call", "usage.cost"], "usage.cost", {}],
     [["stability", "--limit", "5"], "diagnostics.stability", { limit: 5 }],
   ])("prints no gateway %j reply that lands after Ctrl+C", async (args, method, params) => {
     work.signal = AbortSignal.abort();
