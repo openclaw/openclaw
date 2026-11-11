@@ -108,7 +108,6 @@ suite.define(() => {
       expect(new URL(page.url()).hash).toBe("#settings-session-sources");
     });
   });
-
   it("indexes source labels before Appearance and waits for the catalog", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -134,7 +133,6 @@ suite.define(() => {
       await expectCount(section.getByRole("switch"), 2);
     });
   });
-
   it("navigates from the sidebar and independently saves source preferences", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, { featureMethods, methodResponses });
