@@ -4,7 +4,6 @@ import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   isDefinitiveRunLifecycle,
 } from "../agents/agent-run-terminal-outcome.js";
-import { PreparedModelRuntimeOwnerNotPublishedError } from "../agents/prepared-model-runtime-admission-errors.js";
 import {
   flushSessionActivityAssistantNote,
   noteSessionActivityEvent,
@@ -15,6 +14,7 @@ import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/obs
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isLlmRuntimeLifecycleFailure } from "../plugins/runtime/runtime-llm-error.js";
 import {
   createSessionObserverAudience,
   createSessionObserverAudienceLifecycle,
@@ -409,11 +409,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           if (!acceptDigestPublication(session)) {
             return;
           }
-          if (
-            error instanceof PreparedModelRuntimeOwnerNotPublishedError &&
-            error.admissionBlocked
-          ) {
+          if (isLlmRuntimeLifecycleFailure(error)) {
             // Runtime replacement is not a provider failure; the next digest needs fresh admission.
+            observerLog.debug(`session observer paused: ${error.name}`, { runId: state.runId });
             state.preparedPromise = undefined;
             if (final || state.finalPending || state.terminalHealth) {
               retireTerminalState(state);

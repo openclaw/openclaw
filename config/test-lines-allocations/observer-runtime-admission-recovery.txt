@@ -1,2 +1,2 @@
-# Same-run preparation/completion recovery and terminal settlement during replacement.
-49
+# Same-run preparation/completion recovery across typed lifecycle refusals and terminal settlement.
+66
