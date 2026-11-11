@@ -230,6 +230,31 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       Object.assign(agentChip, registerAgentCreationEnglish.catalog.agentChip);
     }
   }
+  const presenceCard: TranslationMap = {};
+  const cardBody = registerChatComposerEnglish.catalog.presence.card;
+  // Keep canonical key order while card-only copy moves behind its lazy consumer.
+  for (const [key, value] of Object.entries(en.presence.card)) {
+    if (key === "viewingNow") {
+      for (const name of [
+        "onlineFor",
+        "where",
+        "reportedTimeZone",
+        "lastActivity",
+        "notObserved",
+      ] as const) {
+        presenceCard[name] = cardBody[name];
+      }
+    }
+    if (key === "viewActivity") {
+      for (const name of ["recentSessions", "noRecentSessions", "ago"] as const) {
+        presenceCard[name] = cardBody[name];
+      }
+    }
+    presenceCard[key] = value;
+    if (key === "viewActivity") {
+      presenceCard.viewPermissions = cardBody.viewPermissions;
+    }
+  }
   const newSession: TranslationMap = {};
   for (const [key, value] of Object.entries(registerNewSessionSetupEnglish.catalog.newSession)) {
     newSession[key] = value;
@@ -544,6 +569,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       terminal: registerTerminalEnglish.catalog.terminal,
       updates: registerUpdateActionsEnglish.catalog.updates,
       agentChip,
+      presence: { ...en.presence, card: presenceCard },
       secretsStore: registerSecretsStoreEnglish.catalog.secretsStore,
       custodian: {
         ...registerPluginManagementEnglish.catalog.custodian,

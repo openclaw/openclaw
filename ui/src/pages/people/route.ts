@@ -6,6 +6,6 @@ export const page = defineSolidPage(
   () => import("./people-page.tsx").then((module) => module.PeoplePage),
   {
     loaderDeps: (_context: ApplicationContext, location) => location.search,
-    loader: (_context: ApplicationContext, { location }) => location.search,
+    loader: (_context: ApplicationContext, { deps }) => deps,
   },
 );

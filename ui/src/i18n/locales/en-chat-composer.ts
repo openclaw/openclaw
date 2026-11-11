@@ -3,6 +3,19 @@ import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const catalog = {
+  presence: {
+    card: {
+      onlineFor: "Online for",
+      where: "Where",
+      reportedTimeZone: "Reported time zone: {zone}",
+      lastActivity: "Last interaction",
+      notObserved: "Activity unavailable",
+      recentSessions: "Recent sessions",
+      noRecentSessions: "No recent visible sessions.",
+      ago: "ago",
+      viewPermissions: "View permissions",
+    },
+  },
   chat: {
     view: {
       activityDetails: "View activity details",

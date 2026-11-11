@@ -75,13 +75,15 @@ openclaw-appearance-background {
   transition: box-shadow var(--duration-fast) ease;
 }
 
-.settings-background-option:hover:not(:disabled) .settings-background-option__sample {
+.settings-background-option:hover:not(:disabled) .settings-background-option__sample,
+.settings-tab-icon__pick:hover {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 40%, transparent);
 }
 
 .settings-background-option[aria-pressed="true"] .settings-background-option__sample,
 .settings-background-option[aria-pressed="true"]:hover:not(:disabled)
-  .settings-background-option__sample {
+  .settings-background-option__sample,
+.settings-tab-icon__pick[aria-pressed="true"] {
   box-shadow:
     0 0 0 2px var(--card),
     0 0 0 4px var(--text-strong);
@@ -827,7 +829,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
   overflow-wrap: anywhere;
 }
 
-.settings-row__value--mono {
+.settings-row__value--mono,
+.settings-kv code {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
 }
@@ -896,16 +899,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   background: var(--bg);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
   transition: box-shadow var(--duration-fast) ease;
-}
-
-.settings-tab-icon__pick:hover {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 40%, transparent);
-}
-
-.settings-tab-icon__pick[aria-pressed="true"] {
-  box-shadow:
-    0 0 0 2px var(--card),
-    0 0 0 4px var(--text-strong);
 }
 
 .settings-tab-icon__pick:focus-visible {
@@ -1230,15 +1223,17 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex: 1 1 auto;
 }
 
-/* A secret that holds its edit: the field, then Save and Cancel beside it. Together they keep the
-   lone-input width, so a held edit narrows the field instead of moving the row or its neighbours. */
-.cfg-secret {
+/* Inline edit/action clusters share geometry; their field-width rules remain local below. */
+.cfg-secret,
+.identity-avatar-control,
+.identity-name-control {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
 }
 
+/* Held secrets retain the lone-input width while Save and Cancel share its row. */
 .cfg-secret > .settings-secret {
   flex: 1 1 0;
   min-width: 0;
@@ -1566,21 +1561,6 @@ textarea.settings-input {
   margin: 0;
   color: var(--text);
   overflow-wrap: anywhere;
-}
-
-.settings-kv code {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-}
-
-/* Identity composes existing row controls; these wrappers only keep the
-   avatar/file action and name/save action aligned as one control cluster. */
-.identity-avatar-control,
-.identity-name-control {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
 }
 
 .identity-name-control .settings-input {

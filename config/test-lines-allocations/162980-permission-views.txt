@@ -3,4 +3,5 @@
 # popover navigation plus production-browser capture/guest RPC boundaries.
 # Exact net LF growth for the current-base #162980 permission-view implementation.
 # Includes the shared People page-census integration regression.
-418
+# Includes the two-line host catalog regression for lazy person-card copy.
+420
