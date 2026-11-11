@@ -1,4 +1,4 @@
-1343
+1335
 # Subagent wait-expiry disposition: the provisional wait-expiry registry suite, the
 # still-running announce cases, and the killed/exited disposition pins on the
 # cancellation producers and the wire schema.

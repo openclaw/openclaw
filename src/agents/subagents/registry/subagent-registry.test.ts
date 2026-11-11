@@ -726,25 +726,16 @@ describe("subagent registry seam flow", () => {
     expectUnsettled(findRequesterRun(runId));
 
     await vi.advanceTimersByTimeAsync(5_000);
+    // The stored deadline elapsed on our own clock and `agent.wait` returned no
+    // terminal snapshot, so the expiry is published provisionally: the run stays
+    // live and keeps its session until its lifecycle owner reports the end.
     await waitForFast(() => {
-      expect(findRequesterRun(runId)).toMatchObject({
-        execution: {
-          status: "terminal",
-          endedAt: startedAt + 1_000,
-          outcome: {
-            status: "timeout",
-            startedAt,
-            endedAt: startedAt + 1_000,
-            elapsedMs: 1_000,
-          },
-        },
-      });
+      const observed = findRequesterRun(runId);
+      expect(observed?.execution.status).toBe("running");
+      expect(observed?.execution.endedAt).toBeUndefined();
+      expect(observed?.waitExpiryObservedAt).toBe(startedAt + 1_000);
     });
     await settleRootWork();
-    expect(mocks.captureSubagentCompletionReply).toHaveBeenCalledTimes(1);
-    expect(
-      mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent.wait").length,
-    ).toBeGreaterThanOrEqual(2);
     emitLifecycle(runId, { phase: "end", startedAt: startedAt + 10, endedAt: startedAt + 500 });
     await waitForFast(() => {
       const run = findRequesterRun(runId);
