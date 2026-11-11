@@ -136,7 +136,8 @@ remain owned by their existing execution paths.
 
 For session actions, thrown handler errors return `ok: false` with code
 `OPERATION_FAILED` and the error's message (or stringified thrown value), limited
-to 2,000 characters. Validation failures retain `INVALID_INPUT` or
+to 2,000 UTF-16 code units without splitting surrogate pairs. Blank messages use
+`Feature operation failed`. Validation failures retain `INVALID_INPUT` or
 `INVALID_OUTPUT`. `createFeatureClient.invoke` rejects with the returned message.
 Use caller-safe error messages: stacks, causes, and other error fields are not
 included. Tools and commands retain their existing error handling; the Gateway

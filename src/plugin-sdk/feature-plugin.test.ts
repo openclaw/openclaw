@@ -156,7 +156,10 @@ describe("typed feature plugins", () => {
       new Error("operation unavailable", { cause: new Error("private cause") }),
       "operation unavailable",
     ],
-    [new Error(""), ""],
+    [new Error(""), "Feature operation failed"],
+    [new Error("   "), "Feature operation failed"],
+    ["", "Feature operation failed"],
+    [new Error("  operation unavailable  "), "  operation unavailable  "],
     ["string failure", "string failure"],
     [{ message: "object failure", details: "private details" }, "object failure"],
     [{ details: "private details" }, "[object Object]"],
@@ -164,6 +167,8 @@ describe("typed feature plugins", () => {
     [undefined, "undefined"],
     [42, "42"],
     [new Error("x".repeat(2001)), "x".repeat(2000)],
+    [new Error(" ".repeat(2000) + "hidden"), "Feature operation failed"],
+    [new Error("x".repeat(1999) + "😀"), "x".repeat(1999)],
   ])("returns bounded application errors for thrown value %#", async (error, message) => {
     const action = register(() => ({
       inspect: vi.fn<() => Promise<{ value: string }>>().mockRejectedValue(error),
