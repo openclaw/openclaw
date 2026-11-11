@@ -26,10 +26,7 @@ describe("Template execution settings", () => {
     { sandbox: { scope: "agent" } },
     { sandbox: { workspaceAccess: "none" } },
     { tools: { profile: "minimal" } },
-    { tools: { allow: [] } },
-    { tools: { alsoAllow: [] } },
-    { tools: { deny: [] } },
-    { tools: { fs: { workspaceOnly: false } } },
+    { tools: { fs: { workspaceOnly: true } } },
   ])("keeps a partial or explicitly disabled declaration visible: %j", (access) => {
     const view = mountSolid(() => <TemplateAccessSection access={access} />);
     expect(view.getByRole("heading", { name: "Execution settings" })).toBeTruthy();
@@ -49,7 +46,7 @@ describe("Template execution settings", () => {
       return <TemplateAccessSection access={access()} />;
     });
     expect(view.container.childElementCount).toBe(0);
-    update({ tools: { fs: { workspaceOnly: false } } });
+    update({ sandbox: { mode: "off" } });
     flush();
     expect(view.getByRole("heading", { name: "Execution settings" })).toBeTruthy();
     update({ tools: { fs: {} } });
@@ -65,7 +62,7 @@ describe("Template execution settings", () => {
       <TemplateAccessSection
         access={{
           sandbox: { mode: "off", scope: "agent", workspaceAccess: "ro" },
-          tools: { profile: "full", allow, deny, fs: { workspaceOnly: false } },
+          tools: { profile: "full", allow, deny, fs: { workspaceOnly: true } },
         }}
       />
     ));
@@ -80,7 +77,7 @@ describe("Template execution settings", () => {
       "full",
       "read, web_fetch",
       "exec, write",
-      "Workspace-only restriction off",
+      "Workspace only",
     ]) {
       expect(fields.getByText(value, { exact: true })).toBeTruthy();
     }

@@ -12,6 +12,7 @@ import { SettingsRow } from "./settings-ui.tsx";
 export function SettingsDisclosure(props: {
   id?: string;
   class?: string;
+  ariaLabel?: string;
   title: JSX.Element;
   description?: JSX.Element;
   open?: boolean;
@@ -23,6 +24,7 @@ export function SettingsDisclosure(props: {
   return (
     <details
       id={props.id}
+      aria-label={props.ariaLabel}
       class={[
         "settings-disclosure",
         { "settings-group": !props.quiet && !props.sections },

@@ -1,9 +1,9 @@
 import { For, Show } from "solid-js";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { TemplateCatalogDetail } from "./templates-catalog-client.ts";
-import "./template-access-section.css";
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
@@ -101,20 +101,20 @@ export function TemplateAccessSection(props: { access: TemplateCatalogDetail["ac
           carapace
         >
           <dl
-            class="template-execution-summary"
+            class="settings-summary template-execution-summary"
             aria-label={t("templatesCatalog.access.summaryLabel")}
           >
-            <div>
+            <div class="settings-summary__tile">
               <dt>{t("templatesCatalog.access.sandbox")}</dt>
-              <dd>
+              <dd class="settings-row__text">
                 {props.access?.sandbox?.mode === undefined
                   ? t("templatesCatalog.access.unspecified")
                   : t(`templatesCatalog.access.mode.${props.access.sandbox.mode}`)}
               </dd>
             </div>
-            <div>
+            <div class="settings-summary__tile">
               <dt>{t("templatesCatalog.access.fileAccess")}</dt>
-              <dd>
+              <dd class="settings-row__text">
                 {props.access?.tools?.fs?.workspaceOnly === undefined
                   ? t("templatesCatalog.access.unspecified")
                   : t(
@@ -123,7 +123,7 @@ export function TemplateAccessSection(props: { access: TemplateCatalogDetail["ac
                         : "templatesCatalog.access.workspaceOnlyOff",
                     )}
                 <Show when={props.access?.sandbox?.workspaceAccess}>
-                  <span class="template-execution-summary__detail">
+                  <span class="settings-row__desc">
                     {t("templatesCatalog.access.sandboxWorkspace", {
                       access: t(
                         `templatesCatalog.access.workspace.${props.access?.sandbox?.workspaceAccess}`,
@@ -133,9 +133,9 @@ export function TemplateAccessSection(props: { access: TemplateCatalogDetail["ac
                 </Show>
               </dd>
             </div>
-            <div>
+            <div class="settings-summary__tile">
               <dt>{t("templatesCatalog.access.toolPolicy")}</dt>
-              <dd>
+              <dd class="settings-row__text">
                 {props.access?.tools?.profile ??
                   t(
                     props.access?.tools?.allow === undefined
@@ -143,22 +143,23 @@ export function TemplateAccessSection(props: { access: TemplateCatalogDetail["ac
                       : "templatesCatalog.access.allow",
                   )}
                 <Show when={toolRuleSummary()}>
-                  <span class="template-execution-summary__detail">{toolRuleSummary()}</span>
+                  <span class="settings-row__desc">{toolRuleSummary()}</span>
                 </Show>
               </dd>
             </div>
           </dl>
-          <details
+          <SettingsDisclosure
             class="template-execution-details"
-            aria-label={t("templatesCatalog.access.detailsLabel")}
+            ariaLabel={t("templatesCatalog.access.detailsLabel")}
+            title={t("templatesCatalog.access.viewDetails")}
+            quiet
           >
-            <summary>{t("templatesCatalog.access.viewDetails")}</summary>
             <For each={rows()} keyed={(row) => row.id}>
               {(row) => (
                 <SettingsRow title={row().title} description={row().description} carapace />
               )}
             </For>
-          </details>
+          </SettingsDisclosure>
         </SettingsSection>
       </div>
     </Show>
