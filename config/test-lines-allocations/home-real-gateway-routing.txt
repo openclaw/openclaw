@@ -1,0 +1,2 @@
+# Add the existing Home real-Gateway case to independent runtime admission coverage.
+1
