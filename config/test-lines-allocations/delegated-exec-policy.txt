@@ -1,2 +1,2 @@
-348
+329
 # Covers delegated policy, benign and command-capable spawned Gateway approval, closed-schema inventory proof, fixture support, and owner-grant persistence after approval.

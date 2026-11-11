@@ -53,17 +53,14 @@ const AUTO_APPLY_CONFIG_PATHS = new Set(
     "gateway.controlUi.environment.label",
     "gateway.controlUi.environment.color",
     "agents.defaults.thinkingDefault",
-    "agents.defaults.fastModeDefault",
     "agents.defaults.blockStreamingDefault",
     "agents.defaults.blockStreamingBreak",
     "agents.defaults.typingMode",
     "agents.defaults.typingIntervalSeconds",
-    "messages.visibleReplies",
     "messages.responsePrefix",
     "messages.ackReaction",
     "messages.ackReactionScope",
     "messages.statusReactions.enabled",
-    "messages.groupChat.visibleReplies",
   ].map((path) => JSON.stringify(path.split("."))),
 );
 
