@@ -320,7 +320,7 @@ suite.define(() => {
           });
           await pollDisabled(start).toBe(true);
           await pollAttribute(start.locator("xpath=.."), "content").toContain(
-            "No worker slots are available",
+            "No session slots are available",
           );
           expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
           await page.clock.resume();
@@ -415,7 +415,7 @@ suite.define(() => {
       ...rememberedTarget("auto-device"),
       status: "available",
       availableSlots: 0,
-      reason: "No worker slots are available",
+      reason: "No session slots are available",
     },
   ])(
     "keeps a remembered $name blocked until the user explicitly switches to Local",
@@ -485,7 +485,7 @@ suite.define(() => {
       await agentPicker.getByRole("option", { name: "research", exact: true }).click();
       await pollText(agentPicker.locator(".agent-select__label")).toBe("research");
       await pollAttribute(where, "data-device-id").toBeNull();
-      await pollText(where.locator(".new-session-page__trigger-label")).toBe("Local");
+      await pollText(where.locator(".new-session-page__trigger-label")).toBe("This computer");
       await captureDeviceRuntimeUiProof(
         suite,
         page,

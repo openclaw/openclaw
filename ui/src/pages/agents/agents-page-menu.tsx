@@ -19,6 +19,8 @@ export function AgentsPageMenu(props: {
   defaultLabel: string;
   defaultDisabled: boolean;
   pinLabel: string;
+  deleteDisabled: boolean;
+  onDelete: (agentId: string) => void;
   showPhoneActions: boolean;
   createLabel: string;
   createDisabled: boolean;
@@ -48,6 +50,13 @@ export function AgentsPageMenu(props: {
           { id: "copy", label: t("agents.copyId") },
           { id: "default", label: props.defaultLabel, disabled: props.defaultDisabled },
           { id: "pin", label: props.pinLabel },
+          {
+            id: "delete",
+            label: t("common.delete"),
+            icon: <Icon name="trash" />,
+            variant: "danger" as const,
+            disabled: props.deleteDisabled,
+          },
         ]
       : []),
     ...(props.showPhoneActions
@@ -77,6 +86,8 @@ export function AgentsPageMenu(props: {
           props.onSetDefault(agentId);
         } else if (agentId && item.id === "pin") {
           props.onTogglePinned(agentId);
+        } else if (agentId && item.id === "delete") {
+          props.onDelete(agentId);
         }
       }}
     />

@@ -608,7 +608,7 @@ export function inspectDatabaseWorkerBoundaries(
   });
   session.checkpoint?.("sources-registration");
   if (validateCredentialWriters) {
-    violations.push(...inspectPersonalCredentialWriters(sources, checker));
+    violations.push(...inspectPersonalCredentialWriters(sources, checker, symbolsAt));
     session.checkpoint?.("credential-writers");
   }
   // Follow named kernels from the reviewed boundaries. A symbol reference from
@@ -835,6 +835,7 @@ export function inspectDatabaseWorkerBoundaries(
       pending.push(operation);
     }
   }
+  session.checkpoint?.("closure-expansion");
   const aliases: [string, string][] = [];
   const namespaces: (ts.Identifier | ts.StringLiteral)[] = [];
   const bindings: ts.VariableDeclaration[] = [];
@@ -960,6 +961,7 @@ export function inspectDatabaseWorkerBoundaries(
       handledImports.add(dynamicImport);
     }
   }
+  session.checkpoint?.("binding-forwarding");
   const edges = new Map<BoundaryOperation, Set<BoundaryOperation>>();
   const callerEdges = new Map<BoundaryOperation, Set<BoundaryOperation>>();
   const runtimeReferences = new Set<BoundaryOperation>();
@@ -1056,10 +1058,15 @@ export function inspectDatabaseWorkerBoundaries(
     return { file, source, references };
   });
   // Reference discovery is independent across files in this immutable snapshot.
-  // Resolve the full batch before classifying callers instead of one RPC per file.
-  symbolsAt(sourceReferences.flatMap(({ references }) => references));
+  // Shorthand properties use their value-symbol query during caller classification.
+  symbolsAt(
+    sourceReferences.flatMap(({ references }) =>
+      references.filter((node) => !ts.isShorthandPropertyAssignment(node.parent)),
+    ),
+  );
+  session.checkpoint?.("reference-prefetch");
   for (const { file, source, references } of sourceReferences) {
-    const symbols = symbolsAt(references);
+    const symbols = references.map((node) => compilerSymbols.get(node));
     const pendingAccesses = new Set<ts.Expression>();
     const receiverBindings = new Map<ts.Node, ts.ObjectBindingPattern>();
     for (const [index, node] of references.entries()) {
@@ -1242,6 +1249,7 @@ export function inspectDatabaseWorkerBoundaries(
       }
     }
   }
+  session.checkpoint?.("caller-classification");
   const compatibilityReachable = new Set(
     [...registered.values()].filter((operation) => operation.reviewed && !operation.candidate),
   );

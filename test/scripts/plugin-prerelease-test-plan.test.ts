@@ -108,7 +108,11 @@ function runPluginManifest(
   }
   const root = tempDirs.make("openclaw-plugin-prerelease-phase-");
   const outputPath = join(root, "github-output");
-  const result = spawnSync("bash", ["-c", step.run], {
+  const run = step.run.replace(
+    "./.frv-tooling/scripts/lib/ci-blacksmith-capacity.mjs",
+    new URL("../../scripts/lib/ci-blacksmith-capacity.mjs", import.meta.url).href,
+  );
+  const result = spawnSync("bash", ["-c", run], {
     cwd: targetRoot,
     encoding: "utf8",
     env: {

@@ -456,7 +456,7 @@ describe("cron trigger evaluation", () => {
       failureNotificationDetail: { kind: "script-failure", source: "trigger", code: "timeout" },
     });
     expect(h.events[1]).not.toHaveProperty("failureNotificationDetail");
-    expect(h.events.map((event) => event.action)).toEqual(["started", "finished", "scheduled"]);
+    expect(h.events.map((event) => event.action)).toEqual(["started", "finished"]);
     const history = readHistory(h.storePath, job.id);
     expect(history).toHaveLength(1);
     for (const result of [h.events[1], history[0]]) {
@@ -469,7 +469,7 @@ describe("cron trigger evaluation", () => {
       expect(result?.deliveryError).toBeUndefined();
     }
     const persisted = await readStoredJob(h.storePath, job.id);
-    expectScheduled(h, job.id, persisted?.state.nextRunAtMs);
+    expect(h.events[1]?.job?.state.nextRunAtMs).toBe(persisted?.state.nextRunAtMs);
   });
 
   it("keeps a once trigger armed after malformed evaluator output", async () => {
@@ -616,6 +616,37 @@ describe("cron trigger evaluation", () => {
       lastRunStatus: "error",
       lastError: "cron trigger evaluator is unavailable",
     });
+  });
+});
+
+describe("cron trigger startup", () => {
+  it("evaluates a condition added before the scheduler starts instead of deferring it as missed work", async () => {
+    const evaluateCronTrigger = vi.fn<Evaluator>(async () => evaluated(false));
+    const { storePath } = await makeStorePath();
+    const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      evaluateCronTrigger,
+    });
+    try {
+      // The Gateway accepts cron.add while its scheduler start is still pending.
+      const job = await cron.add(
+        watcher({ sessionTarget: "main", payload: { kind: "systemEvent", text: "quiet" } }),
+      );
+      vi.setSystemTime(job.state.nextRunAtMs! + 5_000);
+      await cron.start();
+      await vi.waitFor(() => expect(evaluateCronTrigger).toHaveBeenCalledOnce());
+      expect(cron.getJob(job.id)?.state).toMatchObject({ triggerEvalCount: 1 });
+    } finally {
+      cron.stop();
+      await cron.waitForIdle();
+    }
   });
 });
 

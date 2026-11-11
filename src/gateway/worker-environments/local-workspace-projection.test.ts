@@ -32,6 +32,7 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { proveResumedBaseRefresh } from "./local-workspace-base-refresh.test-support.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
+import { registerSandboxCheckpointTests } from "./local-workspace-checkpoint.test-support.js";
 import {
   prepareLegacyArchiveRetention,
   proveAcceptedDirectoryRetention,
@@ -39,11 +40,14 @@ import {
   proveLastFileDirectoryRetention,
 } from "./local-workspace-directory-retention.test-support.js";
 import {
+  proveGitIgnoredWorkspaceOutputs,
+  proveLegacyGitIgnoredWorkspaceOutputs,
+} from "./local-workspace-generated-paths.test-support.js";
+import {
   expectMissing,
   observeAcknowledgedUpdate,
   prepareLocalWorkspaceArchiveFixture,
   prepareSandboxCheckpointFixture,
-  proveAbsentProjectionCheckpoints,
   proveHostAdmittedBuildInputs,
   proveInterruptedWorkspaceCheckpoint,
   proveIncrementalWorkspaceEdits,
@@ -54,11 +58,13 @@ import {
   proveWorkerOwnedArchive,
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import { proveRejectedWorkspaceCheckpoint } from "./local-workspace-recovery.test-support.js";
 import {
   proveConcurrentWorkspacePreparation,
   proveColdPreparationCapacityIsolation,
   provePreparationObservationBoundary,
   provePreparationWaiterAuthority,
+  proveWorkspaceWaitAttribution,
   proveWorkspaceIncarnationRecovery,
   proveWarmWorkspaceConflictRecovery,
   proveWarmWorkspaceReuse,
@@ -70,6 +76,19 @@ import {
   readLocalWorkspaceProjection,
 } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+
+const checkpointLog = vi.hoisted(() => vi.fn<(message: string) => void>());
+// mock-isolation: capture checkpoint diagnostics before imports create the owner logger.
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      info: checkpointLog,
+    }),
+  };
+});
 
 let root: string;
 let stateRoot: string;
@@ -182,9 +201,19 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
+registerSandboxCheckpointTests(() => owner, checkpointLog);
+
+it.each(["canonical", "projection"] as const)(
+  "quarantines rejected checkpoints while allowing new agent work: %s",
+  (target) => proveRejectedWorkspaceCheckpoint(owner, target),
+);
+
 it("reuses warm workspaces and reconciles edits", () => proveWarmWorkspaceReuse(owner));
 
 it("isolates cold capacity", ({ signal }) => proveColdPreparationCapacityIsolation(owner, signal));
+
+it("attributes sandbox projection custody and joined preparation waits", () =>
+  proveWorkspaceWaitAttribution(owner));
 
 it("coalesces concurrent cold and warm sandbox preparations without retaining completed scans", () =>
   proveConcurrentWorkspacePreparation(owner));
@@ -209,9 +238,6 @@ it.each(["read", "authority", "observation", "cancel"] as const)(
       revoked = true;
     }),
 );
-
-it("avoids lease requests for absent projections and checkpoints a later projection", () =>
-  proveAbsentProjectionCheckpoints(owner));
 
 it("joins waiting sandbox checkpoints across handles without losing later writes", ({ signal }) =>
   proveSharedSandboxCheckpoints(owner, signal));
@@ -414,6 +440,12 @@ it.each([false, true])(
     await proveAcceptedInventoryRecovery(owner, retainedMembership);
   },
 );
+
+it("checkpoints Git changes without ignored build outputs or guest Git metadata", () =>
+  proveGitIgnoredWorkspaceOutputs(owner, root));
+
+it("recaptures pre-fix accepted build output without publishing or deleting ignored bytes", () =>
+  proveLegacyGitIgnoredWorkspaceOutputs(owner));
 
 it("never admits nested host secrets after guest de-ignore", async () => {
   const prefix = "nested/";
@@ -769,6 +801,7 @@ it.for([false, true])(
       usePty: false,
     });
     events.length = 0;
+    await writeText(projection.workspaceDir, "source.txt", "accepted command output\n");
     const finalize = (spec: typeof accepted) =>
       backend.finalizeExec!({
         status: "completed",

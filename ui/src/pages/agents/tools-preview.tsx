@@ -1,6 +1,7 @@
 import { createMemo, For, Show } from "solid-js";
 import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsSection,
   SettingsEmpty,
@@ -157,12 +158,12 @@ export function ToolRuntime(props: {
         <div class="agent-tools-notices">
           <For each={props.preview.result?.notices}>
             {(notice) => (
-              <div
-                class={["callout", notice.severity === "warning" ? "warning" : "info"]}
+              <InlineAlert
+                tone={notice.severity === "warning" ? "warning" : "info"}
                 style={{ "margin-top": "12px" }}
               >
                 {formatUiExternalText(notice.message)}
-              </div>
+              </InlineAlert>
             )}
           </For>
         </div>

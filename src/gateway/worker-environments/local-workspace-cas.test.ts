@@ -1,9 +1,13 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize, serialize } from "node:v8";
 import { inflateRawSync } from "node:zlib";
-import { assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import {
@@ -21,6 +25,7 @@ import {
   readLocalWorkspaceSweepCandidates,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
+import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
 import {
   executeLocalWorkspaceManifestRead,
   readLocalWorkspaceManifestRows,
@@ -31,6 +36,10 @@ import {
 } from "./local-workspace-manifest-tree.js";
 import { mutateLocalWorkspaceProjection } from "./local-workspace-store.kernel.js";
 import { localWorkspaceProjectionFixture } from "./local-workspace-store.test-support.js";
+import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 function tree(character: string) {
   return createLocalWorkspaceManifestTree([
@@ -63,7 +72,11 @@ it("materializes a manifest snapshot after its database closes", async () => {
     try {
       mutateLocalWorkspaceProjection(database, worktreeId, {
         kind: "create",
-        row: localWorkspaceProjectionFixture(worktreeId, "/synthetic"),
+        row: {
+          ...localWorkspaceProjectionFixture(worktreeId, "/synthetic"),
+          canonical_fingerprints: Buffer.alloc(1024, 1),
+          projection_fingerprints: Buffer.alloc(2048, 2),
+        },
       });
       prepareTreePacks(database, records);
       mutateLocalWorkspaceProjection(database, worktreeId, {
@@ -80,11 +93,19 @@ it("materializes a manifest snapshot after its database closes", async () => {
         },
       });
       using parsing = vi.spyOn(JSON, "parse");
+      const reads = trackSqliteStatementExecutions(database, ["projection"], (sql) =>
+        /^select\b/i.test(sql) && sql.includes('from "local_workspace_projections"')
+          ? "projection"
+          : null,
+      );
       const captured = readLocalWorkspaceManifestRows(database, {
         id: worktreeId,
         revision: 1,
         action,
       });
+      reads.restore();
+      // Only the tree digest is needed; materialization never consumes either fingerprint.
+      expect(reads.blobBytes.projection).toBe(32);
       expect(parsing.mock.calls.filter(([text]) => text.includes('"node":'))).toHaveLength(0);
       return deserialize(serialize(captured)) as typeof captured;
     } finally {
@@ -93,15 +114,101 @@ it("materializes a manifest snapshot after its database closes", async () => {
   })();
   // The read scope is closed: materialization must own all facts, not a live SQLite cursor.
   const value = await executeLocalWorkspaceManifestRead(snapshot, action);
-  expect(value).toMatchObject({
+  const expected = JSON.stringify({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: [{ path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) }],
+  });
+  expect(value).toEqual({
     kind: "materialize",
-    rawManifest: JSON.stringify({
-      version: 1,
-      baseCommit: "a".repeat(40),
-      entries: [{ path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) }],
-    }),
+    rawManifest: expected,
+    manifestRef: `sha256:${createHash("sha256").update(expected).digest("hex")}`,
   });
 });
+
+it.each(["canonical", "projection"] as const)(
+  "reads only the opposite fingerprint and preserves hash reuse when scanning toward %s",
+  async (target) => {
+    using database = new DatabaseSync(":memory:");
+    const root = await fs.realpath(dirs.make("workspace-manifest-fingerprint-"));
+    const canonicalRoot = path.join(root, "canonical");
+    const projectionRoot = path.join(root, "projection");
+    const records = createLocalWorkspaceManifestTree([
+      {
+        path: "entry.txt",
+        type: "file",
+        mode: 0o644,
+        size: 1,
+        sha256: createHash("sha256").update("a").digest("hex"),
+      },
+    ]);
+    const treeRoot = records.get("")!.treeRef;
+    const fingerprints: Buffer[] = [];
+    for (const directory of [canonicalRoot, projectionRoot]) {
+      await fs.mkdir(directory);
+      await fs.writeFile(path.join(directory, "entry.txt"), "a");
+      const stats = await fs.lstat(path.join(directory, "entry.txt"), { bigint: true });
+      const scan = prepareLocalWorkspaceFingerprints(records, treeRoot, null, Date.now() + 3000);
+      scan.observe(
+        "entry.txt",
+        `gateway:${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`,
+      );
+      fingerprints.push(scan.encode(records, treeRoot)!);
+    }
+    await requireGit(canonicalRoot, ["init", "--quiet"]);
+    await requireGit(canonicalRoot, ["add", "entry.txt"]);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3000);
+    const row = {
+      ...localWorkspaceProjectionFixture("fingerprints", projectionRoot),
+      projection_path: projectionRoot,
+      tree_root_digest: localWorkspaceDigestBytes(treeRoot),
+      baseline_ref: localWorkspaceManifestRootReference(records, "a".repeat(40)),
+      canonical_fingerprints: fingerprints[0]!,
+      projection_fingerprints: fingerprints[1]!,
+    };
+    mutateLocalWorkspaceProjection(database, row.worktree_id, { kind: "create", row });
+    prepareTreePacks(database, records);
+    const required = target === "canonical" ? fingerprints[1]! : fingerprints[0]!;
+    for (const kind of ["scan", "probe"] as const) {
+      const action = { kind, target, canonicalRoot };
+      const reads = trackSqliteStatementExecutions(database, ["projection"], (sql) =>
+        /^select\b/i.test(sql) && sql.includes('from "local_workspace_projections"')
+          ? "projection"
+          : null,
+      );
+      const captured = readLocalWorkspaceManifestRows(database, {
+        id: row.worktree_id,
+        revision: 0,
+        action,
+        knownTreeRoot: treeRoot,
+      });
+      reads.restore();
+      expect(reads.blobBytes.projection).toBe(32 + required.byteLength);
+      expect(captured.records).toBeUndefined();
+      const metrics = { contentHashCount: 0, memoHitCount: 0 };
+      const value = await withWorkspaceHashMemo(
+        new Map(),
+        () => executeLocalWorkspaceManifestRead(captured, action, new Map(records)),
+        metrics,
+      );
+      expect(value).toMatchObject({ kind: "scan", resultingRoot: row.baseline_ref });
+      expect(metrics.contentHashCount).toBe(0);
+    }
+    const archived = readLocalWorkspaceManifestRows(database, {
+      id: row.worktree_id,
+      revision: 0,
+      action: {
+        kind: "archive",
+        canonicalRoot,
+        archiveRoot: canonicalRoot,
+        snapshotCommit: "a".repeat(40),
+      },
+      knownTreeRoot: treeRoot,
+    });
+    expect(archived.row.canonical_fingerprints).toBeNull();
+    expect(Buffer.from(archived.row.projection_fingerprints!)).toEqual(fingerprints[1]);
+  },
+);
 
 it.each([
   ["empty", ""],
@@ -335,7 +442,16 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   expect(beginLocalWorkspaceSweepInDatabase(db)).toBe(1);
   const epoch = beginLocalWorkspaceSweepInDatabase(db);
   expect(epoch).toBe(2);
+  const packCount = Number(
+    db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n,
+  );
+  const reads = trackSqliteStatementExecutions(db, ["packs"], (sql) =>
+    /^select\b/i.test(sql) && sql.includes('from "local_workspace_tree_packs"') ? "packs" : null,
+  );
   const candidates = readLocalWorkspaceSweepCandidates(db, epoch);
+  reads.restore();
+  // Every old digest is returned by candidate discovery; traversal already knows its lookup keys.
+  expect(reads.blobBytes.packs).toBe(packCount * 32);
   expect(candidates.packs).toHaveLength(4);
   expect(candidates.paths).toHaveLength(2);
   // A writer reusing content after the snapshot protects it with the current epoch.

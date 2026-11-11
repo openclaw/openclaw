@@ -29,8 +29,8 @@
 
   min-width: 0;
   overflow: hidden;
-  scrollbar-color: color-mix(in srgb, var(--muted) 34%, transparent) transparent;
-  scrollbar-width: thin;
+  /* A short list stacked on the composer takes the compact thumb. */
+  --scrollbar-size: var(--scrollbar-size-compact);
 }
 
 .chat-queue__global-state {
@@ -40,7 +40,7 @@
   padding: 4px 12px;
   border-bottom: 1px solid var(--chat-queue-divider);
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 500;
   line-height: 1.4;
 }
@@ -58,7 +58,7 @@
   padding-block: 4px;
   padding-inline: var(--chat-stack-leading-inset) var(--chat-stack-trailing-inset);
   border-bottom: 1px solid var(--chat-queue-divider);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
 }
 
@@ -115,19 +115,6 @@
 
 .chat-queue__scroll[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
   mask-image: linear-gradient(to bottom, var(--chat-queue-fade-in), var(--chat-queue-fade-out));
-}
-
-.chat-queue__scroll::-webkit-scrollbar {
-  width: 5px;
-}
-
-.chat-queue__scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.chat-queue__scroll::-webkit-scrollbar-thumb {
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 34%, transparent);
 }
 
 .chat-queue__item {
@@ -294,7 +281,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;
@@ -309,7 +296,7 @@
 
 .chat-queue__state {
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;
@@ -335,7 +322,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--chat-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.4;
   overflow-wrap: break-word;
   -webkit-box-orient: vertical;
@@ -354,7 +341,7 @@
   background: var(--bg);
   color: var(--chat-text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
   overflow-y: hidden;
   resize: none;
@@ -374,7 +361,7 @@
   min-width: 0;
   padding: 0 0 2px;
   color: var(--danger);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--control-ui-text-scale));
   line-height: 1.35;
 }
 
@@ -400,7 +387,7 @@
   border-radius: var(--radius-full);
   background: none;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   line-height: 1;
   cursor: var(--cursor-action);
@@ -489,7 +476,7 @@
   width: 100%;
   min-height: 32px;
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-queue__overflow .oc-menu-item svg {

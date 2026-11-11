@@ -352,11 +352,15 @@ import Testing
         self.clearTLSFingerprint(stableID: stableID)
 
         let appModel = NodeAppModel()
+        let probeState = DisplayStateRecorder()
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
             tcpReachabilityProbe: { _, _, _, _ in true },
-            tlsFingerprintProbe: { _ in .fingerprint("abc123") })
+            tlsFingerprintProbe: { _ in
+                await probeState.record(GatewayStatusBuilder.build(appModel: appModel))
+                return .fingerprint("abc123")
+            })
 
         await controller.connectManual(host: host, port: port, useTLS: true)
 
@@ -364,6 +368,9 @@ import Testing
         #expect(controller.pendingTrustPrompt?.host == host)
         #expect(controller.pendingTrustPrompt?.port == port)
         #expect(appModel.gatewayStatusText == "Verify gateway TLS fingerprint")
+        // Every status surface reads this: connecting while probing, attention while the user decides.
+        #expect(probeState.states == [.connecting])
+        #expect(GatewayStatusBuilder.build(appModel: appModel) == .error)
     }
 
     @Test(arguments: [false, true])
@@ -1527,5 +1534,14 @@ import Testing
 
         #expect(problem?.kind == .tlsPinMismatch)
         #expect(problem?.canTrustRotatedCertificate == false)
+    }
+}
+
+@MainActor
+private final class DisplayStateRecorder {
+    private(set) var states: [GatewayDisplayState] = []
+
+    func record(_ state: GatewayDisplayState) {
+        self.states.append(state)
     }
 }

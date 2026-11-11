@@ -2,6 +2,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { hasMenuSurface } from "../../components/menu-surface.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
+import { iconButtonClass } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PhoneSheet } from "../../components/solid/phone-sheet.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
@@ -107,7 +108,8 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
     props.statusFilter !== "active" ||
     props.groupBy !== "none";
   const triggerClass = () => [
-    "btn btn--xs btn--icon sessions-toolbar__icon sessions-filter-popover__trigger",
+    iconButtonClass(),
+    "sessions-toolbar__icon sessions-filter-popover__trigger",
     { active: active() },
   ];
   const search = () => (

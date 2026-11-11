@@ -307,6 +307,7 @@ function collectArtifactsFromMessage(
       download: { mode: previewOnly ? "unsupported" : download.mode },
       ...(imageUrl ? { image: { url: imageUrl } } : {}),
       ...(download.data !== undefined ? { data: download.data } : {}),
+      ...(download.localPath ? { localPath: download.localPath } : {}),
       ...(params.includeDownloadData !== false && download.url ? { url: download.url } : {}),
     };
     params.collection.artifacts.push(summary);
@@ -487,9 +488,7 @@ export async function selectSessionArtifacts(
         messageRole: query.messageRole,
         imagesOnly: true,
       });
-      const images = collected
-        .map((artifact) => artifact && toArtifactSummary(artifact))
-        .toReversed();
+      const images = collected.toReversed();
       const start = query.beforeSeq === seq + 1 ? (query.imageOffset ?? 0) : 0;
       for (let index = start; index < images.length; index++) {
         const image = images[index];

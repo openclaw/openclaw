@@ -237,8 +237,8 @@ const gc = managedWorktrees.gc.bind(managedWorktrees);
 managedWorktrees.gc = async (params) => {
   if (params?.beforeRemoval) {
     const beforeRemoval = params.beforeRemoval;
-    params.beforeRemoval = async () => {
-      await beforeRemoval();
+    params.beforeRemoval = async (record) => {
+      await beforeRemoval(record);
       admissions.push(now());
     };
   }

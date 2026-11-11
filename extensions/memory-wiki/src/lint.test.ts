@@ -177,7 +177,7 @@ describe("lintMemoryWikiVault", () => {
       '# Links\n\n[Plan](../entities/plan.md "Project plan")\n' +
         "[Revision](../entities/plan(v2).md)\n" +
         "[Notes](<../entities/plan notes.md>)\n" +
-        "[Encoded](../entities/encoded%20notes.md)\n",
+        "[Encoded](../entities/encoded%20notes.md)\n\n<!-- [[missing-comment]] -->\n\\[[missing-escape]]\n",
     );
 
     const result = await lintMemoryWikiVault(config);

@@ -129,15 +129,20 @@ it.each([
       });
       const view = mountSolid(() => <ChatPaneModelControl model={model()} />);
       const speed = () => view.container.querySelector("[data-chat-fast-mode]");
-      await waitForSolid(() =>
-        expect(speed()?.getAttribute("aria-label")).toContain(expectedSpeed),
-      );
-      expect(speed()?.getAttribute("data-chat-fast-mode")).toBe(String(active));
+      const expectSpeedControl = () => {
+        expect(view.container.querySelector("[data-chat-model-select]")?.textContent).toContain(
+          "Saved model",
+        );
+        if (!supported) {
+          expect(speed()).toBeNull();
+          return;
+        }
+        expect(speed()?.getAttribute("aria-label")).toContain(expectedSpeed);
+        expect(speed()?.getAttribute("data-chat-fast-mode")).toBe(String(active));
+      };
+      await waitForSolid(expectSpeedControl);
       setModel(liveModel);
-      await waitForSolid(() =>
-        expect(speed()?.getAttribute("aria-label")).toContain(expectedSpeed),
-      );
-      expect(speed()?.getAttribute("data-chat-fast-mode")).toBe(String(active));
+      await waitForSolid(expectSpeedControl);
     } finally {
       retireChatMetadataRequests(state);
       state.sessions.dispose();

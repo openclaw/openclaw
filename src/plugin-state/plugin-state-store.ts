@@ -624,7 +624,7 @@ export function createCorePluginStateKeyedStoreV2<T>(
 
 /** Bind a core catalog read and its later replacement to the same physical store. */
 export function prepareCorePluginStateReplacement<T>(
-  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+  options: OpenAsyncKeyedStoreOptions & { ownerId: `core:${string}` },
 ) {
   const prepared = prepareKeyedStoreOptions(options.ownerId, options);
   const context = captureOpenClawStateWorkerContext({ env: prepared.env });

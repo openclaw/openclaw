@@ -7,6 +7,8 @@ provider: boat
 class: standard
 asciiBox:
   noEnv: true
+  noSnapshots: true
+  visibility: private
 capacity:
   # Capacity policy applies to direct AWS/Azure VMs; Boat sizes use class.
   # Keep explicit on-demand capacity
@@ -30,7 +32,7 @@ actions:
   ephemeral: true
 blacksmith:
   org: openclaw
-  # Explicit legacy Testbox proof retains its maintained workflow selection.
+  # Explicit Testbox proof uses 4 vCPUs; high-memory proof opts in by workflow.
   workflow: .github/workflows/ci-check-testbox.yml
   job: check
   ref: main

@@ -162,7 +162,7 @@ export function createAgentDatabaseExecution(
     }
     assertAgentDeletionExecutionCleanupAccess(owner, executionOptions);
     context.admission.assertCurrent();
-    assertAgentAdmitted();
+    (cleanupOwner?.assertCurrentHost ?? assertAgentAdmitted)();
     creationClaim?.assertCurrent();
   };
   const closeNative = (expected?: AgentDatabaseNativeGeneration): Promise<void> => {

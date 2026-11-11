@@ -433,6 +433,11 @@ enabled.
 latency, and request fields such as method, URL, timeout, proxy, and policy)
 uses `debug` by default. Responses with a non-2xx status remain at `info`,
 and transport failures remain warnings.
+HTTP `400` records also include a bounded, credential-redacted `providerError`
+from the provider's JSON error message when available. This distinguishes request
+validation failures from upstream credit failures that use the same status code.
+Diagnostics read at most 16 KiB with a one-second deadline; the SDK still receives
+the original response body.
 `[model-fetch]` and `[responses]` report caller-signaled `AbortError` as `aborted`
 at `debug` (or `info` with the targeted flags), rather than as provider failures.
 The requesting layer owns the final cancellation or timeout outcome; an SDK can
@@ -800,6 +805,15 @@ settlement that mutation is actually awaiting. `completionDelayMs` measures
 synchronous owner-release cleanup after the callback settles. A
 caller can cancel before all of its queued work unwinds; `signalAborted`
 reports the signal without claiming that the holder has released.
+
+Subagent-kill mutations also report `subphaseDurationsMs` for awaited caller facts,
+caller Stop hooks, descendant discovery, durable kill intent, admission draining, runtime loading,
+registry settlement and obligation retirement, prefixed with `prepare.` or `run.`.
+These durations include rejected waits and accumulate repeated waits; they exclude
+each operation's synchronous work before returning its promise. Registry settlement
+includes its persistence and session cleanup bookkeeping. The joins for raw source
+settlement and child-command process cleanup occur after the mutation and are not included.
+The subphase totals therefore need not equal the enclosing phase durations.
 
 The tracker preserves outer ownership across reentrant work and retires a
 holder only when its actual callback exits and the owner releases custody. Its

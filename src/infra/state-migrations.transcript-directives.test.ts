@@ -8,6 +8,7 @@ import { readSessionArchiveText } from "../../test/helpers/session-archive.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   claimOpenClawAgentDatabaseLease,
@@ -913,6 +914,22 @@ it.each(["complete", "transcripts"])("resumes V1 %s provider repair", async (pha
   const { env, databasePath, database, masked, tagged, read } = singleSession(content, sessionId);
   // Completed V1 already handled directives; interrupted V1 skipped earlier session ids.
   writeMetadata(database, phase === "complete" ? { phase } : { phase, sessionId: "z-session" });
+  if (phase === "complete") {
+    const ignored = prepareTranscriptPayload(
+      database,
+      JSON.stringify({
+        type: "custom",
+        customType: "synthetic",
+        data: "x".repeat(4_096),
+      }),
+    );
+    // Provider-only repair must not decode an unrelated historical payload.
+    database
+      .prepare(`INSERT INTO transcript_events
+      (session_id,seq,event_json,event_zstd,event_utf8_bytes,navigation_json,created_at)
+      VALUES(?,2,NULL,x'00',?,?,1)`)
+      .run(sessionId, ignored.event_utf8_bytes, ignored.navigation_json);
+  }
   closeOpenClawAgentDatabasesForTest();
   const result = await migrateHistoricalTranscriptDirectives({ env });
   expect(result.warnings).toEqual([]);
@@ -922,6 +939,13 @@ it.each(["complete", "transcripts"])("resumes V1 %s provider repair", async (pha
   expect(read(sessionId, 0)).toBe(restored(masked));
   if (phase === "complete") {
     expect(read(sessionId, 1)).toBe(JSON.stringify(tagged));
+    expect(
+      readDatabaseRow(
+        databasePath,
+        "SELECT hex(event_zstd) AS bytes FROM transcript_events WHERE session_id = ? AND seq = 2",
+        sessionId,
+      )?.bytes,
+    ).toBe("00");
   }
   expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete", version: 2 });
   await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({

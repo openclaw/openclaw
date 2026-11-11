@@ -52,14 +52,14 @@ const it = completionTest();
 const portableIt = completionTest(true);
 const literalIt = completionTest(false, "completion-$dollar Ada's !42-$state's-");
 
-async function writeText(filePath: string, content: string) {
+async function writeText(filePath: string, content: string | Buffer) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf8");
   return filePath;
 }
 const writeCompletionCache = (shell: CompletionShell, content = "# completion\n") =>
   writeText(resolveCompletionCachePath(shell, "openclaw"), content);
-const writeProfile = (shell: CompletionShell, content: string) =>
+const writeProfile = (shell: CompletionShell, content: string | Buffer) =>
   writeText(resolveCompletionProfilePath(shell), content);
 
 const readProfile = (profilePath: string) => fs.readFile(profilePath, "utf8");
@@ -121,10 +121,10 @@ function expectProfileMode(profilePath: string) {
 it.skipIf(process.platform === "win32").for([
   ["zsh", "ZDOTDIR", ".zshrc"],
   ["fish", "XDG_CONFIG_HOME", "fish/config.fish"],
+  ["powershell", "XDG_CONFIG_HOME", "powershell/Microsoft.PowerShell_profile.ps1"],
   ["zsh", "HOME", ".zshrc"],
   ["bash", "HOME", ".bash_profile"],
   ["fish", "HOME", ".config/fish/config.fish"],
-  ["powershell", "HOME", ".config/powershell/Microsoft.PowerShell_profile.ps1"],
 ] as const)(
   "preserves %s profile traversal through symlinked %s before parent components",
   async ([shell, variable, profileName], { homeDir }) => {
@@ -139,7 +139,7 @@ it.skipIf(process.platform === "win32").for([
     await installCompletion(shell, true, "openclaw");
     await expect(readProfile(path.join(profileParent, profileName))).resolves.toContain(cachePath);
     const hintRoot =
-      variable !== "HOME" ? "~/linked-profiles/.." : shell === "powershell" ? startupDir : "~";
+      shell === "powershell" ? startupDir : variable !== "HOME" ? "~/linked-profiles/.." : "~";
     expect(resolveCompletionProfileHint(shell)).toBe(`${hintRoot}/${profileName}`);
   },
 );
@@ -370,7 +370,7 @@ it("preserves unrelated sources during installation and selected-state removal",
   }
 });
 
-it.each([
+it.for([
   ["bash", undefined, 'source <(openclaw completion --shell bash >"$HOME/completion.log")'],
   [
     "bash",
@@ -380,27 +380,27 @@ it.each([
   [
     "powershell",
     "openclaw completion --shell powershell | Out-String | Invoke-Expression",
-    '$refresh = "openclaw completion --write-state"',
+    "$refresh = 'openclaw completion --write-state' # café",
   ],
 ] as const)(
   "migrates %s completion without deleting user commands: %s",
-  async (shell, replaced, retained) => {
-    const cachePath = await writeCompletionCache(shell);
-    const profilePath = await writeProfile(
-      shell,
-      [replaced, retained, ""].filter((line) => line !== undefined).join("\n"),
-    );
-    if (shell === "powershell") {
-      await expect(usesSlowDynamicCompletion(shell, "openclaw")).resolves.toBe(true);
-    }
+  async ([shell, replaced, retained], { stateDir }) => {
+    // PowerShell loads BOM-marked UTF-16 profiles on every platform.
+    const bom = shell === "powershell" ? "\uFEFF" : "";
+    const encoding = bom ? "utf16le" : "utf8";
+    await writeCompletionCache(shell);
+    const lines = [replaced, retained, ""].filter((line) => line !== undefined).join("\n");
+    const profilePath = await writeProfile(shell, Buffer.from(bom + lines, encoding));
+    await expect(usesSlowDynamicCompletion(shell, "openclaw")).resolves.toBe(Boolean(replaced));
     await installCompletion(shell, true, "openclaw");
-    const profile = await readProfile(profilePath);
+    const profile = (await fs.readFile(profilePath)).toString(encoding);
     expect(profile).toContain(retained + "\n");
+    await expect(isCompletionInstalled(shell, "openclaw")).resolves.toBe(true);
     if (replaced) {
       expect(profile).not.toContain(replaced);
-      expect(profile).toContain(cachePath);
-    } else {
-      await expect(isCompletionInstalled(shell, "openclaw")).resolves.toBe(true);
+      await expect(removeSelectedCompletion(stateDir)).resolves.toEqual([profilePath]);
+      const removed = Buffer.from(`${bom}${retained}\n\n`, encoding);
+      await expect(fs.readFile(profilePath)).resolves.toEqual(removed);
     }
   },
 );

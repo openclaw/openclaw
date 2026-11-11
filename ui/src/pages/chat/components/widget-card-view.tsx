@@ -86,7 +86,7 @@ function McpAppHost(
       prop:viewId={props.viewId}
       prop:height={props.height}
       prop:onHeightChange={props.onHeightChange}
-      style={{ display: "block", "min-height": `${props.height}px` }}
+      style={{ "min-height": `${props.height}px` }}
       title={props.title}
     />
   );

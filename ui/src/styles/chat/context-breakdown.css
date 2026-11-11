@@ -41,7 +41,7 @@
   background: transparent;
   color: var(--text);
   text-align: start;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 .chat-context__swatch {
   width: 8px;
@@ -60,12 +60,6 @@
   color: var(--muted);
   white-space: nowrap;
 }
-.chat-context__note {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--muted);
-  margin: 8px 0;
-}
 .chat-context--popover {
   margin-top: 10px;
   .chat-context__bar {
@@ -83,9 +77,6 @@
   }
   .chat-context__swatch {
     justify-self: center;
-  }
-  .chat-context__note {
-    margin: 0;
   }
   .context-usage__report-skeleton {
     margin-top: 0;
@@ -118,7 +109,7 @@ openclaw-chat-context-panel {
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--muted);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     font-weight: 500;
   }
   .chat-context__refresh > svg {
@@ -129,7 +120,7 @@ openclaw-chat-context-panel {
     width: 100px;
     height: 28px;
     padding: 0;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
   /* Only the panel promotes Compact near the limit; the composer popover keeps it secondary. */
   .chat-context__compact--high {
@@ -145,7 +136,7 @@ openclaw-chat-context-panel {
 .chat-context-page {
   --context-page-padding: 20px;
   min-width: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   .chat-context__refresh {
     width: 28px;
@@ -174,11 +165,11 @@ openclaw-chat-context-panel {
   .chat-context__label small {
     margin-left: 6px;
     color: var(--muted);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
   .chat-context__tokens {
     color: var(--text);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
   .chat-context__row > svg {
     width: 14px;
@@ -213,7 +204,7 @@ openclaw-chat-context-panel {
     align-items: center;
     height: 22px;
     color: var(--muted);
-    font-size: 11px;
+    font-size: var(--control-ui-text-xs);
   }
   .chat-context__entry {
     display: grid;
@@ -221,7 +212,7 @@ openclaw-chat-context-panel {
     align-items: center;
     height: 28px;
     column-gap: 12px;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     color: var(--muted);
   }
   .chat-context__entry-name {
@@ -263,7 +254,7 @@ openclaw-chat-context-panel {
     outline: 0;
     background: transparent;
     color: var(--text);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
   .chat-context__search input::placeholder {
     color: var(--muted);
@@ -275,11 +266,11 @@ openclaw-chat-context-panel {
     padding: 0;
     background: transparent;
     color: var(--muted);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
   .chat-context__no-matches {
     color: var(--muted);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
   .chat-context__swatch {
     transition: opacity 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -308,7 +299,7 @@ openclaw-chat-context-panel {
 .chat-context-page__title h2 {
   flex: 1;
   margin: 0;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -324,14 +315,14 @@ openclaw-chat-context-panel {
   gap: 6px;
   margin-top: 14px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 .chat-context-page__numbers strong {
   color: var(--text-strong);
-  font-size: 26px;
+  font-size: calc(26px * var(--control-ui-text-scale));
   font-weight: 500;
-  line-height: 34px;
+  line-height: calc(34px * var(--control-ui-text-scale));
   letter-spacing: -0.6px;
 }
 .chat-context-page__percent {
@@ -347,7 +338,7 @@ openclaw-chat-context-panel {
   height: 20px;
   margin-top: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .chat-context-page__latest {
   display: flex;
@@ -356,7 +347,7 @@ openclaw-chat-context-panel {
   margin-top: 16px;
   gap: 4px;
   border-top: 1px solid var(--border);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   color: var(--muted);
 }
 .chat-context-page__latest b {
@@ -435,7 +426,7 @@ openclaw-chat-context-panel {
     --context-page-padding: 16px;
   }
   .chat-context-page__numbers strong {
-    font-size: 24px;
+    font-size: calc(24px * var(--control-ui-text-scale));
   }
 }
 /* A bottom dock must not reserve its entire height for the fixed header. */

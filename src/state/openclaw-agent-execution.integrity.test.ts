@@ -361,6 +361,10 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
               ? ["publication", "open"]
               : ["publication", "open", "migration"],
         );
+        if (stopping) {
+          // Admission stops observing cleanup; the execution owner still joins native retirement.
+          await closeOpenClawAgentDatabasesAsync();
+        }
         expect(counter.workers.size).toBe(plugins.length);
       } finally {
         integrity.release();

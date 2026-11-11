@@ -42,7 +42,9 @@ const enChatMessageMetadata = {
       actions: "Message actions",
       selectionActions: "Selection actions",
       askInSideChat: "Ask in side chat",
-      addToChat: "Add to message",
+      askInNewSession: "Ask in new session",
+      newSessionOption: "New session",
+      addToChat: "Add to chat",
       annotationEditor: "Comment",
       annotationComment: "Add an optional comment…",
       saveAnnotation: "Save comment",
@@ -102,7 +104,7 @@ const enChatMessageMetadata = {
       },
       automationRecovery: {
         label: "System · automation recovery",
-        summary: "An automation failed — asked the agent to investigate and continue if needed.",
+        summary: "Automation failed.",
       },
       gatewayRestarted: {
         label: "System · Gateway restarted",

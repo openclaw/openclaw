@@ -371,15 +371,26 @@ export function createTerminalPanel(
     },
     get hostedTabs() {
       return terminalPanelHostedTabs(terminalSessions.state.tabs, element.gatewayConnected).map(
-        (tab) => Object.assign(tab, { icon: hostedTabIcon.cloneNode(true) }),
+        (tab) =>
+          Object.assign(tab, {
+            icon: hostedTabIcon.cloneNode(true),
+            onActivate: () => owner.selectHostedTab(tab.id),
+          }),
       );
     },
     get activeHostedTabId() {
       return terminalSessions.state.activeId;
     },
-    selectHostedTab(id: string): void {
+    selectHostedTab(id: string, event?: MouseEvent | KeyboardEvent): void {
       sessionPicker?.onDismiss(false);
-      terminalSessions.switchTo(id);
+      // Automatic tab navigation keeps focus in the tablist for the next key.
+      const navigating =
+        event instanceof KeyboardEvent &&
+        (event.key === "ArrowLeft" ||
+          event.key === "ArrowRight" ||
+          event.key === "Home" ||
+          event.key === "End");
+      terminalSessions.switchTo(id, !navigating);
     },
     async closeHostedTab(id: string): Promise<void> {
       const tab = terminalSessions.state.tabs.find((entry) => entry.id === id);
@@ -555,7 +566,8 @@ export function createTerminalPanel(
         viewportRef: (nextViewport: HTMLDivElement) => {
           viewport = nextViewport;
         },
-        onSelect: (id: string): void => owner.selectHostedTab(id),
+        onSelect: (id: string, event?: MouseEvent | KeyboardEvent): void =>
+          owner.selectHostedTab(id, event),
         onClose: (id: string): Promise<void> => owner.closeHostedTab(id),
         onNew: (): void => {
           sessionPicker?.onDismiss(false);

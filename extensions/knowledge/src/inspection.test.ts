@@ -33,7 +33,7 @@ async function fixture() {
 
 it("record defaults return content once and compact metadata without evidence", async () => {
   const vault = new SampleVault(),
-    result = checked("record", await inspectRecord(vault, { id: "sample_claim_pilot" }));
+    result = checked("record_detail", await inspectRecord(vault, { id: "sample_claim_pilot" }));
   expect(result.record.body).toBeTruthy();
   expect(result.record.raw).toBe(undefined);
   expect(result.record.metadata).toBeTruthy();
@@ -44,7 +44,7 @@ it("record defaults return content once and compact metadata without evidence", 
   expect(result.evidence).toBe(undefined);
   expect(result.content.nextOffset).toBe(null);
   for (const id of ["missing-id", "sample_duplicate_id"]) {
-    expect(checked("record", await inspectRecord(vault, { id })).record).toBe(null);
+    expect(checked("record_detail", await inspectRecord(vault, { id })).record).toBe(null);
   }
 });
 
@@ -60,7 +60,7 @@ it("record text and raw pages reassemble the exact observed content within the b
     let offset = 0;
     do {
       const page = checked(
-        "record",
+        "record_detail",
         await inspectRecord(vault, { id: "sample_person_alex", ...input, offset }),
       );
       expect(Buffer.byteLength(JSON.stringify(page)) <= RECORD_RESPONSE_BYTES).toBeTruthy();
@@ -78,7 +78,7 @@ it("record text and raw pages reassemble the exact observed content within the b
   expect(raw.every((page) => page.record.body === undefined && !page.evidence)).toBeTruthy();
   expect(raw.map((page) => page.record.raw).join("")).toBe(original.raw);
   const summary = checked(
-    "record",
+    "record_detail",
     await inspectRecord(vault, {
       id: "sample_person_alex",
       view: "summary",
@@ -88,7 +88,7 @@ it("record text and raw pages reassemble the exact observed content within the b
   expect(summary.record.body).toBe(undefined);
   expect(summary.record.metadata.custom_note).toBe("Unknown user metadata is preserved.");
   const beyond = checked(
-    "record",
+    "record_detail",
     await inspectRecord(vault, { id: "sample_person_alex", offset: 999999 }),
   );
   expect(beyond.record.body).toBe("");
@@ -98,7 +98,7 @@ it("record text and raw pages reassemble the exact observed content within the b
 it("evidence budgets disclose truncation; references are paginated separately", async () => {
   const vault = new SampleVault();
   const small = checked(
-    "record",
+    "record_detail",
     await inspectRecord(vault, {
       id: "sample_claim_pilot",
       includeEvidence: true,
@@ -115,7 +115,7 @@ it("evidence budgets disclose truncation; references are paginated separately", 
   let offset = small.nextReferenceOffset;
   while (offset !== null) {
     const r = checked(
-      "record",
+      "record_detail",
       await inspectRecord(vault, {
         id: "sample_claim_pilot",
         view: "summary",
@@ -200,7 +200,7 @@ it("ontology definition pages are exhaustive and JSON-safe; the UI follows all p
 
 it("source view is opt-in, bounded, and refuses arbitrary paths; invalid YAML remains diagnosable", async () => {
   const { root, vault } = await fixture(),
-    broken = "format: [broken\n" + "# comment\n".repeat(80);
+    broken = "format: [broken\n" + "x".repeat(239) + "😀tail\n" + "# comment\n".repeat(80);
   await writeFile(path.join(root, "ontology.yaml"), broken);
   const catalog = checked("ontology", await inspectOntology(vault, {}));
   expect(catalog.available).toBe(false);
@@ -209,22 +209,17 @@ it("source view is opt-in, bounded, and refuses arbitrary paths; invalid YAML re
   const sources = checked("ontology", await inspectOntology(vault, { view: "sources" }));
   expect(sources.sources.some((s: any) => s.path === "ontology.yaml" && !s.valid)).toBeTruthy();
   expect(sources.source).toBe(undefined);
+  const sourceInput = { view: "sources" as const, sourcePath: "ontology.yaml", maxChars: 256 };
   let raw = "",
     offset = 0;
   do {
-    const page = checked(
-      "ontology",
-      await inspectOntology(vault, {
-        view: "sources",
-        sourcePath: "ontology.yaml",
-        maxChars: 256,
-        offset,
-      }),
-    );
+    const page = checked("ontology", await inspectOntology(vault, { ...sourceInput, offset }));
+    expect(Buffer.from(page.source.raw, "utf8").toString("utf8")).toBe(page.source.raw);
     raw += page.source.raw;
     offset = page.nextOffset;
   } while (offset !== null);
   expect(raw).toBe(broken);
+  await expect(inspectOntology(vault, { ...sourceInput, offset: 256 })).rejects.toThrow(/Unicode/);
   const diagnostics = checked(
     "ontology",
     await inspectOntology(vault, { view: "diagnostics", limit: 1 }),
@@ -245,7 +240,7 @@ it("inspection inputs reject invalid budgets and authority selectors", () => {
     { id: "sample_person_alex", referenceLimit: 101 },
     { id: "sample_person_alex", root: "/etc" },
   ]) {
-    expect(Check(contract.operations.record.input, input)).toBe(false);
+    expect(Check(contract.operations.record_detail.input, input)).toBe(false);
   }
   for (const input of [{ view: "all" }, { limit: 0 }, { offset: -1 }, { agent: "other" }]) {
     expect(Check(contract.operations.ontology.input, input)).toBe(false);
@@ -273,7 +268,7 @@ it("byte-bounded evidence pages preserve every locator and make progress", async
   const paths = [];
   do {
     const result = checked(
-      "record",
+      "record_detail",
       await inspectRecord(fake, {
         id: detail.record!.id,
         view: "summary",

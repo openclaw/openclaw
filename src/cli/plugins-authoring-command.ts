@@ -318,7 +318,9 @@ export async function runPluginsInitCommand(
   if (opts.force !== true && fs.existsSync(rootDir)) {
     throwExpectedCliError(`Refusing to overwrite existing path: ${rootDir}`);
   }
-  fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
+  if (type !== "feature") {
+    fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
+  }
 
   if (type === "feature") {
     writeFeaturePluginScaffold({ rootDir, id, name });

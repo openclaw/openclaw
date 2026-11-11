@@ -9,6 +9,9 @@ export type DatabaseEngineInput =
     }>
   | undefined;
 export type DatabaseEngineId = "sqlite" | "postgres";
+export type BackupEngine =
+  | { engine: "sqlite" }
+  | { engine: "postgres"; storeId: string; namespace: string };
 export type DatabaseEngineFamily =
   | "state"
   | "agent"

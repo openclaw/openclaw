@@ -301,22 +301,11 @@ a.activity-current-work__row:hover {
   color: var(--text-strong);
 }
 
-.activity-feed__people-count,
-.activity-feed__people-group-label {
+.activity-feed__people-count {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-}
-
-.activity-feed__people-count {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
-}
-
-.activity-feed__people-group-label {
-  padding: var(--space-1) var(--space-2);
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .activity-feed__main {
@@ -365,7 +354,7 @@ a.activity-current-work__row:hover {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  line-height: 20px;
+  line-height: calc(20px * var(--control-ui-text-scale));
 }
 
 .activity-pulse__header {
@@ -424,10 +413,10 @@ a.activity-current-work__row:hover {
 .activity-pulse__axis {
   display: flex;
   gap: 3px;
-  height: 16px;
+  height: calc(16px * var(--control-ui-text-scale));
   margin-top: var(--space-1);
   font-size: var(--control-ui-text-xs);
-  line-height: 16px;
+  line-height: calc(16px * var(--control-ui-text-scale));
 }
 
 .activity-pulse__axis > span {
@@ -944,11 +933,6 @@ a.activity-current-work__row:hover {
   cursor: var(--cursor-action);
 }
 
-.activity-status-filter input {
-  margin: 0;
-}
-
-.activity-status-filter:focus-within,
 .activity-entry__summary:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
@@ -1231,11 +1215,6 @@ a.activity-current-work__row:hover {
     color: var(--text);
     font-size: var(--control-ui-text-sm);
     font-weight: var(--control-ui-font-weight-normal);
-  }
-
-  /* Tapping a checkbox in the popover should not draw the keyboard focus ring. */
-  .activity-status-filter:focus-within:not(:has(:focus-visible)) {
-    outline: none;
   }
 
   /* The page scrolls here, so Active sessions takes the height it needs instead of

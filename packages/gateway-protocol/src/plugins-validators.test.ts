@@ -21,7 +21,7 @@ const consent = { reviewToken: "surface-sha256" };
 const invalidConsent = [true, {}, { reviewToken: "" }, { ...consent, unexpected: true }];
 
 describe("plugin lifecycle protocol validators", () => {
-  it("keeps optional prompt metadata to three nonempty strings without a text length cap", () => {
+  it("bounds optional prompt metadata to three strings of 128 Unicode code points", () => {
     const schemas = [
       PluginCatalogEntrySchema.properties.recommendedPrompts,
       PluginDiscoveryDetailSchema.properties.recommendedPrompts,
@@ -29,10 +29,17 @@ describe("plugin lifecycle protocol validators", () => {
     ];
     for (const schema of schemas) {
       const validate = Compile(schema);
-      for (const prompts of [[], ["one", "two", "x".repeat(4096)]]) {
+      for (const prompts of [[], ["one", "x".repeat(128), "😀".repeat(128)]]) {
         expect(validate.Check(prompts)).toBe(true);
       }
-      for (const prompts of [["one", "two", "three", "four"], [""], [false], "one"]) {
+      for (const prompts of [
+        ["one", "two", "three", "four"],
+        ["x".repeat(129)],
+        ["😀".repeat(129)],
+        [""],
+        [false],
+        "one",
+      ]) {
         expect(validate.Check(prompts)).toBe(false);
       }
     }

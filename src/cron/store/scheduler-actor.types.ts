@@ -57,6 +57,8 @@ export type CronSchedulerOperations = {
       snapshot: CronSchedulerSnapshot;
       skipJobIds?: string[];
       deferAgentWork?: boolean;
+      /** Slots due at or after this process went live are late, not downtime catch-up. */
+      liveSinceMs?: number;
     };
     output: CronSchedulerResult;
   };

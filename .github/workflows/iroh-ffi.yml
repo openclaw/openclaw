@@ -1,0 +1,127 @@
+name: iroh native binding
+
+on:
+  push:
+    branches: [main]
+    paths: &iroh_ffi_paths
+      - ".github/workflows/iroh-ffi.yml"
+      - "crates/openclaw-iroh-ffi/**"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: *iroh_ffi_paths
+  workflow_dispatch:
+
+concurrency:
+  group: iroh-ffi-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  RUSTUP_TOOLCHAIN: "1.99.0"
+
+jobs:
+  build:
+    # Drafts deliberately run: native consumers need build proof before the stack is ready.
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            runner: ubuntu-24.04
+            targets: x86_64-unknown-linux-gnu
+          - platform: android
+            runner: ubuntu-24.04
+            targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+          - platform: apple
+            runner: xcode-27
+            targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+    defaults:
+      run:
+        shell: bash
+        working-directory: crates/openclaw-iroh-ffi
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Rust
+        env:
+          TARGETS: ${{ matrix.targets }}
+        run: |
+          set -euo pipefail
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          fi
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy,rustfmt --target "$TARGETS"
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          prefix-key: iroh-ffi
+          key: ${{ matrix.platform }}
+          workspaces: crates/openclaw-iroh-ffi -> target
+          cache-bin: "false"
+          cmd-format: rustup run 1.99.0 {0}
+
+      - name: Rust tests and lint
+        if: matrix.platform == 'linux'
+        run: |
+          set -euo pipefail
+          cargo fmt --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked
+
+      - name: Generate and check bindings
+        if: matrix.platform != 'android'
+        run: |
+          set -euo pipefail
+          scripts/generate-bindings.sh
+          git diff --exit-code -- generated
+          test -z "$(git ls-files --others --exclude-standard generated)"
+
+      - name: Build host library and measure
+        if: matrix.platform == 'linux'
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --lib
+          wc -c target/release/libopenclaw_iroh_ffi.so
+          sha256sum target/release/libopenclaw_iroh_ffi.so
+
+      - name: Setup Android toolchain
+        if: matrix.platform == 'android'
+        uses: ./.github/actions/setup-android-toolchain
+
+      - name: Build Android ABIs and check 16 KiB alignment
+        if: matrix.platform == 'android'
+        run: |
+          set -euo pipefail
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --install 'ndk;28.2.13676358'
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/28.2.13676358"
+          cargo install cargo-ndk --version 3.5.4 --locked
+          scripts/build-android.sh
+
+      - name: Build Apple XCFramework and typecheck Swift
+        if: matrix.platform == 'apple'
+        run: scripts/build-apple.sh
+
+      # Short-lived workflow artifact for app integration testing; not a release.
+      - name: Upload Apple XCFramework
+        if: matrix.platform == 'apple'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openclaw-iroh-ffi-apple-${{ github.event.pull_request.head.sha || github.sha }}
+          path: crates/openclaw-iroh-ffi/dist/apple/OpenClawIrohFFI.xcframework
+          retention-days: 3
+          if-no-files-found: error

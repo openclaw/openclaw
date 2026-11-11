@@ -738,7 +738,7 @@ describe("sessions transcript search view", () => {
           .querySelector(".sessions-transcript-search__form")
           ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       } else {
-        expect(trigger?.closest("openclaw-tooltip")).toBeNull();
+        expect(trigger?.closest("openclaw-tooltip")?.content).toBe(unavailable);
         render({ transcriptSearchAvailable: true });
         await Promise.resolve();
         expect(connectionStatus()).toBeNull();
@@ -850,8 +850,8 @@ describe("sessions view at phone width", () => {
     const onSearchChange = vi.fn();
     await renderSettled(
       [
-        createRow("agent:main:alpha", { label: "Alpha", updatedAt: Date.now() }),
-        createRow("agent:main:beta", { label: "Beta", updatedAt: Date.now() }),
+        createRow("agent:main:alpha", { label: "Alpha", updatedAt: 1 }),
+        createRow("agent:main:beta", { label: "Beta", updatedAt: 1 }),
       ],
       { onSearchChange },
     );

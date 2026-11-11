@@ -1,0 +1,3 @@
+# Assert measured predecessor placement, paintability, and retained-row stability,
+# including oversized paint and compensation across overscan remount. Exact growth.
+21

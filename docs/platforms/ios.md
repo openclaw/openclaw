@@ -32,7 +32,8 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - Sessions has **Active**, **Snoozed**, **Automations**, and **Archived** scopes. Snoozed sessions stay out of the active sidebar and Overview until they wake.
 - Agent narration appears inline as each segment finishes, including after reconnect. Narration, tool activity, and the reply stay grouped in one response. Compact-width layouts hide the assistant avatar to leave more room for text; regular-width layouts keep a single top-aligned avatar. Completed standalone bubbles use sender-side tails where the avatar is hidden, and accessible reply containers retain the assistant’s name. Completed chat turns keep all assistant text and media visible in place on iPhone and iPad. Contiguous tool activity and reasoning fold into separate **Worked** disclosures between the visible parts. Collapsed headings list operation kinds and failed, blocked, skipped, or unknown outcomes; expanding a section also shows its total tool-call count. Tap one to inspect that stretch of work; loading older history keeps expanded sections open. Active or unanswered work stays expanded.
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
-- Choose **+ → File** to attach audio, video, PDFs, text/code, CSV, JSON, Markdown, ZIP archives, and Office documents from Files. Removable chips show filenames and sizes. Files use the Gateway’s advertised attachment size limits and preserve their original bytes through the durable outbox. The file limit also caps the total attachment bytes per message, counting images after resizing; oversized drafts stay in the composer when you try to send. For older Gateways that do not advertise limits, native chat caps non-image files and the combined attachment budget at 19,464,192 bytes (the decoded budget for a 25 MiB frame), and processed images at 5 MB after resizing. Image source reads have a separate 64 MiB cap to bound resize-input memory; a larger source photo within that cap can be sent when its resized JPEG fits the image and batch budgets. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Recorded voice notes keep their separate recording flow.
+- Choose **+ → File** to attach audio, video, PDFs, text/code, CSV, JSON, Markdown, ZIP archives, and Office documents from Files. Removable chips show filenames and sizes. Files use the Gateway’s advertised attachment size limits and preserve their original bytes through the durable outbox. The file limit also caps the total attachment bytes per message, counting images after resizing; attachments already in an oversized draft stay in the composer when Send rejects their combined size. For older Gateways that do not advertise limits, native chat caps non-image files and the combined attachment budget at 19,464,192 bytes (the decoded budget for a 25 MiB frame), and processed images at 5 MB after resizing. Image source reads have a separate 64 MiB cap to bound resize-input memory; a larger source photo within that cap can be sent when its resized JPEG fits the image and batch budgets. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Recorded voice notes keep their separate recording flow.
+- If a file or video selected in native chat shows **Too large to send** while loading, it has not been attached. Check for its filename chip or thumbnail before sending any accompanying text; a later Send can send the text without the rejected selection. Reduce the file size or choose a smaller file, then select it again. Draft preservation on Send applies to attachments that were successfully added to the composer.
 - Assistant file attachments have a **Download file** action. Tap it to fetch the managed file and open the system share sheet, where you can choose **Save to Files** or another app. Downloads use the current Gateway connection and its scoped artifact access; an expired or removed file must be sent again. Documents are limited to 100 MB.
 - Dictation shows when it is starting and listening, a live microphone waveform, and the words recognized so far. Tap **Done** to add the transcript to your draft or **Cancel** to discard it. Attachments show **Preparing attachments…** while loading and **Sending attachments…** during delivery; failed photo loads show an error so you can select them again.
 - Preserves Markdown paragraph breaks, including before lists and while responses are streaming.
@@ -68,6 +69,14 @@ and Gateway permissions are unchanged.
 
 Open **Settings** in the sidebar to use the same Dashboard settings pages as the
 web and macOS apps. A connected operator session with `operator.admin` is required.
+The toolbar's **Device** button opens local appearance, notification delivery,
+camera access, keep-awake, Health summaries, Voice & Talk, and permission controls.
+These controls also appear under **Device Settings** at the top of the native
+fallback when offline, connected with Limited access, or using native Cloudflare
+Access authorization that cannot open the embedded Dashboard. They use the same
+native preferences, consent, and iOS permission prompts as the Dashboard; local
+access does not grant Gateway scopes or expose Gateway credentials.
+
 Access comes from the current connection's accepted scopes, including when
 authenticated ingress does not issue a reusable Gateway token.
 The toolbar's **Gateway** button opens the native connection screen, including
@@ -104,6 +113,11 @@ Gateway protocol; the native authentication path does not persist it in page sto
 
 The **This iPhone** or **This iPad** page contains appearance, notification
 delivery, camera access, keep-awake behavior, and optional Health summaries.
+QR scanning requests camera permission on first use. If access was denied, the
+scanner offers **Open Settings**; allow **Camera** for OpenClaw, then return to
+the scanner. Screen Time or device-management restrictions must be changed by
+the person who manages those restrictions.
+
 Its **Permissions** page shows notification, camera, microphone, speech, location,
 contacts, calendars, reminders, and photo access. Permission requests use native
 iOS prompts; Precise Location shows the system's current state and links to iOS
@@ -121,14 +135,15 @@ that share. These changes do not remove the Gateway's `talk.speechLocale` option
 **This iPhone** and **This iPad** also open native **Apple Watch**, **Diagnostics**,
 **Licenses**, and **About** screens. When disconnected, connected without admin
 access, or running in demo or screenshot mode, Settings shows a native fallback:
-the Gateway connection controls followed by those four rows in a **Device**
-section. Connection and these device screens remain available without loading
-the Dashboard.
+a **Device** section with **Device Settings** and those four rows, followed by
+the Gateway connection controls. These local screens remain available without
+loading the Dashboard. Connected admins can still use Dashboard settings normally.
 
 Channels (`/settings/channels`) and Skills (`/skills`) are managed in the
-Dashboard. Appearance, notifications, privacy, permissions, and Voice & Talk
-settings also use the Dashboard pages; the separate native settings screens and
-system-agent settings chat have been removed. Agent selection and read-only
+Dashboard. Local device settings are also available natively without duplicating
+Gateway work pages. Provider, voice, speech language, and other Gateway
+configuration remain owned by the Dashboard and keep their existing admin gates.
+The system-agent settings chat remains removed. Agent selection and read-only
 Files browsing remain native.
 
 The sidebar opens these Gateway pages in the embedded Dashboard without web
@@ -137,6 +152,7 @@ navigation chrome:
 | Sidebar destination | Dashboard path            |
 | ------------------- | ------------------------- |
 | Activity            | `/activity`               |
+| Systems             | `/systems`                |
 | Workboard           | `/workboard`              |
 | Skill Workshop      | `/skills/workshop`        |
 | Instances           | `/settings/devices`       |
@@ -147,6 +163,12 @@ navigation chrome:
 These pages require the same connected `operator.admin` session as Settings.
 Without that access, they show the native Gateway connection guidance. Instances
 opens **Devices**, the Dashboard owner of paired nodes and connected clients.
+
+If the Gateway answers Settings or one of these pages with a plain-text or JSON
+HTTP error (for example `gateway.controlUi.enabled: false`, or while Control UI
+assets are being prepared), the app shows **Dashboard unavailable** with the
+HTTP status and **Reload** instead of the raw response. HTML error pages, such
+as a proxy's sign-in page, still load in the Dashboard.
 
 The native **New Thread** agent picker shows configured names or agent IDs as
 soon as the roster arrives. Resolved identities update each choice without
@@ -196,6 +218,24 @@ cannot connect, or open native Gateway settings to recover the connection. Acces
 sign-in alone does not grant operator admin access or replace Gateway pairing.
 The share extension asks you to send from OpenClaw for an Access-protected
 Gateway. Access credentials are not exported to Apple Watch or cloud workers.
+
+The share extension reuses the connected Gateway's approved TLS certificate pin
+and saved custom service headers. Header values stay in the shared Keychain,
+not App Group preferences. Reconnect the app after upgrading to refresh the
+extension's saved connection. The extension cannot approve a new certificate or
+complete browser sign-in; open OpenClaw to review changed trust or use Access.
+
+## Share request admission
+
+The share extension shows **Sent** only after the Gateway explicitly accepts the
+request for agent dispatch, not after the agent finishes. Rejected messages and
+attachments leave the draft in the sheet with an error so you can correct it.
+The Gateway limits share message text to 20,000 UTF-16 code units.
+
+Older Gateways return an acknowledgement without confirming admission. The
+extension keeps the draft and asks you to check OpenClaw before retrying and
+update the Gateway. That request might already have been accepted: retries are
+not deduplicated, so do not resend it without checking the destination session.
 
 ## Sessions
 
@@ -332,6 +372,19 @@ creation has a token or password auth path.
    limited for bearer-token safety. If it is limited, configure `wss://` or
    Tailscale Serve, scan a new full-access code from Control UI or `openclaw qr`,
    then reconnect to enable settings and upgrades.
+
+   Full-access connections also prepare the **OpenClaw Share** extension
+   automatically, so sharing a photo or link does not require a second device
+   approval. The extension keeps its own Gateway-scoped, node-only credential;
+   it does not receive the app's administrative credential. Existing Share
+   credentials are not automatically replaced, including after revocation.
+   After upgrading, reconnecting an already full-access app also prepares Share
+   if it has no credential yet. Existing identities and credentials are reused;
+   reconnecting does not restore revoked or removed Share access. To restore it,
+   set up the app again with a new full-access code; a revoked Share identity
+   then needs `openclaw devices approve`.
+   Limited connections still require separate Share approval. Cloudflare Access
+   Gateways continue to require sending from the foreground app.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered Gateway in the iOS app (or enable
@@ -683,6 +736,10 @@ Expected operator flow:
 
 When iOS wakes the app for a silent push, background refresh, or significant-location event, the app attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`. The Gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.
 
+When chat messages are waiting in the offline outbox, a silent push or background refresh wake then stays open for up to 8 seconds while they send, in order and with the usual retry backoff; a slow reconnect leaves less of that time, and a wake that does not reach the Gateway does not wait.
+
+A wake that finds the node still connected skips the beacon while the last recorded beacon is less than 10 minutes old, so `lastSeenAtMs`/`lastSeenReason` keep their earlier values. A wake that finds the node disconnected reconnects and sends regardless of that window. Significant-location wakes run only while the node is disconnected, at most once every 3 minutes.
+
 The app treats a background wake as successfully recorded only when the Gateway response includes `handled: true`. Older Gateways may acknowledge `node.event` with `{ "ok": true }`; that response is compatible but does not count as a durable last-seen update.
 
 Background refresh wakes are requested through the system BackgroundTasks scheduler whenever the app moves to the background, after a silent push that could not be applied, and again after each refresh run; iOS decides when they actually execute. They stop if Background App Refresh is turned off for OpenClaw in iOS Settings, leaving push and significant-location wakes.
@@ -769,6 +826,7 @@ Agents can still operate the iOS app through OpenClaw by invoking node commands,
 
 - Voice wake and Talk mode are available on the Dashboard's **Settings -> Talk** page.
 - Voice wake sends recognized commands to the active session; use Talk mode for spoken assistant replies.
+- Switching chats or Gateways cancels pending Voice Wake commands and discards buffered recognition from the previous capture.
 - OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).
 - Talk-capable iOS nodes advertise the `talk` capability and can declare `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`; the Gateway allows those push-to-talk commands by default for trusted Talk-capable nodes.
 - iOS may suspend background audio; treat voice features as best-effort when the app is not active.

@@ -412,10 +412,16 @@ Double-click selections stay inside the message where they started, including
 when you drag on the second click. Ordinary drag selection and Select All can
 still span multiple messages.
 
-Highlight text and choose **Add to message** to attach a comment to the main
+Highlight text and choose **Add to chat** to attach a comment to the main
 composer. The optional comment field starts on one line, grows to five lines,
 then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
 Saving keeps your existing draft and does not send a message.
+
+**Ask in side chat** asks about the passage in Side chat. **New session**
+opens the new-session launcher with the passage attached as a
+comment; starting the session sends it as a quote ahead of your prompt. The
+launcher's comment preview can delete the passage but not edit it, and your
+current chat draft is left unchanged.
 
 Saving leaves a small, filled comment marker beside the selected passage. Click
 that marker, or the pencil in the comment count's hover preview, to reopen the
@@ -458,7 +464,10 @@ file links also support spaces, emoji, and punctuation in filenames; for example
 `[Read notes](notes/caf%C3%A9%20note.md)` opens the workspace file. Bare CSV
 filenames in authored links, such as `[Read inventory](inventory.csv)`, and code
 spans also open the file preview. Plain-text and inline-code file detection stays
-conservative to avoid turning prose into links.
+conservative to avoid turning prose into links. Unprefixed paths such as
+`src/index.ts` require a recognized file extension, so repository names such as
+`openclaw/openclaw.ai` remain text. For uncommon file extensions, use an explicit
+path such as `./assets/logo.ai` or an authored Markdown link.
 
 In a workspace Markdown file's **Preview**, authored relative file links resolve
 from the document's folder. For example, a report in `reports/review.md` can open
@@ -930,7 +939,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
-    - With the composer caret at the start, ArrowUp recalls earlier prompts and ArrowDown returns to your draft. Each new traversal includes newly loaded history; an active traversal keeps its order.
+    - With the composer caret at the start, ArrowUp recalls earlier prompts and ArrowDown returns to your draft. Each new traversal includes newly loaded history; an active traversal keeps its order. Recall keeps the latest 100 loaded user inputs; assistant replies and tool activity do not count toward that limit.
     - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
     - A submitted message stays pending until the Gateway acknowledges it or returns a duplicate response. While disconnected, it shows **Waiting for reconnect**, not a delivery-review state. After reconnecting with the same identity and recovery scope, attempted pending messages resend in queue order with their original submission keys, including the first message of a new session. A rejection shows **Not sent** with **Retry** and **Discard**. Discarding a pending copy does not undo or cancel accepted Gateway work. See [Offline and reconnect](/web/control-ui/offline-and-reconnect).
     - Chat uploads accept images, videos, and other files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links. Files appear in their final composer slots as soon as preparation starts, with a per-file progress fill and an in-place error icon if reading fails. Before sending, use **Remove attachment** at the corner of a staged attachment, including one still being prepared; the control supports touch and keyboard input in both Chat and New session.
@@ -1019,7 +1028,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Stopping a run pauses the messages waiting in the composer queue, so the next one does not start on its own. A **Queue paused** row above the queue offers **Resume**, which sends the paused messages in order, and **Clear**, which removes them. Messages you send after stopping are not paused: they go out as usual, ahead of the paused ones. Retrying, steering, or saving an edit of a paused message sends it. The pause lasts until you resume or clear it or the paused messages are gone; reloading the page or opening the conversation in another tab does not keep it. Follow-ups the Gateway already holds follow its own Stop rules.
     - Exact-run Stop cancels that parent's associated sub-agents and Swarm collectors, including their descendants. Successful cancellation prevents selected queued children from starting while running siblings stop; it leaves unrelated parent turns and session-wide queues alone.
     - If Stop reports incomplete descendant cancellation, inspect the remaining native subagent runs with `/subagents list` and ask the agent to retry their cancellation with `subagents`. Do not treat the parent's stopped state as confirmation that every child stopped or that runtime cleanup was instantaneous. See [Sub-agent stopping](/tools/subagents#stopping) for scope details.
-    - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. If the Gateway queues an input instead of steering it, the message appears above the composer until consumed or canceled. Reconnecting also recovers queued inputs from older history pages without changing the page you are viewing. Once the Gateway accepts input for an existing session, its database owns the approved input until it reaches the transcript. Collected messages are retired together with their combined transcript entry. At a graceful Gateway restart, accepted queued user inputs follow the session’s single resume input in FIFO order under each sender’s current authority. A sender that cannot be admitted gets an ordinary failed send that can be resent. Crash-left interrupted and ownerless queued rows stay inert and do not add notices or pending counts. Cancelled inputs retain their individual **Dismiss** action; there is no bulk restart dismissal. Dismissing needs permission to send in the conversation and never touches queued or running work. Click **Steer** on a browser-owned queued message to inject it manually; removing a server-owned queued message requests its cancellation. A message you steer moves once from the queue to the bottom of the transcript when delivery starts. It stays there while acknowledgment and history catch up, until its saved copy replaces it. Accepted messages keep their saved transcript positions: earlier saved output stays above the steer and later output appears below it. This order survives history refreshes, reconnects, and reloading a finished run. Unsaved assistant text remains a single live tail after saved rows until its own transcript entries arrive.
+    - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. If the Gateway queues an input instead of steering it, the message appears above the composer until consumed or canceled. Reconnecting also recovers queued inputs from older history pages without changing the page you are viewing. Once the Gateway accepts input for an existing session, its database owns the approved input until it reaches the transcript. Collected messages are retired together with their combined transcript entry. At a graceful Gateway restart, accepted queued user inputs follow the session’s single resume input in FIFO order under each sender’s current authority. A sender that cannot be admitted gets an ordinary failed send that can be resent. Crash-left interrupted and ownerless queued rows stay inert and do not add notices or pending counts. An input canceled by an explicit Control UI **Stop** keeps its message without an additional cancellation notice or **Dismiss** button. Other cancelled inputs retain their individual **Dismiss** action; there is no bulk restart dismissal. Dismissing needs permission to send in the conversation and never touches queued or running work. Click **Steer** on a browser-owned queued message to inject it manually; removing a server-owned queued message requests its cancellation. A message you steer moves once from the queue to the bottom of the transcript when delivery starts. It stays there while acknowledgment and history catch up, until its saved copy replaces it. Accepted messages keep their saved transcript positions: earlier saved output stays above the steer and later output appears below it. This order survives history refreshes, reconnects, and reloading a finished run. Unsaved assistant text remains a single live tail after saved rows until its own transcript entries arrive.
     - Type `/steer <message>` to steer explicitly. Once consumed, the message belongs in the transcript, with no separate command chip waiting for the entire run to finish. If the Gateway defers the input, its queued message remains above the composer until consumed or canceled.
     - On desktop, with **Settings → Appearance → Send shortcut** set to **Enter**, **Cmd/Ctrl+Enter** submits the opposite follow-up action while connected to an active run: queue when Enter steers, or steer when Enter queues (including inherited `collect` and `followup` modes). The send button tooltip shows both actions for the current follow-up setting. This affects only that message, not your saved preference. With the **Cmd/Ctrl+Enter** send shortcut selected, modified Enter remains the normal send action and plain Enter inserts a newline. Interrupt mode keeps its normal behavior.
     - Reorder the queue from the handle on the left of a queued message: drag it, or focus it and press the up and down arrow keys. The position is stored with the message, so it survives a reload and decides delivery order, not just what the list looks like. Rows already handed to a run — sending, steering, running a command, awaiting settings, or awaiting acknowledgment — hold their place and split the queue: a message moves only among the rows between two of them, so it can never reach the Gateway ahead of work already handed over.
@@ -1423,6 +1432,9 @@ Compact activity controls can open related details without duplicating the full
 lists above the composer. The mobile **Publish PR** control appears only for an
 undismissed branch with publishable work or a retained publication result or
 recovery state. An empty workspace or account discovery alone does not show it.
+
+Subagent rows show elapsed time once the child starts, just like ordinary child-session rows.
+Queued rows have no elapsed label; finished work stops at its recorded end time.
 
 The progress header shows the current step, not a completed-step total. On desktop,
 its options menu stays available when the card is expanded or collapsed and contains

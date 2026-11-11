@@ -154,8 +154,11 @@ export function createConfigWriteListenerRef(): ConfigWriteListenerRef {
   return { current: null };
 }
 
-export function publishConfigWrite(listener: ConfigWriteListener, event: ConfigWriteNotification) {
-  const application = createRuntimeConfigWriteApplication();
+export function publishConfigWrite(
+  listener: ConfigWriteListener,
+  event: ConfigWriteNotification,
+  application = createRuntimeConfigWriteApplication(),
+) {
   listener(attachRuntimeConfigWriteApplication(event, application));
   return application.result;
 }

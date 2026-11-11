@@ -29,6 +29,7 @@ import {
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
 
@@ -582,12 +583,12 @@ export function sessionCatalogHostKey(catalogId: string, hostId: string): string
   return `${catalogId}\u0000${hostId}`;
 }
 
-/** Archived pins leave Pinned so the archived view can still list them in place. */
+/** Hidden pins remain discoverable in their lifecycle views without a duplicate in Pinned. */
 export function isListedInPinnedSection(
-  row: Pick<SidebarRecentSession, "key" | "archived">,
+  row: Pick<SidebarRecentSession, "key" | "archived" | "snoozedUntil">,
   pinnedKeys: ReadonlySet<string>,
 ): boolean {
-  return pinnedKeys.has(row.key) && row.archived !== true;
+  return pinnedKeys.has(row.key) && row.archived !== true && !isSessionSnoozed(row, Date.now());
 }
 
 export type SidebarPinZone = {
