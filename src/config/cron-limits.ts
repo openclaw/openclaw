@@ -1,12 +1,10 @@
 export const DEFAULT_CRON_ENABLED = true;
-/** Default maximum number of cron jobs allowed to run at once. */
-export const DEFAULT_CRON_MAX_CONCURRENT_RUNS = 8;
+/**
+ * Run slots automation always has, whatever conversations are doing. Beyond these, automation
+ * uses the part of the agent concurrency limit that conversations leave free.
+ */
+export const MIN_CRON_RUN_SLOTS = 8;
 const DEFAULT_CRON_TRIGGER_MIN_INTERVAL_MS = 30_000;
-
-/** Resolves cron concurrency config, flooring finite values and clamping to at least one. */
-export function resolveCronMaxConcurrentRuns(): number {
-  return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
-}
 
 /** Resolves the minimum cadence for trigger-bearing cron jobs. */
 export function resolveCronTriggerMinIntervalMs(): number {
