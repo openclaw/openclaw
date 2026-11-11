@@ -5,6 +5,7 @@ import { canPrepareGitHubPullRequest } from "../agents/sandbox/github-publicatio
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
 import { isEmptyWorktreeSource } from "../agents/worktrees/empty-source.js";
+import { runGit } from "../agents/worktrees/git.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { sessionEntryCommitGuardOptions } from "../config/sessions/session-source-authority.js";
 import type { SessionEntry, SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
@@ -30,6 +31,7 @@ import {
 import { prepareManagedWorkspaceReviewBase } from "./github-publication-workspace-review.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { resolvePullRequestProjectSource } from "./session-project-source.js";
 import { isSessionOwnRequester } from "./session-sharing-policy.js";
 import { resolveLocalWorkspaceOwner } from "./worker-environments/local-workspace-projection.js";
 
@@ -168,6 +170,14 @@ export async function performSessionGitHubPreparation(
         target: { ...session, storePath: loaded.storePath },
         entry: loaded.entry!,
         sandbox: sandbox!,
+        projectSource: {
+          host: eligibility.inspected.result.host,
+          repository: eligibility.inspected.result.base.repository,
+          requester: {
+            kind: "operator",
+            scopes: authority.operatorWrite ? ["operator.write"] : [],
+          },
+        },
         assertCurrent: eligibility.assertCurrent,
         verifyBeforeBinding: async () => {
           await assertExistingPullRequestWriteAccess({
@@ -243,6 +253,42 @@ export async function performSessionGitHubPreparation(
       signal,
       commitGuard: assertCurrent,
     });
+    if (
+      emptySource &&
+      !loaded.entry?.worktree?.githubPullRequest?.preparedHeadCommit &&
+      !inspected.publishedHeadCommit
+    ) {
+      const project = await resolvePullRequestProjectSource(context.getRuntimeConfig(), {
+        host: pullRequest.host,
+        repository: pullRequest.base.repository,
+        requester: { kind: "operator", scopes: authority.operatorWrite ? ["operator.write"] : [] },
+      });
+      assertCurrent();
+      if (project) {
+        // Loose commits alone are not advertised; retained fetch refs make interrupted imports usable.
+        const history = await runGit(
+          owner.worktree.path,
+          [
+            "for-each-ref",
+            "--count=1",
+            "--format=%(objectname)",
+            "refs/openclaw/fetched/",
+            "refs/remotes/",
+          ],
+          {
+            signal,
+            beforeRun: assertCurrent,
+            env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+          },
+        );
+        assertCurrent();
+        if (history.code !== 0 || !history.stdout.trim()) {
+          throw new Error(
+            `This empty workspace has no history for ${pullRequest.base.repository}. Start a new session using project ${project.id} and retry prepare_pr there to reuse its shared history. Existing files were preserved; repeating this cold fetch can exceed the execution limit.`,
+          );
+        }
+      }
+    }
     let projectBase: { repository: string; branch: string } | undefined;
     if (!emptySource) {
       const repository = await prepareGitHubPublicationRepositoryIdentity({
