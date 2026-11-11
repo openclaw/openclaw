@@ -133,7 +133,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 <Accordion title="Gateway field details">
 
 - `mode`: `local` (run gateway) or `remote` (connect to remote gateway). Gateway refuses to start unless `local`.
-- `port`: local Gateway bind port, multiplexing WS + HTTP. It does not select the macOS SSH tunnel port. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
+- `port`: local Gateway bind port, multiplexing WS + HTTP. It does not select the macOS SSH tunnel port. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > named-profile default (`19001` for `dev`, otherwise derived from the profile name) > `18789`. When `--profile dev` selects the profile and `OPENCLAW_GATEWAY_PORT` is unset, the CLI sets `OPENCLAW_GATEWAY_PORT=19001`, so `19001` takes precedence over `gateway.port`.
 - `publicOrigin`: optional externally reachable HTTPS origin of the Gateway,
   without a path, query, or credentials. HTTP is accepted only for literal
   loopback hosts (`localhost`, `127.0.0.1`, or `[::1]`) during local development.

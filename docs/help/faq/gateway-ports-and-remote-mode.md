@@ -13,8 +13,10 @@ read_when:
     `gateway.port` controls the single multiplexed port for WebSocket + HTTP (Control UI, hooks, etc.). Precedence:
 
     ```text
-    --port > OPENCLAW_GATEWAY_PORT > gateway.port > default 18789
+    --port > OPENCLAW_GATEWAY_PORT > gateway.port > named-profile default > 18789
     ```
+
+    The named-profile default is `19001` for `dev` and a port derived from the profile name for other named profiles (`--profile <name>` or `OPENCLAW_PROFILE`). When `--profile dev` selects the profile and `OPENCLAW_GATEWAY_PORT` is unset, the CLI sets `OPENCLAW_GATEWAY_PORT=19001`, so `19001` takes precedence over `gateway.port`.
 
   </Accordion>
 
