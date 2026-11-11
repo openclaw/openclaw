@@ -1,3 +1,4 @@
+import { resolveSummaryFloorChars } from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
@@ -198,7 +199,8 @@ export function resolveCompactionRetentionBudget(
   const summaryTokens = estimateCompactionHistoryTokens([
     {
       role: "compactionSummary",
-      summary: "x".repeat(maxSummaryChars),
+      // The cut keeps room for the floor committed beside a full summary.
+      summary: "x".repeat(maxSummaryChars + resolveSummaryFloorChars(maxSummaryChars)),
       tokensBefore: 0,
       timestamp: 0,
     },
