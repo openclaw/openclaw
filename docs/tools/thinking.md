@@ -140,7 +140,7 @@ check the per-agent setting if the model default still does not take effect.
 ## Application by agent
 
 - **Embedded OpenClaw**: the resolved level is passed to the in-process OpenClaw agent runtime.
-- **Claude CLI backend**: concrete levels are mapped to Claude Code `--effort`; models that allow fixed budgets also receive a matching `MAX_THINKING_TOKENS` launch value. `adaptive` removes both configured effort flags and fixed-budget overrides, delegating effective thinking to Claude Code's environment, settings, and model defaults. See [CLI backends](/gateway/cli-backends).
+- **Claude CLI backend**: concrete levels are mapped to Claude Code `--effort`; Claude Code also receives a matching `MAX_THINKING_TOKENS` launch value and applies it only to models that allow fixed budgets. `adaptive` removes both configured effort flags and fixed-budget overrides, delegating effective thinking to Claude Code's environment, settings, and model defaults. See [CLI backends](/gateway/cli-backends).
 
 ## Fast mode (/fast)
 
