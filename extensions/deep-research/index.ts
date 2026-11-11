@@ -2,8 +2,10 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { researchToolDefinition } from "./src/contract.js";
 import type { ResearchJobs } from "./src/jobs.js";
+import { registerResearchViewApi } from "./src/view-api.js";
 
 const loadTool = createLazyRuntimeModule(() => import("./src/tool.js"));
+
 const loadJobs = createLazyRuntimeModule(() => import("./src/jobs.js"));
 
 export default definePluginEntry({
@@ -12,13 +14,31 @@ export default definePluginEntry({
   description: "Bounded, evidence-backed research",
   register(api) {
     let service: { scheduler: PluginServiceSchedulerV1; jobs: ResearchJobs } | undefined;
+    registerResearchViewApi(api, () => {
+      if (!service || service.scheduler.signal.aborted) {
+        return undefined;
+      }
+      return service.jobs;
+    });
     api.registerService({
       apiVersion: 3,
       id: "deep-research-jobs",
       async start(context) {
         const { ResearchJobs } = await loadJobs();
         context.scheduler.signal.throwIfAborted();
-        const jobs = new ResearchJobs(api, context.scheduler, context.sessionWork);
+        const jobs = new ResearchJobs(api, context.scheduler, context.sessionWork, () => {
+          if (context.scheduler.signal.aborted) {
+            return;
+          }
+          context.scheduler.schedule({
+            id: "view-invalidation",
+            atMs: context.scheduler.now() + 250,
+            mode: "earliest",
+            run: async () => {
+              context.gatewayEvents?.emit("changed", {}, { scope: "operator.read" });
+            },
+          });
+        });
         service = { scheduler: context.scheduler, jobs };
         await jobs.startRecovery();
       },
@@ -43,10 +63,10 @@ export default definePluginEntry({
             const jobs = owner.jobs;
             return (await loadTool())
               .createResearchTool(api, context, jobs)
-              .execute(id, params, signal, (message) =>
+              .execute(id, params, signal, (message, jobId) =>
                 onUpdate?.({
                   content: [{ type: "text", text: message }],
-                  details: { progress: message },
+                  details: { progress: message, ...(jobId ? { version: 1, jobId } : {}) },
                 }),
               );
           },

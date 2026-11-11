@@ -1,7 +1,8 @@
 import { createMemo, createSignal, For, latest, Loading, onSettled } from "solid-js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
@@ -452,8 +453,7 @@ export function PaletteSessionSettingsView(properties: {
                     : undefined
                 }
               >
-                <input
-                  type="checkbox"
+                <Checkbox
                   ref={[controlRef()]}
                   checked={properties.options.preferences.remember}
                   disabled={view().locked || !properties.options.preferences.available}

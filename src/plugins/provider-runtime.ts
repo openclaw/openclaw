@@ -439,6 +439,7 @@ export function resolveProviderTransportTurnStateWithPlugin(
 }
 
 export {
+  formatProviderAuthProfileApiKeyWithPlugin,
   loginProviderOAuthWithPlugin,
   prepareProviderRuntimeAuth,
   refreshProviderOAuthCredentialWithPlugin,
@@ -531,8 +532,6 @@ export function listProviderUsagePluginDescriptors(params: {
 }
 
 export { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
-
-export const formatProviderAuthProfileApiKeyWithPlugin = runtimeHook("formatApiKey");
 
 export const resolveProviderCacheTtlEligibility = runtimeHook("isCacheTtlEligible");
 

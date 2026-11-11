@@ -773,9 +773,11 @@ Docs-only runs and unparseable logs do not fill that quota. Failed workflows
 supply positive timing samples only: their missing jobs never count as evidence
 for pruning absent keys. Successful workflow cohorts retain their existing
 pruning policy, including when mixed with failed-workflow samples.
-It also seeks the newest five successful `ci.yml` `pull_request` runs with
-contributing compact or numbered tooling measurements, skipping docs-only and
-unparseable cohorts. The collector recognizes ordinary, `changed-compact`, and
+It also seeks the newest five completed `ci.yml` `pull_request` runs with a
+success or failure conclusion and contributing compact or numbered tooling
+measurements from successful jobs, skipping docs-only and unparseable cohorts.
+Cancelled runs do not supply samples or fill the quota.
+The collector recognizes ordinary, `changed-compact`, and
 `changed-config-compact` jobs and reads each log once for both timing families.
 These tests execute the PR merge-ref; `source` records that provenance separately
 from upstream main and release runs. PR plans may select a subset, so their

@@ -103,7 +103,8 @@ export function collectRecoveryInventory(params: {
   const protectUnmanifested = (filePath: string, bytes: number, reason: string) => {
     artifacts.push({ path: filePath, runs: [], bytes, outcome: "protected", reason });
   };
-  let laterUpdateStartedAt = 0;
+  // Originals completed before this instant are superseded by a later or verified update.
+  let supersededBefore = 0;
   const manifestsDir = resolveSessionSqliteMigrationRunsDir(params.env);
   if (hasSymbolicLinkInDirectoryPath(manifestsDir)) {
     artifacts.push({
@@ -173,7 +174,11 @@ export function collectRecoveryInventory(params: {
     params.readHistory !== false &&
     [...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))
   ) {
-    laterUpdateStartedAt = readCompletedUpdateHistory(params.env)?.latestCompletedStartedAt ?? 0;
+    const history = readCompletedUpdateHistory(params.env);
+    supersededBefore = Math.max(
+      history?.latestCompletedStartedAt ?? 0,
+      history?.latestVerifiedFinishedAt ?? 0,
+    );
   }
   for (const [archivePath, refs] of references) {
     const evidence = resolveRecoveryArtifact(refs);
@@ -239,8 +244,7 @@ export function collectRecoveryInventory(params: {
     } else if (
       refs.some(
         ({ target, run }) =>
-          target.databaseIdentity &&
-          !(laterUpdateStartedAt > Date.parse(run.manifest.completedAt!)),
+          target.databaseIdentity && !(supersededBefore > Date.parse(run.manifest.completedAt!)),
       )
     ) {
       classify("protected", "awaiting-later-completed-update");

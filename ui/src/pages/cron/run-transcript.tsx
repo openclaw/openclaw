@@ -2,17 +2,16 @@ import type { CronHistoryResult } from "@openclaw/gateway-protocol";
 import { lazy, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronRunLogEntry } from "../../api/types.ts";
-import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { attachHistoryActivity } from "../chat/chat-history-request.ts";
-import { mergeChatTranscriptPages } from "../chat/chat-transcript-pages.ts";
-import { ChatHistoryBoundary } from "../chat/components/chat-history-boundary.tsx";
 import { ChatLazyBoundary } from "../chat/components/chat-lazy-boundary.tsx";
 
 const ChatTranscriptFeed = lazy(() => import("../chat/components/chat-transcript-feed-view.tsx"), {
   export: "ChatTranscriptFeed",
+});
+const ChatHistoryBoundary = lazy(() => import("./run-transcript.runtime.ts"), {
+  export: "ChatHistoryBoundary",
 });
 
 type Scope = { client: GatewayBrowserClient; isCurrent: () => boolean };
@@ -94,11 +93,18 @@ export function createCronRunTranscript(notify: () => void, capture: () => Scope
       if (!current()) {
         return;
       }
-      const messages = visibleChatHistoryMessages(attachHistoryActivity(result).messages);
+      const { prepareCronRunTranscriptMessages } = await import("./run-transcript.runtime.ts");
+      if (!current()) {
+        return;
+      }
+      const messages = prepareCronRunTranscriptMessages(
+        result,
+        cursor ? state.messages : undefined,
+      );
       if (cursor) {
         cursors.add(cursor);
       }
-      state.messages = cursor ? mergeChatTranscriptPages(messages, state.messages) : messages;
+      state.messages = messages;
       state.nextCursor =
         result.nextCursor && !cursors.has(result.nextCursor) ? result.nextCursor : undefined;
       state.failedCursor = undefined;
@@ -183,11 +189,13 @@ export function CronRunTranscriptView(props: {
             <p>{t("cron.runEntry.transcriptEmpty")}</p>
           ) : null}
           {state().nextCursor ? (
-            <ChatHistoryBoundary
-              hasMore={true}
-              loading={state().loading}
-              onShowEarlier={() => void props.transcript.load(props.transcript.nextCursor)}
-            />
+            <ChatLazyBoundary>
+              <ChatHistoryBoundary
+                hasMore={true}
+                loading={state().loading}
+                onShowEarlier={() => void props.transcript.load(props.transcript.nextCursor)}
+              />
+            </ChatLazyBoundary>
           ) : undefined}
           <ChatLazyBoundary fallback={<p role="status">{t("common.loading")}</p>}>
             <ChatTranscriptFeed messages={state().messages} />

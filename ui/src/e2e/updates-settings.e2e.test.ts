@@ -1,6 +1,10 @@
 // Control UI tests cover the routed Updates settings page through a mocked Gateway.
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import {
@@ -36,6 +40,74 @@ async function expectRadiosDisabled(page: Page) {
 }
 
 suite.define(() => {
+  it("saves hourly daily weekly and custom automatic update schedules", async () => {
+    await suite.withPage(
+      { ...pageOptions, viewport: { width: 1280, height: 1000 } },
+      async ({ page }) => {
+        const config = { update: { auto: { enabled: true }, channel: "stable" } };
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["config.get", "config.set", "update.status", "update.run"],
+          methodResponses: {
+            "config.get": configResponse(config, "schedule-config"),
+            "update.status": {
+              sentinel: null,
+              schedule: { channel: "stable", autoEnabled: true, install: { kind: "package" } },
+            },
+          },
+          operatorScopes: ["operator.read", "operator.admin"],
+        });
+        expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
+        await gateway.waitForRequest("config.get");
+        const automatic = page.getByRole("switch", { name: "Automatic updates", exact: true });
+        await expect.poll(() => automatic.isChecked()).toBe(true);
+        const policy = page
+          .locator(".settings-section")
+          .filter({ has: page.getByRole("heading", { name: "Update policy", exact: true }) });
+        const capture = async (name: string) => {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            policy,
+            [policy.getByText("Update schedule", { exact: true })],
+            { animations: "disabled", elements: [policy], scrollTo: policy },
+          );
+          await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
+          await writeFile(
+            path.join(suite.artifactDir, name + "-policy.png"),
+            frame.elements[0]!.png,
+          );
+        };
+        const saved = async (schedule: string | undefined) => {
+          await expect
+            .poll(async () => {
+              const requests = await gateway.getRequests("config.set");
+              const raw = asNullableRecord(requests.at(-1)?.params)?.raw;
+              return typeof raw === "string" ? JSON.parse(raw).update.auto : null;
+            })
+            .toEqual({ enabled: true, ...(schedule === undefined ? {} : { schedule }) });
+        };
+        await page.getByRole("radio", { name: "Hourly (default)", exact: true }).waitFor();
+        await capture("after-hourly");
+        await page.getByRole("radio", { name: "Daily", exact: true }).click();
+        await saved("0 3 * * *");
+        await page.getByLabel("Time of day", { exact: true }).fill("04:25");
+        await page.getByLabel("Time of day", { exact: true }).blur();
+        await saved("25 4 * * *");
+        await capture("after-daily");
+        await page.getByRole("radio", { name: "Weekly", exact: true }).click();
+        await saved("25 4 * * 0");
+        await page.getByLabel("Day of the week", { exact: true }).selectOption("2");
+        await saved("25 4 * * 2");
+        await capture("after-weekly");
+        await page.getByRole("radio", { name: "Custom cron", exact: true }).click();
+        await page.getByLabel("Cron expression", { exact: true }).fill("*/15 2-5 * * 1-5");
+        await page.getByLabel("Cron expression", { exact: true }).blur();
+        await saved("*/15 2-5 * * 1-5");
+        await capture("after-custom");
+        await page.getByRole("radio", { name: "Hourly (default)", exact: true }).click();
+        await saved(undefined);
+      },
+    );
+  });
   it("locks update policy while an automatic apply runs and shows readable recovery guidance", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const config = { update: { auto: { enabled: true }, channel: "stable" } };

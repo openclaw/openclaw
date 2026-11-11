@@ -141,6 +141,10 @@ describe("update-cli", () => {
     expect(message).toMatch(/^[^\n]*update repair`[^]*process failed[^]*diagnostic output/u);
     expect(message).not.toContain("long-argv-prefix");
   });
+});
+
+describe("update-cli", () => {
+  const f = createUpdateCliFixture({ databaseEngines: ["sqlite", "postgres"] });
 
   registerForegroundFailureRecoveryTests({
     setupUpdatedRootRefresh: f.setupUpdatedRootRefresh,

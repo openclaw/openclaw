@@ -370,7 +370,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     await result.dispose();
   });
 
-  it("returns a bounded operator-visible notice for failed configured MCP discovery", async () => {
+  it("returns a well-formed bounded notice for failed configured MCP discovery", async () => {
     const runtime = makeStaticRuntime("scheduled-diagnostic");
     setCatalog(runtime, {
       ...runtime.peekCatalog()!,
@@ -381,7 +381,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
           serverName: "user-mail",
           safeServerName: "user-mail",
           launchSummary: "user-mail",
-          message: "authentication required",
+          message: "authentication required " + "🙂".repeat(120),
         },
       ],
     });
@@ -389,7 +389,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     const result = await staticTools("scheduled-diagnostic", { toolsAllow: ["*"] });
 
     expect(result.diagnosticNotice).toContain("user-mail: authentication required");
-    expect(result.diagnosticNotice).toContain("Do not claim MCP-backed work succeeded");
+    expect(result.diagnosticNotice).toContain(`${"🙂".repeat(72)}. Do not claim MCP-backed work`);
     await result.dispose();
   });
 

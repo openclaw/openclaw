@@ -1,6 +1,6 @@
 import { hash } from "node:crypto";
 import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   freezeJsonSnapshot,
   isDeeplyFrozenPlainData,
@@ -633,6 +633,9 @@ describe("OpenAI Responses continuation", () => {
       request: { ...current, previous_response_id: "resp_1", input: [secondUser] },
     });
     expect({ state, request }).toEqual(before);
+    assert(current.tools[0]);
+    current.tools[0].parameters.type = "string";
+    expect(resolve(state, request).request.tools).toHaveProperty("0.parameters.type", "string");
   });
 
   it.each([

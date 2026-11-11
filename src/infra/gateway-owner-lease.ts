@@ -63,6 +63,7 @@ const log = createSubsystemLogger("gateway");
 
 export type GatewayOwnerLease = {
   owner: string;
+  previousOwner?: GatewayOwnerLeaseIdentity;
   ready: Promise<void>;
   markListening: () => void;
   release: () => Promise<void>;
@@ -341,8 +342,10 @@ export function acquireGatewayOwnerLease(params: {
         singleStatement: operation === "release" ? true : undefined,
       },
     );
+  let previousOwner: GatewayOwnerLeaseIdentity | undefined;
   const expiresAt = mutateLease("acquire", (db) => {
     const previous = resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));
+    previousOwner = previous;
     const now = Date.now();
     const leaseExpiresAt = now + STARTUP_MIGRATION_LEASE_TTL_MS;
     const values = {
@@ -406,6 +409,7 @@ export function acquireGatewayOwnerLease(params: {
   let released = false;
   return {
     owner: identity.owner,
+    previousOwner,
     ready,
     markListening() {
       mutateLease("listening", (db) => {

@@ -36,6 +36,7 @@ export function resolveGatewayWsBrowserOrigin(
     origin: params.origin,
     isLocalClient: params.isLocalClient,
     remoteControlUiIngress: params.remoteControlUiIngress,
+    ...(params.openclawIdTunnel ? { openclawIdTunnel: true } : {}),
   };
 }
 

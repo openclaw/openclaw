@@ -31,6 +31,7 @@ const performanceSources = [
     "control-ui-i18n-config.ts",
     "control-ui-i18n-config.json",
     "control-ui-module-attribution.mts",
+    "control-ui-script-coverage.mts",
     "control-ui-optional-assets.ts",
     "record-shared.mjs",
     "regexp.mjs",
@@ -231,6 +232,23 @@ describe("Control UI performance budgets", () => {
         <link rel="manifest" href="./manifest.webmanifest">
       `),
     ).toEqual(["assets/index-abc.css", "assets/index-abc.js", "assets/runtime-def.js"]);
+  });
+
+  it("caps inline document bytes alongside the external startup assets", () => {
+    const { distDir } = createStartupFixture();
+    const metrics = collectMetrics(distDir);
+    expect(metrics.document).toEqual({
+      rawBytes: Buffer.byteLength(startupHtml),
+      gzipBytes: gzipSync(startupHtml).byteLength,
+    });
+    expect(
+      evaluateBudgets(metrics, { ...CONTROL_UI_PERFORMANCE_BUDGETS, documentGzipBytes: 1 }),
+    ).toContainEqual({
+      metric: "document gzip",
+      actual: metrics.document.gzipBytes,
+      limit: 1,
+      unit: "bytes",
+    });
   });
 
   it("counts identity bytes for each missing compression sidecar", () => {
@@ -575,6 +593,41 @@ describe("Control UI performance budgets", () => {
         } else {
           expect(result.violations).toEqual([]);
         }
+      }
+    },
+  );
+
+  it.each(["report-only", "over-budget base"])(
+    "annotates document and total CSS overages in Actions with %s",
+    (mode) => {
+      const fixture = createCliFixture();
+      fixture.writeHtml(
+        startupHtml +
+          Array.from({ length: 1024 }, (_, index) =>
+            createHash("sha256").update(String(index)).digest("hex"),
+          ).join(""),
+      );
+      for (let index = 0; index < 32; index++) {
+        fixture.writeAsset("extra-" + index + ".css", 53_000, 10_500);
+      }
+      const summary = path.join(fixture.rootDir, "summary.md");
+      const args = mode === "report-only" ? ["--report-only"] : ["--base-dist", fixture.distDir];
+      const result = fixture.run(["--json", ...args], {
+        GITHUB_ACTIONS: "true",
+        GITHUB_STEP_SUMMARY: summary,
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      const report = JSON.parse(result.stdout);
+      if (mode === "over-budget base") {
+        expect(report.violations).toEqual([]);
+      }
+      expect(result.stderr).toContain("::warning file=");
+      const stepSummary = fs.readFileSync(summary, "utf8");
+      for (const metric of ["document gzip", "total CSS gzip", "total CSS raw"]) {
+        expect(report.report).toContain(`warning: ${metric}`);
+        expect(result.stderr).toContain(`${metric} is `);
+        expect(stepSummary).toContain(`${metric} is `);
       }
     },
   );

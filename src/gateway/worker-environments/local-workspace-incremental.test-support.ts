@@ -11,11 +11,6 @@ import {
 } from "../../../test/helpers/promise.js";
 import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
-import {
-  onInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../../infra/diagnostic-events.js";
 import { stagedInputDirectory, STAGED_INPUT_GITIGNORE } from "../../media/staged-inputs.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import {
@@ -26,10 +21,7 @@ import {
 import { decodeLocalWorkspaceTree, localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
-import {
-  checkpointLocalWorkspacePath,
-  withLocalWorkspaceProjection,
-} from "./local-workspace-projection.js";
+import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import * as workspaceStore from "./local-workspace-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
@@ -306,7 +298,10 @@ export async function proveSharedSandboxCheckpoints(
         ...store,
         manifest: async (row, action) => {
           const result = await store.manifest(row, action);
-          if (action.kind === "scan" && action.target === "canonical") {
+          if (
+            (action.kind === "scan" || (action.kind === "probe" && result.kind === "scan")) &&
+            action.target === "canonical"
+          ) {
             scans++;
             await afterScan?.();
           }
@@ -315,7 +310,7 @@ export async function proveSharedSandboxCheckpoints(
       });
     }),
   );
-  for (const phase of ["waiting", "captured", "revoked"] as const) {
+  for (const phase of ["waiting", "captured", "revoked", "known mutation"] as const) {
     const entered = createDeferred();
     const released = createDeferred();
     const pause = async () => {
@@ -341,7 +336,7 @@ export async function proveSharedSandboxCheckpoints(
       if (phase === "captured") {
         await writeText(second.workspaceDir, "late.txt", "write after capture\n");
       }
-      later = second.checkpoint();
+      later = second.checkpoint(phase === "known mutation" ? { knownMutation: true } : undefined);
       joinedAuthorityRevoked = phase === "revoked";
     } finally {
       released.resolve();
@@ -354,7 +349,7 @@ export async function proveSharedSandboxCheckpoints(
         ? { status: "rejected", reason: new Error("Joined checkpoint authority revoked") }
         : { status: "fulfilled", value: undefined },
     );
-    expect.soft(scans).toBe(phase === "captured" ? 2 : 1);
+    expect.soft(scans).toBe(phase === "captured" || phase === "known mutation" ? 2 : 1);
     await expectText(owner.worktree.path, "source.txt", "shared checkpoint\n");
     if (phase === "captured") {
       await expectText(owner.worktree.path, "late.txt", "write after capture\n");
@@ -628,46 +623,4 @@ export async function proveInterruptedWorkspaceCheckpoint(
     checkpoint_json: null,
     baseline_json: null,
   });
-}
-
-export async function proveAbsentProjectionCheckpoints(owner: LocalWorkspaceOwner) {
-  await insertRegistryWorktree(process.env, owner.worktree);
-  expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeUndefined();
-  await waitForDiagnosticEventsDrained();
-  const requests: string[] = [];
-  const stop = onInternalDiagnosticEvent(
-    (event) => {
-      if (
-        event.type === "worker.request" &&
-        event.kind === "sqlite_writer" &&
-        event.phase === "completed" &&
-        event.requestClass.startsWith("stateLease.")
-      ) {
-        requests.push(event.requestClass);
-      }
-    },
-    { include: ["worker.request"] },
-  );
-  const checkpoint = () =>
-    checkpointLocalWorkspacePath({ cwd: owner.worktree.path, assertCurrent: owner.assertCurrent });
-  try {
-    for (let poll = 0; poll < 4; poll++) {
-      await checkpoint();
-    }
-    await waitForDiagnosticEventsDrained();
-    expect(requests).toEqual([]);
-
-    const projection = await prepare(owner);
-    await writeText(projection, "source.txt", "later guest edit\n");
-    await waitForDiagnosticEventsDrained();
-    requests.length = 0;
-    await checkpoint();
-    await waitForDiagnosticEventsDrained();
-    await expectText(owner.worktree.path, "source.txt", "later guest edit\n");
-    expect(requests).toEqual(
-      expect.arrayContaining(["stateLease.acquire", "stateLease.verify", "stateLease.release"]),
-    );
-  } finally {
-    stop();
-  }
 }

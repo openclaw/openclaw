@@ -33,6 +33,7 @@ import type {
   LocalWorkspaceMutation,
   LocalWorkspacePreparedUpdate,
   LocalWorkspaceProjection,
+  LocalWorkspaceRejectedResult,
 } from "./local-workspace-store.types.js";
 
 export type { LocalWorkspaceProjection } from "./local-workspace-store.types.js";
@@ -59,7 +60,7 @@ export type LocalWorkspaceStore = {
     action: LocalWorkspaceManifestAction,
   ) => Promise<LocalWorkspaceManifestValue>;
   create: (
-    row: Omit<LocalWorkspaceProjection, "revision">,
+    row: Omit<LocalWorkspaceProjection, "revision" | "rejectedResult">,
     authority?: WorktreeWorkerAuthority,
   ) => Promise<LocalWorkspaceProjection>;
   update: (
@@ -73,6 +74,11 @@ export type LocalWorkspaceStore = {
     authority?: WorktreeWorkerAuthority,
   ) => Promise<LocalWorkspaceProjection>;
   delete: (row: LocalWorkspaceProjection, authority?: WorktreeWorkerAuthority) => Promise<void>;
+  reject: (
+    row: LocalWorkspaceProjection,
+    rejection: Omit<LocalWorkspaceRejectedResult, "ref">,
+    authority?: WorktreeWorkerAuthority,
+  ) => Promise<LocalWorkspaceProjection>;
 };
 
 /** The reconciliation lease owns present and absent rows through effects and settlement. */
@@ -420,6 +426,27 @@ export function withLocalWorkspaceStore<T>(
                   },
                   manifest: readManifest,
                   accept,
+                  reject: async (previous, rejection, guard) => {
+                    if (
+                      previous.worktree_id !== params.worktreeId ||
+                      !previous.pending_ref ||
+                      previous.journal_json
+                    ) {
+                      throw new Error(
+                        "Local workspace rejection requires an unapplied pending result",
+                      );
+                    }
+                    await mutate(
+                      {
+                        kind: "update",
+                        revision: previous.revision,
+                        patch: {},
+                        rejectedResult: { ref: previous.pending_ref, ...rejection },
+                      },
+                      guard,
+                    );
+                    return row!;
+                  },
                   create: async (value, guard) => {
                     await mutate({ kind: "create", row: value }, guard);
                     return row!;

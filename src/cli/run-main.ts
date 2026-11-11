@@ -635,7 +635,7 @@ export async function runCli(
           try {
             const invokeCommand = () =>
               withGatewayServiceInstallation(serviceInstallation, () =>
-                withDoctorSnapshotReuse(originalInvocation.primary, () =>
+                withSnapshotReuseForMaintenance(originalInvocation.primary, () =>
                   runCliWithPreparedOutputMode(originalArgv, {
                     ...options,
                     runtimeRecoveryEnv,
@@ -695,11 +695,11 @@ export async function runCli(
     : await invoke();
 }
 
-async function withDoctorSnapshotReuse<T>(
+async function withSnapshotReuseForMaintenance<T>(
   primary: string | null | undefined,
   run: () => Promise<T>,
 ): Promise<T> {
-  if (primary !== "doctor") {
+  if (primary !== "doctor" && primary !== "update") {
     return run();
   }
   const { withSqliteSnapshotReuse } = await import("../infra/sqlite-snapshot-reuse.js");

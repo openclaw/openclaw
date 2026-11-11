@@ -72,6 +72,7 @@ describe("Windows Gateway task supervisor", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     process.argv = [...argv];
     process.execArgv = [...execArgv];
     process.exitCode = originalExitCode;
@@ -114,8 +115,8 @@ describe("Windows Gateway task supervisor", () => {
   });
 
   it.each([
-    [75, null, false, 75],
-    [null, "SIGTERM", false, 1],
+    [78, null, false, 78],
+    [null, "SIGTERM", true, 1],
     [23, null, true, 1],
   ] as const)(
     "settles child %s/%s (cleanup failure=%s)",
@@ -153,7 +154,7 @@ describe("Windows Gateway task supervisor", () => {
     },
   );
 
-  it("runs anchored children and replaces only a child requesting a Gateway restart", async () => {
+  it("runs anchored children and immediately replaces a child requesting a Gateway restart", async () => {
     process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = "1";
     const firstExtinction = vi.fn(async () => {});
     const secondExtinction = vi.fn(async () => {});
@@ -170,6 +171,43 @@ describe("Windows Gateway task supervisor", () => {
     expect(secondExtinction).toHaveBeenCalledOnce();
     expect(process.exitCode).toBeUndefined();
   });
+
+  it.each([
+    { exitCode: null, exitSignal: "SIGTERM" },
+    { exitCode: 0xc0000005, exitSignal: null },
+    { exitCode: 1, exitSignal: null },
+    { exitCode: 75, exitSignal: null },
+  ])("restarts a crashed Gateway after cleanup and backoff: %j", async (result) => {
+    vi.useFakeTimers();
+    const extinct = vi.fn(async () => {});
+    spawn.mockResolvedValueOnce(childRun(result, extinct)).mockResolvedValueOnce(childRun());
+    const running = runSupervisor();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(extinct).toHaveBeenCalledOnce();
+    expect(spawn).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    await running;
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    "bounds crash retries and honors shutdown during backoff (%s)",
+    async (stop) => {
+      vi.useFakeTimers();
+      const shutdown = captureShutdown();
+      spawn.mockResolvedValue(childRun({ exitCode: null, exitSignal: "SIGKILL" }));
+      const running = runSupervisor();
+      await vi.advanceTimersByTimeAsync(1);
+      if (stop) {
+        shutdown();
+      }
+      await vi.advanceTimersByTimeAsync(7_000);
+      await running;
+      expect(spawn).toHaveBeenCalledTimes(stop ? 1 : 4);
+      expect(process.exitCode).toBe(stop ? undefined : 1);
+    },
+  );
 
   it.each(["wait", "extinction"])(
     "suppresses restart when shutdown arrives during %s",

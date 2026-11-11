@@ -4,14 +4,15 @@ import {
   filePreviewDocumentLink,
 } from "../../components/file-preview-document.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateAddFeedback } from "./templates-detail-view.tsx";
-import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 import "../../styles/template-preview.css";
+import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 
 type Category = "instructions" | "skills" | "integrations" | "automations";
 const categories: Array<{ key: Category; labelKey: string; icon: IconName }> = [
@@ -77,13 +78,22 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
       return "";
     }
     if ("schedule" in item) {
-      return item.schedule + " · " + item.timezone;
+      return (
+        item.schedule +
+        " · " +
+        item.timezone +
+        " · " +
+        t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationPaused")
+      );
+    }
+    if ("source" in item && item.source === "bundled") {
+      return t("templatesCatalog.dependencyBundled");
+    }
+    if ("ref" in item) {
+      return t("templatesCatalog.dependencyClawHub", { version: item.version });
     }
     if ("kind" in item) {
-      return (
-        (item.kind === "plugin" ? t("tabs.plugin") : t("tabs.mcp")) +
-        (item.version ? " · " + item.version : "")
-      );
+      return t("tabs.mcp");
     }
     return "";
   };
@@ -140,22 +150,16 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
         </button>
       </header>
       <div ref={(element) => (body = element)} class="template-preview__body">
-        <For each={[props.view.detailRequest ?? props.view.catalogRequest]}>
+        <For each={[props.view.detailRequest]}>
           {() => (
             <Errored
               fallback={(error) => (
-                <div class="callout danger" role="alert">
+                <InlineAlert tone="danger" role="alert">
                   {formatUiError(error())}
-                  <button
-                    type="button"
-                    class="btn"
-                    onClick={() =>
-                      props.view.selected ? props.view.onRetryDetail() : props.view.onRetryCatalog()
-                    }
-                  >
+                  <button type="button" class="btn" onClick={() => props.view.onRetryDetail()}>
                     {t("common.retry")}
                   </button>
-                </div>
+                </InlineAlert>
               )}
             >
               <Loading
@@ -165,9 +169,6 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                   </p>
                 }
               >
-                <Show when={props.view.readEntries().length === 0}>
-                  <span />
-                </Show>
                 <Show when={contents()}>
                   <Show
                     when={category()}
@@ -219,13 +220,25 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                     <span>
                                       <strong>{item.name}</strong>
                                       <small>
-                                        {"excerpt" in item
-                                          ? item.excerpt
-                                          : "schedule" in item
-                                            ? item.schedule + " · " + item.timezone
-                                            : "version" in item
-                                              ? item.version
-                                              : ""}
+                                        {"source" in item && item.source === "bundled"
+                                          ? t("templatesCatalog.dependencyBundled")
+                                          : "ref" in item
+                                            ? t("templatesCatalog.dependencyClawHub", {
+                                                version: item.version,
+                                              })
+                                            : "excerpt" in item
+                                              ? item.excerpt
+                                              : "schedule" in item
+                                                ? item.schedule +
+                                                  " · " +
+                                                  item.timezone +
+                                                  " · " +
+                                                  t(
+                                                    item.enabled
+                                                      ? "templatesCatalog.automationEnabled"
+                                                      : "templatesCatalog.automationPaused",
+                                                  )
+                                                : ""}
                                       </small>
                                     </span>
                                     <Icon name="chevronRight" />
@@ -259,7 +272,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                             {() => (
                               <Errored
                                 fallback={(error) => (
-                                  <div class="callout danger" role="alert">
+                                  <InlineAlert tone="danger" role="alert">
                                     {formatUiError(error())}
                                     <button
                                       type="button"
@@ -268,7 +281,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                     >
                                       {t("common.retry")}
                                     </button>
-                                  </div>
+                                  </InlineAlert>
                                 )}
                               >
                                 <Loading fallback={<p role="status">{t("common.loading")}</p>}>
@@ -312,7 +325,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
               !props.view.canAdd ||
               !props.view.detail ||
               props.view.applying ||
-              Boolean(props.view.consentWarning || props.view.reviewPlan || props.view.addedAgentId)
+              Boolean(props.view.consentWarning || props.view.reviewPlan)
             }
             onClick={() => void props.view.onConfirm()}
           >

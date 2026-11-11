@@ -13,12 +13,15 @@ export type ServiceWorkerFetchRequest = Pick<
   "url" | "method" | "mode" | "cache" | "headers"
 >;
 type CacheRequest = string | ServiceWorkerFetchRequest;
+const importMap = JSON.stringify({
+  imports: { "./assets/_app.js": "./assets/app-AbCd1234.js" },
+});
 export const offlineBootFixture = {
   id: "fixture",
   routes: ["/chat", "/new", "/settings", "/settings/connection"],
   routePrefixes: ["/chat/", "/dashboard/", "/settings/agents/"],
-  html: '<!doctype html><html><head><script src="./assets/app-AbCd1234.js"></script></head><body>generic shell</body></html>',
-  csp: "default-src 'self'; base-uri 'none'",
+  html: `<!doctype html><html><head><script type="importmap">${importMap}</script><script src="./assets/app-AbCd1234.js"></script></head><body>generic shell</body></html>`,
+  csp: `default-src 'self'; base-uri 'none'; script-src 'self' 'sha256-${createHash("sha256").update(importMap).digest("base64")}'`,
   assets: [
     {
       path: "assets/app-AbCd1234.js",
@@ -132,6 +135,7 @@ export function createFetchServiceWorker(
     URL,
     Response,
     crypto: webcrypto,
+    TextEncoder,
     btoa,
     AbortController,
     setTimeout,

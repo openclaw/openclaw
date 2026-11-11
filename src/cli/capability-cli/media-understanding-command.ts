@@ -63,6 +63,9 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
         const filePath = await resolveMediaFilePath(file);
         const input = { filePath, cfg, agentId, agentDir, activeModel };
         const signal = getAsyncWorkSignal();
+        const execution = signal
+          ? { signal, assertCurrent: () => signal.throwIfAborted() }
+          : undefined;
         const result = audio
           ? await transcribeAudioFile(
               {
@@ -70,9 +73,9 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
                 language: opts.language,
                 prompt: opts.prompt,
               },
-              signal ? { signal, assertCurrent: () => signal.throwIfAborted() } : undefined,
+              execution,
             )
-          : await describeVideoFile(input);
+          : await describeVideoFile(input, execution);
         if (!result.text) {
           if (audio && isMissingMediaUnderstandingProvider(result)) {
             throw new Error(

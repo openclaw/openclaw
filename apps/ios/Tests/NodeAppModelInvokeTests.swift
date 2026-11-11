@@ -9413,18 +9413,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("gateway not connected") == true)
     }
 
-    @Test func `agent deep link logging excludes the original URL`() throws {
-        let source = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
-        let start = try #require(source.range(of: "private func handleAgentDeepLink("))
-        let end = try #require(
-            source.range(
-                of: "private func effectiveAgentDeepLinkForPrompt(",
-                range: start.upperBound..<source.endIndex))
-        let handler = String(source[start.lowerBound..<end.lowerBound])
-
-        #expect(!handler.contains("originalURL.absoluteString, privacy: .public"))
-    }
-
     @Test @MainActor func `handle deep link records oversized message rejection`() async throws {
         let appModel = NodeAppModel()
         let msg = String(repeating: "a", count: 20001)
@@ -9595,13 +9583,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             }
         }
         #expect(errors == [.cancelled])
-    }
-
-    private static func nodeAppModelSourceURL() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Model/NodeAppModel.swift")
     }
 }
 

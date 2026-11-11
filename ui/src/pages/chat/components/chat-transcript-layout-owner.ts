@@ -40,7 +40,7 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
   ready = false;
-  /** Row-column offset held back from scrollTop while iOS momentum is running. */
+  /** Row-column offset held back from scrollTop while native scrolling is running. */
   rowShift = 0;
   private rowGeometry: readonly TranscriptRowGeometry[] = [];
   rowLayout?: ChatWidgetLayout;
@@ -98,8 +98,12 @@ export class TranscriptLayoutOwner {
   }
 
   readonly rowMinimum = (index: number): number => {
+    const heights = this.rowLayout?.readRows();
+    if (!heights) {
+      return 0;
+    }
     const key = this.rowLayoutKey(index);
-    return key ? (this.rowLayout?.read(key) ?? 0) : 0;
+    return key ? (heights[key] ?? 0) : 0;
   };
 
   restoreRows(

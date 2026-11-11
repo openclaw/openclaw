@@ -395,7 +395,6 @@ describe("control-ui-i18n generated ownership", () => {
       "tryAnotherName",
       "sharingOptions",
       "menu",
-      "share",
       "current",
       "visibility",
       "shared",

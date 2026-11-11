@@ -7,13 +7,14 @@ import {
 } from "../../../../src/infra/session-cost-usage-totals.js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { ProviderUsagePanel } from "../../components/solid/provider-usage.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import "../../components/tooltip.ts";
+import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { formatIsoDate } from "./helpers.ts";
 import {
@@ -630,9 +631,9 @@ export function renderProviderUsage(
 ) {
   const notice =
     stalled || unavailable ? (
-      <div class="callout warning usage-callout">
+      <InlineAlert tone="warning" class="usage-callout">
         {t(stalled ? "usage.providerUsage.stalled" : "usage.providerUsage.unavailable")}
-      </div>
+      </InlineAlert>
     ) : undefined;
   if (providers.length === 0) {
     return notice;

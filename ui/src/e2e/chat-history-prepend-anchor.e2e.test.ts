@@ -34,7 +34,7 @@ suite.define(() => {
     const prompts: Record<number, string> = {
       1: "Earlier prompt",
       3: "Recent prompt",
-      81: "Latest prompt",
+      203: "Latest prompt",
     };
     const message = (seq: number) => ({
       __openclaw: { id: `recall-${seq}`, seq },
@@ -49,17 +49,17 @@ suite.define(() => {
       sessions: [{ key: "agent:main:main", sessionId: "recall-session" }],
       methodResponses: {
         "chat.startup": {
-          messages: Array.from({ length: 80 }, (_, index) => message(index + 3)),
+          messages: Array.from({ length: 80 }, (_, index) => message(index + 203)),
           hasMore: true,
           nextOffset: 80,
           olderCursor: "older-recall",
-          totalMessages: 82,
+          totalMessages: 282,
           sessionId: "recall-session",
         },
         "chat.history": {
-          messages: [message(1), message(2)],
+          messages: Array.from({ length: 202 }, (_, index) => message(index + 1)),
           hasMore: false,
-          totalMessages: 82,
+          totalMessages: 282,
           sessionId: "recall-session",
         },
       },
@@ -82,7 +82,7 @@ suite.define(() => {
         )
         .toEqual([text, caret, caret]);
     };
-    await thread.getByText(/^History entry 82\./).waitFor();
+    await thread.getByText(/^History entry 282\./).waitFor();
     await waitForChatScrollIdle(page);
     expect(await gateway.getRequests("chat.history")).toHaveLength(0);
     await recallPrompt("ArrowUp", "Latest prompt");

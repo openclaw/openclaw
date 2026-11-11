@@ -116,7 +116,7 @@ export type ChatReplyTarget = {
 };
 
 export type ChatGoalDraftMode = { sessionId?: string } & (
-  | { action: "start" }
+  | { action: "start"; fromCommand?: true }
   | { action: "edit"; goalId: string; previousDraft: string }
 );
 
@@ -406,6 +406,7 @@ export type MessageImageSource = {
 
 export type MessageContentItem =
   | import("../../../../src/shared/plugin-inline-view.js").PluginInlineViewBlock
+  | import("../../../../src/shared/template-install-notice.js").TemplatePluginInstallNotice
   | ClawHubRecommendation
   | {
       type: "image";

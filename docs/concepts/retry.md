@@ -101,6 +101,7 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 - Operations safe to repeat, including preview edits, can retry transient network failures and HTTP 5xx responses without replacing the existing message.
 - Uses `retry_after` when available, otherwise exponential backoff.
 - HTML/Markdown parse errors are not retried; they fall back to plain text on the first attempt.
+- When durable final-reply recovery stops after an unconfirmed send or exhausted retries, the Gateway hands the existing uncertainty notice to lifecycle delivery without waiting for another incoming message. The ambiguous answer is not resent. Notice delivery uses the same bounded durable queue and can itself fail if the channel remains unavailable.
 
 ## Configuration
 

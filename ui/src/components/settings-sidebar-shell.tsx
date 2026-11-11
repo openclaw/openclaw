@@ -1,7 +1,11 @@
 import { createMemo, onSettled } from "solid-js";
 import { sameRouteLocation } from "../app-route-paths.ts";
 import type { ShellViewHost } from "../app/app-shell-view-state.ts";
-import { currentConfigConnectionEpoch } from "../lib/config/config-state-model.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
+import {
+  currentConfigConnectionEpoch,
+  currentConfigObject,
+} from "../lib/config/config-state-model.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import {
   SettingsSaveIndicator,
@@ -103,13 +107,59 @@ export function ShellSettingsSidebar(props: {
   sidebarProps: SettingsSidebarFallbackProps;
 }) {
   const saveIndicator = useSaveIndicatorProps(() => props.host);
+  const schemaReceipt = createMemo(
+    () => {
+      props.host.shellRevision();
+      return { result: props.host.context!.runtimeConfig.schemaRead };
+    },
+    { equals: (left, right) => left.result === right.result },
+  );
+  const schemaOutcome = createMemo(() => {
+    const requested = schemaReceipt().result;
+    // Each receipt starts empty; prior matches cannot stay actionable while it loads.
+    return createMemo(() => requested, { loadingValue: null });
+  });
+  const searchSchema = () => {
+    const completed = schemaOutcome()();
+    return completed?.ok ? props.host.context!.runtimeConfig.state.configSchema : null;
+  };
+  const searchSchemaReady = () => {
+    props.host.shellRevision();
+    const gateway = props.host.context!.gateway.snapshot;
+    if (gateway.phase === "connected" && !hasOperatorReadAccess(gateway.hello?.auth ?? null)) {
+      return true;
+    }
+    const completed = schemaOutcome()();
+    if (completed && !completed.ok) {
+      throw new Error(completed.error);
+    }
+    return searchSchema() !== null;
+  };
+  // Keep schema presentation separate from unrelated Save transitions.
+  const searchParams = createMemo(() => {
+    const host = props.host;
+    host.shellRevision();
+    const context = host.context!;
+    const gateway = context.gateway.snapshot;
+    return {
+      query: host.settingsSearchQuery,
+      openclawIdEnabled: context.config.current.openclawIdEnabled,
+      schema: searchSchema(),
+      value: currentConfigObject(context.runtimeConfig.state),
+      uiHints: context.runtimeConfig.state.configUiHints,
+      identityAvailable: Boolean(gateway.selfUser),
+      multipleProfiles: gateway.hello?.policy?.hasMultipleSessionSharingIdentities === true,
+      basePath: context.basePath,
+      canAdmin: props.sidebarProps.canAdmin,
+      nativeDeviceSettings: context.nativeDeviceSettings,
+    };
+  });
   const sidebarProps = createMemo<SettingsSidebarProps>(() => {
     const host = props.host;
     host.shellRevision();
     const context = host.context!;
     const gatewaySnapshot = context.gateway.snapshot;
     const config = context.config.current;
-    const runtimeConfig = context.runtimeConfig.state;
     const callbacks = host.viewCallbacks;
     return {
       ...props.sidebarProps,
@@ -123,24 +173,34 @@ export function ShellSettingsSidebar(props: {
       lastError: gatewaySnapshot.lastError,
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
       searchQuery: host.settingsSearchQuery,
-      searchParams: {
-        query: host.settingsSearchQuery,
-        schema: runtimeConfig.configSchema,
-        value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
-        uiHints: runtimeConfig.configUiHints,
-        identityAvailable: Boolean(gatewaySnapshot.selfUser),
-        multipleProfiles:
-          gatewaySnapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true,
-        basePath: context.basePath,
-        canAdmin: props.sidebarProps.canAdmin,
-        nativeDeviceSettings: context.nativeDeviceSettings,
+      searchSchemaReady,
+      onRetrySearchSchema: () => {
+        // The receipt presents failure; consume unexpected activation rejection here too.
+        void context.runtimeConfig.refreshSchema().catch(() => {});
       },
       onRetryConnect: callbacks.retryGateway,
       onNavigate: host.shellNavigation.navigate,
-      onSearchQueryChange: (nextQuery: string) =>
-        void host.handleSettingsSearchQueryChange(nextQuery),
+      onSearchQueryChange: async (nextQuery: string) => {
+        host.settingsSearchQuery = nextQuery;
+        if (nextQuery.trim()) {
+          try {
+            await Promise.all([
+              context.runtimeConfig.ensureLoaded(),
+              context.runtimeConfig.ensureSchemaLoaded(),
+            ]);
+          } catch {
+            // The owners retain read failures; search input stays available.
+          }
+        }
+      },
       saveIndicator: saveIndicator(),
     };
   });
-  return <SettingsSidebar {...sidebarProps()} />;
+  return (
+    <SettingsSidebar
+      {...sidebarProps()}
+      searchParams={searchParams()}
+      searchSchemaRequest={schemaReceipt().result}
+    />
+  );
 }

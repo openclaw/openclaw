@@ -1,3 +1,7 @@
+"plugin: openclaw-id-access":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openclaw-id-access/**"
 "plugin: azure-speech":
   - changed-files:
       - any-glob-to-any-file:

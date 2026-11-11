@@ -2,7 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSection, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
@@ -312,11 +312,11 @@ function SessionRows(props: {
                   return (
                     <>
                       {" "}
-                      <button
-                        type="button"
-                        class="btn btn--sm btn--icon session-bar-copy"
-                        aria-label={t("usage.sessions.copy")}
-                        title={t("usage.sessions.copy")}
+                      <IconButton
+                        size={28}
+                        class="session-bar-copy"
+                        icon="copy"
+                        label={t("usage.sessions.copy")}
                         onClick={(event: MouseEvent) => {
                           event.stopPropagation();
                           void handleCopyButton(event, label(), t("usage.sessions.copy"), {
@@ -324,9 +324,7 @@ function SessionRows(props: {
                             announcement,
                           });
                         }}
-                      >
-                        <Icon name="copy" />
-                      </button>
+                      />
                       <span
                         ref={(element) => (feedback = element)}
                         class="session-bar-copy-feedback"

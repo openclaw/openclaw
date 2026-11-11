@@ -90,6 +90,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Checks for updates when the Gateway starts, including read-only extended-stable hints (default: true). Set false to disable automatic Gateway and headless-node update checks, applies, and anonymous update pings.",
   "update.auto.enabled":
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
+  "update.auto.schedule":
+    "Optional cron expression for Gateway automatic-update campaign starts, in the Gateway host timezone. Omit for the existing hourly cadence. Rollout delays and idle countdowns still apply; missed windows are skipped.",
   telemetry:
     "Explicit consent for anonymous feature statistics attached to the daily update check. Feature statistics are disabled by default and never include messages, credentials, or identifiers.",
   ...TELEMETRY_FIELD_HELP,

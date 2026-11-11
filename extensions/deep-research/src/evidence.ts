@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResearchFinding, ResearchSource } from "./contract.js";
 
 /** Mechanical provenance is independent of the fallible model's support verdict. */
@@ -62,9 +63,14 @@ export function evidenceProblem(
   return undefined;
 }
 
+/** Finding identity keeps the whole statement: the display cap must not merge two findings. */
+export function researchFindingKey(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
+}
+
 /** Bound untrusted labels before prompts; source passages remain byte-for-byte evidence. */
 export function researchPlainText(value: string, maxLength = 1_000): string {
-  return value.replace(/\s+/gu, " ").trim().slice(0, maxLength);
+  return truncateUtf16Safe(researchFindingKey(value), maxLength);
 }
 
 /** Only the renderer may emit citation markers or Markdown structure. */
@@ -75,31 +81,33 @@ function markdownText(value: string, maxLength = 1_000): string {
     .replace(/[\\`*_{}[\]<>|#!]/gu, "\\$&");
 }
 
-export function renderResearchReport(
+export function renderResearchDocument(
   question: string,
   findings: ResearchFinding[],
   sources: ResearchSource[],
   gaps: string[],
-): string {
-  const lines = [
-    `# ${markdownText(question, 8_000)}`,
-    "",
-    "## Findings",
-    ...findings.map(
-      (finding) =>
-        `- ${markdownText(finding.statement)} ${finding.evidence.map((e) => `[${e.sourceId}]`).join(" ")}`,
-    ),
-  ];
-  if (gaps.length) {
-    lines.push("", "## Unresolved", ...gaps.map((gap) => `- ${markdownText(gap)}`));
+) {
+  let report = `# ${markdownText(question, 8_000)}\n\n## Findings`;
+  const citations: Array<{ sourceId: string; startByte: number; endByte: number }> = [];
+  for (const finding of findings) {
+    report += `\n- ${markdownText(finding.statement)}`;
+    for (const evidence of finding.evidence) {
+      report += " ";
+      const startByte = Buffer.byteLength(report);
+      report += `[${evidence.sourceId}]`;
+      citations.push({
+        sourceId: evidence.sourceId,
+        startByte,
+        endByte: Buffer.byteLength(report),
+      });
+    }
   }
-  lines.push(
-    "",
-    "## Sources",
-    ...sources.map(
-      (source) =>
-        `[${source.id}] ${markdownText(source.title, 256)}${source.url ? ` — ${markdownText(source.url, 2_048)}` : " (supplied document)"}`,
-    ),
-  );
-  return lines.join("\n");
+  if (gaps.length) {
+    report += `\n\n## Unresolved\n${gaps.map((gap) => `- ${markdownText(gap)}`).join("\n")}`;
+  }
+  report += "\n\n## Sources";
+  for (const source of sources) {
+    report += `\n[${source.id}] ${markdownText(source.title, 256)}${source.url ? ` — ${markdownText(source.url, 2_048)}` : " (supplied document)"}`;
+  }
+  return { report, citations };
 }
