@@ -1,5 +1,9 @@
-import { resolveSummaryFloorChars } from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
+import {
+  commitCompactionSummary,
+  resolveSummaryFloorChars,
+} from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { SAFETY_MARGIN } from "../../compaction-planning.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
@@ -27,8 +31,11 @@ export type CompactionRequestConstraints = Readonly<{
   /** Source of the active run, including after its input has been processed. */
   requestFromEntryId?: string;
   pendingUserEntryId?: string;
+  /** The pending request cannot run until this compaction commits, such as a required preflight. */
+  requestRequiresCompaction?: true;
 }>;
 
+const log = createSubsystemLogger("agents/session");
 const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
 
 function estimateVariableRequestTokens(messages: AgentMessage[], prompt: string): number {
@@ -196,6 +203,22 @@ export function replayTokenBudget(
     model.contextWindow - settings.reserveTokens - estimateCompactedRequestTokens(messages, budget);
   // The estimator above carries the safety margin; the summary is fitted without it.
   return Math.floor(remaining / SAFETY_MARGIN) - 1;
+}
+
+/** Commits the harness summary; a floor the token budget shrank or dropped gets one warning. */
+export function commitSessionCompactionSummary(
+  result: Parameters<typeof commitCompactionSummary>[0],
+  preparation: Parameters<typeof commitCompactionSummary>[1],
+  withoutSummary: boolean,
+  replayBudget: () => number | undefined,
+): string {
+  return commitCompactionSummary(result, preparation, withoutSummary, replayBudget, (reduction) =>
+    log.warn(
+      `[compaction] summary floor ${reduction.keptChars ? "shrunk" : "dropped"} for the ` +
+        `${reduction.source} token budget: kept ${reduction.keptChars}/${reduction.floorChars} ` +
+        `floor chars; summaryTokenBudget=${reduction.tokenBudget}`,
+    ),
+  );
 }
 
 export function assertCompactionRequestCanFit(

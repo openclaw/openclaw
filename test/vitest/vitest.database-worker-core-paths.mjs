@@ -1056,6 +1056,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/user-channel-identities.worker.test.ts",
   "src/state/user-profiles.schema.test.ts",
   "src/state/user-profile-writes.owner.test.ts",
+  "src/state/user-profile-delegation.test.ts",
   "src/state/user-profile-openclaw-id.test.ts",
   "src/state/user-profile-email.test.ts",
   "src/state/user-profiles.avatar-admission.test.ts",
