@@ -470,7 +470,6 @@ it("keeps runtime memory registrations through local command preparation and dra
     resolveMemoryBackendConfig: () => ({ backend: "builtin" as const }),
     closeAllMemorySearchManagers,
   };
-  registry.memoryCapabilities.push({ pluginId, capability: { runtime } });
   setActivePluginRegistry(registry, undefined, "default", state.workspaceDir);
   mocks.prepare.mockResolvedValueOnce({
     ...createPrepared(false),
@@ -482,6 +481,7 @@ it("keeps runtime memory registrations through local command preparation and dra
       expect(captured?.memoryCorpusSupplements).toContainEqual({ pluginId, supplement });
       expect(captured?.memoryPromptPreparations).toContainEqual({ pluginId, prepare });
       expect(captured?.memoryPromptSupplements).toContainEqual({ pluginId, builder });
+      captured?.memoryCapabilities.push({ pluginId, capability: { runtime } });
     },
     { opts: { message: "test", runId: "local-memory", cleanupMemoryOnRunEnd: true } },
   );
