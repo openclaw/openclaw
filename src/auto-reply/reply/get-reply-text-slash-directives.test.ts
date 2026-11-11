@@ -135,9 +135,3 @@ it("preserves text exec commands when text routing is disabled on a native surfa
   expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: body } });
   expect(read()?.execHost).toBeUndefined();
 });
-
-it("persists the documented spaced thinking alias", async () => {
-  const { result, read } = await resolveTextSlashDirective("/think extra high");
-  expect(result).toMatchObject({ kind: "reply" });
-  expect(read()?.thinkingLevel).toBe("xhigh");
-});

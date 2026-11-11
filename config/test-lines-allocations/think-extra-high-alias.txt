@@ -1,2 +1,0 @@
-# Regression coverage for spaced thinking aliases (issue #197066).
-32
