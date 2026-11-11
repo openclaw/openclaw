@@ -505,6 +505,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             pty: params.pty === true && !sandbox,
             safeBins,
             safeBinProfiles,
+            config: defaults?.config,
+            skillScope: defaults?.skillScope,
             runId: defaults?.runId,
             onApprovalReview: (review) => (approvalReview = review),
             scopeKey: defaults?.scopeKey,

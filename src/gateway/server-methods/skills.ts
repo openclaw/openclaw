@@ -1,7 +1,4 @@
-import {
-  normalizeSortedUniqueTrimmedStringList,
-  normalizeTrimmedStringList,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
@@ -18,6 +15,7 @@ import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
+import { collectSkillBins } from "../../skills/discovery/bins.js";
 import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import {
   searchSkillsFromClawHub,
@@ -119,14 +117,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           agentSkillFilter: "ignore",
         },
       );
-      for (const bin of normalizeSortedUniqueTrimmedStringList(
-        entries.flatMap((entry) =>
-          (entry.metadata?.requires?.bins ?? []).concat(
-            entry.metadata?.requires?.anyBins ?? [],
-            (entry.metadata?.install ?? []).flatMap((spec) => spec?.bins ?? []),
-          ),
-        ),
-      )) {
+      for (const bin of collectSkillBins(entries)) {
         bins.add(bin);
       }
     }

@@ -1,0 +1,7 @@
+# Gateway-host autoAllowSkills authority-chain regressions. Real native launches, no exec-path
+# mocks: executing-agent skill ownership (embedded and CLI loopback grant, including session filter
+# and override exclusions) and the native-initiation recheck (only the egress-proxy registration
+# hook is wrapped, as the withdrawal seam). Mocked-boundary regressions: inline and detached-approval
+# rechecks (supervisor and approval RPCs mocked) and the cron standing-grant recheck (allowlist
+# classification mocked). Exact net growth for PR #158244.
+848

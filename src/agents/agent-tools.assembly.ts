@@ -254,6 +254,18 @@ export function* assembleOpenClawCodingTools(
               ...options?.exec,
               ...effectiveExecPolicy,
               config: options?.exec?.config ?? options?.config,
+              // Skill-bin trust under autoAllowSkills must follow the run's admitted skill scope: the
+              // executing agent's skills, never a borrowed policy agent's, narrowed so a session
+              // filter or override that excludes a skill also withdraws its binaries.
+              skillScope: options?.execSkillScope ?? {
+                ownerAgentId: executionAgentId,
+                ...(options?.skillsSnapshot?.skillFilter
+                  ? { skillFilter: options.skillsSnapshot.skillFilter }
+                  : {}),
+                ...(options?.skillsSnapshot?.skillOverrides
+                  ? { skillOverrides: options.skillsSnapshot.skillOverrides }
+                  : {}),
+              },
               preparedRunEnvironment: options?.exec?.preparedRunEnvironment,
               reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
               reviewTranscript: options?.exec?.reviewTranscript,

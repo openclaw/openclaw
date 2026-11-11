@@ -5,7 +5,7 @@ import {
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
+import type { ExecElevatedDefaults, ExecSkillScope } from "../agents/bash-tools.exec-types.js";
 import type { DelegationCapability } from "../agents/delegation-capability.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { PreparedQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
@@ -54,6 +54,11 @@ export type McpLoopbackRequestContext = {
   chatType?: ChatType;
   /** Recorded requester boundary captured by the host; never read from request headers. */
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
+  /**
+   * The admitted run's skill narrowing, captured by the host from its skill snapshot; never read
+   * from request headers. Bounds which skills may authorize exec bins under autoAllowSkills.
+   */
+  admittedSkillScope?: Pick<ExecSkillScope, "skillFilter" | "skillOverrides">;
   /** Host-prepared channel policy; never sourced from MCP request headers. */
   conversationToolPolicy?: GroupToolPolicyConfig;
   /** Host-verified completion context; never read from MCP request headers. */

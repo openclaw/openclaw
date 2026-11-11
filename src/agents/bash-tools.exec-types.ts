@@ -17,6 +17,23 @@ import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types
 /** Restart notification policy captured only for a durable launch. */
 export type DurableExecOptions = { notifyOnExit: boolean; notifyOnExitEmptySuccess: boolean };
 
+/**
+ * The admitted run's skill narrowing, carried from its skill snapshot. Bounds which skills may
+ * authorize a host binary under `autoAllowSkills`, so a session that excluded a skill cannot
+ * borrow the binaries it declares.
+ */
+export type ExecSkillScope = {
+  /**
+   * Executing agent whose skills may authorize bins. Approval policy stays with the exec `agentId`,
+   * which names another agent when the run borrows that agent's tool policy.
+   */
+  ownerAgentId?: string;
+  /** Normalized agent-level filter used to build the run's snapshot; undefined means unrestricted. */
+  skillFilter?: string[];
+  /** Sparse per-session overlay applied after the agent-level filter. */
+  skillOverrides?: Record<string, boolean>;
+};
+
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
   hasCronTool?: boolean;
   mode?: ExecMode;
@@ -30,6 +47,8 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   reviewer?: ExecReviewerConfig;
   config?: OpenClawConfig;
+  /** Admitted run's skill scope for autoAllowSkills bin trust. */
+  skillScope?: ExecSkillScope;
   /** Host-prepared non-secret environment and store projection exclusions. */
   preparedRunEnvironment?: PreparedGitHubToolEnvironment;
   /** An explicit snapshot, including an empty one, replaces local store access. */

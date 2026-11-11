@@ -18,7 +18,8 @@ export function resolveExecutableTrustPathFromEnv(bin: string, pathEnv: string):
   }
 }
 
-function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
+/** Resolves skill bin names to trusted executable paths on the given PATH. */
+export function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
   const trustEntries = new Map<string, SkillBinTrustEntry>();
   for (const raw of bins) {
     const name = raw.trim();
