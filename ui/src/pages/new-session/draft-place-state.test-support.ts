@@ -75,7 +75,7 @@ export function createRepositoryFixture(
   const browser = new DraftPlaceBrowser(gateway, () => ({ context, isAdmin: true }), {
     changed,
     updateComplete: () => Promise.resolve(),
-    onProjectMissing: vi.fn(),
+    onProjectMissing: () => state.clearProjectSelection(),
     onSelectProject: vi.fn(),
     onApprovedListing: vi.fn(),
     activeElement: () => null,

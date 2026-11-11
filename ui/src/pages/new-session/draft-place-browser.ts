@@ -18,7 +18,7 @@ import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
-import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
+import { PlaceBrowserState } from "./place-browser-state.ts";
 import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 
 type ProjectSearchOutcome = { result: ProjectsSearchRemoteResult } | { error: unknown } | null;
@@ -65,7 +65,7 @@ export class DraftPlaceBrowser {
   private selectedProjectRecord: ProjectRecord | undefined;
   private projectQueryValue = "";
   private environmentQueryValue = "";
-  private debouncedProjectQuery = "";
+  private submittedProjectQuery = "";
   private browserOpenValue = false;
   // Empty lists the Gateway host; otherwise the paired device whose folders are listed.
   private browserNodeIdValue = "";
@@ -77,7 +77,6 @@ export class DraftPlaceBrowser {
   } | null = null;
   private openPopoverValue: DraftPickerKind | null = null;
   private focusRequestId = 0;
-  private projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   readonly browser: PlaceBrowserState;
 
@@ -169,9 +168,9 @@ export class DraftPlaceBrowser {
       canCallGatewayMethod(
         this.read().context?.gateway.snapshot,
         "projects.searchRemote",
-        "operator.read",
+        "operator.write",
       ),
-      this.debouncedProjectQuery,
+      this.submittedProjectQuery,
       this.gateway.connectionEpoch,
     ] as const;
   }
@@ -409,41 +408,19 @@ export class DraftPlaceBrowser {
 
   changeProjectQuery(query: string) {
     this.projectQueryValue = query;
-    this.clearProjectSearchTimer();
-    this.debouncedProjectQuery = "";
-    this.searchProjects([null, false, "", this.gateway.connectionEpoch]);
-    const normalized = query.trim();
-    const context = this.read().context;
-    if (
-      normalized.length < 2 ||
-      projectCloneInput(normalized) ||
-      !this.gateway.connected ||
-      !this.gateway.client ||
-      !context ||
-      !canCallGatewayMethod(context.gateway.snapshot, "projects.searchRemote", "operator.read")
-    ) {
-      this.callbacks.changed();
-      return;
-    }
-    const client = this.gateway.client;
-    const connectionEpoch = this.gateway.connectionEpoch;
-    this.projectSearchTimer = globalThis.setTimeout(() => {
-      this.projectSearchTimer = undefined;
-      if (client !== this.gateway.client || connectionEpoch !== this.gateway.connectionEpoch) {
-        return;
-      }
-      this.debouncedProjectQuery = normalized;
-      this.searchProjects([client, true, normalized, connectionEpoch]);
-      this.callbacks.changed();
-    }, PICKER_INPUT_DEBOUNCE_MS);
+    this.submittedProjectQuery = "";
+    this.searchProjects();
+    this.callbacks.changed();
+  }
+
+  searchRemoteProjects() {
+    this.submittedProjectQuery = this.projectQueryValue.trim();
+    this.searchProjects();
     this.callbacks.changed();
   }
 
   resetProjectSearch() {
-    this.clearProjectSearchTimer();
-    this.projectQueryValue = "";
-    this.debouncedProjectQuery = "";
-    this.callbacks.changed();
+    this.changeProjectQuery("");
   }
 
   resetProjects(resetSelection = true) {
@@ -564,7 +541,6 @@ export class DraftPlaceBrowser {
     this.environmentQueryValue = "";
     this.browser.reset();
     this.retireRegistration();
-    this.clearProjectSearchTimer();
     this.projectCatalogCleanup?.();
     this.projectCatalogCleanup = undefined;
     this.projectCatalogGateway = undefined;
@@ -588,11 +564,6 @@ export class DraftPlaceBrowser {
   private retireRegistration() {
     this.browserRegistration?.retire();
     this.browserRegistration = null;
-  }
-
-  private clearProjectSearchTimer() {
-    globalThis.clearTimeout(this.projectSearchTimer);
-    this.projectSearchTimer = undefined;
   }
 
   private focusProjectView(kind: keyof ProjectBrowserFocus) {
