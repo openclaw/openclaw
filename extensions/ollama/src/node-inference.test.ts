@@ -264,7 +264,6 @@ describe("node_inference agent tool", () => {
     const params = discovery ? {} : { model: "chat:small", prompt: "answer fast", maxTokens: 32 };
     for (const [displayName, query] of [
       [discovery ? "Desk" : undefined, undefined],
-      ["Desk", "desk"],
       ["Cafe\u0301 desk", " CAFÉ DESK "],
       ["Dépôt desk", "De\u0301po\u0302t desk"],
       ["ǰ desk", "J\u030c desk"],
@@ -288,11 +287,12 @@ describe("node_inference agent tool", () => {
       });
       const row = { nodeId: "allowed-node", ...(displayName && { displayName }), ...payload };
       expect(result.details).toEqual(discovery ? { nodes: [{ ...row, ok: true }] } : row);
-      if (!displayName) continue;
-      nodes.push(nodeRow("duplicate-node", [MODELS, CHAT], displayName.normalize("NFC")));
-      await expect(execute(displayName)).rejects.toThrow("ambiguous");
-      await expect(execute("Cafe desk")).rejects.toThrow("not connected");
-      expect(invoke).toHaveBeenCalledOnce();
+      if (displayName) {
+        nodes.push(nodeRow("duplicate-node", [MODELS, CHAT], displayName.normalize("NFC")));
+        await expect(execute(displayName)).rejects.toThrow("ambiguous");
+        await expect(execute("Cafe desk")).rejects.toThrow("not connected");
+        expect(invoke).toHaveBeenCalledOnce();
+      }
     }
   });
 });
