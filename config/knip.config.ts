@@ -31,6 +31,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/boat-release-runner.mjs!",
+  "scripts/build-iroh.mjs!",
   "scripts/perf/agent-deletion-cancellation-measure.ts",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
@@ -47,12 +49,16 @@ const repositoryScriptEntries = [
   // Spawned directly by beam-handoff.joined.e2e.test.ts.
   "test/fixtures/beam-live-handoff-client/beam.mjs",
   // Their source headers document standalone benchmark and measurement commands.
+  "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-ios-release-note-overlap.mjs!",
   "scripts/bench-mobile-release-dependencies.mjs!",
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/bench-plugin-catalog.ts!",
   "scripts/bench-template-detail.mts!",
+  "scripts/bench-session-source-notifications.mjs!",
+  // The Windows benchmark launches this observer with Node --import by exact path.
+  "scripts/lib/session-source-observer-preload.mjs!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
@@ -450,7 +456,6 @@ const repositoryScriptEntries = [
   // Existing explicit Linux proof driver imports the inactive capsule adapter.
   // Reachability for auditing is not registration or permission to execute it.
   "scripts/openclaw-release-clawhub-plan.ts!",
-  "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Protected preparation/button workflows invoke this coordinator by path.
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.

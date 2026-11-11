@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as fsSafe from "../../infra/fs-safe.js";
+import { prepareSkillBundle } from "../../skills/library/bundle.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import {
@@ -48,6 +49,34 @@ async function matchingNames(catalog: InstalledSkill[], query: string) {
 }
 
 describe("installed skill catalog", () => {
+  it("shares instruction indexes across delivered companion revisions, but refreshes changed bodies", async () => {
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
+    for (let revision = 0; revision < 3; revision++) {
+      const readContent = revision === 2 ? "Nebula spectroscopy" : "Pulsar spectroscopy";
+      const bundle = prepareSkillBundle([
+        { path: "SKILL.md", content: readContent },
+        { path: "scripts/check.sh", content: `echo ${revision}` },
+      ]);
+      const current = installed([
+        {
+          ...createCanonicalFixtureSkill({
+            name: "observatory",
+            description: "Guide",
+            filePath: "node://synthetic/observatory/SKILL.md",
+            baseDir: "node://synthetic/observatory",
+            source: "bundled",
+          }),
+          contentHash: bundle.revision,
+          readContent,
+        },
+      ]);
+      expect(await matchingNames(current, "spectroscopy")).toEqual(["observatory"]);
+      expect(await matchingNames(current, "pulsar")).toEqual(revision === 2 ? [] : ["observatory"]);
+      expect(await matchingNames(current, "nebula")).toEqual(revision === 2 ? ["observatory"] : []);
+      expect(build).toHaveBeenCalledTimes(revision === 2 ? 3 : 2);
+    }
+  });
+
   it.each([
     { catalogs: 5, descriptionBytes: 1 },
     { catalogs: 2, descriptionBytes: 18 * 1024 * 1024 },
@@ -114,8 +143,8 @@ describe("installed skill catalog", () => {
     expect(await matchingNames(installed(revised), "nebula")).toEqual(["large-0"]);
     expect(await matchingNames(installed([...catalog]), "nebula")).toEqual([]);
     expect(tokenize.mock.calls.filter(([text]) => text.startsWith("#"))).toHaveLength(136);
-    // Published content revisions already identify bounded inline instructions.
-    expect(hash.mock.calls.filter(([text]) => text.startsWith("#"))).toHaveLength(0);
+    // Each published body is prepared once; fresh catalogs reuse its bounded text hash.
+    expect(hash.mock.calls.filter(([text]) => text.startsWith("#"))).toHaveLength(136);
   });
 
   it("reuses decoded file revisions across fresh catalogs without serializing their bodies", async () => {

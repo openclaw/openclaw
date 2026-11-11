@@ -121,6 +121,8 @@ export type AgentCommandOpts = {
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
+  /** The installer owns initial bootstrap until shared setup has completed. */
+  deferWorkspaceBootstrap?: true;
   /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Consumed in-process subagent-completion capability; never accepted from public RPC params. */
@@ -199,6 +201,8 @@ export type AgentCommandOpts = {
   cwd?: string;
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Settle memory managers before a temporary one-shot caller retires their state. */
+  cleanupMemoryOnRunEnd?: boolean;
   /** Force long-lived CLI live session teardown when a one-shot local run completes. */
   cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
@@ -279,6 +283,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   prepareAssistantTranscriptMessage: undefined,
   internalDeliverySuppressErrors: undefined,
   operatorDirectRoot: undefined,
+  cleanupMemoryOnRunEnd: undefined,
 } as const satisfies Partial<AgentCommandOpts>;
 
 type AgentCommandGatewayOnlyKey = Exclude<

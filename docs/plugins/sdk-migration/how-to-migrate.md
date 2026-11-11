@@ -808,9 +808,12 @@ Use `await statSessionEntry(path, options)` from
 metadata through the worker. `statSessionEntrySync` remains available through
 2026-12-31; passing already prepared transcript statistics to it
 only projects those values and does not query SQLite. `buildSessionEntry`
-also reads durable snapshots in the worker when an `onTranscriptMessage`
-observer is supplied, then invokes the observer on the caller with the original
-messages and timestamps.
+renders SQLite exports in the worker and assembles the complete entry on the
+caller. With an `onTranscriptMessage` observer, the worker also delivers the
+original messages and timestamps in bounded pages and the observer runs on the
+caller. Memory engines that only need pages, the entry hash or provenance use
+`streamSessionEntry` or `streamSessionEntries`, which deliver about 1 MiB of
+rendered lines at a time and never hold the complete export.
 
 ## Prepare session entry changes
 

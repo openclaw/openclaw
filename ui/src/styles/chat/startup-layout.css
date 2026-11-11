@@ -235,15 +235,17 @@ div.chat-thread:where(.chat-thread--annotations) {
      their default proportion of that column. */
   --chat-message-column-max: min(var(--chat-message-max-width, 100%), 900px, 68%);
   --chat-run-block-gap: 8px;
-  --chat-group-inset-start: 4px;
-  --chat-group-inset-end: 16px;
+  /* One inset on both sides: the user's reserved avatar column on the
+     trailing side mirrors the assistant's on the leading side, so both sit the
+     same distance inside the composer's edges. */
+  --chat-group-inset: 4px;
   display: flex;
   gap: var(--chat-avatar-gap);
   align-items: flex-start;
   margin-block: 0 var(--chat-turn-gap);
   /* Keep the row bounds fixed while identity adds its existing inner gutter. */
   margin-inline: 0;
-  padding-inline: var(--chat-group-inset-start) var(--chat-group-inset-end);
+  padding-inline: var(--chat-group-inset);
 }
 
 @media (hover: none),
@@ -257,7 +259,7 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 /* Both sides share the content edge inside the trailing avatar gutter. */
 .chat-group:where(:not(.user), .chat-group--peer) {
-  padding-inline-end: calc(var(--chat-group-inset-end) + var(--chat-avatar-gutter));
+  padding-inline-end: calc(var(--chat-group-inset) + var(--chat-avatar-gutter));
 }
 
 .chat-group.user {
@@ -347,8 +349,7 @@ div.chat-thread:where(.chat-thread--annotations) {
 .chat-thread--direct .chat-group {
   --chat-avatar-column: 0px;
   --chat-avatar-gap: 0px;
-  --chat-group-inset-start: 0px;
-  --chat-group-inset-end: 0px;
+  --chat-group-inset: 0px;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -356,8 +357,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     --chat-avatar-column: 0px;
     --chat-avatar-gap: 0px;
     --chat-message-column-max: 82%;
-    --chat-group-inset-start: 0px;
-    --chat-group-inset-end: 0px;
+    --chat-group-inset: 0px;
   }
 
   .chat-group :is(.chat-avatar, .chat-avatar-slot) {
@@ -394,33 +394,10 @@ div.chat-thread:where(.chat-thread--annotations) {
   -webkit-user-select: none;
 }
 
-/* Desktop chat and panel chrome reveal one continuous shell canvas. Mobile
-   keeps its own reading surface. */
+/* The desktop chat header reveals the shell canvas. Side-panel headers and
+   mobile chat keep their own reading surfaces. */
 .sidebar-region--desktop .chat-pane__header {
   background: transparent;
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-leading,
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-trailing {
-  gap: 4px;
-  flex-wrap: nowrap;
-}
-
-/* Keep the trailing region stable while presence and session actions arrive. */
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-trailing {
-  flex-grow: 1;
-  align-self: stretch;
-  justify-self: stretch;
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {
-  display: flex;
-  flex: 0 0 auto;
-  /* Reserve the native menu's hit area before its session descriptor arrives. */
-  min-width: var(--chat-pane-header-icon-size);
-  min-height: var(--chat-pane-header-icon-size);
-  align-items: center;
-  gap: 0;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile)
@@ -436,8 +413,8 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__layout-trigger {
-  min-height: 32px;
-  height: 32px;
+  min-height: 28px;
+  height: 28px;
   gap: 6px;
   padding-inline: 8px;
 }
@@ -474,7 +451,9 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 /* Desktop composition; mobile keeps its own presenter and touch targets. */
 .chat-pane__header:not(.chat-pane__header--mobile) {
-  --chat-pane-header-icon-size: 32px;
+  /* Every control in the desktop header row is 28px (--rail-header-action-size)
+     with the shared icon-button radius, so the row reads as one toolbar. */
+  --chat-pane-header-icon-size: 28px;
 
   /* Lift the header's stacking context so its floating connection indicator
      paints over the transcript below. */
@@ -484,6 +463,29 @@ div.chat-thread:where(.chat-thread--annotations) {
   min-height: var(--desktop-header-height, calc(var(--rail-header-height) - var(--space-1)));
   padding-inline: 12px 8px;
   gap: 4px;
+
+  & .chat-pane__header-leading,
+  & .chat-pane__header-trailing {
+    gap: 4px;
+    flex-wrap: nowrap;
+  }
+
+  /* Keep the trailing region stable while presence and session actions arrive. */
+  & .chat-pane__header-trailing {
+    flex-grow: 1;
+    align-self: stretch;
+    justify-self: stretch;
+  }
+
+  & .chat-pane__identity-actions {
+    display: flex;
+    flex: 0 0 auto;
+    /* Reserve the native menu's hit area before its session descriptor arrives. */
+    min-width: var(--chat-pane-header-icon-size);
+    min-height: var(--chat-pane-header-icon-size);
+    align-items: center;
+    gap: 0;
+  }
 
   & .chat-pane__actions {
     flex-grow: 1;
@@ -497,7 +499,8 @@ div.chat-thread:where(.chat-thread--annotations) {
   --icon-button-stroke: 1.6px;
   --icon-button-color: var(--icon-interactive, var(--control-secondary-text, var(--muted)));
 
-  /* Header composition supplies the approved glyph to the native Details trigger. */
+  /* Header composition supplies the approved glyph to the native Details trigger;
+     the base rule's --radius-md keeps it in the same shape as the icon buttons beside it. */
   & .chat-details-toggle {
     width: var(--rail-header-action-size);
     min-width: var(--rail-header-action-size);
@@ -506,8 +509,6 @@ div.chat-thread:where(.chat-thread--annotations) {
     padding: 0;
     justify-content: center;
     border-color: transparent;
-    border-radius: calc(8px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
     background: transparent;
   }
 
@@ -541,7 +542,7 @@ div.chat-thread:where(.chat-thread--annotations) {
       .chat-pane__session-title-input,
       .chat-pane__parent-session
     ) {
-    min-height: 32px;
+    min-height: 28px;
     padding: 0 8px;
     margin-inline: 0;
     font-family: inherit;
@@ -553,20 +554,6 @@ div.chat-thread:where(.chat-thread--annotations) {
 
   & .chat-pane__header-leading {
     gap: 0;
-  }
-
-  /* Align visible lettering with the glyph centerline without moving hit areas. */
-  &
-    :is(
-      .chat-pane__workspace-chip > .oc-menu-item__label > span,
-      .chat-pane__session-title-text,
-      .chat-pane__parent-session-text
-    ) {
-    transform: translateY(calc(-1px * var(--control-ui-text-scale)));
-  }
-
-  & .chat-pane__session-title-input {
-    padding-block-end: calc(2px * var(--control-ui-text-scale));
   }
 
   & .chat-pane__crumbs {
@@ -709,7 +696,14 @@ div.chat-thread:where(.chat-thread--annotations) {
   grid-column: 1 / -1;
 }
 
-/* One settings target, with the name chip beneath the avatar. */
+/* Desktop identity fits the same header row as the adjacent panel controls. */
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__agent-avatar {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+}
+
+/* One settings target, with the name chip beneath the avatar on mobile. */
 .chat-pane__agent-identity {
   display: inline-flex;
   flex-direction: column;
@@ -1160,7 +1154,8 @@ openclaw-chat-sidebar-region,
   display: contents;
 }
 
-.side-panel__panel {
+.side-panel__panel,
+.side-panel__empty-body {
   background: var(--bg);
 }
 
@@ -1598,4 +1593,54 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop)
   > :not(openclaw-chat-details):not(.chat-details-toggle) * {
     visibility: hidden;
   }
+}
+
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed)
+  .chat-split-view__column
+  > .chat-split-view__cell:first-child
+  .sidebar-region {
+  > .sidebar-region__header,
+  &:not(.sidebar-region--bottom, .sidebar-region--narrow) [data-region-header="side"] {
+    background: var(--sidebar-rail-surface);
+  }
+}
+
+/* The divider keeps its hit target; only its titlebar segment joins the chrome. */
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed)
+  .chat-split-view__column
+  > .chat-split-view__cell:first-child
+  .sidebar-region--desktop.sidebar-region--open:not(
+    .sidebar-region--bottom,
+    .sidebar-region--narrow,
+    .sidebar-region--expanded-side
+  )
+  .sidebar-column__divider {
+  background-image: linear-gradient(
+    var(--sidebar-rail-surface) var(--desktop-header-height),
+    transparent var(--desktop-header-height)
+  );
+}
+
+/* The separator belongs to the visible panel header, not the hidden resize gutter. */
+.sidebar-region--desktop.sidebar-region--open:not(
+    .sidebar-region--bottom,
+    .sidebar-region--narrow,
+    .sidebar-region--expanded-side
+  )
+  [data-region-header="side"]::before {
+  content: "";
+  position: absolute;
+  top: calc((var(--desktop-header-height) - 18px) / 2);
+  inset-inline-start: 0;
+  width: 1px;
+  height: 18px;
+  background: var(--rail-divider-color);
+  pointer-events: none;
+}
+
+.sidebar-region--desktop.sidebar-region--left [data-region-header="side"]::before {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
 }

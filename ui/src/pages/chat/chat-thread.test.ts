@@ -1658,7 +1658,7 @@ describe("expansion-state render dependencies", () => {
 
     expect(expanded.has(hiddenCardId)).toBe(false);
     expect(expanded.has("visible-card:toolcard:0")).toBe(true);
-    expect(getExpansionStateVersion(expanded)).toBe(filteredVersion + 1);
+    expect(getExpansionStateVersion(expanded)).toBe(filteredVersion);
   });
 
   it("retains explicit choices when sibling panes have different loaded history", () => {

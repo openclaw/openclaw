@@ -322,17 +322,21 @@ export async function renameSession(
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
+  const canSubmit = () =>
+    readSessionMethodAccess(scope.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: session.key, label: null },
+      sessionScope: true,
+      session,
+      allowDeferred: true,
+    }).allowed;
+  if (!canSubmit()) {
+    return;
+  }
   await showInputDialog({
     signal: deps.sessionData.sessionDraftSignal,
     gateway: scope.gateway,
-    canSubmit: () =>
-      readSessionMethodAccess(scope.gateway.snapshot, {
-        method: "sessions.patch",
-        params: { key: session.key, label: null },
-        sessionScope: true,
-        session,
-        allowDeferred: true,
-      }).allowed,
+    canSubmit,
     title: t("sessionsView.renameSessionPrompt"),
     defaultValue: session.renameValue,
     submit: async (value) => {
