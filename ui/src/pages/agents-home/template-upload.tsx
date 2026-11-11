@@ -134,7 +134,7 @@ export function TemplateUpload() {
         }
       >
         <IconButton
-          icon="download"
+          icon="upload"
           label={t("templatesCatalog.importButton")}
           disabled={busy()}
           onClick={() => fileInput?.click()}
