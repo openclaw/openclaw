@@ -172,7 +172,7 @@ function keyAttentionEntries(
 export function openClawIdMenuEntries(
   status: OpenClawIdStatusResult | null,
   publication?: OpenClawIdPublication | null,
-  copied = false,
+  copied: () => boolean = () => false,
 ): MenuEntry[] {
   if (!status || status.status.state === "off") {
     return [];
@@ -252,7 +252,9 @@ export function openClawIdMenuEntries(
         class: "sidebar-openclaw-id__card sidebar-openclaw-id__linked",
         attributes: {
           "aria-description": status.link.hostname,
-          "data-copied": copied ? "true" : undefined,
+          get "data-copied"() {
+            return copied() ? "true" : undefined;
+          },
         },
         content: (
           <span class="sidebar-openclaw-id__linked-content">
@@ -272,7 +274,12 @@ export function openClawIdMenuEntries(
                 )}
               </span>
               <span class="sidebar-openclaw-id__copy" aria-hidden="true">
-                <Icon name={copied ? "check" : "copy"} />
+                <span class="sidebar-openclaw-id__copy-a">
+                  <Icon name="copy" />
+                </span>
+                <span class="sidebar-openclaw-id__copy-b">
+                  <Icon name="check" />
+                </span>
               </span>
             </span>
             <span class="sidebar-openclaw-id__detail">{status.link.hostname}</span>

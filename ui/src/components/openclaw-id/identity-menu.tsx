@@ -71,7 +71,7 @@ export function OpenClawIdIdentityMenu(props: SidebarIdentityMenuParams) {
     }
     return {
       identity: openClawIdMenuIdentity(current),
-      entries: openClawIdMenuEntries(current, publication()?.(), copied()),
+      entries: openClawIdMenuEntries(current, publication()?.(), copied),
       signOut: openClawIdSignOutEntries(current),
       onSelect: (value: string) =>
         selectOpenClawIdMenuValue(value, {

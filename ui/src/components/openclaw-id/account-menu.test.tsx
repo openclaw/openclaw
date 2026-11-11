@@ -95,7 +95,18 @@ async function signIn(current: OpenClawIdStatusResult) {
 }
 
 describe("approved OpenClaw ID account menu", () => {
-  beforeEach(() => vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true));
+  beforeEach(() => {
+    vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
+    // jsdom has no Web Animations; the production-browser suite owns motion proof.
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => {
+      const media = matchMedia(query);
+      Object.defineProperty(media, "matches", {
+        value: query === "(prefers-reduced-motion: reduce)",
+      });
+      return media;
+    });
+  });
 
   afterEach(() => {
     cleanupSolid();

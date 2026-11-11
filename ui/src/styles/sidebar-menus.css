@@ -1581,18 +1581,43 @@
   font-weight: 600;
 }
 
-.sidebar-identity-menu .sidebar-openclaw-id__card {
+.oc-menu.sidebar-identity-menu .sidebar-openclaw-id__card {
   flex: none;
   margin-block: 4px;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--text) 4.5%, transparent);
   font-size: var(--control-ui-text-sm);
   overflow: hidden;
+  transition: background 140ms ease;
+
+  &:hover,
+  &.oc-menu-item:hover {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  &:active,
+  &.oc-menu-item:active {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+
+  & .oc-menu-item__details {
+    color: var(--muted);
+    transition: color 140ms ease;
+  }
+
+  &:hover .oc-menu-item__details {
+    color: var(--text-strong);
+  }
 
   & .oc-menu-item__details svg {
     width: 14px;
     height: 14px;
   }
+}
+
+/* The card owns its hover fill, including cards containing a native menu row. */
+.oc-menu.sidebar-identity-menu .sidebar-openclaw-id__card:is(:hover, :active) .oc-menu-item {
+  background: transparent;
 }
 
 .sidebar-openclaw-id__card .sidebar-customize-menu__item {
@@ -1655,15 +1680,6 @@
   padding: 9px 14px 10px;
   font-weight: 500;
   letter-spacing: inherit;
-  transition: background 140ms ease;
-
-  &:hover {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
-  }
-
-  &:active {
-    background: color-mix(in srgb, var(--text) 10%, transparent);
-  }
 
   & .sidebar-openclaw-id__linked-content {
     display: grid;
@@ -1718,6 +1734,9 @@
   height: 16px;
   color: var(--muted);
   opacity: 0;
+  transition:
+    opacity 140ms ease,
+    color 140ms ease;
 
   & svg {
     width: 14px;
@@ -1735,12 +1754,49 @@
 .sidebar-openclaw-id__linked:is(:hover, :focus-visible, [data-copied="true"]) {
   & .sidebar-openclaw-id__copy {
     opacity: 1;
-    color: var(--text-strong);
   }
 }
 
-.sidebar-openclaw-id__linked[data-copied="true"] .sidebar-openclaw-id__copy {
+.sidebar-openclaw-id__linked:hover .sidebar-openclaw-id__copy {
+  color: var(--text-strong);
+}
+
+.sidebar-openclaw-id__copy-a,
+.sidebar-openclaw-id__copy-b {
+  display: grid;
+  place-items: center;
+  grid-area: 1 / 1;
+  transition:
+    opacity 160ms ease,
+    scale 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.sidebar-openclaw-id__copy-b {
+  opacity: 0;
+  scale: 0.6;
   color: var(--ok);
+}
+
+.sidebar-openclaw-id__linked[data-copied="true"] {
+  & .sidebar-openclaw-id__copy-a {
+    opacity: 0;
+    scale: 0.6;
+  }
+
+  & .sidebar-openclaw-id__copy-b {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-identity-menu .sidebar-openclaw-id__card,
+  .sidebar-identity-menu .sidebar-openclaw-id__card * {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-delay: 0.01ms !important;
+  }
 }
 
 @media (hover: none) {

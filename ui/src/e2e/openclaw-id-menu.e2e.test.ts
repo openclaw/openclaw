@@ -209,7 +209,18 @@ suite.define(() => {
                   },
                 },
               };
-              const gateway = await installMockGateway(page, scenario);
+              let publication: OpenClawIdPublication = {
+                state: "published",
+                ownerAccountId: "fixture-owner",
+                snapshotSeq: 1,
+              };
+              const gateway = await installMockGateway(page, scenario, {
+                requestHandlers: {
+                  "openclawId.people": () => ({
+                    link: { ...scenario.methodResponses["openclawId.status"].link, publication },
+                  }),
+                },
+              });
               const bootstrap = {
                 ...createControlUiMockBootstrapConfig(scenario),
                 openclawIdEnabled: true,
@@ -249,6 +260,11 @@ suite.define(() => {
                 ? menu.getByRole("menuitem", { name: "Copy claw link", exact: true })
                 : menu.locator('[data-value="openclaw-id:sign-in"]');
               await target.hover();
+              if (width === 1280) {
+                await expect
+                  .poll(() => target.evaluate((node) => getComputedStyle(node).backgroundColor))
+                  .toMatch(/\/ 0\.08\)$/);
+              }
               await page.evaluate(() => document.fonts.ready);
               const geometry = await menu.evaluate((element) =>
                 [
@@ -346,9 +362,25 @@ suite.define(() => {
                 await expect
                   .poll(() => opacity(".sidebar-openclaw-id__pill"))
                   .toBe(width === 390 ? "1" : "0");
+                expect(await card.locator(".sidebar-openclaw-id__copy > span").count()).toBe(2);
+                const copyIcon = await card.locator(".sidebar-openclaw-id__copy-a").elementHandle();
+                expect(
+                  await card.locator(".sidebar-openclaw-id__copy-b").evaluate((node) => ({
+                    opacity: getComputedStyle(node).opacity,
+                    scale: getComputedStyle(node).scale,
+                    transition: getComputedStyle(node).transition,
+                  })),
+                ).toEqual({
+                  opacity: "0",
+                  scale: "0.6",
+                  transition: "opacity 0.16s, scale 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)",
+                });
                 // Activate the radio/label row, not just the address, then use the keyboard.
                 await card.click({ position: { x: 10, y: 10 } });
                 await expect.poll(() => card.getAttribute("data-copied")).toBe("true");
+                expect(await copyIcon?.evaluate((node) => node.isConnected)).toBe(true);
+                await expect.poll(() => opacity(".sidebar-openclaw-id__copy-b")).toBe("1");
+                expect(await opacity(".sidebar-openclaw-id__copy-a")).toBe("0");
                 expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
                   "https://a-long-demo-claw-e61zr.crabd.xyz",
                 );
@@ -366,6 +398,115 @@ suite.define(() => {
                     await menu.getByRole("menuitem", { name: "Your devices", exact: true }).count(),
                   )
                   .toBe(1);
+                // Server publication events change the open menu through its real subscription.
+                await page.setViewportSize({ width, height: 900 });
+                for (const reducedMotion of ["no-preference", "reduce"] as const) {
+                  await page.emulateMedia({ reducedMotion });
+                  const before = await menu.boundingBox();
+                  const motion =
+                    reducedMotion === "no-preference"
+                      ? page.waitForFunction(() => {
+                          const surface = document.querySelector(".sidebar-identity-menu");
+                          const height = surface
+                            ?.getAnimations()
+                            .find(
+                              (animation) =>
+                                animation.effect instanceof KeyframeEffect &&
+                                animation.effect.getKeyframes().some((frame) => "height" in frame),
+                            );
+                          if (!height) {
+                            return null;
+                          }
+                          return surface
+                            ?.getAnimations({ subtree: true })
+                            .filter(
+                              (animation) =>
+                                animation instanceof Animation &&
+                                !(animation instanceof CSSTransition) &&
+                                !(animation instanceof CSSAnimation),
+                            )
+                            .map((animation) => ({
+                              timing: animation.effect?.getTiming(),
+                              frames:
+                                animation.effect instanceof KeyframeEffect
+                                  ? animation.effect.getKeyframes()
+                                  : [],
+                            }));
+                        })
+                      : null;
+                  publication = {
+                    state: "failed",
+                    code: "needs_link_code",
+                    message: "Synthetic publication warning",
+                  };
+                  await gateway.emitGatewayEvent("openclawId.people.changed", {});
+                  await menu
+                    .getByRole("menuitem", { name: "Publish new keys", exact: true })
+                    .waitFor();
+                  if (motion) {
+                    const animations = await (await motion).jsonValue();
+                    expect(animations).toEqual(
+                      expect.arrayContaining([
+                        expect.objectContaining({
+                          timing: expect.objectContaining({
+                            duration: 240,
+                            easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+                          }),
+                        }),
+                        expect.objectContaining({
+                          timing: expect.objectContaining({
+                            duration: 220,
+                            delay: 80,
+                            fill: "backwards",
+                          }),
+                          frames: expect.arrayContaining([
+                            expect.objectContaining({ opacity: "0" }),
+                            expect.objectContaining({ opacity: "1" }),
+                          ]),
+                        }),
+                      ]),
+                    );
+                  }
+                  await expect
+                    .poll(() =>
+                      menu.evaluate(
+                        (node) =>
+                          node
+                            .getAnimations({ subtree: true })
+                            .filter(
+                              (animation) => animation.playState === "running" || animation.pending,
+                            ).length,
+                      ),
+                    )
+                    .toBe(0);
+                  const after = await menu.boundingBox();
+                  expect(after!.height).toBeGreaterThan(before!.height);
+                  expect(after!.width).toBe(before!.width);
+                  expect(after!.x).toBe(before!.x);
+                  expect(after!.y + after!.height).toBeCloseTo(before!.y + before!.height, 1);
+                  expect(await card.evaluate((node) => node === document.activeElement)).toBe(true);
+                  expect(await menu.evaluate((node) => node.style.overflow)).toBe("");
+                  if (reducedMotion === "reduce") {
+                    expect(
+                      await card.evaluate((node) => getComputedStyle(node).transitionDuration),
+                    ).toBe("1e-05s");
+                    expect(
+                      await menu.evaluate((node) => node.getAnimations({ subtree: true }).length),
+                    ).toBe(0);
+                  }
+                  publication = {
+                    state: "published",
+                    ownerAccountId: "fixture-owner",
+                    snapshotSeq: 2,
+                  };
+                  await gateway.emitGatewayEvent("openclawId.people.changed", {});
+                  await menu
+                    .getByRole("menuitem", { name: "Publish new keys", exact: true })
+                    .waitFor({ state: "hidden" });
+                  await expect
+                    .poll(async () => (await menu.boundingBox())?.height)
+                    .toBe(before!.height);
+                }
               }
             },
           );
