@@ -51,18 +51,20 @@ function expectAdmission(
 }
 
 describe("complete CI failure reporting", () => {
-  it("runs the PG16 Gateway smoke on one PR shard after test failure, with successful setup", () => {
-    const smoke = ciStep("postgres-conformance", "Run PostgreSQL 16 Gateway cron smoke");
+  it("runs the independently budgeted PG16 smoke on PRs after successful setup", () => {
+    const smoke = ciStep("postgres-gateway-smoke", "Run PostgreSQL 16 Gateway cron smoke");
     const admitted = {
       ...failedContext,
-      matrix: { shard: "1/3" },
       steps: { node_setup: { outputs: {}, outcome: "success" as const } },
     };
+    const selection = ciWorkflow.jobs["postgres-gateway-smoke"].if;
+    const selected = { ...admitted, preflightOutputs: { run_postgres_conformance: "true" } };
+    expectAdmission(selection, selected, [
+      { ...selected, eventName: "push" },
+      { ...selected, eventName: "workflow_dispatch" },
+      { ...selected, preflightOutputs: { run_postgres_conformance: "false" } },
+    ]);
     expectAdmission(smoke.if, admitted, [
-      { ...admitted, matrix: { shard: "2/3" } },
-      { ...admitted, matrix: { shard: "3/3" } },
-      { ...admitted, eventName: "workflow_dispatch" },
-      { ...admitted, eventName: "push" },
       { ...admitted, steps: { node_setup: { outputs: {}, outcome: "failure" } } },
       { ...admitted, steps: { node_setup: { outputs: {}, outcome: "skipped" } } },
     ]);

@@ -136,7 +136,10 @@ describe("PostgreSQL conformance selection", () => {
       shard: "${{ matrix.shard }}",
     });
     expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
-    const smoke = requiredWorkflowStep(job.steps, "Run PostgreSQL 16 Gateway cron smoke");
+    const smokeJob = workflow.jobs["postgres-gateway-smoke"];
+    expect(smokeJob["timeout-minutes"]).toBe(15);
+    expect(workflow.jobs["ci-gate"].needs).toContain("postgres-gateway-smoke");
+    const smoke = requiredWorkflowStep(smokeJob.steps, "Run PostgreSQL 16 Gateway cron smoke");
     expect(smoke.uses).toBe(conformance.uses);
     expect(smoke.with).toEqual({
       image:
@@ -3363,6 +3366,7 @@ describe("ci workflow guards", () => {
         { eventName: "pull_request" },
       );
       expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(3);
+      expect(rows.filter((name) => name === "postgres-gateway-smoke")).toHaveLength(1);
       expect(Number(result.outputs.hybrid_hosted_base_rows)).toBe(rows.length);
     });
 

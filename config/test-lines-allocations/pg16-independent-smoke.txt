@@ -1,0 +1,2 @@
+# Six net lines extend existing CI guard cases for independent PG16 admission, timeout/gate ownership and hosted-row accounting after a proven shared-job deadline cancellation. No new test cases.
+6
