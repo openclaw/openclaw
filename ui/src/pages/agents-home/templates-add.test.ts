@@ -423,12 +423,17 @@ describe("Template Add", () => {
     ).toHaveProperty("acknowledgeClawHubRisk", true);
   });
 
-  it.each(["plugin", "skill"] as const)(
-    "asks before applying a direct catalog %s review plan",
-    async (kind) => {
+  it.each([
+    { kind: "plugin", bundled: false },
+    { kind: "skill", bundled: false },
+    { kind: "skill", bundled: true },
+  ] as const)(
+    "asks before applying a direct catalog $kind review plan (bundled=$bundled)",
+    async ({ kind, bundled }) => {
       const { find, request, navigate, addSelector } = createAddSurface("card", {
         templatesEnabled: true,
         reviewRequiredOnce: kind,
+        bundledReview: bundled,
       });
 
       await vi.waitFor(() => expect(find(addSelector)?.matches(":disabled")).toBe(false));
@@ -436,13 +441,20 @@ describe("Template Add", () => {
 
       await vi.waitFor(() =>
         expect(find(".templates-add-consent")?.textContent).toContain(
-          kind === "plugin" ? "@openclaw/workflow-tools" : "@openclaw/research",
+          bundled
+            ? "research"
+            : kind === "plugin"
+              ? "@openclaw/workflow-tools"
+              : "@openclaw/research",
         ),
       );
       if (kind === "plugin") {
         expect(find(".templates-add-consent")?.textContent).toContain(
           "Conversation access: Allowed",
         );
+      }
+      if (bundled) {
+        expect(find(".templates-add-consent")?.textContent).not.toContain("Version undefined");
       }
       expect(request.mock.calls.filter(([method]) => method === "templates.add.plan")).toHaveLength(
         1,
@@ -466,6 +478,9 @@ describe("Template Add", () => {
               kind === "plugin" ? "plugin:@openclaw/workflow-tools" : "skill:@openclaw/research",
             reviewToken: kind === "plugin" ? "review-workflow-tools" : "review-research",
             acknowledgeRiskWarning: true,
+            ...(bundled
+              ? { source: "bundled", path: "skills/research", digest: `sha256:${"b".repeat(64)}` }
+              : {}),
           }),
         ],
       );

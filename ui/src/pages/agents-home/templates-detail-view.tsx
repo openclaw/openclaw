@@ -153,7 +153,9 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
           description: item.excerpt,
           trailing: (
             <span class="muted">
-              {t("templatesCatalog.dependencyClawHub", { version: item.version })}
+              {item.source === "bundled"
+                ? t("templatesCatalog.dependencyBundled")
+                : t("templatesCatalog.dependencyClawHub", { version: item.version })}
             </span>
           ),
           onOpen: () => props.view.onOpenPreview("skill", item.name),
@@ -168,10 +170,13 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
           name: item.name,
           description:
             item.kind === "plugin"
-              ? t("templatesCatalog.dependencyClawHub", { version: item.version })
+              ? item.source === "bundled"
+                ? t("templatesCatalog.dependencyBundled")
+                : t("templatesCatalog.dependencyClawHub", { version: item.version })
               : t("tabs.mcp"),
           trailing:
             item.kind === "plugin" &&
+            item.source === "clawhub" &&
             props.view.installedPluginPackages.has(`${item.ref}@${item.version}`) ? (
               <span class="plugin-connection-status" role="status">
                 <Icon name="check" /> {t("templatesCatalog.installed")}
@@ -180,7 +185,7 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
           details: (
             <p>
               {item.kind === "plugin" ? t("tabs.plugin") : t("tabs.mcp")}
-              {item.kind === "plugin" ? ` · ${item.version}` : ""}
+              {item.kind === "plugin" && item.source === "clawhub" ? ` · ${item.version}` : ""}
             </p>
           ),
         })),
@@ -253,8 +258,12 @@ function ReviewWarning(props: { view: TemplatesCatalogViewProps }) {
         <For each={props.view.reviewPlan?.skillReviews}>
           {(item) => (
             <div class="templates-add-consent__item">
-              <strong>{item.ref}</strong>
-              <span>{t("templatesCatalog.version", { version: item.version })}</span>
+              <strong>{"path" in item ? item.name : item.ref}</strong>
+              <span>
+                {"path" in item
+                  ? `${t("templatesCatalog.dependencyBundled")} · ${item.path}`
+                  : t("templatesCatalog.version", { version: item.version })}
+              </span>
               {renderTemplateTrustWarning(item.riskWarning)}
             </div>
           )}

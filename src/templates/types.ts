@@ -8,7 +8,7 @@ import type {
   TemplateDiagnostic,
   TemplateSourceIdentity,
 } from "./manifest-contract.js";
-import type { TemplateManifest, TemplatePackage } from "./schema.js";
+import type { TemplateManifest, TemplatePackage, TemplateDependency } from "./schema.js";
 
 export { TEMPLATE_BOOTSTRAP_FILE_NAMES, type TemplateDiagnostic } from "./manifest-contract.js";
 export type { TemplateSourceIdentity } from "./manifest-contract.js";
@@ -18,6 +18,8 @@ export type {
   TemplateManifest,
   TemplateMcpServer,
   TemplatePackage,
+  TemplateDependency,
+  TemplateBundledDependency,
 } from "./schema.js";
 
 export const TEMPLATE_ADD_PLAN_SCHEMA_VERSION = "openclaw.templateAddPlan.v1" as const;
@@ -31,6 +33,13 @@ export type ResolvedTemplatePackage = TemplatePackage & {
   extension?: TemplateAppliedExtension;
 };
 
+export type TemplateBundledSourceSnapshot = {
+  kind: "skill" | "plugin";
+  path: string;
+  name?: string;
+  snapshot: import("./dependency-directory.js").TemplateDirectorySnapshot;
+};
+
 export type TemplatePluginCapabilityGrantsById = Record<string, PluginOperatorGrants>;
 
 export type TemplatePackagePreflightResult = {
@@ -39,9 +48,12 @@ export type TemplatePackagePreflightResult = {
   integrity?: string;
   installId?: string;
   warning?: string;
+  installPolicyWarningDigest?: string;
   installedIntegrity?: string;
   installedAt?: string;
   installedVersion?: string;
+  name?: string;
+  snapshot?: import("./dependency-directory.js").TemplateDirectorySnapshot;
   code?: string;
   message?: string;
   requirements?: TemplateLocalPrerequisite[];
@@ -55,8 +67,12 @@ export type TemplatePackagePreflightResult = {
 };
 
 export type TemplatePackagePreflight = (
-  pkg: TemplatePackage,
+  pkg: TemplateDependency,
   workspace: string,
+  source?: {
+    packageRoot: string;
+    snapshot?: import("./dependency-directory.js").TemplateDirectorySnapshot;
+  },
 ) => Promise<TemplatePackagePreflightResult>;
 
 export type TemplateWorkspaceSourceSnapshot = {
@@ -73,6 +89,7 @@ type TemplateSourceFileSnapshot = {
 
 type TemplateSourceSnapshot = {
   manifest: TemplateSourceFileSnapshot;
+  bundledSources?: TemplateBundledSourceSnapshot[];
   workspaceSources: TemplateWorkspaceSourceSnapshot[];
   packageBootstrap?: TemplateWorkspaceSourceSnapshot;
 };

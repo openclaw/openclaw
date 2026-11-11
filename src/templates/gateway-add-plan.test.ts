@@ -220,7 +220,7 @@ describe("Gateway Template Add plan", () => {
     expect(preflightTemplatePackage).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "plugin" }),
       expect.any(String),
-      { config },
+      { config, packageRoot: source.source.packageRoot },
     );
   });
 

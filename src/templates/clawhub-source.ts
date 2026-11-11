@@ -493,7 +493,10 @@ async function readClawHubTemplateContents(
         ) {
           instructions.push({ name: "SOUL.md", source: "CLAW.md#body" });
         }
-        const { skills, integrations } = projectTemplateCatalogDependencies(manifest);
+        const { skills, integrations } = projectTemplateCatalogDependencies(
+          manifest,
+          verified.snapshot.bundledSources,
+        );
         const [describedInstructions, describedSkills] = requestedPreview
           ? [instructions, skills]
           : await Promise.all([
