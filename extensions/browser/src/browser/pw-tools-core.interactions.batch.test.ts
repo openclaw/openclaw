@@ -1,7 +1,16 @@
 import { EventEmitter } from "node:events";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
+import { chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as chromeModule from "./chrome.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
+import {
+  BROWSER_TAB_CRASHED_MESSAGE,
+  BrowserTabCrashedError,
+  toBrowserErrorResponse,
+} from "./errors.js";
+import { closePlaywrightBrowserConnection as closeRealBrowserConnection } from "./pw-session-actions.js";
+import { getPageForTargetId as getRealPageForTargetId } from "./pw-session-connection.js";
 import {
   BrowserObservedDialogBlockedError,
   isBrowserObservedDialogBlockedError,
@@ -13,17 +22,46 @@ function createPage() {
   let closed = false;
   const events = new EventEmitter();
   const mainFrame = { url: () => currentUrl };
+  const context = {
+    pages: () => [page],
+    browser: () => browser,
+    on: vi.fn(),
+    newCDPSession: vi.fn(async () => ({
+      send: vi.fn(async (method: string) =>
+        method === "Target.getTargetInfo" ? { targetInfo: { targetId: "tab-1" } } : {},
+      ),
+      detach: vi.fn(async () => {}),
+    })),
+  };
+  const browser = {
+    contexts: () => [context],
+    newBrowserCDPSession: vi.fn(async () => ({
+      send: vi.fn(async () => ({ commandLine: "" })),
+      detach: vi.fn(async () => {}),
+    })),
+    on: vi.fn(),
+    off: vi.fn(),
+    close: vi.fn(async () => {}),
+  };
+  const page = {
+    evaluate: vi.fn(async () => {}),
+    context: vi.fn(() => context),
+    close: vi.fn(async () => {
+      closed = true;
+      events.emit("close");
+    }),
+    isClosed: vi.fn(() => closed),
+    keyboard: { press: vi.fn(async () => {}), insertText: vi.fn(async () => {}) },
+    mainFrame: vi.fn(() => mainFrame),
+    mouse: { click: vi.fn(async () => {}) },
+    on: vi.fn(events.on.bind(events)),
+    off: vi.fn(events.off.bind(events)),
+    url: vi.fn(() => currentUrl),
+  };
   return {
-    page: {
-      evaluate: vi.fn(async () => {}),
-      isClosed: vi.fn(() => closed),
-      keyboard: { press: vi.fn(async () => {}), insertText: vi.fn(async () => {}) },
-      mainFrame: vi.fn(() => mainFrame),
-      mouse: { click: vi.fn(async () => {}) },
-      on: vi.fn(events.on.bind(events)),
-      off: vi.fn(events.off.bind(events)),
-      url: vi.fn(() => currentUrl),
-    },
+    page,
+    browser,
+    emitPageEvent: (event: string) => events.emit(event),
     setPageUrl: (url: string) => {
       currentUrl = url;
       events.emit("framenavigated", mainFrame);
@@ -33,7 +71,7 @@ function createPage() {
     },
   };
 }
-let { page, setPageUrl, setPageClosed } = createPage();
+let { page, browser, emitPageEvent, setPageUrl, setPageClosed } = createPage();
 const locator = {
   click: vi.fn(async () => {}),
   dragTo: vi.fn(async () => {}),
@@ -54,11 +92,30 @@ const session = await vi.hoisted(async () => {
 });
 const { assertPageNavigationCompletedSafely, withPageNavigationRequestGuard } = session;
 
-const closePageViaPlaywright = vi.fn(async () => {});
+const closePageViaPlaywright = vi.fn<
+  typeof import("./pw-tools-core.snapshot.js").closePageViaPlaywright
+>(async () => {});
 const resizeViewportViaPlaywright = vi.fn(async () => {});
 const drainDownloads = vi.fn(async () => undefined);
 const disposeDownloads = vi.fn();
 const cleanupDialogAbort = vi.fn();
+const registerManagedProxyBrowserCdpBypassMock = vi.hoisted(() =>
+  vi.fn<(url: string) => (() => void) | undefined>(() => undefined),
+);
+const actualClosePageViaPlaywright = vi.hoisted(() => ({
+  current:
+    undefined as unknown as typeof import("./pw-tools-core.snapshot.js").closePageViaPlaywright,
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime-internal")>()),
+  registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
+}));
+// mock-isolation: Route CDP through the synthetic Playwright fixture, never a live socket.
+vi.mock(
+  "./pw-session-cdp-transport.js",
+  () => import("./pw-session-cdp-transport.test-support.js"),
+);
 
 // mock-isolation: Exercise synthetic page actions without connecting to a live browser session.
 vi.mock("./pw-session.js", () => ({
@@ -78,12 +135,18 @@ vi.mock("./pw-session.js", () => ({
   isPolicyDenyNavigationError,
 }));
 
-vi.mock("./pw-tools-core.snapshot.js", () => ({
-  closePageViaPlaywright,
-  resizeViewportViaPlaywright,
-}));
+vi.mock("./pw-tools-core.snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pw-tools-core.snapshot.js")>();
+  actualClosePageViaPlaywright.current = actual.closePageViaPlaywright;
+  return {
+    ...actual,
+    closePageViaPlaywright,
+    resizeViewportViaPlaywright,
+  };
+});
 
-vi.mock("./pw-session-connection.js", () => ({
+vi.mock("./pw-session-connection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pw-session-connection.js")>()),
   pageTargetInfo: vi.fn(async () => ({ targetId: "tab-1" })),
 }));
 
@@ -117,10 +180,32 @@ function batch(
   });
 }
 
+async function useRealCrashedResolver() {
+  const resolvePage = session.getPageForTargetId;
+  const previousResolve = resolvePage.getMockImplementation();
+  if (!previousResolve) {
+    throw new Error("the crashed-target fixture needs the default page resolver");
+  }
+  type PageResolver = NonNullable<typeof previousResolve>;
+  const connectSpy = vi
+    .spyOn(chromium, "connectOverCDP")
+    .mockResolvedValue(browser as unknown as import("playwright-core").Browser);
+  const endpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint").mockResolvedValue(null);
+  resolvePage.mockImplementation(getRealPageForTargetId as unknown as PageResolver);
+  await getRealPageForTargetId({ ...target, allowCrashed: true });
+  emitPageEvent("crash");
+  return async () => {
+    resolvePage.mockImplementation(previousResolve);
+    connectSpy.mockRestore();
+    endpointSpy.mockRestore();
+    await closeRealBrowserConnection();
+  };
+}
+
 describe("executeActViaPlaywright batches", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    ({ page, setPageUrl, setPageClosed } = createPage());
+    ({ page, browser, emitPageEvent, setPageUrl, setPageClosed } = createPage());
     for (const mock of Object.values(locator)) {
       mock.mockReset();
     }
@@ -183,6 +268,59 @@ describe("executeActViaPlaywright batches", () => {
       signal: expect.any(AbortSignal),
     });
     expect(closePageViaPlaywright).toHaveBeenCalledWith(target);
+  });
+
+  it("resolves a crashed target so a close-only batch can clean it up", async () => {
+    const restoreResolver = await useRealCrashedResolver();
+    closePageViaPlaywright.mockImplementation(actualClosePageViaPlaywright.current);
+    try {
+      const result = await batch([{ kind: "close" }]);
+      expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }] });
+      expect(closePageViaPlaywright).toHaveBeenCalledWith(target);
+      expect(page.close).toHaveBeenCalledOnce();
+      expect(page.isClosed()).toBe(true);
+      expect(
+        session.getPageForTargetId.mock.calls.map(([options]) => options.allowCrashed),
+      ).toEqual([true, true]);
+    } finally {
+      await restoreResolver();
+    }
+  });
+
+  it("refuses non-close children on a crashed target", async () => {
+    const restoreResolver = await useRealCrashedResolver();
+    try {
+      await expect(batch([click])).rejects.toThrow(BrowserTabCrashedError);
+      expect(locator.click).not.toHaveBeenCalled();
+      expect(
+        session.getPageForTargetId.mock.calls.map(([options]) => options.allowCrashed),
+      ).toEqual([true, undefined]);
+    } finally {
+      await restoreResolver();
+    }
+  });
+
+  it("stops the batch when a child action crashes during execution", async () => {
+    locator.click.mockRejectedValueOnce(
+      new Error("locator.click: Page crashed\nCall log:\n  - waiting for locator('b')"),
+    );
+    const error = await batch([click, hover], { stopOnError: false }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(toBrowserErrorResponse(error)).toEqual({
+      status: 409,
+      message: BROWSER_TAB_CRASHED_MESSAGE,
+    });
+    expect(locator.hover).not.toHaveBeenCalled();
+  });
+
+  it("preserves crash classification when native insertion crashes", async () => {
+    page.keyboard.insertText.mockRejectedValueOnce(
+      new Error("keyboard.insertText: Page crashed\nCall log:\n  - inserting text"),
+    );
+    await expect(batch([{ kind: "insertText", text: "value" }])).rejects.toThrow(
+      BrowserTabCrashedError,
+    );
   });
 
   it.each([

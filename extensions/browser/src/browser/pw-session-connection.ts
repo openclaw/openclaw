@@ -46,6 +46,7 @@ import {
   pageTargetInfo,
 } from "./pw-session-page-target.js";
 import {
+  assertPageNotCrashed,
   bindRoleRefsTarget,
   ensurePageState,
   normalizeCdpUrl,
@@ -556,6 +557,8 @@ async function getPageForTargetIdOnce(opts: {
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
   relayReference?: RelayOperationReference;
+  /** Closing a crashed tab must stay possible; every other action refuses a dead renderer. */
+  allowCrashed?: boolean;
 }): Promise<Page> {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
@@ -582,6 +585,12 @@ async function getPageForTargetIdOnce(opts: {
     : accessible[0];
   if (found) {
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
+    // Idempotent for resolved pages; covers targets picked without a bound target id so the
+    // crash listener is registered before the action runs. Closing a dead tab must stay possible.
+    ensurePageState(found.page);
+    if (!opts.allowCrashed) {
+      assertPageNotCrashed(found.page);
+    }
     if (!engine || engine === "chromium") {
       await prepareMeetPlaybackObservation(found.page);
     }
@@ -600,6 +609,8 @@ export async function getPageForTargetId(opts: {
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
   relayReference?: RelayOperationReference;
+  /** Closing a crashed tab must stay possible; every other action refuses a dead renderer. */
+  allowCrashed?: boolean;
 }): Promise<Page> {
   const cachedBrowser = cachedByCdpUrl.get(normalizeCdpUrl(opts.cdpUrl))?.browser;
   if (isConnectionScopedTargetId(opts.targetId) && !cachedBrowser) {

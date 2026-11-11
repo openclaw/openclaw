@@ -60,7 +60,11 @@ export function createGuardSession<P, L>(getPage: () => P, getLocator: () => L) 
     assertPageNavigationCompletedSafely: vi.fn(async () => {}),
     ensurePageState: vi.fn(() => ({})),
     forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
-    getPageForTargetId: vi.fn(async () => getPage()),
+    getPageForTargetId: vi.fn(
+      async (
+        _options: Parameters<typeof import("./pw-session-connection.js").getPageForTargetId>[0],
+      ) => getPage(),
+    ),
     isBrowserObservedDialogBlockedError: vi.fn((_err: unknown) => false),
     isPolicyDenyNavigationError: vi.fn((_err: unknown) => false),
     markObservedDialogsHandledRemotelyForPage: vi.fn(() => ({})),

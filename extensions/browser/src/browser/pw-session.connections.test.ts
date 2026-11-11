@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BROWSER_TAB_CRASHED_MESSAGE } from "./errors.js";
 import { makeTargetBrowser as makeBrowser } from "./pw-session.browser.test-support.js";
 import {
   makeEmptyBrowser,
@@ -781,5 +782,34 @@ describe("Playwright created-page ownership", () => {
     release();
     await expect(creation).rejects.toThrow("cancelled page creation");
     expect(f.pageMock.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe("crashed browser targets", () => {
+  it("refuses a target whose renderer already crashed instead of waiting for a timeout", async () => {
+    const fixture = makeBrowser("CRASH-REFUSE", "https://crash.example");
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+
+    await getPageForTargetId({ cdpUrl });
+    // State registration must subscribe to the crash event before any action runs.
+    expect(fixture.countPageEventHandlers("crash")).toBe(1);
+
+    fixture.emitPageEvent("crash");
+
+    await expect(getPageForTargetId({ cdpUrl })).rejects.toMatchObject({
+      name: "BrowserTabCrashedError",
+      status: 409,
+      message: BROWSER_TAB_CRASHED_MESSAGE,
+    });
+  });
+  it("still resolves a crashed target when the caller is closing it", async () => {
+    const fixture = makeBrowser("CRASH-CLOSE", "https://crash.example");
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+
+    await getPageForTargetId({ cdpUrl });
+    fixture.emitPageEvent("crash");
+
+    // A dead tab must remain removable; only action traffic is refused.
+    await expect(getPageForTargetId({ cdpUrl, allowCrashed: true })).resolves.toBe(fixture.page);
   });
 });
