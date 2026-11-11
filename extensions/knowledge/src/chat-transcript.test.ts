@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,4 +58,27 @@ it.each([false, true])("exports chat chunks (deleted=%s)", async (deleted) => {
     const label = `part ${chunk.part} of ${chunk.parts}`;
     expect(texts[i].includes(label)).toBe(chunk.parts > 1);
   }
+});
+
+it("reports a malformed row by physical line without a traceback", async () => {
+  const out = tempDirs.make("chat-transcript-");
+  const text =
+    '{"id":"m1","occurred_at":"2026-11-09T10:00:00Z","payload":{"author_id":"1","author_name":"A","content":"hi"}}\n' +
+    "\n" +
+    "{invalid-json}\n";
+  await writeFile(path.join(out, "in.jsonl"), text);
+  const args = [
+    script,
+    "--input",
+    path.join(out, "in.jsonl"),
+    "--output-dir",
+    out,
+    "--channel",
+    "#t",
+  ];
+  const child = spawnSync(process.execPath, args, { encoding: "utf8" });
+  expect(child.status).toBe(1);
+  expect(child.stderr).toContain("Row 3 of the export is not valid JSON");
+  expect(child.stderr).not.toContain("at ");
+  await expect(readFile(path.join(out, "chunks.json"), "utf8")).rejects.toThrow();
 });

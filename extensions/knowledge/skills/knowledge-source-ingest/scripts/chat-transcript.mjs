@@ -43,8 +43,12 @@ async function run(argv) {
   async function readRows(filename) {
     const rows = [];
     const text = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(filename));
-    const lines = text.split("\n").filter((line) => line.trim());
+    // Number physical lines (before skipping blanks) so a bad row points at its true location.
+    const lines = text.split("\n");
     for (let index = 0; index < lines.length; index++) {
+      if (!lines[index].trim()) {
+        continue;
+      }
       try {
         rows.push(JSON.parse(lines[index]));
       } catch {
@@ -276,4 +280,9 @@ async function run(argv) {
   );
 }
 
-await run(process.argv.slice(2));
+try {
+  await run(process.argv.slice(2));
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 1;
+}
