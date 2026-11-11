@@ -29,6 +29,13 @@ the `anthropic/*` one.
   An Anthropic Default row also uses this label when it will clear a pinned session runtime:
   the current session route does not describe the configured route being restored.
 
+For native login, the web picker's Claude CLI group reads the billing label from
+Claude Code's `claude auth status --json`: a Claude account shows its recognized
+plan or **Subscription**, API authentication shows **API**, and an unrecognized
+login type shows **Native login**. An explicitly selected saved account takes
+precedence. This does not import a saved account or change who manages login
+and token refresh.
+
 The web picker shows route details on hover or keyboard focus. Telegram `/models`
 shows route guidance before selection and labels models when their runtime is
 known. Model IDs and explicit runtime choices remain unchanged.
@@ -182,15 +189,18 @@ OpenClaw release:
         an explicit logged-out response or a `claude` executable missing from
         `PATH` blocks the native route, while a timeout or unreadable response
         allows Claude to try the request. Captures expire
-        after one minute. If a selected native login is unavailable, spawn admission
-        rechecks it immediately, so signing in does not require a Gateway restart.
+        after one minute. Model lists, chat model pickers, and `/model` recheck an
+        expired capture, and spawn admission rechecks an unavailable native login
+        immediately, so signing in after Gateway start does not require a restart.
 
         For native-login users, the model picker reads Claude Code's own model menu
         in the background, without sending a prompt or using an inference turn.
         It shows unique native model IDs as `anthropic/<id>` on the Claude CLI
         runtime, with the effort levels reported by Claude Code. Models that allow
         thinking to be disabled also offer `/think off`, independently of those
-        effort levels. Models with mandatory adaptive thinking do not offer `off`.
+        effort levels. Claude Code's menu reports which models allow disabled
+        thinking and which support fast mode; OpenClaw reads those flags instead of
+        model-name rules.
         Account and organization restrictions therefore affect the menu. The hosted
         OpenClaw catalog adds metadata only to those exact IDs; it cannot add native models.
         New native models do not require an OpenClaw upgrade or a catalog edit.
@@ -947,12 +957,13 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
     <Note>
     - Native fast mode is a research preview with up to 2.5x higher output-token throughput. It is billed at twice the standard rates, for example `$16/$80` per million input/output tokens for Fable 5.2, `$8/$40` for Opus 5.5, and `$10/$50` for Opus 5 and Opus 4.8. OpenClaw applies the same 2x multiplier to cache pricing in its cost estimate.
-    - Native fast mode only applies to direct `api.anthropic.com` requests made with an API key. OAuth/subscription-token requests, Claude CLI, proxies, Bedrock, Vertex, and Foundry never receive the beta or `speed` field.
+    - Native fast mode only applies to direct `api.anthropic.com` requests made with an API key, and to the Claude CLI runtime. OAuth/subscription-token API requests, proxies, Bedrock, Vertex, and Foundry never receive the beta or `speed` field.
+    - On the Claude CLI runtime, `/fast on` launches Claude Code with `--fast-mode on` for models whose Claude Code menu reports fast mode. Claude Code sends the fast request; when Anthropic refuses it (for example, without usage credits), Claude Code resends the turn at standard speed.
     - Accounts need fast-mode access and a non-zero fast-mode rate limit. Anthropic returns a fast-specific `429` when the separate fast quota is exhausted or zero.
     - For other direct Anthropic models, `/fast` retains the existing Priority Tier mapping: on uses `service_tier: "auto"` and off uses `service_tier: "standard_only"`.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
     - Claude Sonnet 5.5 and Sonnet 5 support neither native fast mode nor Priority Tier, so OpenClaw omits both fields.
-    - The Control UI disables confirmed no-op Fast choices, including Claude CLI, Sonnet 5.5, Sonnet 5, and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
+    - The Control UI disables confirmed no-op Fast choices, including Claude CLI models whose menu does not report fast mode, Sonnet 5.5, Sonnet 5, and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
 
     </Note>
 
@@ -1103,12 +1114,14 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     window by default; no `params.context1m: true` needed.
   </Accordion>
 
-  <Accordion title="Claude Code native subagents on managed turns">
+  <Accordion title="Claude Code native subagents and web search on managed turns">
     `plugins.entries.anthropic.config.managedNativeTools` keeps selected Claude
-    Code orchestration tools on `claude-cli` turns that OpenClaw manages. It is
-    off by default. `default` applies to every agent; `agents.<id>` replaces it
-    for one agent, and `[]` opts that agent out. Accepted values: `Agent`,
-    `Workflow`.
+    Code orchestration tools and native web search on `claude-cli` turns that
+    OpenClaw manages. It is off by default. `default` applies to every agent;
+    `agents.<id>` replaces it for one agent, and `[]` opts that agent out.
+    Accepted values: `Agent`, `Workflow`, `WebSearch`. `WebSearch` uses Claude Code's
+    server-side search, billed to the Claude login, so no OpenClaw search provider is needed; it
+    is kept only while the agent's tool policy allows `web_search`.
 
     ```json5
     {
@@ -1116,7 +1129,10 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
         entries: {
           anthropic: {
             config: {
-              managedNativeTools: { default: ["Agent", "Workflow"], agents: { ops: [] } },
+              managedNativeTools: {
+                default: ["Agent", "Workflow", "WebSearch"],
+                agents: { ops: [] },
+              },
             },
           },
         },

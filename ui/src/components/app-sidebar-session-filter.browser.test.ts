@@ -55,7 +55,7 @@ const ownerOptions = (root: Element) =>
   ].map((label) => label.textContent!.trim());
 
 async function mountFilters(width: number, teammates = 0, otherOwner = "Bob") {
-  const { page, userEvent } = await import("vitest/browser");
+  const { page, server, userEvent } = await import("vitest/browser");
   const role = (kind: Parameters<typeof page.getByRole>[0], name: string | RegExp) =>
     page.getByRole(kind, { name, exact: true });
   await page.viewport(width, 560);
@@ -95,8 +95,10 @@ async function mountFilters(width: number, teammates = 0, otherOwner = "Bob") {
     await role("button", label).click();
     await role("option", value).click();
   };
-  const tabTo = async (kind: Parameters<typeof role>[0], name: string) => {
-    await userEvent.tab();
+  const nativeOptionTab = server.browser === "webkit" && server.platform === "darwin";
+  const tabTo = async (kind: Parameters<typeof role>[0], name: string, shift = false) => {
+    const key = shift ? "{Shift>}{Tab}{/Shift}" : "{Tab}";
+    await userEvent.keyboard(nativeOptionTab ? `{Alt>}${key}{/Alt}` : key);
     await expect.element(role(kind, name)).toHaveFocus();
   };
   return { ...mounted, sessions, page, userEvent, role, query, choose, tabTo };
@@ -196,7 +198,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         const controls = rows.map((row) => row.lastElementChild!.getBoundingClientRect());
         for (const [index, row] of rows.entries()) {
           expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
-          expect(row.getBoundingClientRect().height).toBe(width <= 640 ? 42 : 36);
+          expect(row.getBoundingClientRect().height).toBeCloseTo(width <= 640 ? 42 : 36, 4);
           expect(controls[index]!.left).toBeCloseTo(controls[0]!.left, 1);
           expect(controls[index]!.right).toBeCloseTo(controls[0]!.right, 1);
         }
@@ -379,7 +381,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     const grouping = query("#sidebar-sessions-group")!;
     grouping.focus();
     await tabTo("button", "Sort by: Last updated");
-    await userEvent.tab({ shift: true });
+    await tabTo("button", "Group by: Custom groups", true);
     await expect.element(grouping).toHaveFocus();
     await role("heading", "Filters").click();
     const automation = role("switch", "Show automation sessions");
@@ -482,46 +484,99 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     }
   });
 
-  it.each(["roster", "owners"] as const)(
-    "preserves hidden grouping preferences across reset when %s hides them",
-    async (hiddenBy) => {
-      const { sidebar, sessions, role, query, choose } = await mountFilters(1440);
-      const original = sessions.sessions.state.result!;
-      const grouping = hiddenBy === "roster" ? "project" : "person";
-      if (hiddenBy === "roster") {
-        setSessionsGrouping(sidebar.sessionOrganizer, grouping);
-        await role("button", /^Filter & sort · /).click();
-        await choose(/^Hide empty groups:/, "Never");
-        sidebar.dismissTransientMenus();
-        sidebar.sidebarAgentsMode = "roster";
-        await sidebar.updateComplete;
-        await role("button", /^Filter & sort · /).click();
-        expect(query("#sidebar-sessions-group")).toBeNull();
-        expect(query("#sidebar-sessions-empty")).toBeNull();
-      } else {
-        await role("button", /^Filter & sort · /).click();
-        await choose("Group by: Custom groups", "Person");
-        sessions.publish({ result: { ...original, owners: original.owners!.slice(0, 1) } });
-        await expect.element(role("button", "Group by: Custom groups")).toBeVisible();
-        expect(loadStoredSidebarSessionsGrouping()).toBe("person");
-      }
-      expect(query("#sidebar-sessions-reset")).toBeNull();
-      await role("switch", "Show message preview").click();
-      await role("button", "Reset").click();
-      expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
-      expect(loadStoredSidebarSessionsGrouping()).toBe(grouping);
-      if (hiddenBy === "roster") {
-        expect(query("#sidebar-sessions-reset")).toBeNull();
-        sidebar.sidebarAgentsMode = "chip";
-        await sidebar.updateComplete;
-        await expect.element(role("button", "Hide empty groups: Never")).toBeVisible();
-      } else {
-        sessions.publish({ result: original });
-        await expect.element(role("button", "Group by: Person")).toBeVisible();
-        expect(query("#sidebar-sessions-reset")).not.toBeNull();
-      }
-    },
-  );
+  it("preserves hidden grouping preferences across reset in roster mode", async () => {
+    const { sidebar, role, query, choose } = await mountFilters(1440);
+    setSessionsGrouping(sidebar.sessionOrganizer, "project");
+    await role("button", /^Filter & sort · /).click();
+    await choose(/^Hide empty groups:/, "Never");
+    sidebar.dismissTransientMenus();
+    sidebar.sidebarAgentsMode = "roster";
+    await sidebar.updateComplete;
+    await role("button", /^Filter & sort · /).click();
+    expect(query("#sidebar-sessions-group")).toBeNull();
+    expect(query("#sidebar-sessions-empty")).toBeNull();
+    expect(query("#sidebar-sessions-reset")).toBeNull();
+    await role("switch", "Show message preview").click();
+    await role("button", "Reset").click();
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
+    expect(loadStoredSidebarSessionsGrouping()).toBe("project");
+    expect(query("#sidebar-sessions-reset")).toBeNull();
+    sidebar.sidebarAgentsMode = "chip";
+    await sidebar.updateComplete;
+    await expect.element(role("button", "Hide empty groups: Never")).toBeVisible();
+  });
+
+  it("keeps Person grouping through single, loading, empty, and same-name owner snapshots", async () => {
+    const { sidebar, sessions, role, query, choose } = await mountFilters(1440);
+    const original = sessions.sessions.state.result!;
+    const owners = original.owners!.map((owner) => ({
+      type: owner.type,
+      id: owner.id,
+      label: "Ada",
+      identity: { type: "profile" as const, id: owner.id },
+    }));
+    const rows = original.sessions.map((row, index) =>
+      Object.assign({}, row, { owner: { actor: owners[index]! } }),
+    );
+    sessions.publish({
+      result: { ...original, owners: owners.slice(0, 1), sessions: rows.slice(0, 1) },
+    });
+    await role("button", /^Filter & sort · /).click();
+    await choose("Group by: Custom groups", "Person");
+    const sectionIds = () =>
+      [...sidebar.querySelectorAll<HTMLElement>('[data-session-section^="person:"]')]
+        .map((section) => section.dataset.sessionSection!)
+        .toSorted((a, b) => a.localeCompare(b));
+    expect(sectionIds()).toEqual(["person:profile:profile-ada"]);
+    for (const snapshot of [
+      { loading: true, result: { ...original, owners: undefined, sessions: rows.slice(0, 1) } },
+      { loading: false, result: { ...original, owners: [], sessions: [] } },
+      { loading: false, result: { ...original, owners, sessions: rows } },
+    ]) {
+      sessions.publish(snapshot);
+      await expect.element(role("button", "Group by: Person")).toBeVisible();
+      expect(loadStoredSidebarSessionsGrouping()).toBe("person");
+      await expect
+        .poll(sectionIds)
+        .toEqual(
+          snapshot.result.sessions.length === 2
+            ? ["person:profile:profile-ada", "person:profile:profile-bob"]
+            : snapshot.result.sessions.length === 1
+              ? ["person:profile:profile-ada"]
+              : [],
+        );
+    }
+    await choose("Owners: All owners", "My sessions");
+    await expect.poll(sectionIds).toEqual(["person:profile:profile-ada"]);
+    expect(query('[data-session-key="agent:main:bob"]')).toBeNull();
+    await choose("Owners: My sessions", "All owners");
+    await expect
+      .poll(sectionIds)
+      .toEqual(["person:profile:profile-ada", "person:profile:profile-bob"]);
+    await role("button", /^Filter & sort · /).click();
+    sessions.publish({
+      result: {
+        ...original,
+        owners: owners.slice(0, 1),
+        sessions: rows.map((row) => Object.assign({}, row, { owner: { actor: owners[0]! } })),
+      },
+    });
+    await expect.element(role("button", "Group by: Person")).toBeVisible();
+    await expect.poll(sectionIds).toEqual(["person:profile:profile-ada"]);
+    // The section settles before its window finishes placing the moved rows.
+    await expect
+      .poll(() =>
+        Array.from(
+          query('[data-session-section="person:profile:profile-ada"]')!.querySelectorAll(
+            "[data-session-key]",
+          ),
+          (row) => row.getAttribute("data-session-key")!,
+        ).toSorted((a, b) => a.localeCompare(b)),
+      )
+      .toEqual(["agent:main:ada", "agent:main:bob"]);
+    await role("button", "Reset").click();
+    expect(loadStoredSidebarSessionsGrouping()).toBe("category");
+  });
 
   it.each([
     { ownerId: "profile-ada", selected: "My sessions", label: "My sessions" },

@@ -1482,6 +1482,7 @@ AFTER_CD
         "clone",
         "-q",
         "--no-local",
+        "--no-checkout",
         "--filter=blob:none",
         "--depth=2",
         origin,
@@ -2449,6 +2450,88 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(checkoutIndex).toBeLessThan(actionCheckoutIndex);
     expect(actionCheckoutIndex).toBeLessThan(setupIndex);
   });
+
+  it.each(["", "release-fixture"])(
+    "preserves SDK report capacity with runner group %s",
+    (releaseRunnerGroup) => {
+      const context = {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "blacksmith",
+        matrix: {
+          group: "plugin-sdk-api-diff",
+          runner: "blacksmith-32vcpu-ubuntu-2404",
+        },
+        preflightOutputs: { node_runner_backend: "github", ci_qualification: "false" },
+        dispatchId: "full-release-validation-sdk-routing",
+        releaseRunnerGroup,
+      } as const;
+      const cases: Array<{
+        name: string;
+        overrides: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>;
+        expected: string;
+      }> = [
+        { name: "default dispatch", overrides: {}, expected: context.matrix.runner },
+        {
+          name: "configured GitHub backend",
+          overrides: { runnerBackend: "github" },
+          expected: "ubuntu-24.04",
+        },
+        ...(["hybrid", "runson"] as const).map((backend) => ({
+          name: `admitted ${backend} qualification`,
+          overrides: {
+            preflightOutputs: {
+              ci_qualification: "true",
+              qualification_runner_backend: "hybrid",
+              node_runner_backend: backend,
+            },
+          },
+          expected: context.matrix.runner,
+        })),
+        { name: "retry", overrides: { runAttempt: 2 }, expected: "ubuntu-24.04" },
+        {
+          name: "noncanonical repository",
+          overrides: { repository: "contributor/openclaw" },
+          expected: "ubuntu-24.04",
+        },
+        {
+          name: "unrelated additional check",
+          overrides: { matrix: { group: "boundaries", runner: "blacksmith-4vcpu-ubuntu-2404" } },
+          expected: "ubuntu-24.04",
+        },
+      ];
+      for (const { name, overrides, expected } of cases) {
+        expect(
+          ciValue("check-additional-shard", "runs-on", { ...context, ...overrides }),
+          name,
+        ).toEqual(releaseRunnerGroup ? { group: releaseRunnerGroup, labels: expected } : expected);
+      }
+      expect(
+        ciValue("check-additional-shard", "runs-on", {
+          ...context,
+          dispatchId: "",
+          releaseGate: true,
+          validationTier: "full",
+        }),
+      ).toBe(context.matrix.runner);
+      const timeouts: Array<[Partial<Parameters<typeof evaluateWorkflowExpression>[1]>, number]> = [
+        [{}, 30],
+        [{ dispatchId: "", releaseGate: true, validationTier: "full" }, 30],
+        [{ dispatchId: "" }, 60],
+        [{ dispatchId: "", releaseGate: true, validationTier: "main" }, 60],
+        [{ runAttempt: 2 }, 60],
+        [{ repository: "contributor/openclaw" }, 60],
+        [{ eventName: "push" }, 60],
+      ];
+      for (const [overrides, expected] of timeouts) {
+        expect(
+          ciValue("check-additional-shard", "timeout-minutes", { ...context, ...overrides }),
+          JSON.stringify(overrides),
+        ).toBe(expected);
+      }
+    },
+  );
 
   it("keeps tiny hybrid controls hosted without moving security or fork first attempts", () => {
     const context = {
@@ -4809,7 +4892,9 @@ ${buildScript}`,
     const packages = workflow.jobs["macos-swift-packages"];
     expect(native.needs).toEqual(["preflight", "build-artifacts"]);
     expect(packages.needs).toEqual(["preflight"]);
-    expect(packages.strategy.matrix.phase).toEqual(["packages"]);
+    expect(packages.strategy.matrix.phase).toContain(
+      "needs.preflight.outputs.run_mlx_native_proof",
+    );
     expect(packages.steps).toEqual(native.steps);
     expect(packages["timeout-minutes"]).toBe(30);
     for (const result of ["success", "skipped", "failure", "cancelled"] as const) {
@@ -6673,13 +6758,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           GITHUB_ENV: output,
           FIXTURE_CORES: String(cores),
           RUNSON_JOB: "true",
+          OPENCLAW_NODE_TEST_CPU_BUDGET: "",
           RUNNER_ENVIRONMENT: "self-hosted",
           FROZEN_TARGET: "false",
           SHARD_PLAN_CONCURRENCY: "1",
         },
       });
       expect(result.status, result.stderr).toBe(0);
-      expect(readWorkflowOutputs(output)).toEqual({ OPENCLAW_VITEST_MAX_WORKERS: String(workers) });
+      expect(readWorkflowOutputs(output)).toEqual({
+        OPENCLAW_NODE_TEST_CPU_BUDGET: "",
+        OPENCLAW_VITEST_MAX_WORKERS: String(workers),
+      });
     }
   });
 
@@ -6996,6 +7085,7 @@ it.each(["publish", "promote"])(
             finalize_release_before_docker: false,
           },
           needs: {
+            resolve_release_target: { outputs: { prepared_plugins: "" } },
             publish: { result: "success" },
             publish_docker: { result: "success" },
             finalize_github_release_before_docker: { result: "skipped" },

@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
 // Synthetic Git-only benchmark; run: node --import ./scripts/tsx.mjs scripts/perf/agent-git-probes.mts --scratch-parent <directory>
+// Historical blobs: add --history-blobs --commits 600 --baseline-shim <saved-shim>;
+// --aa-only/--ab-only split controls from comparisons; --warm hydrates before measurement.
 import { createHash } from "node:crypto";
 import {
   cpSync,
@@ -7,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -25,6 +28,11 @@ const { values } = parseArgs({
     commits: { type: "string" },
     samples: { type: "string" },
     "shared-shallow": { type: "boolean" },
+    "history-blobs": { type: "boolean" },
+    "aa-only": { type: "boolean" },
+    "ab-only": { type: "boolean" },
+    "allocation-preload": { type: "string" },
+    warm: { type: "boolean" },
     "baseline-shim": { type: "string" },
   },
 });
@@ -37,9 +45,16 @@ const files = integer("files", 62_000);
 const commits = integer("commits", 20_000);
 const samples = integer("samples", 5);
 const sharedShallow = values["shared-shallow"] === true;
+const historyBlobs = values["history-blobs"] === true;
 const baselineShimPath = values["baseline-shim"] ?? "";
 if (sharedShallow && (!baselineShimPath || commits < 4010)) {
   throw new Error("--shared-shallow requires --baseline-shim and at least 4010 commits");
+}
+if (historyBlobs && (!baselineShimPath || sharedShallow)) {
+  throw new Error("--history-blobs requires --baseline-shim and excludes --shared-shallow");
+}
+if (values["aa-only"] && values["ab-only"]) {
+  throw new Error("--aa-only and --ab-only are mutually exclusive");
 }
 const root = mkdtempSync(path.join(values["scratch-parent"], "agent-git-probes-"));
 const env: NodeJS.ProcessEnv = {
@@ -78,6 +93,11 @@ type Sample = {
   shallowChanged: number;
   exitCode: number | null;
   hint: boolean;
+  newPacks: number;
+  newPromisorPacks: number;
+  outputSha256: string;
+  allocationCalls: number;
+  allocationRequestedBytes: number;
   load: number[];
 };
 const rows: Sample[] = [];
@@ -91,7 +111,7 @@ try {
   report(`Fixture: ${files} files, ${commits} history commits; ${root}`);
   mkdirSync(bin);
   writeFileSync(path.join(bin, "git"), AGENT_GIT_SHIM, { mode: 0o755 });
-  if (sharedShallow) {
+  if (sharedShallow || historyBlobs) {
     mkdirSync(baselineBin);
     writeFileSync(path.join(baselineBin, "git"), readFileSync(baselineShimPath), { mode: 0o755 });
   }
@@ -104,8 +124,10 @@ try {
     input += `M 100644 :1 files/${Math.floor(index / 1000)}/file-${index}.txt\n`;
   }
   input += "\n";
+  let history = "";
   for (let index = 0; index < commits; index++) {
-    const text = `history ${index}\n`;
+    history = historyBlobs ? `${history}history ${index}\n` : `history ${index}\n`;
+    const text = history;
     input += `commit refs/heads/main\ncommitter Fixture <fixture@example.invalid> ${1700000001 + index} +0000\ndata 7\nhistory\nM 100644 inline history.txt\ndata ${text.length}\n${text}\n`;
   }
   git(origin, ["fast-import", "--quiet"], input);
@@ -141,7 +163,7 @@ try {
     let gitDir = metadata;
     const shallowFile = path.join(metadata, "shallow");
     const shallowBefore = existsSync(shallowFile) ? readFileSync(shallowFile, "utf8") : "";
-    if (sharedShallow) {
+    if (sharedShallow || historyBlobs) {
       const linked = path.join(root, `linked-${index}`);
       git(root, [
         "--git-dir",
@@ -155,18 +177,60 @@ try {
       ]);
       gitDir = git(linked, ["rev-parse", "--absolute-git-dir"]);
     }
+    if (historyBlobs && values.warm) {
+      const missingBlobs = git(root, [
+        "--git-dir",
+        gitDir,
+        "rev-list",
+        "--objects",
+        "--missing=print",
+        "HEAD",
+        "--",
+        "history.txt",
+      ])
+        .split("\n")
+        .filter((line) => line.startsWith("?"))
+        .map((line) => line.slice(1));
+      git(
+        root,
+        [
+          "--git-dir",
+          gitDir,
+          "-c",
+          "fetch.negotiationAlgorithm=noop",
+          "fetch",
+          "--quiet",
+          "--filter=blob:none",
+          "--no-auto-maintenance",
+          "--no-tags",
+          "--no-write-fetch-head",
+          "origin",
+          "--stdin",
+        ],
+        `${missingBlobs.join("\n")}\n`,
+      );
+    }
     const trace = path.join(root, `trace-${index}.jsonl`);
     const packTrace = path.join(root, `trace-${index}.pack`);
+    const allocationLog = path.join(root, `allocations-${index}.jsonl`);
+    const packsBefore = new Set(readdirSync(path.join(metadata, "objects/pack")));
     const sampleEnv = {
       ...env,
       PATH:
-        guarded || sharedShallow
+        guarded || sharedShallow || historyBlobs
           ? `${guarded ? bin : baselineBin}${path.delimiter}${env.PATH}`
           : env.PATH,
       GIT_DIR: gitDir,
       GIT_WORK_TREE: workspace,
       GIT_TRACE2_EVENT: trace,
       GIT_TRACE_PACKFILE: packTrace,
+      ...(values["allocation-preload"]
+        ? {
+            LD_PRELOAD: values["allocation-preload"],
+            OPENCLAW_ALLOC_TARGET: "git",
+            OPENCLAW_ALLOC_LOG: allocationLog,
+          }
+        : {}),
       ...extraEnv,
     };
     const load = os.loadavg();
@@ -193,6 +257,15 @@ try {
     const rss =
       /([\d]+)\s+maximum resident set size/.exec(result.stderr) ??
       /Maximum resident set size \(kbytes\): (\d+)/.exec(result.stderr);
+    const allocations = existsSync(allocationLog)
+      ? readFileSync(allocationLog, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as { calls: number; requestedBytes: number })
+      : [];
+    if (values["allocation-preload"] && allocations.length === 0) {
+      throw new Error("Allocation preload produced no Git process receipts");
+    }
     const row: Sample = {
       lane,
       wallMs,
@@ -217,6 +290,18 @@ try {
       ),
       exitCode: result.status,
       hint: result.stderr.includes("OpenClaw:"),
+      newPacks: readdirSync(path.join(metadata, "objects/pack")).filter(
+        (name) => name.endsWith(".pack") && !packsBefore.has(name),
+      ).length,
+      newPromisorPacks: readdirSync(path.join(metadata, "objects/pack")).filter(
+        (name) => name.endsWith(".promisor") && !packsBefore.has(name),
+      ).length,
+      outputSha256: createHash("sha256").update(result.stdout).digest("hex"),
+      allocationCalls: allocations.reduce((sum, receipt) => sum + receipt.calls, 0),
+      allocationRequestedBytes: allocations.reduce(
+        (sum, receipt) => sum + receipt.requestedBytes,
+        0,
+      ),
       load,
     };
     rows.push(row);
@@ -226,7 +311,37 @@ try {
     rmSync(metadata, { recursive: true });
     return row;
   };
-  if (sharedShallow) {
+  if (historyBlobs) {
+    report(
+      "Rule: identical output and object counts; many promisor packs become one; lower wall/CPU without >20% regression. A/A controls use the baseline shim twice.",
+    );
+    for (const command of ["log", "blame"]) {
+      const args =
+        command === "log"
+          ? ["log", "-p", "--format=%H", "HEAD", "--", "history.txt"]
+          : ["blame", "--line-porcelain", "HEAD", "--", "history.txt"];
+      for (const control of values["aa-only"]
+        ? [true]
+        : values["ab-only"]
+          ? [false]
+          : [true, false]) {
+        for (let index = 0; index < samples; index++) {
+          const runSample = (candidate: boolean) =>
+            sample(
+              `${command}-${control ? "AA" : "AB"}-${candidate ? "B" : "A"}`,
+              candidate && !control,
+              args,
+              0,
+            );
+          const first = runSample(index % 2 === 1);
+          const second = runSample(index % 2 === 0);
+          if (first.outputSha256 !== second.outputSha256) {
+            throw new Error(`${command}: baseline and candidate output differs`);
+          }
+        }
+      }
+    }
+  } else if (sharedShallow) {
     report(
       "Rule: shared shallow writes and transport 1→0; normal commands add no Git starts; disclose A/A timing controls",
     );
@@ -326,6 +441,10 @@ try {
             "gitStarts",
             "transports",
             "shallowChanged",
+            "newPacks",
+            "newPromisorPacks",
+            "allocationCalls",
+            "allocationRequestedBytes",
           ] as const
         ).map((metric) => [
           metric,
@@ -338,14 +457,17 @@ try {
     JSON.stringify(
       {
         gitVersion: git(root, ["--version"]),
-        mode: sharedShallow ? "shared-shallow" : "missing-commit",
-        baselineShimSha256: sharedShallow
-          ? createHash("sha256").update(readFileSync(baselineShimPath)).digest("hex")
-          : undefined,
+        mode: historyBlobs ? "history-blobs" : sharedShallow ? "shared-shallow" : "missing-commit",
+        warm: values.warm === true,
+        allocationInstrumented: Boolean(values["allocation-preload"]),
+        baselineShimSha256:
+          sharedShallow || historyBlobs
+            ? createHash("sha256").update(readFileSync(baselineShimPath)).digest("hex")
+            : undefined,
         shimSha256: createHash("sha256").update(AGENT_GIT_SHIM).digest("hex"),
         platform: process.platform,
         files: files + 1,
-        workingTreeBytes: files * content.length + `history ${commits - 1}\n`.length,
+        workingTreeBytes: files * content.length + history.length,
         commits: commits + 1,
         samples,
         summary,
