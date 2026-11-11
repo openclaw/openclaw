@@ -256,7 +256,7 @@ suite.define(() => {
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("root");
       await expect
         .poll(() => dropdown.locator(".oc-menu-item:focus").textContent())
-        .toContain("Skills");
+        .toContain("Camera");
       await page.evaluate(() => {
         const input = document.querySelector<HTMLInputElement>(".agent-chat__file-input");
         if (!input) {

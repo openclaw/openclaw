@@ -372,6 +372,7 @@ src/agents/worktrees/allocation.ts
 src/agents/worktrees/branches.runtime.ts
 src/agents/worktrees/capacity-contract.ts
 src/agents/worktrees/capacity-store.ts
+src/agents/worktrees/base-fetch.ts
 src/agents/worktrees/capacity.runtime.ts
 src/agents/worktrees/capacity.ts
 src/agents/worktrees/capacity.worker.ts
@@ -1100,6 +1101,7 @@ src/infra/git-content-budget.ts
 src/infra/git-exec.ts
 src/infra/git-maintenance-env.ts
 src/infra/git-network-retry.ts
+src/infra/git-object-store-transport.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
 src/infra/git-path-quote.ts

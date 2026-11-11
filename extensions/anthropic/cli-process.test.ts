@@ -633,7 +633,16 @@ it("discovers native models without a turn, resolving aliases and retaining unma
       resolvedModel,
       displayName,
       supportedEffortLevels: ["low", "max"],
+      supportsThinkingOff: false,
+      supportsFastMode: true,
     })),
+    {
+      value: "claude-zzz-9-9",
+      resolvedModel: "claude-zzz-9-9",
+      displayName: "Zzz 9.9",
+      supportedEffortLevels: ["low"],
+      supportsThinkingOff: true,
+    },
     { value: "default", resolvedModel: "claude-hidden", displayName: "Default (recommended)" },
   ];
   const context = await contextForChild(`
@@ -658,7 +667,8 @@ it("discovers native models without a turn, resolving aliases and retaining unma
     expect.objectContaining({
       id: "claude-future[1m]",
       name: "Future",
-      // An unknown Claude model gets the strict contract: thinking cannot be turned off.
+      // The menu, not the model id, decides off and Fast for models OpenClaw has never seen.
+      params: { claudeCodeFastMode: true, nativeModelAliases: ["future"] },
       thinkingLevelMap: {
         off: null,
         minimal: null,
@@ -673,6 +683,10 @@ it("discovers native models without a turn, resolving aliases and retaining unma
       id: "claude-opus-5-5",
       name: "Opus",
       thinkingLevelMap: expect.objectContaining({ off: null, low: "low", max: "max" }),
+    }),
+    expect.objectContaining({
+      id: "claude-zzz-9-9",
+      thinkingLevelMap: expect.objectContaining({ off: "off", low: "low", max: null }),
     }),
     expect.objectContaining({ id: "claude-hidden", name: "Default (recommended)" }),
   ]);
