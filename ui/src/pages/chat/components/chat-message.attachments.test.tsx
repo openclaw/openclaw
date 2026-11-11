@@ -257,6 +257,7 @@ describe("grouped chat attachments", () => {
 
   it("refreshes a managed attachment ticket while its Files player stays open", async () => {
     const { source, artifactId, ticket } = managedTicketFixture();
+    const audio = { artifactId, playback: "native" } as const;
     const first = ticket("first", 31_000);
     const refreshed = ticket("refreshed", 5 * 60_000);
     const resolveArtifactDownload = vi
@@ -268,10 +269,7 @@ describe("grouped chat attachments", () => {
     renderReactiveAssistant(
       () =>
         createAssistantMessage([
-          createAttachmentBlock(source, "audio", "clip.mp3", "audio/mpeg", {
-            artifactId,
-            playback: "native",
-          }),
+          createAttachmentBlock(source, "audio", "clip.mp3", "audio/mpeg", audio),
         ]),
       {
         resolveArtifactDownload,
