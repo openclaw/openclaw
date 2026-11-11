@@ -244,7 +244,11 @@ describe("models list published transport", () => {
         await result;
         expectModelRows([{ key: "catalog-provider/Reader" }]);
       } else {
-        await expect(result).rejects.toBe(mode === "authorization" ? failure : cancellation);
+        if (mode === "authorization") {
+          await expect(result).rejects.toBe(failure);
+        } else {
+          await result;
+        }
         for (const writeOutput of Object.values(runtime)) {
           expect(writeOutput).not.toHaveBeenCalled();
         }

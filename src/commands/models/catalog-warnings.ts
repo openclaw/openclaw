@@ -82,7 +82,18 @@ export async function readModelCatalog(
   });
 }
 
-/** Public status reads follow their command scope; maintenance callers supply their owner. */
-export function readCommandModelCatalog(config: OpenClawConfig, agentId?: string) {
-  return readModelCatalog(config, agentId, getAsyncWorkSignal());
+/** The public read owns interruption; refresh must retain its admitted result. */
+export async function runModelCatalogReadCommand(
+  run: (signal?: AbortSignal) => Promise<void>,
+  readOnly = true,
+): Promise<void> {
+  const signal = readOnly ? getAsyncWorkSignal() : undefined;
+  try {
+    signal?.throwIfAborted();
+    await run(signal);
+  } catch (error) {
+    if (!signal?.aborted) {
+      throw error;
+    }
+  }
 }
