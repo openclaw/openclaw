@@ -9,6 +9,7 @@ import {
   generateConversationLabel as generateTopicLabel,
   resolveChunkMode,
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
@@ -465,7 +466,8 @@ export const dispatchTelegramMessage = async (
       return;
     }
     const topicThreadId = dispatchContext.threadSpec.id!;
-    void (async () => {
+    // The turn's work scope closes on return; the label outlives it.
+    void runInDetachedAsyncContext(async () => {
       try {
         const label = await generateTopicLabel({
           userMessage,
@@ -502,7 +504,7 @@ export const dispatchTelegramMessage = async (
       } catch (err) {
         logVerbose(`auto-topic-label: failed: ${String(err)}`);
       }
-    })();
+    });
   };
   scheduleDmTopicLabel();
   if (statusReactionController) {
