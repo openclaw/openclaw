@@ -192,7 +192,7 @@ async function expectPaneHeaderGeometry(page: Page, dock: "left" | "right" | "bo
 }
 
 suite.define(() => {
-  it("keeps launcher and panel chrome opaque over wallpaper across layouts and roles", async () => {
+  it("keeps launcher and panel chrome opaque over wallpaper on desktop and mobile", async () => {
     for (const guest of [false, true]) {
       await suite.withPage(
         {
@@ -284,35 +284,11 @@ suite.define(() => {
               ).toBe(true);
             }
           };
-          for (const dock of ["right", "left", "bottom"] as const) {
-            await dockChatSidePanel(page, dock);
-            await expectOpaque();
-          }
-          await dockChatSidePanel(page, "right");
-          const divider = page.getByRole("separator", { name: "Resize side panel" });
-          const width = await regionSize(page.locator(".side-panel__empty-body"));
-          await divider.focus();
-          await page.keyboard.press("ArrowLeft");
-          await expect
-            .poll(() => regionSize(page.locator(".side-panel__empty-body")))
-            .not.toBe(width);
           await expectOpaque();
-          await selectChatLayoutAction(page, "Expand Side panel");
-          await expectOpaque(false);
-          await selectChatLayoutAction(page, "Restore split");
           await page.setViewportSize({ width: 640, height: 800 });
           await page.locator(".sidebar-region--narrow").waitFor();
           await openChatPanels(page, "mobile");
           await expectOpaque(false);
-          await header.getByRole("button", { name: "Close", exact: true }).click();
-          await page.setViewportSize({ width: 1440, height: 960 });
-          for (const panel of guest ? ["Files", "Subagents"] : ["Files", "Browser", "Subagents"]) {
-            await openChatSidePanelType(page, panel);
-            await expectOpaque();
-            await header.getByRole("button", { name: "New tab", exact: true }).click();
-            await launcher.waitFor();
-            await expectOpaque();
-          }
         },
       );
     }

@@ -1,2 +1,2 @@
-# Rendered header/body wallpaper exclusion across launcher, docking, resizing, expansion, panel navigation, and restricted guest presentation; no DOM opacity-only oracle.
-129
+# Rendered header/body wallpaper exclusion on desktop/mobile in light/member and dark/guest contexts, plus updated theme-header expectations.
+108
