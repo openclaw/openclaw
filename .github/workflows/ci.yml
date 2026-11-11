@@ -788,7 +788,7 @@ jobs:
           def checkout_harness(sha):
               action = ".github/actions/setup-node-env/action.yml"
               node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
-              security_scripts = (".github/zizmor.yml", "scripts/detect-private-keys.mts", "scripts/ci-production-audit.mjs", "scripts/ci-collect-checks.sh")
+              security_scripts = (".github/zizmor.yml", "scripts/detect-private-keys.mts", "scripts/ci-production-audit.mjs", "scripts/ci-collect-checks.sh", "scripts/stage-openclaw-bun.sh", "scripts/lib/openclaw-bun.json")
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/ios-test-results.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs", "scripts/lib/process-memory.mts", "packages/normalization-core/src/mountinfo-path.ts")
               platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py", "scripts/swift-build-cache-metadata.py")
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
@@ -1695,7 +1695,7 @@ jobs:
         with:
           ref: *workflow_sha
           path: .ci-harness
-          sparse-checkout: ".github/actions\n.github/zizmor.yml\nscripts/detect-private-keys.mts\nscripts/ci-production-audit.mjs\nscripts/ci-collect-checks.sh"
+          sparse-checkout: ".github/actions\n.github/zizmor.yml\nscripts/detect-private-keys.mts\nscripts/ci-production-audit.mjs\nscripts/ci-collect-checks.sh\nscripts/stage-openclaw-bun.sh\nscripts/lib/openclaw-bun.json"
           persist-credentials: false
 
       - name: Resolve security diff base
@@ -1866,7 +1866,7 @@ jobs:
 
       - name: Setup differential guard dependencies
         id: guard_setup
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true' }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: restore
@@ -1882,19 +1882,18 @@ jobs:
         env:
           BASE_SHA: *diff_base
           PROTOCOL_SINCE_BASE_SHA: *diff_base
-        run: |
-          set -euo pipefail
-          source .ci-harness/scripts/ci-collect-checks.sh
-          prepare_ratchet_base_args "$BASE_SHA"
-          run_check max-lines pnpm check:max-lines-ratchet "${ratchet_base_args[@]}"
-          run_check assertion-safety pnpm check:assertion-safety "${ratchet_base_args[@]}"
-          run_check database-worker pnpm check:database-worker-ratchet "${ratchet_base_args[@]}"
-          run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
-          run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
-          run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
-          run_check test-lines pnpm check:test-lines-ratchet "${ratchet_base_args[@]}"
-          run_check protocol-additions node --import ./scripts/tsx.mjs scripts/check-protocol-since.mts
-          finish_checks
+        run: source scripts/ci-main-push-checks.sh ratchets
+
+      - name: Setup pinned Bun for main push regressions
+        id: push_test_bun
+        if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: restore
+
+      - name: Check main push shutdown and suppression regressions
+        if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && steps.push_test_bun.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: source scripts/ci-main-push-checks.sh regressions
 
   build-artifacts:
     permissions:
