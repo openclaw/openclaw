@@ -2,10 +2,14 @@
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  checkRunMessage,
   REPAIR_HEADING,
+  UPDATE_HEADING,
+  SCRIBE_SESSION_TARGET,
   SCRIBES,
   scribeDeclarationKey,
   scribeLabel,
+  type RunMessageCheck,
   type ScribeDefinition,
 } from "./scribes-catalog.js";
 
@@ -37,6 +41,8 @@ export type ScribeJob = {
   enabled: boolean;
   configRevision?: string;
   sessionTarget?: string;
+  /** The conversation that created the automation; a `current` job runs as its child. */
+  sessionKey?: string;
   schedule: { kind: string; expr?: string; tz?: string; everyMs?: number; at?: string };
   failureAlert?: false | { after?: number };
   /** The run message is the prompt each scheduled run receives. */
@@ -65,6 +71,10 @@ export type ScribeRun = {
   durationMs?: number;
   model?: string;
   usage?: { total_tokens?: number };
+  /** The run's id; `cron.history` reads its transcript by it, after its session is cleaned up. */
+  runId?: string;
+  /** The session the run executed in; a `current` job runs each time in a new one. */
+  sessionKey?: string;
 };
 
 /** The `Scribe status: <state> — <sentence>` line every scribe turn ends with. */
@@ -80,6 +90,9 @@ export type ScribeSnapshot = {
   session?: ScribeSession;
   job?: ScribeJob;
   result?: ScribeResult;
+  /** How the automation's run message compares with the one Knowledge generates now. */
+  runMessage?: RunMessageCheck;
+
   /**
    * The page owes this ongoing scribe its first run: the latest turn answered `on` and its job
    * has never run. Setup turns never run their own job, so the page forces it once.
@@ -177,7 +190,9 @@ const lastSent = (messages: readonly unknown[]) =>
  * repair, its turn answered `on`, and the job is enabled and has never run or started.
  */
 const isFirstRunDue = (job: ScribeJob, result: ScribeResult, sent: unknown) =>
-  !messageText(sent).trimStart().startsWith(REPAIR_HEADING) &&
+  ![REPAIR_HEADING, UPDATE_HEADING].some((heading) =>
+    messageText(sent).trimStart().startsWith(heading),
+  ) &&
   result.state === "on" &&
   job.enabled &&
   !job.state.lastRunAtMs &&
@@ -249,14 +264,24 @@ async function findSessions(host: ScribeReader, agentId: string, scribe: ScribeD
 
 const SESSION_TARGET = "session:";
 
+/**
+ * The conversation a scribe automation belongs to: the session a `session:<key>` job runs in, or
+ * the conversation a `current` job runs as a child of.
+ */
+function jobConversationKey(job: ScribeJob) {
+  if (job.sessionTarget?.startsWith(SESSION_TARGET)) {
+    return job.sessionTarget.slice(SESSION_TARGET.length);
+  }
+  return job.sessionTarget === SCRIBE_SESSION_TARGET ? job.sessionKey : undefined;
+}
+
 /** The sessions the scribe's automations target, by exact key; deleted ones are left out. */
 async function describeTargets(host: ScribeReader, keyed: ScribeJob[]) {
   const keys = new Set(
-    keyed.flatMap((job) =>
-      job.sessionTarget?.startsWith(SESSION_TARGET)
-        ? [job.sessionTarget.slice(SESSION_TARGET.length)]
-        : [],
-    ),
+    keyed.flatMap((job) => {
+      const key = jobConversationKey(job);
+      return key ? [key] : [];
+    }),
   );
   const rows = await Promise.all(
     [...keys].map((key) =>
@@ -284,8 +309,7 @@ async function pairScribe(
     : await findSessions(host, agentId, scribe);
   const session = sessions.find((row) => !row.archived) ?? sessions[0];
   const job =
-    keyed.find((entry) => session && entry.sessionTarget === `${SESSION_TARGET}${session.key}`) ??
-    keyed[0];
+    keyed.find((entry) => session && jobConversationKey(entry) === session.key) ?? keyed[0];
   return { session, job };
 }
 
@@ -324,6 +348,35 @@ async function readMessages(host: ScribeReader, session: ScribeSession, agentId:
   return history?.messages ?? [];
 }
 
+// When a message was written, when the transcript records it.
+const messageTime = (message: unknown) =>
+  isRecord(message) && typeof message.timestamp === "number" ? message.timestamp : undefined;
+
+/**
+ * The status line of a `current` job's latest run, which ran in its own session, with the run's
+ * start time. Read through `cron.history`, which keeps a run's transcript after its session is
+ * cleaned up. Undefined when the job has not run in one or its transcript can't be read.
+ */
+async function latestRunResult(
+  host: ScribeReader,
+  job: ScribeJob,
+  conversationKey: string,
+  agentId: string,
+) {
+  if (job.sessionTarget !== SCRIBE_SESSION_TARGET || !job.state.lastRunAtMs) {
+    return undefined;
+  }
+  const [run] = await loadRuns(host, job, agentId, 1).catch(() => []);
+  if (!run?.runId || !run.sessionKey || run.sessionKey === conversationKey) {
+    return undefined;
+  }
+  const history = await host
+    .request<{ messages?: unknown[] }>("cron.history", { id: job.id, runId: run.runId, limit: 20 })
+    .catch(() => undefined);
+  const { result } = parseScribeResult(history?.messages ?? []);
+  return result && { result, at: run.runAtMs ?? run.ts };
+}
+
 /** Load every scribe's conversation, automation and last status line for one agent. */
 export async function loadScribes(host: ScribeReader, agentId: string): Promise<ScribeSnapshot[]> {
   const jobs = await findJobs(host, agentId);
@@ -336,15 +389,27 @@ export async function loadScribes(host: ScribeReader, agentId: string): Promise<
         jobs.get(scribeDeclarationKey(scribe.id)) ?? [],
       );
       const messages = session ? await readMessages(host, session, agentId) : [];
-      const { result, index: resultIndex } = parseScribeResult(messages);
+      const { result: said, index: resultIndex } = parseScribeResult(messages);
       const sentIndex = lastSent(messages);
       // A status line older than the latest message sent answers an earlier turn.
-      const current = resultIndex > sentIndex ? result : undefined;
+      let current = resultIndex > sentIndex ? said : undefined;
+      let result = said;
+      // A run of a `current` job answers in its own session; it supersedes the conversation's
+      // answer unless a start or repair was sent after it began.
+      const run =
+        job && session ? await latestRunResult(host, job, session.key, agentId) : undefined;
+      const sentAt = messageTime(messages[sentIndex]);
+      if (run && (sentAt === undefined || run.at > sentAt)) {
+        current = result = run.result;
+      }
       const snapshot: ScribeSnapshot = {
         scribe,
         status: deriveStatus({ scribe, session, job, result: current, setupSent: sentIndex >= 0 }),
       };
       Object.assign(snapshot, session && { session }, job && { job }, result && { result });
+      if (job?.payload?.message !== undefined) {
+        snapshot.runMessage = checkRunMessage(scribe.id, job.payload.message);
+      }
       if (job && current && snapshot.status === "on") {
         snapshot.firstRunDue = isFirstRunDue(job, current, messages[sentIndex]);
       }
@@ -354,12 +419,12 @@ export async function loadScribes(host: ScribeReader, agentId: string): Promise<
 }
 
 /** Recent runs of a scribe's automation, newest first. */
-export async function loadRuns(host: ScribeReader, job: ScribeJob, agentId: string) {
+export async function loadRuns(host: ScribeReader, job: ScribeJob, agentId: string, limit = 10) {
   const result = await host.request<{ entries?: ScribeRun[] }>("cron.runs", {
     agentId,
     scope: "job",
     id: job.id,
-    limit: 10,
+    limit,
     sortDir: "desc",
     view: "summary",
   });

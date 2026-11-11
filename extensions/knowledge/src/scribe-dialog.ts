@@ -599,9 +599,11 @@ export function openConfirmDialog(
   text: string,
   confirmLabel: string,
   confirm: () => Promise<void>,
+  /** What confirming applies, shown below the text. */
+  detail?: Node,
 ) {
   const frame = dialogFrame(title);
-  frame.body.append(el("p", text, "scribe-dialog-blurb"));
+  frame.body.append(el("p", text, "scribe-dialog-blurb"), ...(detail ? [detail] : []));
   const submit = button(
     confirmLabel,
     () => {

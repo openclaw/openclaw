@@ -125,6 +125,12 @@ export const scribeLabel = (scribe: ScribeDefinition) => `Scribe · ${scribe.tit
 /** declarationKey of the one automation an ongoing scribe creates. */
 export const scribeDeclarationKey = (id: ScribeId) => `knowledge:scribe:${id}`;
 /**
+ * Session target of a scribe's automation: each run is a fresh child session of the scribe's
+ * conversation, with its memory access and workspace, so it reads the current skills instead of
+ * earlier runs' history.
+ */
+export const SCRIBE_SESSION_TARGET = "current";
+/**
  * chat.send idempotency key for one start attempt in one session. A scribe reuses its
  * conversation across starts, so each attempt (one dialog) gets its own key; retries within
  * the attempt stay deduplicated.
@@ -252,9 +258,28 @@ const COUNTS: Record<ScribeId, string> = {
 
 const UNATTENDED = "Don't ask questions: nobody is watching this turn.";
 
+/** Wording a run message is generated from; earlier releases generated some of it differently. */
+type RunWording = { access: string };
+
+/**
+ * Every wording a released run message was generated from, oldest first; the last is current.
+ * Add the replaced wording here whenever a change alters generated run messages, so the Scribes
+ * page can recognize an unedited earlier message and upgrade it.
+ */
+const RUN_WORDINGS: readonly RunWording[] = [
+  {
+    access:
+      "Call knowledge_status. Go on when the scope is private and writes are enabled, or the store is unprovisioned (a vault that was never written reports writes off until its first write). Otherwise stop: this conversation lacks the owner's private Knowledge access.",
+  },
+  {
+    access:
+      'Call knowledge_status. Go on when the scope is private and writes are enabled; a never-written store reports "unprovisioned" and is created by your first Knowledge call. Otherwise stop: this conversation lacks the owner\'s private Knowledge access.',
+  },
+];
+const CURRENT_WORDING = RUN_WORDINGS.at(-1)!;
+
 // Step 1 of every prompt; `fix` says how the owner restores access.
-const accessStep = (fix: string) =>
-  `Call knowledge_status. Go on when the scope is private and writes are enabled; a never-written store reports "unprovisioned" and is created by your first Knowledge call. Otherwise stop: this conversation lacks the owner's private Knowledge access. ${fix}`;
+const accessStep = (fix: string, wording = CURRENT_WORDING) => `${wording.access} ${fix}`;
 
 // The last step of every prompt: the closing status line.
 const endStep = (state: "on" | "done", what: string) =>
@@ -276,18 +301,18 @@ const numbered = (steps: string[]) =>
 function automationSteps(scribe: ScribeDefinition, schedule: string, enabled: string, keep = "") {
   const key = scribeDeclarationKey(scribe.id);
   return [
-    `With the automations tool, list automations including disabled ones and take those with declaration key \`${key}\`.${keep} Remove each one owned by another conversation, noting whether it was paused. If this conversation owns one that targets another session, update its session target to this conversation.`,
+    `With the automations tool, list automations including disabled ones and take those with declaration key \`${key}\`.${keep} Remove each one owned by another conversation, noting whether it was paused. If this conversation owns one whose session target is not \`${SCRIBE_SESSION_TARGET}\`, update its session target to \`${SCRIBE_SESSION_TARGET}\`.`,
     [
       "Add the automation with the automations tool:",
       `- name: Knowledge scribe · ${scribe.title}`,
       `- declaration key: \`${key}\``,
       `- schedule: ${schedule}`,
-      "- session target: `session:` followed by this conversation's session key (from Runtime)",
+      `- session target: \`${SCRIBE_SESSION_TARGET}\`, so each run starts in a fresh session of this conversation`,
       "- payload: an agent turn whose message is the run message below, exactly as written inside the fence",
       "- delivery: none; failure alert after 2 failed runs",
       `Adding with an existing declaration key updates this conversation's automation in place. ${enabled}`,
     ].join("\n"),
-    "Get the automation and check that it targets this conversation.",
+    `Get the automation and check that its session target is \`${SCRIBE_SESSION_TARGET}\` and its session key is this conversation's.`,
   ];
 }
 
@@ -298,7 +323,7 @@ const runMessageBlock = (message: string) => ["Run message:", "", "```text", mes
  * The message an ongoing scribe's automation sends each run: the work settings, the work step
  * and the closing line. Editing it on the automation changes what later runs do.
  */
-function runPrompt(setup: ScribeSetup) {
+function runPrompt(setup: ScribeSetup, wording = CURRENT_WORDING) {
   const scribe = scribeById(setup.scribe)!;
   const settings = workSettings(setup);
   return [
@@ -307,7 +332,7 @@ function runPrompt(setup: ScribeSetup) {
     "",
     "Steps:",
     ...numbered([
-      accessStep("A repair from the Scribes page fixes it."),
+      accessStep("A repair from the Scribes page fixes it.", wording),
       `${WORK[scribe.id]} This run can't change automations: if its setup looks broken, say a repair is needed.`,
       endStep("on", `one sentence with counts: ${COUNTS[scribe.id]}`),
     ]),
@@ -377,20 +402,89 @@ export function setupPrompt(setup: ScribeSetup) {
   ].join("\n");
 }
 
+// Every choice of the settings a run message spells out; a scribe without settings has one.
+function settingsChoices(id: ScribeId): ScribeOptions[ScribeId][] {
+  if (id === "conversations") {
+    return (["active", "all"] as const).flatMap((scope) =>
+      (Object.keys(SINCE_WORDS) as ConversationSince[]).map((since) => ({ scope, since })),
+    );
+  }
+  if (id === "granola") {
+    return (Object.keys(GRANOLA_MEETING_WORDS) as GranolaMeetings[]).flatMap((meetings) =>
+      (Object.keys(GRANOLA_SINCE_WORDS) as GranolaSince[]).map((since) => ({ meetings, since })),
+    );
+  }
+  return [defaultOptions(id)];
+}
+
+/**
+ * How an ongoing scribe's run message compares with the one Knowledge generates now.
+ * - current: it is the current generated message.
+ * - custom: it was edited by hand, and nothing in it is wording Knowledge has since replaced.
+ * - outdated: an earlier version generated it and it was not edited; `current` replaces it.
+ * - edited: it was edited by hand and still carries wording Knowledge has since replaced (an update
+ *   is available); `current` is what resetting it applies, for the settings the message names
+ *   (the defaults when it names none Knowledge generates).
+ */
+export type RunMessageCheck =
+  | { state: "current" | "custom" }
+  | { state: "outdated" | "edited"; current: string };
+
+/** Compare a scribe automation's run message with every message each version generated. */
+export function checkRunMessage(id: ScribeId, message: string): RunMessageCheck {
+  const choices = settingsChoices(id);
+  const generate = (options: ScribeOptions[ScribeId], wording?: RunWording) =>
+    runPrompt({ scribe: id, mode: "ongoing", options, timezone: "UTC" }, wording);
+  for (const options of choices) {
+    if (message === generate(options)) {
+      return { state: "current" };
+    }
+    if (RUN_WORDINGS.slice(0, -1).some((wording) => message === generate(options, wording))) {
+      return { state: "outdated", current: generate(options) };
+    }
+  }
+  const earlier = RUN_WORDINGS.slice(0, -1).flatMap((wording) =>
+    (Object.keys(wording) as (keyof RunWording)[]).flatMap((part) =>
+      wording[part] === CURRENT_WORDING[part] ? [] : [wording[part]],
+    ),
+  );
+  if (!earlier.some((text) => message.includes(text))) {
+    return { state: "custom" };
+  }
+  // An edited message keeps its settings when it still names a generated settings line.
+  const named = choices.find((options) =>
+    workSettings(scribeSetup(id, "ongoing", options)).every((line) =>
+      message.includes(`- ${line}`),
+    ),
+  );
+  return { state: "edited", current: generate(named ?? defaultOptions(id)) };
+}
+
 /** First words of every repair prompt; the page never forces a first run after one. */
 export const REPAIR_HEADING = "Repair the Knowledge scribe";
+/** First words of every update prompt; the page never forces a first run after one either. */
+export const UPDATE_HEADING = "Update the Knowledge scribe";
 
-/** What a repair keeps from the scribe's current automation. */
+/** What a repair or update keeps from the scribe's current automation. */
 export type RepairSource = {
   schedule: { kind: string; expr?: string; tz?: string };
   runMessage?: string;
 };
 
 /**
- * The message that asks a scribe's conversation to re-check its setup and take over its
- * automation, keeping the automation's schedule and run message. It does no work.
+ * The message that asks a scribe's conversation to re-declare its automation, keeping its
+ * schedule and run message (an unedited one from an earlier version becomes the current one).
+ * It does no work.
+ * - repair: take the automation over and turn it back on.
+ * - update: bring it up to this version (fresh session per run, the given run message) and keep
+ *   it paused or on as it is. A turn in the conversation re-declares it, so the automation keeps
+ *   the authority of the owner's authenticated turn; an edit from the page would drop it.
  */
-export function repairPrompt(id: ScribeId, current: RepairSource) {
+export function repairPrompt(
+  id: ScribeId,
+  current: RepairSource,
+  purpose: "repair" | "update" = "repair",
+) {
   const scribe = scribeById(id)!;
   const { schedule } = current;
   const timezone = schedule.tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -398,10 +492,16 @@ export function repairPrompt(id: ScribeId, current: RepairSource) {
     schedule.kind === "cron" && schedule.expr
       ? scheduleLine(schedule.expr, timezone)
       : "Keeps the schedule of its current automation.";
+  const check =
+    current.runMessage === undefined ? undefined : checkRunMessage(id, current.runMessage);
   const runMessage =
-    current.runMessage ?? runPrompt(scribeSetup(id, "ongoing", defaultOptions(id), timezone));
+    check?.state === "outdated"
+      ? check.current
+      : (current.runMessage ?? runPrompt(scribeSetup(id, "ongoing", defaultOptions(id), timezone)));
+  const repair = purpose === "repair";
+  const healthy = `this conversation owns it, its session target is \`${SCRIBE_SESSION_TARGET}\` with this conversation's session key, its message is the run message below`;
   return [
-    `${REPAIR_HEADING} "${scribe.title}" in this conversation. Don't do its work in this turn. ${UNATTENDED}`,
+    `${repair ? REPAIR_HEADING : UPDATE_HEADING} "${scribe.title}" in this conversation. Don't do its work in this turn. ${UNATTENDED}`,
     "",
     "Settings, kept from its current automation:",
     `- ${scheduleSetting}`,
@@ -413,10 +513,14 @@ export function repairPrompt(id: ScribeId, current: RepairSource) {
       ...automationSteps(
         scribe,
         "the schedule in the settings",
-        "Pass `enabled: true`: a repair turns the scribe back on, even when the scheduler paused it after failed runs.",
-        " If exactly one exists, this conversation owns it, it targets this conversation and it is enabled, leave it as it is and go to the last step.",
+        repair
+          ? "Pass `enabled: true`: a repair turns the scribe back on, even when the scheduler paused it after failed runs."
+          : "Leave `enabled` out: an update keeps a paused automation paused.",
+        repair
+          ? ` If exactly one exists, ${healthy} and it is enabled, leave it as it is and go to the last step.`
+          : ` If exactly one exists and ${healthy}, leave it as it is and go to the last step.`,
       ),
-      endStep("on", "one sentence: what the repair changed"),
+      endStep("on", `one sentence: what the ${purpose} changed`),
     ]),
     "",
     FAILED,

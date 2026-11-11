@@ -1,4 +1,4 @@
-/** Gateway writes behind the Scribes controls: start, run now, pause, turn off and repair. */
+/** Gateway writes behind the Scribes controls: start, run now, pause, turn off, repair and update. */
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { repairPrompt, scribeLabel, setupIdempotencyKey } from "./scribes-catalog.js";
@@ -127,6 +127,54 @@ export const setScribePaused = (host: ScribeHost, job: ScribeJob, paused: boolea
     patch: { enabled: !paused },
     ...(job.configRevision ? { expectedConfigRevision: job.configRevision } : {}),
   });
+
+/**
+ * Whether this scribe's automation is behind this version of Knowledge:
+ * - it runs in its conversation's own session instead of a fresh child session per run (only the
+ *   shape setup generated, its own creating conversation, counts), or
+ * - its run message is an unedited one an earlier version generated. An edited one never counts;
+ *   the page offers it as an update instead.
+ * Missing or running scribes wait: an update must not race a repair or a run in progress.
+ */
+export function needsUpdate(snapshot: ScribeSnapshot) {
+  const { job, runMessage } = snapshot;
+  if (!job || !snapshot.session || snapshot.status === "missing" || job.state.runningAtMs) {
+    return false;
+  }
+  return (
+    (Boolean(job.sessionKey) && job.sessionTarget === `session:${job.sessionKey}`) ||
+    runMessage?.state === "outdated"
+  );
+}
+
+/**
+ * Ask the scribe's conversation to bring its automation up to date, with `runMessage` (the job's
+ * own message by default, an unedited earlier one becoming the current one). The conversation
+ * re-declares the automation in a turn, as setup did. A direct edit from the page would drop the
+ * owner's turn authority that the automation's runs use. One request per automation revision.
+ */
+export async function updateScribe(
+  host: ScribeHost,
+  snapshot: ScribeSnapshot,
+  job: ScribeJob,
+  agentId: string,
+  runMessage = job.payload?.message,
+) {
+  const { scribe } = snapshot;
+  const sessionKey = await conversation(host, snapshot, agentId);
+  const prompt = repairPrompt(
+    scribe.id,
+    { schedule: job.schedule, ...(runMessage ? { runMessage } : {}) },
+    "update",
+  );
+  await host.request("chat.send", {
+    sessionKey,
+    agentId,
+    message: prompt,
+    idempotencyKey: `knowledge:scribe:${scribe.id}:${runMessage === job.payload?.message ? "update" : "reset"}:${job.id}:${job.configRevision ?? ""}`,
+  });
+  return sessionKey;
+}
 
 /** Turn the scribe off: remove its automation and keep its conversation. */
 export const turnOffScribe = (host: ScribeHost, job: ScribeJob) =>

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { locationParams, readLocation } from "./page-location.js";
 import {
+  checkRunMessage,
   defaultOptions,
   repairPrompt,
   scribeById,
@@ -115,6 +116,39 @@ describe("scribes catalog", () => {
     );
     expect(once).toContain("Runs once, now, in this turn.");
     expect(once).toContain("including notes others shared, from the last 30 days.");
+  });
+
+  it("recognizes run messages earlier versions generated and keeps edited ones", () => {
+    const runMessage = (id: "claim-consolidation" | "granola", options: object) =>
+      setupPrompt(scribeSetup(id, "ongoing", options as never, "UTC")).match(
+        /Run message:\n\n```text\n([\s\S]+)\n```$/,
+      )![1]!;
+    // The access step every run message carried before the never-written-store wording.
+    const earlierOf = (message: string) =>
+      message.replace(
+        /writes are enabled; a never-written store [^.]+\./,
+        "writes are enabled, or the store is unprovisioned (a vault that was never written reports writes off until its first write).",
+      );
+    const current = runMessage("claim-consolidation", defaultOptions("claim-consolidation"));
+    const earlier = earlierOf(current);
+    expect(earlier).not.toBe(current);
+    expect(checkRunMessage("claim-consolidation", current)).toEqual({ state: "current" });
+    expect(checkRunMessage("claim-consolidation", earlier)).toEqual({ state: "outdated", current });
+    const granola = runMessage("granola", { meetings: "all", since: "today" });
+    const edited = earlierOf(granola).replace("left pending", "skipped and left for later");
+    expect(checkRunMessage("granola", edited)).toEqual({ state: "edited", current: granola });
+    expect(checkRunMessage("granola", `${granola}\nAlso tag speakers.`)).toEqual({
+      state: "custom",
+    });
+    expect(
+      repairPrompt("claim-consolidation", { schedule: { kind: "cron" }, runMessage: earlier }),
+    ).toContain(`\`\`\`text\n${current}\n\`\`\``);
+    expect(repairPrompt("granola", { schedule: { kind: "cron" }, runMessage: edited })).toContain(
+      edited,
+    );
+    expect(
+      setupPrompt(scribeSetup("granola", "ongoing", defaultOptions("granola"), "UTC")),
+    ).toContain("- session target: `current`, so each run starts in a fresh session");
   });
 
   it("reads a status line tolerantly", () => {
@@ -309,6 +343,50 @@ describe("scribes state", () => {
       "mine",
       "on",
     ]);
+  });
+
+  it("reads a fresh-session job's status from its latest run unless a later turn answered", async () => {
+    const label = "Scribe · Learn from conversations";
+    const load = async (conversation: unknown[]) => {
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "cron.list") {
+          const current = { sessionTarget: "current", sessionKey: "s-owner" };
+          return { jobs: [{ ...job(current), declarationKey: "knowledge:scribe:conversations" }] };
+        }
+        if (method === "sessions.describe") {
+          return {
+            session: params?.key === "s-owner" ? { key: "s-owner", displayName: label } : null,
+          };
+        }
+        if (method === "sessions.list") {
+          return { sessions: [] };
+        }
+        if (method === "cron.runs") {
+          const run = { ts: 2_000, runAtMs: 1_000, runId: "r1", sessionKey: "s-run" };
+          return { entries: [run] };
+        }
+        // The run's transcript, kept after its session is cleaned up.
+        if (method === "cron.history" && params?.runId === "r1") {
+          return { messages: [assistant("Scribe status: failed — store is read-only")] };
+        }
+        if (method === "chat.history") {
+          return { messages: params?.sessionKey === "s-owner" ? conversation : [] };
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+      const snapshots = await loadScribes({ request } as never, "main");
+      return snapshots.find((snapshot) => snapshot.scribe.id === "conversations")!;
+    };
+    const setup = { ...user("Set up"), timestamp: 500 };
+    const failed = await load([setup, assistant("Scribe status: on — set up")]);
+    expect([failed.session?.key, failed.status, failed.result?.summary]).toEqual([
+      "s-owner",
+      "failing",
+      "store is read-only",
+    ]);
+    const repair = { ...user("Repair the Knowledge scribe"), timestamp: 1_500 };
+    const repaired = await load([repair, assistant("Scribe status: on — repaired")]);
+    expect([repaired.status, repaired.result?.summary]).toEqual(["on", "repaired"]);
   });
 
   it("detects conversation counts and MEMORY.md, omitting what it cannot read", async () => {

@@ -458,6 +458,56 @@ it("runs, pauses, turns off and opens an On scribe from its detail", async () =>
   expect(load).toHaveBeenCalled();
 });
 
+it("asks an earlier scribe's conversation to update it once and offers an edited one the current message", async () => {
+  const runMessage = setupPrompt(reviewSetup).match(/```text\n([\s\S]+)\n```$/)![1]!;
+  const earlier = runMessage.replace(
+    /writes are enabled; a never-written store [^.]+\./,
+    "writes are enabled, or the store is unprovisioned (a vault that was never written reports writes off until its first write).",
+  );
+  const legacy = { ...reviewJob, sessionKey: "s-review", payload: { kind: "agentTurn" } };
+  const unedited = fixture({
+    sessions: reviewSession,
+    jobs: [{ ...legacy, payload: { kind: "agentTurn", message: earlier } }],
+  });
+  await unedited.render();
+  await unedited.render();
+  const sent = unedited.calls.filter(([method]) => method === "chat.send");
+  // A turn in the conversation re-declares the automation; the page never edits it directly.
+  expect(unedited.calls.some(([method]) => method === "cron.update")).toBe(false);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]![1]).toMatchObject({
+    sessionKey: "s-review",
+    idempotencyKey: "knowledge:scribe:claim-consolidation:update:job-review:rev-7",
+  });
+  const prompt = String(sent[0]![1]!.message);
+  expect(prompt).toMatch(/^Update the Knowledge scribe "Knowledge Consolidation"/);
+  expect(prompt).toContain("Leave `enabled` out");
+  expect(prompt.endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(true);
+  unedited.page.remove();
+
+  const edited = `${earlier}\nAlso tidy page titles.`;
+  const { render, ui, calls, page } = fixture({
+    sessions: reviewSession,
+    jobs: [
+      { ...legacy, sessionTarget: "current", payload: { kind: "agentTurn", message: edited } },
+    ],
+    runs: [{ ts: 1_793_000_000_000, status: "ok", runId: "r1", sessionKey: "s-run" }],
+  });
+  expect((await render()).querySelector(".scribe-row")?.textContent).toContain("Update available");
+  expect(calls.some(([method]) => method === "chat.send")).toBe(false);
+  ui.s.scribe = "claim-consolidation";
+  const view = await render();
+  expect(buttonNamed(view, "Open run")).toBeTruthy();
+  buttonNamed(view, "Use current run message…").click();
+  const confirm = page.querySelector("dialog")!;
+  expect(confirm.querySelector("pre")?.textContent).toBe(runMessage);
+  buttonNamed(confirm, "Use current message").click();
+  await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("chat.send"));
+  expect(String(calls.at(-1)![1]!.message).endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(
+    true,
+  );
+});
+
 it("reports a skipped run that could not complete as failed", async () => {
   const { render, ui } = fixture({
     sessions: reviewSession,

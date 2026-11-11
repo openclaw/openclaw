@@ -10,10 +10,12 @@ import {
 } from "./scribe-dialog.js";
 import {
   repairScribe,
+  needsUpdate,
   runScribeNow,
   setScribePaused,
   startScribe,
   turnOffScribe,
+  updateScribe,
 } from "./scribes-actions.js";
 import { scribeById, scribeLabel } from "./scribes-catalog.js";
 import {
@@ -46,6 +48,13 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
  * moment could force a second run; that is a visible, harmless extra run.
  */
 const firstRuns = new Set<string>();
+/**
+ * Automation revisions this page already asked to update. The update is a turn in the scribe's
+ * conversation, so the revision stays until that turn re-declares the automation; this keeps
+ * reloads in that gap from asking again. A turn that left it unchanged is asked again after the
+ * page is reopened.
+ */
+const updatesAsked = new Set<string>();
 
 /** Scribes the list shows under "On": everything set up that is not finished or startable. */
 const isOn = (status: ScribeStatus) => status !== "available" && status !== "done";
@@ -193,15 +202,21 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
   const host = s.context.host;
   const agentId = ui.viewedAgent();
   const selected = scribeById(s.scribe);
-  const [snapshots, detection] = await Promise.all([
+  const [loaded, detection] = await Promise.all([
     loadScribes(host, agentId),
     // A detail only needs detection for its plugin; the list shows every scribe's facts.
     selected && !selected.plugin
       ? Promise.resolve({})
       : detectSources(host, agentId).catch(() => ({})),
   ]);
+  const snapshots = loaded;
   if (host.connection.canWrite) {
-    await Promise.all(snapshots.map((snapshot) => startFirstRun(ui, snapshot)));
+    await Promise.all(
+      snapshots.map(async (snapshot) => {
+        await update(ui, snapshot, agentId);
+        await startFirstRun(ui, snapshot);
+      }),
+    );
   }
   const snapshot = selected && snapshots.find((entry) => entry.scribe.id === selected.id);
   const runs = snapshot?.job ? await loadRuns(host, snapshot.job, agentId).catch(() => []) : [];
@@ -232,6 +247,27 @@ async function startFirstRun(ui: Page, snapshot: ScribeSnapshot) {
     // Not started: forget it so the next load tries again and nothing shows it as running.
     firstRuns.delete(job.id);
     ui.announce(`${snapshot.scribe.title}: the first run did not start. ${ui.errorText(error)}`);
+  }
+}
+
+/**
+ * Bring a scribe's automation up to date with this version of Knowledge: each run in a fresh
+ * session, and an unedited run message from an earlier version replaced. The Scribes page owns
+ * this because it is where the owner, with write access, manages scribe automations; it asks the
+ * scribe's conversation, which re-declares its automation with the owner's turn authority.
+ */
+async function update(ui: Page, snapshot: ScribeSnapshot, agentId: string) {
+  const { job } = snapshot;
+  const asked = job && `${job.id}:${job.configRevision ?? ""}`;
+  if (!job || !asked || updatesAsked.has(asked) || !needsUpdate(snapshot)) {
+    return;
+  }
+  updatesAsked.add(asked);
+  try {
+    await updateScribe(ui.s.context.host, snapshot, job, agentId);
+    ui.announce(`${snapshot.scribe.title}: asked its conversation to update its automation.`);
+  } catch (error) {
+    ui.announce(`${snapshot.scribe.title}: the update was not sent. ${ui.errorText(error)}`);
   }
 }
 
@@ -351,9 +387,52 @@ function activeRow(ui: Page, snapshot: ScribeSnapshot) {
   );
   chevron.setAttribute("aria-label", `Open ${scribe.title}`);
   chevron.append(icon("chevronRight", 16));
+  if (snapshot.runMessage?.state === "edited") {
+    actions.append(chip("Update available"));
+  }
   actions.append(statusChip(snapshot.status), chevron);
   row.append(link, actions);
   return row;
+}
+
+/**
+ * The notice for a hand-edited run message when Knowledge generates a different one: the edit is
+ * kept until the owner chooses the current message.
+ */
+function updateNotice(
+  ui: Page,
+  snapshot: ScribeSnapshot,
+  job: ScribeJob,
+  agentId: string,
+  current: string,
+) {
+  const { scribe } = snapshot;
+  const notice = el("div", undefined, "knowledge-notice scribe-update");
+  notice.append(
+    el(
+      "span",
+      `Update available. This version of Knowledge generates a different run message for ${scribe.title}. Its run message was edited, so it was kept.`,
+    ),
+  );
+  const reset = button(
+    "Use current run message…",
+    () =>
+      openConfirmDialog(
+        "Use the current run message?",
+        `Its conversation updates the automation so later runs of ${scribe.title} follow this message instead of the edited one. The edit is not kept.`,
+        "Use current message",
+        async () => {
+          await updateScribe(ui.s.context.host, snapshot, job, agentId, current);
+          ui.announce(`Asked ${scribeLabel(scribe)} to use the current run message.`);
+          void ui.load();
+        },
+        el("pre", current, "scribe-prompt-text scribe-update-message"),
+      ),
+    "knowledge-button knowledge-small",
+  );
+  reset.disabled = !ui.s.context.host.connection.canWrite;
+  notice.append(reset);
+  return notice;
 }
 
 function availableRow(
@@ -633,11 +712,20 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
   const rows = el("div", undefined, "knowledge-surface");
   for (const run of runs) {
     const line = el("div", undefined, "scribe-run");
-    line.append(
-      el("time", when(run.runAtMs ?? run.ts)),
-      el("span", runText(run)),
-      runFailed(run) ? statusChip("failing") : el("span"),
-    );
+    const end = el("span", undefined, "scribe-run-end");
+    if (runFailed(run)) {
+      end.append(statusChip("failing"));
+    }
+    // A run in its own session keeps its transcript there, not in the scribe's conversation;
+    // the Automations page shows it, also after that session is cleaned up.
+    if (job && run.runId && run.sessionKey && run.sessionKey !== session?.key) {
+      const params = new URLSearchParams({ job: job.id, run: run.runId });
+      const href = `${host.basePath}/automations?${params}`;
+      end.append(
+        button("Open run", () => window.location.assign(href), "knowledge-quiet knowledge-small"),
+      );
+    }
+    line.append(el("time", when(run.runAtMs ?? run.ts)), el("span", runText(run)), end);
     rows.append(line);
   }
   if (!runs.length && firstRunPending(snapshot)) {
@@ -659,6 +747,10 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     );
   }
   history.append(rows);
-  root.append(crumb, head, feedback, grid, history);
+  root.append(crumb, head, feedback);
+  if (job && snapshot.runMessage?.state === "edited") {
+    root.append(updateNotice(ui, snapshot, job, agentId, snapshot.runMessage.current));
+  }
+  root.append(grid, history);
   return root;
 }
