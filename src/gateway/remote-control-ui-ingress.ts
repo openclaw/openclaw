@@ -216,6 +216,7 @@ export function createGatewayControlUiIngressFactory(params: {
   async function bindPrincipal(
     options: GatewayIngressPrincipalOptionsV1,
   ): Promise<GatewayIngressPrincipalBindingV1> {
+    host.admissionSignal.throwIfAborted();
     const operatorScopeCeiling = validatePrincipalOptions(options);
     const principal = Object.freeze({ ...options.principal });
     const grantSignal = AbortSignal.any([params.signal, host.signal, options.signal]);
@@ -256,7 +257,10 @@ export function createGatewayControlUiIngressFactory(params: {
         const displayName = await resolveHostAccountName();
         assertPrincipalGrant();
         await ensureCanonicalGatewayOwnerProfile(displayName, {
-          assertCurrent: assertPrincipalGrant,
+          assertCurrent: () => {
+            host.admissionSignal.throwIfAborted();
+            assertPrincipalGrant();
+          },
         });
       }
       const prepared = await prepareUserProfileIdentity(profileId).catch(() => {
@@ -383,6 +387,7 @@ export function createGatewayControlUiIngressFactory(params: {
       requestOptions?: { signal?: AbortSignal },
       ingressContext?: RemoteControlUiIngressContext,
     ): Promise<T> => {
+      host.admissionSignal.throwIfAborted();
       const principalSnapshot = resolvePrincipal();
       const context = host.resolveGatewayContext?.();
       if (!context) {
@@ -456,6 +461,7 @@ export function createGatewayControlUiIngressFactory(params: {
     async function openControlUi(
       presentationOptions: GatewayControlUiIngressPresentationOptionsV1,
     ): Promise<GatewayControlUiIngressV2> {
+      host.admissionSignal.throwIfAborted();
       const presentation = {
         ...validatePresentation(presentationOptions),
         operatorScopeCeiling,
@@ -663,7 +669,13 @@ export function createGatewayControlUiIngressFactory(params: {
       openControlUi,
       close: closeBinding,
     };
-    assertPrincipalCurrent();
+    try {
+      host.admissionSignal.throwIfAborted();
+      assertPrincipalCurrent();
+    } catch (error) {
+      authority.close();
+      throw error;
+    }
     return Object.freeze(binding);
   }
   return {

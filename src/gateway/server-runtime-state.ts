@@ -428,7 +428,7 @@ export async function createGatewayHttpTransport(params: {
   }
   if (params.getGatewayRequestContext && controlUiUpgradeHandler) {
     const gatewayLifetime = getGatewayContextLifetime(params.getGatewayRequestContext).signal;
-    const requestLifetime = params.httpRequestLifetime?.requestEntryLifetime?.signal;
+    const requestLifetime = params.httpRequestLifetime?.requestEntryLifetime;
     bindGatewayControlUiIngressHost(params.getGatewayRequestContext, {
       resolveGatewayContext: params.getGatewayRequestContext,
       controlUiBasePath: params.controlUiBasePath,
@@ -437,8 +437,9 @@ export async function createGatewayHttpTransport(params: {
       handleRequest: getGatewayHttpRequestHandler(httpServer),
       handleUpgrade: controlUiUpgradeHandler,
       handleSandboxRequest: createSandboxHostHttpRequestHandler(),
+      admissionSignal: requestLifetime?.signal ?? gatewayLifetime,
       signal: requestLifetime
-        ? AbortSignal.any([gatewayLifetime, requestLifetime])
+        ? AbortSignal.any([gatewayLifetime, requestLifetime.retainedSignal])
         : gatewayLifetime,
     });
   }

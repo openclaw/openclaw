@@ -51,6 +51,7 @@ async function fixture(recordOptions: Partial<PluginRecord> = {}) {
     handleSandboxRequest: async (_req, res) => void res.end("synthetic sandbox"),
     handleUpgrade: async (_req, socket) => void socket.destroy(),
     signal: new AbortController().signal,
+    admissionSignal: new AbortController().signal,
   });
   markPluginRegistryActive(registry);
   let serviceContext: OpenClawPluginServiceContext | undefined;

@@ -46,6 +46,12 @@ IDs of accepted user inputs still queued behind that session at shutdown. The
 Gateway writes one marker per running root session, batched by session store,
 before aborting work. It uses the existing session-entry JSON in SQLite and needs
 no schema migration.
+Shutdown closes request admission and scheduled wakeups before writing markers.
+Accepted ingress inputs retain their live source authority until the markers are
+written and the session owner stops them for restart. A real grant revocation or
+permission change during that interval still cancels the affected work. At startup,
+queued inputs must regain current authority before they can execute.
+
 There are no restart checkpoints written per turn or tool call, startup orphan
 scans, or crash-time execution reconstruction.
 

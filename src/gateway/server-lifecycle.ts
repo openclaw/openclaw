@@ -417,7 +417,7 @@ export async function prepareGatewayLifecycle(params: {
     talkClose.beginClose();
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
-    runtime.scheduler.beginClose();
+    runtime.scheduler.fence();
     void runtimeState.maintenance?.stopPeriodicTasks();
     // Fence new entry now; the run-shutdown owner records recovery before
     // canceling admitted work or withdrawing its runtime capabilities.
@@ -551,7 +551,9 @@ export async function prepareGatewayLifecycle(params: {
           await terminateLiveSubagentsForShutdown(runtime.resolvePluginGatewayContext);
         },
         cancelReceivedWork: (reason) => {
-          // Entry is fenced; retained principals still need their binding to settle.
+          // Restart markers and session stop classification precede authority retirement.
+          requestEntryLifetime.retire(reason);
+          runtime.scheduler.beginClose();
           runtime.connectionWork.beginClose(reason);
         },
         disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
