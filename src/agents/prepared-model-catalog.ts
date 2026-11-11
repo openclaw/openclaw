@@ -27,6 +27,7 @@ import {
   loadPreparedModelRuntimeAuth,
   bindPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
+import { isPreparedModelRuntimeGatewayLifecycleActive } from "./prepared-model-runtime-gateway-lifecycle.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -43,7 +44,6 @@ import {
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
-  isPreparedModelRuntimeGatewayLifecycleActive,
   prepareModelRuntimeSnapshot,
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
