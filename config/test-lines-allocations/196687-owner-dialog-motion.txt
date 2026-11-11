@@ -1,0 +1,4 @@
+219
+# Real-browser proof of height interpolation, stable row content, cascade collapse, and reduced-motion end states.
+# Covers 94 new lines plus this PR's 113 previously unallocated approval regression lines.
+# Includes the final caller-owned dialog navigation and cancellation-safe layout readiness; exact motion-constant assertions were removed. Total owned test growth is 289 lines including the separate 70-line removal-layout grant.
