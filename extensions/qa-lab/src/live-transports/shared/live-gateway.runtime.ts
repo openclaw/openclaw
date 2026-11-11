@@ -51,6 +51,9 @@ function prepareLiveTransportGatewayConfig(cfg: OpenClawConfig): OpenClawConfig 
 type QaLiveGatewayParams = {
   repoRoot: string;
   command?: QaGatewayChildCommand;
+  useRepoCli?: boolean;
+  /** Fresh current-repository fixture; matches QaGatewayChildParams. */
+  initializeCurrentRuntimeState?: boolean;
   transport: {
     requiredPluginIds: readonly string[];
     createGatewayConfig: (params: {
