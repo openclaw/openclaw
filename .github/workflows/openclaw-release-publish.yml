@@ -95,6 +95,10 @@ on:
         description: Comma-separated plugin package names when plugin_publish_scope=selected
         required: false
         type: string
+      core_plugin_deferrals:
+        description: Explicit beta-only JSON packageName/version/sourceSha/reason/evidence entries for operator-reviewed npm authentication failures; all other original packages must be public
+        required: false
+        type: string
       publish_openclaw_npm:
         description: Publish OpenClaw under npm_dist_tag after plugins publish or record exact OIDC-auth deferrals; ClawHub may still run
         required: true
@@ -142,6 +146,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  CORE_PLUGIN_DEFERRALS: ${{ inputs.core_plugin_deferrals }}
   RETIRED_LINE_PUBLICATION_REASON: ${{ inputs.retired_line_publication_reason }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.22.1"
@@ -1487,6 +1492,9 @@ jobs:
         id: approval_receipt
         env:
           GH_TOKEN: ${{ github.token }}
+          PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          PREPARED_NPM_ARTIFACT: ${{ needs.resolve_release_target.outputs.plugin_npm_artifact }}
           RELEASE_TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
@@ -1619,7 +1627,7 @@ jobs:
             --arg full_attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" \
             --arg focused_attempt "$FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT" \
             --arg acknowledgement "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
-            '.inputs + {release_profile: "clawhub-only", publish_openclaw_npm: "false", publish_docker_only: "false", finalize_release_before_docker: "false", openclaw_npm_resume_run_id: "", wait_for_clawhub: "true", full_release_validation_run_attempt: $full_attempt, focused_release_evidence_run_attempt: $focused_attempt, plugin_sdk_api_acknowledgement: $acknowledgement} | {state: "intent", workflow: "openclaw-release-publish.yml", ref: $ref, workflowSha: $sha, inputs: .}' \
+            '.inputs + {core_plugin_deferrals: "", release_profile: "clawhub-only", publish_openclaw_npm: "false", publish_docker_only: "false", finalize_release_before_docker: "false", openclaw_npm_resume_run_id: "", wait_for_clawhub: "true", full_release_validation_run_attempt: $full_attempt, focused_release_evidence_run_attempt: $focused_attempt, plugin_sdk_api_acknowledgement: $acknowledgement} | {state: "intent", workflow: "openclaw-release-publish.yml", ref: $ref, workflowSha: $sha, inputs: .}' \
             "$GITHUB_EVENT_PATH" > "$receipt"
           # Record intent before the single mutation. An uncertain response is
           # retained for reconciliation, never retried by this core publisher.
@@ -2170,8 +2178,8 @@ jobs:
             echo "- OpenClaw npm publish: already on npm; resuming postpublish stages" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # Verify the original complete roster after the child settles. A successful
-          # deferred bootstrap is not proof that its package bytes are public.
+          # Verify every original qualified package after the child settles. Only
+          # the exact operator-approved deferrals may remain unpublished.
           if [[ -n "${PREPARED_NPM_ARTIFACT:-}" ]]; then
             node --input-type=module <<'NODE'
           import { main } from './.release-harness/scripts/plugin-npm-prepared-release.mjs';
@@ -2179,6 +2187,7 @@ jobs:
           await main(['load', '--report-capacity', 'true', '--source-sha', env.TARGET_SHA, '--selection-mode', 'all-publishable',
             '--npm-dist-tag', env.RELEASE_NPM_DIST_TAG === 'extended-stable' ? 'extended-stable' : 'default',
             '--require-published', 'true',
+            '--core-deferral-parent', 'true',
             '--cache-dir', env.RUNNER_TEMP + '/core-roster-downloads',
             '--output-dir', env.RUNNER_TEMP + '/core-roster-packages',
             '--output', env.RUNNER_TEMP + '/core-roster.json',
