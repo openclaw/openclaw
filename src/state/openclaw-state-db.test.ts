@@ -1344,6 +1344,7 @@ describe("openclaw state database", () => {
       "Replaced retained task indexes with ordered cron history indexes (v24)",
       "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
       "Migrated released starter tables and provenance to canonical Template names (v36)",
+      "Recorded deferred Template bootstrap seeding on workspace setup (v40)",
     ]);
 
     const migrated = openOpenClawStateDatabase(options);
