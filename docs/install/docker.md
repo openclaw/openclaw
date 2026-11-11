@@ -105,6 +105,63 @@ Hosting mutually untrusted users? Run a separate Gateway for each trust boundary
   </Step>
 </Steps>
 
+### Use a pre-built image without cloning
+
+In a fresh PowerShell session, open an empty directory. Download the Compose
+file for an official release and select the image with the same version.
+
+```powershell
+$Version = "2026.11.2"
+Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/openclaw/openclaw/v$Version/docker-compose.yml" -OutFile compose.yaml
+"OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:$Version" | Set-Content -Encoding ascii .env
+```
+
+Save the following as `compose.override.yaml` beside `compose.yaml`. This
+override requires Docker Compose v2.24.4 or newer. It removes the source build,
+publishes the Gateway on host loopback, and gives both services the same state
+and auth-profile key volumes.
+
+```yaml
+services:
+  openclaw-gateway:
+    build: !reset null
+    ports: !override
+      - "127.0.0.1:18789:18789"
+    volumes: !override
+      - openclaw-state:/home/node/.openclaw
+      - openclaw-auth:/home/node/.config/openclaw
+  openclaw-cli:
+    volumes: !override
+      - openclaw-state:/home/node/.openclaw
+      - openclaw-auth:/home/node/.config/openclaw
+
+volumes:
+  openclaw-state:
+  openclaw-auth:
+```
+
+In that directory, pull the image and run onboarding.
+
+```powershell
+docker compose pull
+docker compose run --rm --no-deps --entrypoint node openclaw-gateway openclaw.mjs onboard --mode local --flow advanced --gateway-bind lan --gateway-auth token --skip-health --no-install-daemon
+```
+
+In onboarding, keep port `18789`, select **LAN** for the Gateway bind, and
+leave Tailscale off. The LAN bind lets Docker reach the Gateway inside the
+container. Docker publishes the port on the host's loopback address.
+
+Start the Gateway and print the Control UI URL.
+
+```powershell
+docker compose up -d openclaw-gateway
+docker compose run --rm openclaw-cli dashboard --no-open
+```
+
+Open the printed URL in the browser on the Docker host. The named volumes
+preserve the configuration, workspace, and auth-profile keys when you replace
+the container.
+
 ### Using the Control UI browser
 
 The [Control UI Browser panel](/web/control-ui/panels#browser-panel) displays a
