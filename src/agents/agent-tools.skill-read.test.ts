@@ -135,12 +135,19 @@ describe("recognized skill reads", () => {
       "# Demo\ncomplete instructions",
     );
     for (const window of [{ offset: 2 }, { limit: 1 }, { cursor: 0 }]) {
-      await expect(
-        read.execute("sandbox-skill-window", {
-          path: `/workspace/${relativePath}`,
-          ...window,
-        }),
-      ).rejects.toThrow("opaque cursor");
+      expect(
+        (
+          await read.execute("sandbox-skill-window", {
+            path: `/workspace/${relativePath}`,
+            ...window,
+          })
+        ).details,
+      ).toMatchObject({
+        kind: "skill_page",
+        content: "# Demo\ncomplete instructions",
+        startByte: 0,
+        nextCursor: null,
+      });
     }
   });
 
@@ -160,7 +167,9 @@ describe("recognized skill reads", () => {
     do {
       const result = await tool.execute("page", {
         path: "node://test/SKILL.md",
-        ...(cursor ? { cursor } : {}),
+        cursor: cursor ?? 0,
+        offset: 2,
+        limit: 1,
       });
       if (result.details.kind !== "skill_page") {
         throw new Error("Expected skill page");
@@ -170,6 +179,9 @@ describe("recognized skill reads", () => {
       expect(cache.size).toBe(0);
     } while (cursor);
     expect(restored).toBe(content);
+    await expect(
+      tool.execute("invalid", { path: "node://test/SKILL.md", cursor: "0", offset: 2 }),
+    ).rejects.toThrow("Invalid or stale skill cursor");
     expect((await tool.execute("restart", { path: "node://test/SKILL.md" })).details).toMatchObject(
       { startByte: 0 },
     );

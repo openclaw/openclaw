@@ -906,8 +906,9 @@ and self-contained answers do not require discovery.
   Read every page before applying instructions: pass `nextCursor` as `cursor` until
   it is `null`. Each page preserves exact source bytes, including line endings.
   A changed document invalidates its cursor; restart without a cursor.
-  Recognized skill reads through `read` use the same continuation and reject
-  numeric cursors and line windows. Ordinary file paging is unchanged.
+  Recognized skill reads through `read` use the same continuation. Legacy numeric
+  cursors and line windows are ignored, returning the first page unless a string
+  continuation cursor is supplied. Ordinary file paging is unchanged.
 
 Both tools use the current session's eligible catalog. Disabled, filtered,
 ineligible, and model-hidden skills are not added by search. Existing explicit

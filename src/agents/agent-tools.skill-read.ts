@@ -84,18 +84,12 @@ export function wrapReadToolWithSkillContent(
       if (!normalizedPath || !instructionPath || !instructionContent.has(instructionPath)) {
         return tool.execute(toolCallId, args, signal, onUpdate);
       }
-      if (
-        record?.offset !== undefined ||
-        record?.limit !== undefined ||
-        (record?.cursor !== undefined && typeof record.cursor !== "string")
-      ) {
-        throw new Error(
-          "Skill instruction reads use an opaque cursor only; omit offset, limit, and numeric cursor.",
-        );
-      }
+      // Models still send ordinary file windows for skills. Preserve tolerance for
+      // those windows, while string cursors retain verified continuation semantics.
+      const cursor = typeof record?.cursor === "number" ? undefined : record?.cursor;
       for (;;) {
         const priorDelivery =
-          record?.cursor === undefined ? instructionDeliveryCache?.get(instructionPath) : undefined;
+          cursor === undefined ? instructionDeliveryCache?.get(instructionPath) : undefined;
         if (!priorDelivery) {
           break;
         }
@@ -110,7 +104,7 @@ export function wrapReadToolWithSkillContent(
       }
       let settleDelivery = (_delivered: boolean): void => undefined;
       let delivery: Promise<boolean> | undefined;
-      if (instructionDeliveryCache && record?.cursor === undefined) {
+      if (instructionDeliveryCache && cursor === undefined) {
         delivery = new Promise<boolean>((resolve) => {
           settleDelivery = resolve;
         });
@@ -142,12 +136,14 @@ export function wrapReadToolWithSkillContent(
             ))
           : tool;
       const instructionArgs: Record<string, unknown> = { ...record, path: normalizedPath };
-      delete instructionArgs.cursor;
+      for (const key of ["offset", "limit", "cursor"]) {
+        delete instructionArgs[key];
+      }
       try {
         const result = await runWithSkillReadContext(
           {
             location: instructionPath,
-            cursor: record?.cursor,
+            cursor,
             budget: resolveToolResultBudget(options?.modelContextWindowTokens),
           },
           () => instructionTool.execute(toolCallId, instructionArgs, signal, onUpdate),
@@ -158,7 +154,7 @@ export function wrapReadToolWithSkillContent(
           details.kind === "text"
             ? createSkillInstructionPage(
                 { name: instructionPath, location: instructionPath, content: details.content },
-                record?.cursor,
+                cursor,
                 resolveToolResultBudget(options?.modelContextWindowTokens),
               )
             : undefined;

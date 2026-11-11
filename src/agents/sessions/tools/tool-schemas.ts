@@ -98,7 +98,7 @@ export const readToolInputSchema = Type.Object({
       Type.String({
         minLength: 1,
         description:
-          "Opaque continuation for recognized skill instructions only; do not combine with offset/limit.",
+          "Opaque continuation for recognized skill instructions only; line windows are ignored for skills.",
       }),
     ]),
   ),

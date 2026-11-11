@@ -346,8 +346,8 @@ it.each([
         totalBytes: Buffer.byteLength(hostContent),
         nextCursor: null,
       });
-      await expect(read.execute("range", { path: target, offset: 2, limit: 1 })).rejects.toThrow(
-        "Skill instruction reads use an opaque cursor only",
+      expect((await read.execute("range", { path: target, offset: 2, limit: 1 })).details).toEqual(
+        hostResult.details,
       );
     } else {
       expect(hostResult.details).toEqual({ kind: "text", content: "Host instructions support" });
