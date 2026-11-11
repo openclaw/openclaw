@@ -1,32 +1,12 @@
+import { createTestEntrypoint } from "./runtime-entrypoint.test-support.ts";
+
+const entrypoint = createTestEntrypoint(import.meta.url, "infra");
+
 export const nativeBoundaryTestEntrypoints = {
-  unhandledRejections: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "unhandled-rejections",
-    distWorkerPath: "infra/unhandled-rejections.js",
-  },
-  pluginHooks: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../plugins/hooks",
-    distWorkerPath: "plugins/hooks.js",
-  },
-  emptyPluginRegistry: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../plugins/registry-empty",
-    distWorkerPath: "plugins/registry-empty.js",
-  },
-  cliProfile: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../cli/profile",
-    distWorkerPath: "cli/profile.js",
-  },
-  handoffProcess: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "update-managed-service-handoff-process",
-    distWorkerPath: "infra/update-managed-service-handoff-process.js",
-  },
-  handoffDatabase: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "update-managed-service-handoff-database",
-    distWorkerPath: "infra/update-managed-service-handoff-database.js",
-  },
+  unhandledRejections: entrypoint("unhandled-rejections"),
+  pluginHooks: entrypoint("../plugins/hooks", "plugins/hooks.js"),
+  emptyPluginRegistry: entrypoint("../plugins/registry-empty", "plugins/registry-empty.js"),
+  cliProfile: entrypoint("../cli/profile", "cli/profile.js"),
+  handoffProcess: entrypoint("update-managed-service-handoff-process"),
+  handoffDatabase: entrypoint("update-managed-service-handoff-database"),
 } as const;

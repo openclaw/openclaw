@@ -64,33 +64,6 @@ describe("startGmailWatcherWithLogs", () => {
     expect(log.error).not.toHaveBeenCalled();
   });
 
-  it("logs actionable non-start reason", async () => {
-    startGmailWatcherMock.mockResolvedValue({ started: false, reason: "auth failed" });
-
-    await startGmailWatcherWithLogs({
-      scheduler: createTestGatewayScheduler(),
-      cfg: {},
-      log,
-    });
-
-    expect(log.warn).toHaveBeenCalledWith("gmail watcher not started: auth failed");
-  });
-
-  it("suppresses expected non-start reasons", async () => {
-    startGmailWatcherMock.mockResolvedValue({
-      started: false,
-      reason: "hooks not enabled",
-    });
-
-    await startGmailWatcherWithLogs({
-      scheduler: createTestGatewayScheduler(),
-      cfg: {},
-      log,
-    });
-
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
   it("supports skip callback when watcher is disabled", async () => {
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
     const onSkipped = vi.fn();

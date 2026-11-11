@@ -52,6 +52,7 @@ export type PluginMetadataSnapshotOwnerMaps = {
   providerAuthAliases?: ReadonlyMap<string, readonly PluginProviderAuthAliasCandidate[]>;
   providerEndpoints?: readonly PluginManifestProviderEndpoint[];
   providerRequests?: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
+  providersManagingOwnAvailability?: ReadonlySet<string>;
 };
 
 type PluginMetadataSnapshotMetrics = {

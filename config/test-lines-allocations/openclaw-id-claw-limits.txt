@@ -1,0 +1,2 @@
+46
+# Protocol cap regressions: a membership snapshot at every raised cap validates and one more member hits the list limit.

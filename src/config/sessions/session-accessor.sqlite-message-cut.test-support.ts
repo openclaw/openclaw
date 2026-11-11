@@ -1,4 +1,4 @@
-import { afterEach } from "vitest";
+import { afterEach, beforeEach } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -9,13 +9,22 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
+import { transcriptMessage as message } from "./transcript-message.test-support.js";
 import type { InternalSessionEntry } from "./types.js";
+
+const sessionHeader = (id: string, timestamp: string) => ({
+  type: "session",
+  version: 3,
+  id,
+  timestamp,
+});
 
 export const agentId = "main";
 export const sessionKey = "agent:main:message-cut";
@@ -26,6 +35,7 @@ export const sourceExpectedState = {
 
 export function useSessionMessageCutFixtures() {
   const tempDirs = createTempDirTracker();
+  beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(async () => {
     // Keep drains and resets together: consumer afterEach hooks run before this hook.
     // A synchronous reset there would retire native handles before workers finish.
@@ -33,6 +43,7 @@ export function useSessionMessageCutFixtures() {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     tempDirs.cleanup();
   });
   async function createSiblingSession(params: {
@@ -43,12 +54,7 @@ export function useSessionMessageCutFixtures() {
   }) {
     const scope = { agentId, ...params };
     await upsertSessionEntryCore(scope, { sessionId: params.sessionId, updatedAt: Date.now() });
-    await appendTranscriptEvent(scope, {
-      type: "session",
-      id: params.sessionId,
-      version: 3,
-      timestamp: "2026-07-18T01:00:00.000Z",
-    });
+    await appendTranscriptEvent(scope, sessionHeader(params.sessionId, "2026-07-18T01:00:00.000Z"));
     await appendTranscriptMessage(scope, {
       eventId: `${params.sessionId}-user`,
       message: { role: "user", content: params.headline },
@@ -74,11 +80,7 @@ export function useSessionMessageCutFixtures() {
       cliSessionBindings: { "claude-cli": { sessionId: "claude-conversation" } },
       cliSessionIds: { "claude-cli": "claude-conversation" },
       compactionCount: 2,
-      transcriptByteCompactionLatch: {
-        activeBytes: 20_000,
-        sessionId,
-        maxBytes: 10_000,
-      },
+      transcriptByteCompactionLatch: { activeBytes: 20_000, sessionId, maxBytes: 10_000 },
       contextTokens: 100_000,
       contextTokensSource: "runtime",
       createdVia: "operator",
@@ -98,77 +100,44 @@ export function useSessionMessageCutFixtures() {
       updatedAt: Date.now(),
     };
     await upsertSessionEntryCore(scope, entry);
-    for (const event of [
-      { type: "session", id: sessionId, version: 3, timestamp: "2026-07-18T00:00:00.000Z" },
-      {
-        type: "message",
-        id: "user-1",
-        parentId: null,
-        timestamp: "2026-07-18T00:00:01.000Z",
-        message: { role: "user", content: "first prompt" },
-      },
-      {
-        type: "message",
-        id: "assistant-1",
-        parentId: "user-1",
-        timestamp: "2026-07-18T00:00:02.000Z",
-        message: { role: "assistant", content: "first answer" },
-      },
-      {
-        type: "message",
-        id: "user-2",
-        parentId: "assistant-1",
-        timestamp: "2026-07-18T00:00:03.000Z",
-        message: {
-          role: "user",
-          content: [
-            { type: "text", text: "second prompt" },
-            { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+    const startedAt = Date.parse("2026-07-18T00:00:00.000Z");
+    await appendTranscriptEvent(scope, sessionHeader(sessionId, new Date(startedAt).toISOString()));
+    const messages = [
+      message("user-1", null, { role: "user", content: "first prompt" }),
+      message("assistant-1", "user-1", { role: "assistant", content: "first answer" }),
+      message("user-2", "assistant-1", {
+        role: "user",
+        content: [
+          { type: "text", text: "second prompt" },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        ],
+        __openclaw: {
+          media: [
+            { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+            { path: "/state/media/inbound/notes.txt", contentType: "text/plain" },
           ],
-          __openclaw: {
-            media: [
-              { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
-              { path: "/state/media/inbound/notes.txt", contentType: "text/plain" },
-            ],
-          },
         },
-      },
-      {
-        type: "message",
-        id: "assistant-2",
-        parentId: "user-2",
-        timestamp: "2026-07-18T00:00:04.000Z",
-        message: { role: "assistant", content: "second answer" },
-      },
-      {
-        type: "message",
-        id: "off-path-user",
-        parentId: "user-1",
-        timestamp: "2026-07-18T00:00:05.000Z",
-        message: { role: "user", content: "inactive prompt" },
-      },
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "off-path-user",
-        timestamp: "2026-07-18T00:00:06.000Z",
-        targetId: options.activeLeafTarget ?? "assistant-2",
-      },
-    ]) {
-      if (event.type === "message") {
-        await appendTranscriptMessage(scope, {
-          eventId: event.id,
-          message: event.message,
-          now: Date.parse(event.timestamp),
-          parentId: event.parentId,
-        });
-      } else {
-        await appendTranscriptEvent(scope, event);
-      }
+      }),
+      message("assistant-2", "user-2", { role: "assistant", content: "second answer" }),
+      message("off-path-user", "user-1", { role: "user", content: "inactive prompt" }),
+    ];
+    for (const [index, event] of messages.entries()) {
+      await appendTranscriptMessage(scope, { ...event, now: startedAt + (index + 1) * 1_000 });
     }
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "off-path-user",
+      timestamp: new Date(startedAt + 6_000).toISOString(),
+      targetId: options.activeLeafTarget ?? "assistant-2",
+    });
     // Leaf selection schedules projection writes; read/close tests need setup ownership settled.
     await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
-    return { env, scope };
+    return {
+      env,
+      scope,
+      params: { agentId, env, sessionKey: scope.sessionKey, entryId: "user-2" },
+    };
   }
 
   return { tempDirs, createSession, createSiblingSession };

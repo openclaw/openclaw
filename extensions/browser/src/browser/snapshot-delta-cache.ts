@@ -23,12 +23,14 @@ export type SnapshotDeltaFamily = {
   maxChars?: number;
 };
 
-type SnapshotDeltaEntry = {
+type SnapshotDeltaScope = {
   profile: string;
   targetId: string;
   documentIdentity: string;
-  keys: Set<string>;
+  family: SnapshotDeltaFamily;
 };
+
+type SnapshotDeltaEntry = Omit<SnapshotDeltaScope, "family"> & { keys: Set<string> };
 
 const cacheByState = new WeakMap<BrowserServerState, Map<string, SnapshotDeltaEntry>>();
 
@@ -42,22 +44,13 @@ function getCache(ctx: BrowserRouteContext): Map<string, SnapshotDeltaEntry> {
   return cache;
 }
 
-function cacheKey(params: {
-  profile: string;
-  targetId: string;
-  family: SnapshotDeltaFamily;
-}): string {
+function cacheKey(params: SnapshotDeltaScope): string {
   return JSON.stringify([params.profile, params.targetId, params.family]);
 }
 
 export function getPreviousSnapshotKeys(
   ctx: BrowserRouteContext,
-  params: {
-    profile: string;
-    targetId: string;
-    documentIdentity: string;
-    family: SnapshotDeltaFamily;
-  },
+  params: SnapshotDeltaScope,
 ): ReadonlySet<string> | undefined {
   const cache = getCache(ctx);
   const key = cacheKey(params);
@@ -67,24 +60,18 @@ export function getPreviousSnapshotKeys(
   }
   // Delta markers are same-document only. Navigation resets the baseline so a
   // replacement document is not reported as a tree full of newly appeared elements.
-  if (entry.documentIdentity !== params.documentIdentity) {
-    cache.delete(key);
+  const sameDocument = entry.documentIdentity === params.documentIdentity;
+  cache.delete(key);
+  if (!sameDocument) {
     return undefined;
   }
-  cache.delete(key);
   cache.set(key, entry);
   return entry.keys;
 }
 
 export function recordSnapshotKeys(
   ctx: BrowserRouteContext,
-  params: {
-    profile: string;
-    targetId: string;
-    documentIdentity: string;
-    family: SnapshotDeltaFamily;
-    refs: RoleRefMap;
-  },
+  params: SnapshotDeltaScope & { refs: RoleRefMap },
 ): void {
   const cache = getCache(ctx);
   const key = cacheKey(params);

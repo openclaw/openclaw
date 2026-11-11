@@ -21,7 +21,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/steipete/ElevenLabsKit", exact: "0.1.3"),
-        .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.1"),
+        .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.12.0"),
         .package(url: "https://github.com/mgriebling/SwiftMath", exact: "1.7.3"),
         .package(url: "https://github.com/swiftlang/swift-markdown", exact: "0.9.0"),
     ],
@@ -93,6 +93,7 @@ let package = Package(
             name: "OpenClawNativeStateTests",
             dependencies: ["OpenClawNativeState"],
             path: "Tests/OpenClawNativeStateTests",
+            resources: [.copy("Fixtures")],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),

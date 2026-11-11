@@ -180,12 +180,22 @@ describe("normalizeSlackOutboundText", () => {
       ["renders bullet lists", "- one\n- two", "• one\n• two"],
       ["renders ordered lists with numbering", "2. two\n3. three", "2. two\n3. three"],
       ["renders headings as bold text", "# Title", "*Title*"],
-      ["renders blockquotes", "> Quote", "> Quote"],
+      ["renders blockquotes", "> > Quote\n> > more", "> > Quote\n> > more"],
     ] as const;
     for (const [name, input, expected] of cases) {
       expect(normalizeSlackOutboundText(input), name).toBe(expected);
     }
   });
+
+  it.each(["#installation"])(
+    "renders control-sigil Markdown link destinations as labels: %s",
+    (href) => {
+      const markdown = `See [Install](${href})`;
+
+      expect(normalizeSlackOutboundText(markdown)).toBe("See Install");
+      expect(markdownToSlackMrkdwnChunks(markdown, 4_000)).toEqual(["See Install"]);
+    },
+  );
 
   it("handles nested list items", () => {
     const res = normalizeSlackOutboundText("- item\n  - nested");

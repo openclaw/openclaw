@@ -1,5 +1,8 @@
 {
   "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".."
+  },
   // This editor/lint graph includes tests; retain their ambient augmentations.
   "files": [
     "../src/config/sessions/session-entry.test-compat.d.ts",

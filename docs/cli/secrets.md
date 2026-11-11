@@ -44,7 +44,7 @@ Related: [Secrets Management](/gateway/secrets) · [1Password plugin](/plugins/o
 
 ## Shared secret store
 
-`openclaw secrets store` writes directly to the local shared state database. The store is Gateway-wide and team-scoped, and `--scope team` is the only accepted value. `--scope me` exits `2` with `Identity scope is not supported yet; use --scope team.`
+`openclaw secrets store` routes writes through the Gateway that owns the local state directory. With the Gateway stopped, it takes exclusive offline ownership until the write and cleanup settle. If the running Gateway is older or cannot be reached, the command refuses without a local fallback; update or stop that Gateway before retrying. The store is Gateway-wide and team-scoped, and `--scope team` is the only accepted value. `--scope me` exits `2` with `Identity scope is not supported yet; use --scope team.`
 
 Entries also arrive from **Settings -> Secrets** in the Control UI, and from the agent's [`secrets` tool](/tools/secrets). That tool asks you to type a credential into a masked prompt. It stores the credential without the value reaching the model.
 
@@ -60,6 +60,7 @@ Naming and value rules:
 
 - Names must match `^[A-Z][A-Z0-9_]{0,127}$`.
 - Values are limited to 64 KiB (65,536 UTF-8 bytes). An oversized value exits `2` whether it arrives from stdin, `--value`, or `--value-file`.
+- File and stdin inputs must be valid UTF-8. Malformed input exits `2` before changing the store; convert a backup of the input to UTF-8 before retrying.
 - A `secret` entry may not be empty, because an empty credential cannot be diagnosed later. `get` refuses secret kinds, and listings mask them. `env` entries may be empty.
 - Known redaction placeholders such as `__OPENCLAW_REDACTED__` cannot be stored as values. CLI `set` and `import` skip redacted inputs for existing usable entries with an explicit unchanged message; a placeholder without a usable existing entry exits `2`.
 - `--kind secret|env` explicitly changes an entry's kind. Otherwise `set` and `import` preserve the entry's current kind when saving, including protection changes made while input or confirmation is pending. Only new names use automatic detection: names ending in a common credential suffix such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
@@ -91,14 +92,14 @@ openclaw secrets store set TLS_PRIVATE_KEY \
   --value-file ./client-key.pem
 ```
 
-`set` is idempotent and updates an existing name. Add `--dry-run` to validate and preview the operation without writing. A successful write reminds you to run `openclaw secrets reload` before a config-referenced value can take effect.
+`set` creates or updates a name without duplicate entries. Add `--dry-run` to validate and preview the operation without writing. An online write refreshes affected config references in the Gateway. If that refresh fails after saving, the error reports the saved change and directs you to `openclaw secrets reload`; it does not replay the write locally.
 
 `audit` reports previously stored or resolved placeholders as `PLACEHOLDER_VALUE`
 and counts them as unresolved credentials (exit `2`). For a corrupt store-backed
 Gateway token, run `openclaw doctor --fix`, restart the Gateway, and reconnect or
 re-pair devices. See [Gateway token recovery](/cli/doctor/recovery#invalid-gateway-tokens).
 
-Secret egress substitution fails closed until each secret has at least one exact allowed host. Bind or replace hosts with repeatable `--allow-host` flags. This policy-only form does not ask for or replace an existing secret value:
+Secret egress substitution is blocked until each secret has at least one exact allowed host. Bind or replace hosts with repeatable `--allow-host` flags. This policy-only form does not ask for or replace an existing secret value:
 
 ```bash
 openclaw secrets store set OPENAI_API_KEY --allow-host api.openai.com
@@ -120,6 +121,8 @@ openclaw secrets store get LOG_LEVEL
 
 Secret values never appear in human, `--json`, or `--plain` output. `store get` refuses a `secret` entry as write-only by design and exits `2`. It exits `3` when the name does not exist. Environment-kind values are readable.
 
+Human-readable `store list` and `store get` output escapes terminal controls in environment values. Use `--json` or `--plain` when you need the original value.
+
 Team-scoped `env` entries reach Gateway-hosted commands run by OpenClaw's own exec tool, including OpenClaw Code Mode calls into `openclaw:core:exec` and Codex `gateway_exec`. Explicit per-call env wins over store values. Sandbox, remote `node`, ACP, and Codex-native shell execution do not receive them. `secret` entries stay out of subprocesses by default. With `secrets.egressProxy.enabled: true`, Gateway-hosted exec receives only authenticated sentinels and the Gateway replaces them at HTTPS egress. See [Secret egress proxy](/gateway/secrets#secret-egress-proxy).
 
 <Warning>
@@ -134,7 +137,7 @@ openclaw secrets store rm OLD_TOKEN LEGACY_PASSWORD --yes
 openclaw secrets store rm OLD_TOKEN --dry-run
 ```
 
-Removal is idempotent, so a missing name succeeds quietly. Without `--yes`, the CLI asks for confirmation. Removed rows are soft-deleted and purged after 30 days.
+Removing a missing name succeeds quietly. Without `--yes`, the CLI asks for confirmation. Removed rows are soft-deleted and purged after 30 days.
 
 ### Import dotenv files
 
@@ -224,7 +227,7 @@ Flags:
 Notes:
 
 - Requires an interactive TTY.
-- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store. The canonical supported surface is [SecretRef Credential Surface](/reference/secretref-credential-surface).
+- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store. The supported fields are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 - Supports creating new auth profile mappings directly in the picker flow.
 - Runs preflight resolution before apply.
 - Generated plans enable `scrubEnv` and `scrubAuthProfilesForProviderTargets`. `scrubLegacyAuthJson` stays disabled, because Doctor owns legacy `auth.json` migration. Apply is one-way for scrubbed plaintext values.
@@ -235,7 +238,7 @@ Notes:
 
 ### Exec provider safety
 
-Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path. Use `trustedDirs` to restrict executables to approved directories. Run `openclaw config validate` on the Gateway host to check manual exec command paths without executing providers. On Windows, provider paths fail closed when ACL verification is unavailable, with no provider-level bypass.
+Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path. Use `trustedDirs` to restrict executables to approved directories. Run `openclaw config validate` on the Gateway host to check manual exec command paths without executing providers. On Windows, provider paths are rejected when ACL verification is unavailable, with no provider-level bypass.
 
 ## Apply a saved plan
 
@@ -249,7 +252,7 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 
 `--dry-run` validates preflight without writing files. Exec SecretRef checks are skipped by default in dry-run. Write mode rejects plans containing exec SecretRefs/providers unless `--allow-exec`. Use `--allow-exec` to opt in to exec provider checks/execution in either mode.
 
-`--from` must point to a regular file no larger than 16 MiB (16,777,216 bytes). The byte limit applies to the complete serialized file, including whitespace.
+`--from` must point to a regular file containing valid UTF-8 no larger than 16 MiB (16,777,216 bytes). The byte limit applies to the complete serialized file, including whitespace.
 
 What `apply` may update:
 

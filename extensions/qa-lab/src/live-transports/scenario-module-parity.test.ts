@@ -80,10 +80,15 @@ describe("live transport scenario module routing", () => {
       expect(Reflect.get(runtime, runnerName)).toBeTypeOf("function");
 
       const bindings = readQaScenarioPack().scenarios.flatMap((scenario) => {
-        if (scenario.execution.kind !== "flow" || scenario.execution.channel !== channel) {
+        if (
+          scenario.execution.kind !== "flow" ||
+          scenario.execution.channel !== channel ||
+          scenario.execution.flowKind !== "module"
+        ) {
           return [];
         }
         const call = readScenarioModuleCall(scenario, modulePath);
+        expect(call, scenario.id).toBeDefined();
         return call ? [{ call, scenarioId: scenario.id }] : [];
       });
 

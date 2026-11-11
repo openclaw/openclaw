@@ -6,9 +6,7 @@ import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-ca
 
 registerSkillWorkshopEnglish();
 
-export type SkillWorkshopMode = "off" | "auto";
-
-const CONFIG_CHANGED_SINCE_LOAD = "config changed since last load";
+export type SkillWorkshopMode = "off" | "propose" | "auto";
 
 export function resolveWorkshopMode(
   runtimeConfig: RuntimeConfigCapability | undefined,
@@ -18,39 +16,34 @@ export function resolveWorkshopMode(
     return null;
   }
   // The Gateway defaults an absent mode to auto; any other value learns nothing.
-  const configured = asRecord(asRecord(asRecord(config.skills)?.workshop)?.autonomous)?.mode;
-  return configured === undefined || configured === "auto" ? "auto" : "off";
+  const entry = asRecord(asRecord(asRecord(config.plugins)?.entries)?.["skill-workshop"]);
+  const configured = asRecord(asRecord(entry?.config)?.autonomous)?.mode;
+  if (configured === undefined || configured === "auto") {
+    return "auto";
+  }
+  return configured === "propose" ? "propose" : "off";
 }
 
-/** Patch the canonical config key; returns an error message or null on success. */
+/** True only when the loaded config turns every plugin off; unknown stays false. */
+export function arePluginsDisabled(runtimeConfig: RuntimeConfigCapability | undefined): boolean {
+  const config = resolveEditableSnapshotConfig(runtimeConfig?.state.configSnapshot);
+  return asRecord(config?.plugins)?.enabled === false;
+}
+
+/** Patch the plugin's own config key; returns an error message or null on success. */
 export async function setWorkshopMode(
   runtimeConfig: RuntimeConfigCapability,
   mode: SkillWorkshopMode,
-  isCurrent: () => boolean,
 ): Promise<string | null> {
   const patch = {
-    raw: { skills: { workshop: { autonomous: { mode } } } },
-    note:
-      mode === "auto" ? "Enable Skill Workshop auto-learning" : "Disable Skill Workshop learning",
+    raw: { plugins: { entries: { "skill-workshop": { config: { autonomous: { mode } } } } } },
+    note: {
+      auto: "Enable Skill Workshop auto-learning",
+      propose: "Have Skill Workshop propose drafts",
+      off: "Disable Skill Workshop learning",
+    }[mode],
   };
-  let patched = await runtimeConfig.patch(patch);
-  if (!isCurrent()) {
-    return null;
-  }
-  if (!patched && runtimeConfig.state.lastError?.includes(CONFIG_CHANGED_SINCE_LOAD)) {
-    // This scalar switch is safe to replay after refreshing the optimistic-lock hash.
-    await runtimeConfig.refresh();
-    if (!isCurrent()) {
-      return null;
-    }
-    if (runtimeConfig.state.lastError) {
-      return runtimeConfig.state.lastError;
-    }
-    patched = await runtimeConfig.patch(patch);
-    if (!isCurrent()) {
-      return null;
-    }
-  }
+  const patched = await runtimeConfig.patch(patch);
   if (!patched) {
     return runtimeConfig.state.lastError ?? t("skillWorkshop.mode.updateError");
   }

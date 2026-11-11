@@ -1,6 +1,6 @@
 export { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 export {
-  readAmbientTranscriptWatermark,
+  readAmbientTranscriptWatermarkAsync,
   readSessionUpdatedAtAsync,
   resolveAmbientTranscriptWatermarkKey,
   resolveStorePath,

@@ -3,6 +3,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { formatErrorMessageWithCauses } from "./lib/error-format.mts";
 import { parseReleaseVerifyBetaArgs, verifyBetaRelease } from "./lib/release-beta-verifier.ts";
 import { createPluginNpmPublicationReadback } from "./plugin-npm-publication-readback.mjs";
 
@@ -20,6 +21,8 @@ async function main() {
       plugins: args.pluginSelection,
       token: process.env.GH_TOKEN,
       cacheDir,
+      parentRunId: Number(process.env.GITHUB_RUN_ID),
+      parentRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
     });
     for (const line of await verifyBetaRelease(args, { pluginNpmReadback })) {
       console.log(line);
@@ -30,7 +33,7 @@ async function main() {
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(formatErrorMessageWithCauses(error));
   console.error("[release-verify-publish] FAILED (exit 1)");
   process.exitCode = 1;
 });

@@ -8,7 +8,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -19,9 +19,9 @@ import { sweepTombstonedCronRunRemnantsForStore } from "./cleanup-tombstones.js"
 import { patchSessionEntryCore, replaceSessionEntry } from "./session-accessor.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
-import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -999,7 +999,7 @@ describe("sweepTombstonedCronRunRemnants", () => {
 
   it("keeps a placeholder whose own key holds a work admission", async () => {
     const sessionId = await seedCanonicalPlaceholder({});
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [CRON_RUN_KEY],
       assertAllowed: () => {},
@@ -1077,7 +1077,7 @@ describe("sweepTombstonedCronRunRemnants", () => {
     const sessionId = await seedCanonicalPlaceholder({});
     // Admissions carry either the live session key or the backing generation id;
     // this is the id-shaped half, which the narrowed probe answers in memory.
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [sessionId],
       assertAllowed: () => {},

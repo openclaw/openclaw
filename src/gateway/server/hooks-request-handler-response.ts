@@ -4,16 +4,17 @@ import { sendJson } from "../http-common.js";
 
 // gog's hook HTTP client aborts after 10 seconds and treats the abort as a
 // delivery failure. Keep the response deadline below that producer timeout.
-export const HOOK_FAN_OUT_RESPONSE_DEADLINE_MS = 8_000;
+const HOOK_FAN_OUT_RESPONSE_DEADLINE_MS = 8_000;
 
 export type WakeResult = { eventOutcome: "queued" | "coalesced" };
+
+export class HookWakeUnavailableError extends Error {}
 
 const FAN_OUT_PENDING = Symbol("hook-fanout-pending");
 type FanOutSettled = HookAgentDispatchResult | typeof FAN_OUT_PENDING;
 
 export async function settleFanOutDispatches(
   dispatches: Array<Promise<HookAgentDispatchResult>>,
-  deadlineMs: number,
 ): Promise<FanOutSettled[]> {
   // Rejections must settle to failures even when the race already resolved
   // pending, or the detached dispatch promise rejects unhandled later.
@@ -26,15 +27,15 @@ export async function settleFanOutDispatches(
   );
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<typeof FAN_OUT_PENDING>((resolve) => {
-    deadlineTimer = setTimeout(() => resolve(FAN_OUT_PENDING), deadlineMs);
-    deadlineTimer.unref?.();
+    deadlineTimer = setTimeout(
+      () => resolve(FAN_OUT_PENDING),
+      HOOK_FAN_OUT_RESPONSE_DEADLINE_MS,
+    ).unref();
   });
   try {
     return await Promise.all(guarded.map((dispatch) => Promise.race([dispatch, deadline])));
   } finally {
-    if (deadlineTimer) {
-      clearTimeout(deadlineTimer);
-    }
+    clearTimeout(deadlineTimer);
   }
 }
 

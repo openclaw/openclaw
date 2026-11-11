@@ -14,8 +14,9 @@ export function createBoundedLineFramer(maxBytes: number, overflowMessage: strin
     *push(chunk: Buffer): Generator<Buffer> {
       let offset = 0;
       while (offset < chunk.length) {
-        const newline = chunk.indexOf(10, offset);
-        const end = newline === -1 ? chunk.length : newline;
+        const searchable = chunk.subarray(offset, offset + maxBytes - byteLength + 1);
+        const newline = searchable.indexOf(10);
+        const end = offset + (newline === -1 ? searchable.length : newline);
         byteLength += end - offset;
         if (byteLength > maxBytes) {
           throw new Error(overflowMessage);
@@ -26,7 +27,7 @@ export function createBoundedLineFramer(maxBytes: number, overflowMessage: strin
         }
         const line = Buffer.concat(chunks, byteLength);
         clear();
-        offset = newline + 1;
+        offset = end + 1;
         // A caller may retire after this frame; do not inspect later bytes until it resumes.
         yield line;
       }

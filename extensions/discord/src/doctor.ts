@@ -10,7 +10,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { resolveDefaultDiscordAccountId } from "./accounts.js";
 import { normalizeCompatibilityConfig as normalizeDiscordCompatibilityConfig } from "./doctor-contract.js";
-import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
 import { discordVoiceTranscriptsSourceProvider } from "./voice/transcripts-source.js";
 
@@ -223,25 +222,23 @@ function collectDiscordTranscriptsAutoStartWarnings(cfg: OpenClawConfig): string
 
 function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
   const hits: Array<{ path: string; entry: string }> = [];
-  const addHits = (pathLabel: string, list: unknown) => {
-    if (!Array.isArray(list)) {
-      return;
-    }
-    for (const entry of list) {
-      const text = normalizeOptionalString(String(entry)) ?? "";
-      if (!text || text === "*" || !isDiscordMutableAllowEntry(text)) {
-        continue;
-      }
-      hits.push({ path: pathLabel, entry: text });
-    }
-  };
-
   for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "discord")) {
     if (scope.dangerousNameMatchingEnabled) {
       continue;
     }
     for (const ref of collectDiscordIdLists(scope.prefix, scope.account, true)) {
-      addHits(ref.pathLabel, ref.holder[ref.key]);
+      const pathLabel = ref.pathLabel;
+      const list = ref.holder[ref.key];
+      if (!Array.isArray(list)) {
+        continue;
+      }
+      for (const entry of list) {
+        const text = normalizeOptionalString(String(entry)) ?? "";
+        if (!text || text === "*" || !isDiscordMutableAllowEntry(text)) {
+          continue;
+        }
+        hits.push({ path: pathLabel, entry: text });
+      }
     }
   }
 
@@ -267,7 +264,6 @@ export const discordDoctor: ChannelDoctorAdapter = {
   groupModel: "route",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
-  legacyConfigRules: DISCORD_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: normalizeDiscordCompatibilityConfig,
   collectPreviewWarnings: ({ cfg, doctorFixCommand, env }) => [
     ...collectDiscordMissingEnvTokenWarnings({ cfg, env }),

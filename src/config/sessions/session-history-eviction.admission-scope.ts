@@ -1,6 +1,8 @@
 import { toUSVString } from "node:util";
+import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
+import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
-import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { collectSessionControllerTargets } from "../../sessions/session-controller.lifecycle.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
@@ -38,8 +40,12 @@ export function collectAdmissionProtectedCandidateSessionIds(params: {
   if (params.candidateSessionIds.length === 0) {
     return protectedSessionIds;
   }
-  const admissionIdentities =
-    collectActiveSessionWorkAdmissions().get(params.storePath) ?? new Set<string>();
+  // Same identity set the store-wide form protects: this store's live controller
+  // targets plus every projected agent-run session key.
+  const admissionIdentities = new Set([
+    ...(collectSessionControllerTargets(undefined, params.storePath).get(params.storePath) ?? []),
+    ...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
+  ]);
   if (admissionIdentities.size === 0) {
     return protectedSessionIds;
   }

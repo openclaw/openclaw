@@ -30,7 +30,7 @@ export async function preparePackageSwapLocalOverrides(
   // Reject unsupported topology while the original service can still serve.
   await readPackageDistContentInventoryIfPresent(packageRoot);
   await collectPackageDistInventory(packageRoot, { includePackageExcludedFiles: true });
-  const runtimeUrls = options.reapply
+  const runtime = options.reapply
     ? await prepareLocalOverrideRuntime({
         sourceRoot: params.targetSwapRoot,
         destinationRoot: params.backupRoot,
@@ -56,7 +56,7 @@ export async function preparePackageSwapLocalOverrides(
       packageRoot: roots?.packageRoot ?? params.stage.packageRoot,
       plan,
       reapply: options.reapply,
-      runtimeUrls,
+      runtime,
     });
     params.onLocalOverrides?.(result);
     if (result.status === "error") {

@@ -121,8 +121,5 @@ export function adoptRuntimeChannelRegistrations(
     changed = true;
     return { ...scoped, borrowedRuntimeRecord: donorRecord };
   });
-  if (!source.isCurrent()) {
-    throw new Error("Channel runtime owner changed during prepared registry admission");
-  }
   return changed ? { ...target, channels } : target;
 }

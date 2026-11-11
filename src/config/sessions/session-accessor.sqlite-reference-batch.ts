@@ -1,10 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
-  getAdmittedSqliteSchemaFacts,
-  installSqliteTempTrackingSchema,
-  readSqliteDataVersion,
-} from "../../infra/sqlite-schema-facts.js";
+  cacheValidityTokensEqual,
+  readSessionEntryCacheValidityToken,
+  type SqliteSessionEntryRevision,
+} from "./session-accessor.sqlite-entry-revision.js";
 
 /**
  * Connection-local memo for reference analysis over a bounded set of candidate
@@ -18,34 +17,35 @@ import {
  * than re-scan to discover, that the answer is still current at each later
  * boundary.
  *
- * The proof is a two-part connection-local token:
+ * The proof is the store's shared connection validity token
+ * (`readSessionEntryCacheValidityToken`), the same one the session entry cache
+ * keys its own reuse on:
  *
- * - `PRAGMA data_version` changes whenever another connection commits, which is
- *   the only way an external writer can appear.
- * - A TEMP-table generation counter, bumped by TEMP triggers, observes writes on
- *   *this* connection, which `data_version` deliberately does not report.
+ * - the shared sibling write revision advances whenever another connection
+ *   commits, which is the only way an external writer can appear;
+ * - the writer's native mutation revision observes writes on *this*
+ *   connection, which the sibling revision deliberately does not report;
+ * - the admitted schema version covers schema replacement.
  *
- * Both halves are connection-local in the strict sense: a reading is only
+ * The halves are connection-local in the strict sense: a reading is only
  * comparable against another reading from the *same* handle. A replacement
- * connection restarts `data_version` from its own baseline and opens an empty
- * TEMP schema whose counter begins at zero, so two readings taken across a
+ * connection restarts its revision baselines, so two readings taken across a
  * close and reopen can be equal even though another connection committed a
  * reference in between — the numbers reset rather than advance, which is
  * indistinguishable from nothing having happened. A batch therefore records the
  * handle that produced its token and is rebuilt on a replacement instead of
- * being trusted across one.
+ * being trusted across one. `cacheValidityTokensEqual` additionally refuses any
+ * token whose shared half the admission owner could not report, so an
+ * unprovable reading never matches.
  *
- * The triggers count `INSERT` and `UPDATE` only. A `DELETE` can remove a
- * reference but never create one, so a memo taken before a delete stays
- * conservative: it may still claim a candidate is referenced when it no longer
- * is, which abandons a reclaim, and can never claim a referenced candidate is
- * free. That asymmetry is what lets a sweep delete its own candidates without
- * invalidating the batch it is working through.
+ * The native mutation revision observes every write on this connection,
+ * including deletes. A `DELETE` can remove a reference but never create one, so
+ * treating it as invalidating is conservative in the safe direction: a rebuilt
+ * pass can only find fewer holders. It does mean a sweep that reclaims its own
+ * candidates re-primes at those boundaries rather than carrying one pass across
+ * them, which costs amortization and never correctness.
  */
-type SessionReferenceToken = {
-  dataVersion: number;
-  referenceGeneration: number;
-};
+type SessionReferenceToken = SqliteSessionEntryRevision;
 
 type SessionReferenceBatch = {
   /**
@@ -87,82 +87,19 @@ const MAX_TRACKED_OWNERS_PER_ID = 2;
 // token came from: a replacement reprimes rather than inheriting a proof that
 // cannot describe it.
 const activeBatches = new Map<string, SessionReferenceBatch>();
-const referenceTrackerSchemaVersions = new WeakMap<DatabaseSync, number>();
 
 /**
- * Installs the connection-local generation counter, once per admitted schema.
+ * Reads the validity token for `database`.
  *
- * The schema marker comes from the admitted facts rather than from a
- * `PRAGMA schema_version` read of its own. Reading the pragma here meant every
- * token read — candidate preparation, each in-transaction deletion check, every
- * other reference lookup — paid a schema inspection the schema owner had
- * already done and was already tracking, which is the one thing runtime
- * consumers of an admitted connection are not supposed to do. The owner
- * replaces its facts on any schema change, so consuming `schema.schemaVersion`
- * keeps exactly the reinstall trigger this had before while removing the
- * repeated inspection. The `data_version` half of the validity token is
- * untouched: it is still read fresh on every token, because an external commit
- * does not change the schema.
- *
- * The TEMP shapes themselves go through `installSqliteTempTrackingSchema`,
- * which is the owner's non-revoking install for fixed tracking schemas — a
- * hand-rolled `CREATE TEMP` is ordinary TEMP DDL to the owner and revokes the
- * facts it is being keyed on. Only INSERT and UPDATE are observed: a DELETE can
- * remove a reference but never create one, so a memo taken before a delete
- * stays conservative (see the module comment above).
+ * This is the store-wide connection token the session entry cache already
+ * keys its own reuse on: the shared sibling write revision for other
+ * connections' commits, plus the writer's native mutation revision for this
+ * connection's own writes, plus the admitted schema version. It throws when
+ * either the admitted facts or a tracked writer is missing; both callers treat
+ * a failed token read as "cannot prove" and fall back to reading the store.
  */
-function ensureSessionReferenceTracker(database: DatabaseSync): void {
-  const schema = getAdmittedSqliteSchemaFacts(database);
-  if (!schema) {
-    throw new Error("SQLite session reference tracking requires admitted schema facts");
-  }
-  const { schemaVersion } = schema;
-  const trackedSchemaVersion = referenceTrackerSchemaVersions.get(database);
-  if (trackedSchemaVersion === schemaVersion) {
-    return;
-  }
-  // A main-schema change advances the generation before reinstalling its raw-DML
-  // observers, so dropping and recreating them cannot make an older memo look current.
-  installSqliteTempTrackingSchema(database, {
-    kind: "generation",
-    table: "openclaw_session_reference_generation",
-    triggers: ["node", "window"].flatMap((subject) =>
-      (["INSERT", "UPDATE"] as const).map((operation) => ({
-        name: `openclaw_session_reference_generation_${subject}_${operation.toLowerCase()}`,
-        table: subject === "node" ? "session_nodes" : "session_windows",
-        operation,
-        enabled: true,
-      })),
-    ),
-    advance: trackedSchemaVersion !== undefined,
-  });
-  // A rolled-back schema change can reuse its version on retry after SQLite removes the triggers.
-  if (!database.isTransaction) {
-    referenceTrackerSchemaVersions.set(database, schemaVersion);
-  } else {
-    stageSqliteTransactionState(database, {
-      stage: () => referenceTrackerSchemaVersions.set(database, schemaVersion),
-      rollback: () => referenceTrackerSchemaVersions.delete(database),
-      commit: () => {},
-    });
-  }
-}
-
 function readSessionReferenceToken(database: DatabaseSync): SessionReferenceToken {
-  ensureSessionReferenceTracker(database);
-  const row =
-    /* sqlite-allow-raw: the generation counter lives in the TEMP schema, outside the generated Kysely types. */ database
-      .prepare("SELECT generation FROM temp.openclaw_session_reference_generation WHERE id = 1")
-      // node:sqlite hands back an untyped row record for this TEMP-schema read.
-      // SAFETY: the asserted shape types the column as `unknown`, so the assertion grants no value type; the `typeof` guard below is the only thing that admits it.
-      .get() as { generation?: unknown };
-  if (typeof row.generation !== "number") {
-    throw new Error("SQLite session reference generation is unavailable");
-  }
-  return {
-    dataVersion: readSqliteDataVersion(database),
-    referenceGeneration: row.generation,
-  };
+  return readSessionEntryCacheValidityToken(database);
 }
 
 /** Owner collector handed to a priming scan. */
@@ -261,8 +198,8 @@ export async function withSessionReferenceBatch<T>(
 }
 
 /**
- * Returns the batch when a fresh reading from its own handle proves no insert
- * or update landed since the priming scan, and drops it when one did.
+ * Returns the batch when a fresh reading from its own handle proves no write
+ * landed since the priming scan, and drops it when one did.
  */
 function revalidateSessionReferenceBatch(
   batch: SessionReferenceBatch,
@@ -275,12 +212,9 @@ function revalidateSessionReferenceBatch(
   } catch {
     return undefined;
   }
-  if (
-    token.dataVersion !== batch.token.dataVersion ||
-    token.referenceGeneration !== batch.token.referenceGeneration
-  ) {
-    // An insert or update since the priming scan could have created a reference,
-    // so the caller re-reads instead of trusting the memo.
+  if (!cacheValidityTokensEqual(batch.token, token)) {
+    // A write since the priming scan could have created a reference, so the
+    // caller re-reads instead of trusting the memo.
     activeBatches.delete(path);
     return undefined;
   }

@@ -1,44 +1,23 @@
-import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
-import { createSmsTestAccount, createSmsTestDeliveryRecorder } from "./webhook.test-support.js";
+import {
+  createSmsTestAccount,
+  createSmsTestDeliveryRecorder,
+  signSmsTestForm,
+} from "./webhook.test-support.js";
 
-type TestResponse = ServerResponse & {
-  setHeaderMock: ReturnType<typeof vi.fn>;
-};
-
-function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSmsAccount {
-  return createSmsTestAccount({ accountId: "default", ...overrides });
-}
-
-function createSignedDeliveryPayload(params: { account: ResolvedSmsAccount; messageSid: string }): {
-  body: string;
-  signature: string;
-} {
+function createRequest(account: ResolvedSmsAccount, index: number): IncomingMessage {
   const form = {
-    AccountSid: params.account.accountSid,
-    From: params.account.fromNumber,
+    AccountSid: account.accountSid,
+    From: account.fromNumber,
     To: "+15551234567",
-    MessageSid: params.messageSid,
+    MessageSid: `SM${index.toString(16).padStart(32, "0")}`,
     MessageStatus: "sent",
   };
-  const body = new URLSearchParams(form).toString();
-  const signatureInput =
-    params.account.publicWebhookUrl +
-    Object.keys(form)
-      .toSorted()
-      .map((key) => `${key}${form[key as keyof typeof form]}`)
-      .join("");
-  return {
-    body,
-    signature: createHmac("sha1", params.account.authToken).update(signatureInput).digest("base64"),
-  };
-}
-
-function createRequest(body: string, signature: string): IncomingMessage {
+  const { body, signature } = signSmsTestForm(form, account);
   const req = Readable.from([body]) as IncomingMessage;
   req.method = "POST";
   req.headers = {
@@ -51,18 +30,23 @@ function createRequest(body: string, signature: string): IncomingMessage {
   return req;
 }
 
-function createResponse(): TestResponse {
-  const setHeaderMock = vi.fn();
+function createRoute(account: ResolvedSmsAccount, warn = vi.fn()) {
+  const delivery = createSmsTestDeliveryRecorder();
+  const handler = createSmsWebhookHandler({
+    cfg: {},
+    account,
+    ingress: { enqueue: vi.fn() },
+    delivery,
+    log: { warn },
+  });
   return {
-    statusCode: 200,
-    setHeader: setHeaderMock,
-    setHeaderMock,
-    end: vi.fn(),
-  } as unknown as TestResponse;
-}
-
-function messageSid(index: number): string {
-  return `SM${index.toString(16).padStart(32, "0")}`;
+    delivery,
+    submit: async (index: number) => {
+      const res = { statusCode: 200, setHeader: vi.fn(), end: vi.fn() };
+      await handler(createRequest(account, index), res as unknown as ServerResponse);
+      return res;
+    },
+  };
 }
 
 describe("SMS delivery callback admission", () => {
@@ -72,73 +56,41 @@ describe("SMS delivery callback admission", () => {
 
   it("bounds writes per account route and reopens after the window resets", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    const account = createAccount();
-    const delivery = createSmsTestDeliveryRecorder();
     const warn = vi.fn();
-    const handler = createSmsWebhookHandler({
-      cfg: {},
-      account,
-      ingress: { enqueue: vi.fn() },
-      delivery,
-      log: { warn },
-    });
+    const { delivery, submit } = createRoute(createSmsTestAccount({ accountId: "default" }), warn);
 
     for (let i = 0; i < 3_000; i += 1) {
-      const payload = createSignedDeliveryPayload({
-        account,
-        messageSid: messageSid(i),
-      });
-      const res = createResponse();
-      await handler(createRequest(payload.body, payload.signature), res);
+      const res = await submit(i);
       expect(res.statusCode).toBe(200);
     }
 
-    const rejectedPayload = createSignedDeliveryPayload({
-      account,
-      messageSid: messageSid(3_000),
-    });
-    const rejectedRes = createResponse();
-    await handler(createRequest(rejectedPayload.body, rejectedPayload.signature), rejectedRes);
+    const rejectedRes = await submit(3_000);
 
     expect(rejectedRes.statusCode).toBe(503);
-    expect(rejectedRes.setHeaderMock).not.toHaveBeenCalledWith(
+    expect(rejectedRes.setHeader).not.toHaveBeenCalledWith(
       "x-openclaw-delivery-accepted",
       "durable",
     );
     expect(delivery.record).toHaveBeenCalledTimes(3_000);
     expect(warn).toHaveBeenCalledWith("SMS delivery callback rate limit exceeded");
 
-    const otherAccount = createAccount({
-      accountId: "support",
-      accountSid: "AC-support",
-      webhookPath: "/webhooks/sms/support",
-      publicWebhookUrl: "https://gateway.example.com/webhooks/sms/support",
-    });
-    const otherDelivery = createSmsTestDeliveryRecorder();
-    const otherHandler = createSmsWebhookHandler({
-      cfg: {},
-      account: otherAccount,
-      ingress: { enqueue: vi.fn() },
-      delivery: otherDelivery,
-    });
-    const otherPayload = createSignedDeliveryPayload({
-      account: otherAccount,
-      messageSid: messageSid(3_001),
-    });
-    const otherRes = createResponse();
-    await otherHandler(createRequest(otherPayload.body, otherPayload.signature), otherRes);
+    const otherRoute = createRoute(
+      createSmsTestAccount({
+        accountId: "support",
+        accountSid: "AC-support",
+        webhookPath: "/webhooks/sms/support",
+        publicWebhookUrl: "https://gateway.example.com/webhooks/sms/support",
+      }),
+    );
+    const otherRes = await otherRoute.submit(3_001);
     expect(otherRes.statusCode).toBe(200);
-    expect(otherDelivery.record).toHaveBeenCalledOnce();
+    expect(otherRoute.delivery.record).toHaveBeenCalledOnce();
 
     vi.setSystemTime(Date.now() + 60_001);
-    const reopenedRes = createResponse();
-    await handler(createRequest(rejectedPayload.body, rejectedPayload.signature), reopenedRes);
+    const reopenedRes = await submit(3_000);
 
     expect(reopenedRes.statusCode).toBe(200);
-    expect(reopenedRes.setHeaderMock).toHaveBeenCalledWith(
-      "x-openclaw-delivery-accepted",
-      "durable",
-    );
+    expect(reopenedRes.setHeader).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
     expect(delivery.record).toHaveBeenCalledTimes(3_001);
   });
 });

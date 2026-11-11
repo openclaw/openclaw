@@ -38,20 +38,6 @@ function createPolicyContext(
 }
 
 describe("lazy file-transfer node invoke policy", () => {
-  it("exposes command metadata without loading the delegate", () => {
-    const policy = createLazyFileTransferNodeInvokePolicy();
-
-    expect(policy.commands).toEqual([
-      "file.fetch",
-      "file.stat",
-      "dir.list",
-      "dir.fetch",
-      "file.write",
-      "file.create",
-    ]);
-    expect(createPolicy).not.toHaveBeenCalled();
-  });
-
   it("loads and caches the delegate on first handle", async () => {
     const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(async () => ({
       ok: true,

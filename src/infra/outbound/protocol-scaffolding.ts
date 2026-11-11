@@ -53,8 +53,8 @@ function isPromptDataHeaderLine(line: string): boolean {
 
 function isPromptDataTagLine(line: string, kind: "open" | "close"): boolean {
   const trimmed = line.trim().toLowerCase();
-  return PROMPT_DATA_TAG_NAMES.some((tagName) =>
-    kind === "open" ? trimmed === `<${tagName}>` : trimmed === `</${tagName}>`,
+  return PROMPT_DATA_TAG_NAMES.some(
+    (tagName) => trimmed === `<${kind === "close" ? "/" : ""}${tagName}>`,
   );
 }
 
@@ -64,22 +64,13 @@ function unwrapPromptDataWrapperLines(text: string): string {
     return text;
   }
   const lines = text.split(/\r?\n/);
-  let changed = false;
-  const output: string[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const nextLine = lines[index + 1] ?? "";
-    if (
-      (isPromptDataHeaderLine(line) && isPromptDataTagLine(nextLine, "open")) ||
-      isPromptDataTagLine(line, "open") ||
-      isPromptDataTagLine(line, "close")
-    ) {
-      changed = true;
-      continue;
-    }
-    output.push(line);
-  }
-  return changed ? output.join("\n") : text;
+  const output = lines.filter(
+    (line, index) =>
+      !(isPromptDataHeaderLine(line) && isPromptDataTagLine(lines[index + 1] ?? "", "open")) &&
+      !isPromptDataTagLine(line, "open") &&
+      !isPromptDataTagLine(line, "close"),
+  );
+  return output.length === lines.length ? text : output.join("\n");
 }
 
 export function stripInternalRuntimeScaffolding(text: string): string {

@@ -79,9 +79,9 @@ export function compareCliGatewayStateDirs(params: {
     params.gatewayConfigPath ?? path.join(gatewayStateDir, "openclaw.json"),
   );
   const differences = [
-    cliStateDir !== gatewayStateDir &&
+    path.relative(cliStateDir, gatewayStateDir) !== "" &&
       `state directories (CLI: ${params.cliStateDir}; Gateway: ${gatewayStateDir})`,
-    cliConfigPath !== gatewayConfigPath &&
+    path.relative(cliConfigPath, gatewayConfigPath) !== "" &&
       `config paths (CLI: ${params.cliConfigPath}; Gateway: ${gatewayConfigPath})`,
   ].filter((difference): difference is string => Boolean(difference));
   if (differences.length === 0) {

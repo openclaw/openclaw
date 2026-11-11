@@ -8,8 +8,8 @@ import fs from "node:fs";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -24,15 +24,13 @@ import {
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
-import {
-  deleteMaterializedSessionStatePlans,
-  planSessionStateDeleteIfUnreferenced,
-  readReferencedSessionIds,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
 import { deleteSessionNodeArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
 import { runExclusiveSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation.js";
 import { withBatchedSessionReferenceAnalysis } from "./session-accessor.sqlite-reference-scan.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-references.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptArchiveDirectory,
@@ -243,7 +241,8 @@ async function restoreReclaimedCandidate(params: {
   snapshot: ReclaimedRowSnapshot;
 }): Promise<void> {
   const { scope, snapshot } = params;
-  await runExclusiveSessionLifecycleMutation("cron-cleanup", {
+  await runSessionMutation({
+    diagnosticLabel: "cron-cleanup",
     scope: params.storePath,
     identities: [snapshot.sessionKey, ...snapshot.sessionIds],
     run: async () => {
@@ -323,7 +322,8 @@ async function sweepTombstonedCronRunRemnants(params: {
     sweptTranscriptStates: number;
   };
   const reclaim = async (candidate: TombstoneCandidate): Promise<ReclaimedCandidate | null> => {
-    const result = await runExclusiveSessionLifecycleMutation("cron-cleanup", {
+    const result = await runSessionMutation({
+      diagnosticLabel: "cron-cleanup",
       scope: params.storePath,
       identities: [candidate.sessionKey, ...candidate.generationIds],
       run: async () => {

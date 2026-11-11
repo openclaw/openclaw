@@ -11,8 +11,8 @@ import {
 } from "./schtasks-fixtures.js";
 
 // mock-isolation: Keep Task Scheduler subprocesses outside the native registration fixture.
-vi.mock("../schtasks-exec.js", () => ({
-  execSchtasks: async (argv: string[]) => {
+vi.mock("../schtasks-exec.js", () => {
+  const execute = async (argv: string[]) => {
     schtasksCalls.push(argv);
     const registration = schtasksRegistration.response;
     if (argv[0] === "/Query" && argv.includes("/XML") && registration) {
@@ -50,8 +50,13 @@ vi.mock("../schtasks-exec.js", () => ({
             "<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>gateway.cmd</Command></Exec></Actions></Task>",
         }
       : response;
-  },
-}));
+  };
+  return {
+    execSchtasks: execute,
+    execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+      execute(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+  };
+});
 
 vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: (port: number, options?: { probeHosts?: readonly string[] }) =>

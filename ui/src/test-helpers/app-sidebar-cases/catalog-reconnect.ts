@@ -17,7 +17,7 @@ describe("AppSidebar catalog reconnect", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       const hello = {
         auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+        features: { methods: ["sessions.catalog.list"] },
       } as ApplicationGatewaySnapshot["hello"];
       gateway.publish({ hello });
       const { sidebar } = await mountSidebar(
@@ -39,8 +39,8 @@ describe("AppSidebar catalog reconnect", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
       expect(sidebar.textContent).not.toContain("Stale session");
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(5_000);
 
       expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
         agentId: "main",

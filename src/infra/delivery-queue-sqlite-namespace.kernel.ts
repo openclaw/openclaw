@@ -168,7 +168,7 @@ type PendingDeliveryQueueReplacement = {
   replacementEntry: DeliveryQueueEntryState;
 };
 
-export function assertDeliveryQueueReplacement(params: PendingDeliveryQueueReplacement): undefined {
+function assertDeliveryQueueReplacement(params: PendingDeliveryQueueReplacement): undefined {
   if (params.expectedEntry.id !== params.replacementEntry.id) {
     throw new Error(
       `Delivery queue replacement id mismatch: ${params.expectedEntry.id} != ${params.replacementEntry.id}`,
@@ -245,21 +245,12 @@ export function movePendingDeliveryQueueEntryNamespaceInDatabase(
       if (!inserted) {
         return "destination-exists";
       }
-      if (params.retainSourceCompletionFence) {
-        // Completion rewrites entry_json to a minimal tombstone. Never retain
-        // the legacy pre-policy payload or hook context in the source fence.
-        completeDeliveryQueueEntryInDatabase(
-          database,
-          params.sourceQueueName,
-          params.expectedSourceEntry.id,
-        );
-      } else {
-        deleteDeliveryQueueEntryInDatabase(
-          database,
-          params.sourceQueueName,
-          params.expectedSourceEntry.id,
-        );
-      }
+      // Completion rewrites entry_json to a minimal tombstone. Never retain
+      // the legacy pre-policy payload or hook context in the source fence.
+      const retireSource = params.retainSourceCompletionFence
+        ? completeDeliveryQueueEntryInDatabase
+        : deleteDeliveryQueueEntryInDatabase;
+      retireSource(database, params.sourceQueueName, params.expectedSourceEntry.id);
       if (params.stagingId && params.stagingQueueName) {
         deleteDeliveryQueueEntryInDatabase(database, params.stagingQueueName, params.stagingId);
       }

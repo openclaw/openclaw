@@ -1,4 +1,3 @@
-/** Extracts group/channel ids from explicit message targets. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

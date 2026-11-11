@@ -1,3 +1,4 @@
+import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import {
   isUnavailableEnvironment,
@@ -7,7 +8,7 @@ import {
   forceAbandonWorkerEnvironment,
   reportWorkerAbandonmentCleanupError,
 } from "./placement-force-abandon.js";
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type { WorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
@@ -40,6 +41,18 @@ export function createWorkerPlacementMoveAbandonment(
     onCleanupError?: (error: unknown) => void,
   ) =>
     await options.workspaceOperations.run(environmentId, async () => {
+      const ownedPlacements = await placements.listForReconcileAsync();
+      if (
+        ownedPlacements.some(
+          (placement) =>
+            placement.environmentId === environmentId &&
+            placement.workspaceBaseManifestRef === DEVICE_FOLDER_MANIFEST_REF,
+        )
+      ) {
+        throw new Error(
+          "Device folders cannot be abandoned onto the Gateway; reconnect the device and stop its session instead.",
+        );
+      }
       // Capture the selected owner before journal cleanup can yield to a replacement.
       const environment = environments.get(environmentId);
       const sessionId = environment?.attachedSessionIds[0];
@@ -138,18 +151,6 @@ export function createWorkerPlacementMoveAbandonment(
       }
       const assertCurrent = () => {
         authorize?.();
-        const latest = placements.get(request.sessionId);
-        if (
-          !isForceAbandonedWorkerPlacement(latest) ||
-          latest.generation !== failed.generation ||
-          latest.environmentId !== intent.source.environmentId ||
-          latest.activeOwnerEpoch !== intent.source.ownerEpoch ||
-          placements.getPlacementMove(request.sessionId)?.operationId !== intent.operationId
-        ) {
-          throw new Error(
-            `Session ${request.sessionKey} abandonment source changed during Gateway preparation`,
-          );
-        }
       };
       assertCurrent();
       if (intent.target.kind === "gateway") {

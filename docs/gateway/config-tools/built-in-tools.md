@@ -1,7 +1,8 @@
 ---
-summary: "Per-tool settings for exec, loop detection, web search and fetch, media understanding, and the plan tool"
+summary: "Per-tool settings for exec, delegated administration, loop detection, web search and fetch, media understanding, and the plan tool"
 read_when:
   - Tuning `exec` timeouts, approvals, or `apply_patch`
+  - Controlling approvals for delegated OpenClaw setup and repair
   - Configuring web search, web fetch, or inbound media understanding
   - Turning tool-loop detection or `progress_card` on or off
 title: "Configuration — built-in tool settings"
@@ -35,9 +36,49 @@ Values shown are defaults except `applyPatch.allowModels` (empty/unset by defaul
 
 `tools.exec.grantExpiryDays` (unset by default) sets the default lifetime, in days (1–3650), for standing grants minted by Always allow on automation approvals. Unset keeps grants valid until revoked or the owning automation's substantive definition changes; pausing and re-enabling the same definition does not revoke them. Terms freeze at mint, so changing the value affects only future grants; see [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations).
 
+## `tools.openclaw`
+
+`tools.openclaw.autoApproveChanges` controls approval for persistent setup and
+repair changes delegated through the `openclaw` tool.
+
+| Value   | Effect                                                                                                          |
+| ------- | --------------------------------------------------------------------------------------------------------------- |
+| Omitted | Use effective Full Access or another independently valid authority; restricted defaults require human approval. |
+| `false` | Require human approval, including in Full Access.                                                               |
+| `true`  | Grant standing authorization for permitted delegated administration.                                            |
+
+The per-agent setting is
+`agents.entries.<agentId>.tools.openclaw.autoApproveChanges`. It overrides the
+global value; an omitted per-agent value inherits the global setting.
+
+To require approval for every agent by default:
+
+```json5
+{
+  tools: {
+    openclaw: {
+      autoApproveChanges: false,
+    },
+  },
+}
+```
+
+`true` authorizes administration that can enable host code execution, including
+service configuration and plugin installation, even when direct execution or
+editing tools are denied. Filesystem, sandbox, inherited-authority, and operation
+restrictions still apply. Grant broadening requires direct operator administration
+or exact human approval. See [Delegated setup and repair](/gateway/permission-modes#delegated-setup-and-repair)
+for Full Access inference, revocation, and approval delivery.
+
 ## `tools.loopDetection`
 
-Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
+Rolling tool-loop detection is **disabled by default**. Set `enabled: true` to activate it. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
+
+Independently, three consecutive identical tool errors always end the turn with
+a recorded failure and recovery guidance, even when `enabled` is `false`.
+Changed arguments or results and successful calls reset that error streak.
+See [Tool-loop detection](/tools/loop-detection) for the separate post-compaction
+guard and rolling detection behavior.
 
 ```json5
 {

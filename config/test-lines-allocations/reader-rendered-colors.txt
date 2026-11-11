@@ -1,0 +1,2 @@
+# Compare reader chrome colors by rendered pixels without weakening layout checks.
+5

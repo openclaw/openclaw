@@ -1,3 +1,4 @@
+import { getInstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
@@ -21,8 +22,18 @@ export function createPluginRegistryIdNormalizer(
       index,
       includeDisabled: true,
     });
-  return createPluginManifestIdNormalizer(
+  // Immutable inventories own alias facts; manifest projections retain separate answers.
+  const facts = getInstalledPluginIndexFacts(index);
+  const cached = facts?.idNormalizers?.get(registry);
+  if (cached) {
+    return cached;
+  }
+  const normalize = createPluginManifestIdNormalizer(
     registry,
     index.plugins.map((plugin) => plugin.pluginId),
   );
+  if (facts) {
+    (facts.idNormalizers ??= new WeakMap()).set(registry, normalize);
+  }
+  return normalize;
 }

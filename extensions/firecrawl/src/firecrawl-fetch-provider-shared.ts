@@ -1,14 +1,5 @@
+import { ensureRecord } from "openclaw/plugin-sdk/collection-input-runtime";
 import type { WebFetchProviderPlugin } from "openclaw/plugin-sdk/provider-web-fetch-contract";
-
-function ensureRecord(target: Record<string, unknown>, key: string): Record<string, unknown> {
-  const current = target[key];
-  if (current && typeof current === "object" && !Array.isArray(current)) {
-    return current as Record<string, unknown>;
-  }
-  const next: Record<string, unknown> = {};
-  target[key] = next;
-  return next;
-}
 
 export const FIRECRAWL_WEB_FETCH_PROVIDER_SHARED = {
   id: "firecrawl",
