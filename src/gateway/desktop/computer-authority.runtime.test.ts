@@ -10,7 +10,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { createCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
 import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { computerUseSdkEntrypoint } from "../../plugins/loader-sdk-bridge-artifacts.test-support.js";
@@ -48,7 +48,7 @@ async function createRuntimeFixture(pluginId: string, managed = false) {
     config.desktop = { host: { enabled: true, managed: true } };
   }
   await state.writeConfig(config);
-  const sdkHost = createCompiledSdkHost([computerUseSdkEntrypoint], (prefix) =>
+  const sdkHost = prepareCompiledSdkHost([computerUseSdkEntrypoint])((prefix) =>
     tempDirs.make(prefix),
   );
   const env = {

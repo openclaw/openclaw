@@ -26,6 +26,7 @@ import {
   selectStoredGitHubIdentities,
   selectUserProfileRoleAuthority,
 } from "./user-profile-github-identity.js";
+import { ensureOpenClawIdUserProfile } from "./user-profile-openclaw-id.worker.js";
 import {
   createUserProfileWriteOperation,
   linkEmail,
@@ -134,6 +135,11 @@ const userProfileWriteOperations = {
     "userProfiles.ensureTailscale",
     (input: Parameters<typeof ensureProfileForTailscaleIdentity>[0], owned) =>
       ensureProfileForTailscaleIdentity(input, owned),
+  ),
+  "userProfiles.ensureOpenClawId": createUserProfileWriteOperation(
+    "userProfiles.ensureOpenClawId",
+    (input: Parameters<typeof ensureOpenClawIdUserProfile>[0], owned) =>
+      ensureOpenClawIdUserProfile(input, owned),
   ),
   "userProfiles.syncGitHub": createUserProfileWriteOperation(
     "userProfiles.syncGitHub",

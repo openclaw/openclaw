@@ -38,7 +38,7 @@ import {
 import type { MessageActionDetails } from "./chat-message-markdown.types.ts";
 import { GroupMessageReactions } from "./chat-message-reaction-chips-view.tsx";
 import { messageReactionOptions } from "./chat-message-reaction-model.ts";
-import { ChatSendStatus } from "./chat-message-send-status-view.tsx";
+import { ChatSendStatus, ChatSteerNow, ChatSteerRow } from "./chat-message-send-status-view.tsx";
 import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 import type { AssistantMessageDisclosure } from "./chat-message-text-view.tsx";
 import { MessageMeta } from "./chat-message-timestamp-view.tsx";
@@ -55,10 +55,7 @@ import { TurnRecapRow } from "./chat-turn-recap-view.tsx";
 
 export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 
-type MessageGroupProps = {
-  group: MessageGroupData;
-  options: NativeMessageGroupOptions;
-};
+type MessageGroupProps = Pick<MessageGroupFrame, "group" | "options">;
 
 function MessageActionsRow(props: {
   messageKey?: string;
@@ -71,9 +68,7 @@ function MessageActionsRow(props: {
   let owner: HTMLDivElement | undefined;
   return (
     <div
-      ref={(element) => {
-        owner = element;
-      }}
+      ref={(element) => (owner = element)}
       class={props.class ?? "chat-group-footer-actions"}
       data-message-actions-for={props.messageKey}
     >
@@ -117,11 +112,7 @@ function PreparedMessage(props: {
     const actionDetails = prepared().actions;
     let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
     const fullMessage = actionDetails?.fullMessage;
-    if (
-      fullMessage &&
-      props.options.loadFullAssistantMessage &&
-      props.options.onToggleAssistantMessageExpanded
-    ) {
+    if (fullMessage) {
       const { messageId, state: expansion } = fullMessage;
       const retriesExhausted =
         expansion?.status === "error" && expansion.revision >= FULL_MESSAGE_RETRY_REVISION_LIMIT;
@@ -239,7 +230,7 @@ export function MessageGroupContent(props: MessageGroupProps) {
   const options = createMemo(() => resolveFileLinkOwnerOptions(props.group, props.options));
   return (
     <Show
-      when={!isActivityMessageGroup(props.group, options().bubbleMode)}
+      when={!isActivityMessageGroup(props.group, options())}
       fallback={
         <ActivityGroup groups={[props.group]} options={options()} presentation="continuation" />
       }
@@ -270,10 +261,15 @@ function GroupAvatar(props: {
 }) {
   const frame = () => props.frame;
   const options = () => frame().options;
+  // Agent-written openings show their agent like forwarded agent messages do.
+  const agentSenderId = () => {
+    const identity = frame().group.sender?.identity;
+    return identity?.type === "agent" ? identity.id : undefined;
+  };
   return (
     <Show when={frame().hasAvatar}>
       <Show
-        when={frame().isForwarded}
+        when={frame().isForwarded || agentSenderId()}
         fallback={
           <ChatAvatar
             elementRef={props.elementRef}
@@ -296,7 +292,7 @@ function GroupAvatar(props: {
         }
       >
         <ForwardedAvatar
-          agentId={frame().group.senderSession?.agentId}
+          agentId={frame().group.senderSession?.agentId ?? agentSenderId()}
           options={options()}
           elementRef={props.elementRef}
         />
@@ -361,12 +357,7 @@ function UserFooterActions(props: { frame: MessageGroupFrame }) {
   );
 }
 
-function FramedMessage(props: {
-  frame: MessageGroupFrame;
-  item: GroupMessage;
-  index: number;
-  mobile: boolean;
-}) {
+function FramedMessage(props: { frame: MessageGroupFrame; item: GroupMessage; index: number }) {
   const replyElements: ReplyConnectorElements = {};
   const frame = () => props.frame;
   const prepared = () => frame().preparedMessages[props.index]!;
@@ -394,7 +385,10 @@ function FramedMessage(props: {
         ? avatar
         : undefined,
   }));
+  const earlierSteer = () =>
+    props.index < frame().lastMessageIndex && options().pendingSteer?.(props.item.message);
   const showActions = () =>
+    !earlierSteer() &&
     prepared().ownsActions &&
     (hasMessageActionButtons(prepared().actions, frame().options) ||
       Boolean(prepared().actions?.reactionMessageId && frame().options.onReact)) &&
@@ -442,44 +436,65 @@ function FramedMessage(props: {
           <ReplyLineConnector line={line()} avatar={frame().hasAvatar} elements={replyElements} />
         </div>
       </Show>
+      <ChatSteerRow input={earlierSteer() || undefined} onSend={options().onSteerNow} />
       <Show when={showActions()}>
-        <Show
-          when={props.mobile}
-          fallback={
-            <MessageActionsRow
-              messageKey={props.item.key}
-              details={prepared().actions}
-              options={frame().options}
-              class="chat-message-actions-row"
-              reactionGroup={frame().group}
-              timestamp={
-                frame().normalizedRole === "user"
-                  ? prepared().source.normalizedMessage.timestamp
-                  : undefined
+        {(_actions) => {
+          const media = createMediaQuerySource(
+            "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+          );
+          const [mobile, setMobile] = createSignal(media.read());
+          onSettled(() => media.subscribe(setMobile));
+          return (
+            <Show
+              when={mobile()}
+              fallback={
+                <MessageActionsRow
+                  messageKey={props.item.key}
+                  details={prepared().actions}
+                  options={frame().options}
+                  class="chat-message-actions-row"
+                  reactionGroup={frame().group}
+                  timestamp={
+                    frame().normalizedRole === "user"
+                      ? prepared().source.normalizedMessage.timestamp
+                      : undefined
+                  }
+                />
               }
-            />
-          }
-        >
-          <div class="chat-group-footer chat-message-footer">
-            <GroupMessageReactions
-              group={frame().group}
-              actionDetails={prepared().actions}
-              isStreaming={false}
-              options={frame().options}
-            />
-            <div class="chat-group-footer__meta">
-              <SenderIdentity frame={props.frame} />
-              <MessageMeta timestamp={prepared().source.normalizedMessage.timestamp} meta={null} />
-            </div>
-            <MessageActionsRow
-              messageKey={props.item.key}
-              details={prepared().actions}
-              options={frame().options}
-            />
-          </div>
-        </Show>
+            >
+              <div class="chat-group-footer chat-message-footer">
+                <GroupMessageReactions
+                  group={frame().group}
+                  actionDetails={prepared().actions}
+                  isStreaming={false}
+                  options={frame().options}
+                />
+                <div class="chat-group-footer__meta">
+                  <SenderIdentity frame={props.frame} />
+                  <MessageMeta
+                    timestamp={prepared().source.normalizedMessage.timestamp}
+                    meta={null}
+                  />
+                </div>
+                <MessageActionsRow
+                  messageKey={props.item.key}
+                  details={prepared().actions}
+                  options={frame().options}
+                />
+              </div>
+            </Show>
+          );
+        }}
       </Show>
     </>
+  );
+}
+
+function FramedMessages(props: { frame: MessageGroupFrame }) {
+  return (
+    <For each={props.frame.group.messages} keyed={(item) => item.key}>
+      {(item, index) => <FramedMessage frame={props.frame} item={item()} index={index()} />}
+    </For>
   );
 }
 
@@ -487,20 +502,15 @@ function FramedMessageGroup(props: MessageGroupProps) {
   const replyElements: ReplyConnectorElements = {};
   const frame = createMemo(() => prepareMessageGroupFrame(props.group, props.options));
   const options = () => frame().options;
-  const media = createMediaQuerySource(
-    "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
-  );
-  const [mobile, setMobile] = createSignal(media.read());
-  onSettled(() => media.subscribe(setMobile));
   return (
     <div
       ref={(element) => (replyElements.group = element)}
       class={frame().className}
-      style={
+      style={`${
         frame().normalizedRole === "user" || frame().isForwarded
-          ? participantPalette.read()?.style(frame().senderHue)
-          : undefined
-      }
+          ? (participantPalette.read()?.style(frame().senderHue) ?? "")
+          : ""
+      }${options().frameFooter === false ? ";margin-block-end:calc(var(--chat-run-block-gap) - 2px)" : ""}`}
       data-chat-row-key={props.group.key}
       data-chat-streaming={props.group.isStreaming ? "true" : undefined}
       data-file-session-key={frame().sessionKey}
@@ -510,6 +520,7 @@ function FramedMessageGroup(props: MessageGroupProps) {
       </Show>
       <Show
         when={
+          options().frameHeader !== false &&
           !frame().isTurnBlock &&
           (frame().normalizedRole === "user" || frame().normalizedRole === "assistant")
         }
@@ -523,13 +534,7 @@ function FramedMessageGroup(props: MessageGroupProps) {
         <ReplyLineView line={frame().replyLine} actions={options()} elements={replyElements} />
         <Show
           when={options().frameContent !== undefined}
-          fallback={
-            <For each={props.group.messages} keyed={(item) => item.key}>
-              {(item, index) => (
-                <FramedMessage frame={frame()} item={item()} index={index()} mobile={mobile()} />
-              )}
-            </For>
-          }
+          fallback={<FramedMessages frame={frame()} />}
         >
           {options().frameContent}
         </Show>
@@ -543,11 +548,7 @@ function FramedMessageGroup(props: MessageGroupProps) {
           when={Boolean(options().activeContinuation)}
           fallback={
             options().turnRecap ? (
-              <TurnRecapRow
-                recap={options().turnRecap!}
-                presentation="continuation"
-                hideDuration={options().hideTurnRecapDuration}
-              />
+              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
             ) : undefined
           }
         >
@@ -558,7 +559,7 @@ function FramedMessageGroup(props: MessageGroupProps) {
           />
         </Show>
       </div>
-      <Show when={!frame().isTurnBlock}>
+      <Show when={!frame().isTurnBlock && options().frameFooter !== false}>
         <Show
           when={!props.group.isStreaming}
           fallback={<div class="chat-group-footer" aria-hidden="true" />}
@@ -574,11 +575,12 @@ function FramedMessageGroup(props: MessageGroupProps) {
                     frame().isPeerGroup ||
                     (frame().showSenderName && frame().avatarPlacement !== "footer"),
                   ),
-                "chat-group-footer--send-status": Boolean(frame().sendStatus),
+                "chat-group-footer--send-status": frame().statusFooter,
               },
             ]}
           >
-            <Show when={!frame().ownsRunFrame}>
+            <ChatSteerNow input={frame().pendingSteer} onSend={options().onSteerNow} />
+            <Show when={!frame().ownsRunFrame && !frame().pendingSteer}>
               <GroupMessageReactions
                 group={props.group}
                 actionDetails={frame().footerActionDetails}
@@ -586,7 +588,7 @@ function FramedMessageGroup(props: MessageGroupProps) {
                 options={options()}
               />
             </Show>
-            <Show when={!options().activeContinuation}>
+            <Show when={!options().activeContinuation && !frame().pendingSteer}>
               <Show when={!frame().isPeerGroup}>
                 <UserFooterActions frame={frame()} />
               </Show>
@@ -703,7 +705,7 @@ export function MessageGroup(props: MessageGroupProps) {
         }
       >
         <Show
-          when={!isActivityMessageGroup(props.group, options().bubbleMode)}
+          when={!isActivityMessageGroup(props.group, options())}
           fallback={
             <ActivityGroup groups={[props.group]} options={options()} presentation="standalone" />
           }

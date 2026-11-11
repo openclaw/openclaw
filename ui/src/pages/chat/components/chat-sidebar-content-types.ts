@@ -69,6 +69,8 @@ export type TranscriptAttachmentEntry = {
   key: string;
   label: string;
   mimeType?: string;
+  /** Timestamp of the message that carried the media, when the transcript recorded one. */
+  timestamp?: number;
   options: ImageRenderOptions;
   onOpenSidebar: (content: SidebarContent) => void;
 } & ({ kind: "image"; image: ImageBlock } | { kind: "attachment"; item: AssistantAttachmentItem });
@@ -358,7 +360,7 @@ export type SidebarSelection = (
   | { kind: "loading" }
   // Keep failed opens attached to their selected surface instead of falling back
   // to unrelated content.
-  | { kind: "unavailable"; message: string }
+  | { kind: "unavailable"; message: string; permission?: true }
 ) & {
   fileTab?: { id: string; label: string; disposition?: "pinned" | "preview"; intent?: "navigate" };
 };

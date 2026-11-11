@@ -22,6 +22,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   createGatewaySchedulerClock,
@@ -91,7 +92,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   const cfg: OpenClawConfig = {
     commands: { ownerAllowFrom: [`matrix:${recipient}`] },
     agents: { defaults: { heartbeat: { every: "0m" } } },
-    skills: { workshop: { autonomous: { mode: "off" } } },
+    ...workshopPluginConfig({ autonomous: { mode: "off" } }),
   };
   setRuntimeConfigSnapshot(cfg);
   const receipts: string[] = [];

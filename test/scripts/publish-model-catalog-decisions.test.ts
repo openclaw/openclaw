@@ -46,7 +46,7 @@ function fixture(chatModels = 200) {
   });
   writeJsonFile(path.join(rootDir, "scripts/lib/recommended-models.json"), []);
   const file = (version: number) => path.join(rootDir, `v${version}.json`);
-  const files = [file(1), file(2)] as const;
+  const files = [file(1), file(2), file(3)] as const;
   vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   return {
     files,
@@ -58,20 +58,31 @@ function fixture(chatModels = 200) {
         fetchImpl: async () => {
           throw new Error("fixture must not discover external models");
         },
-        args: ["--out", files[0], "--out-v2", files[1]],
+        args: ["--out", files[0], "--out-v2", files[1], "--out-v3", files[2]],
       }),
   };
 }
 
-it("omits native-only rows and capabilities from the released outputs", async () => {
+it("publishes task facts only on the opt-in v3 wire", async () => {
   const { files, run } = fixture();
   await expect(run()).resolves.toMatchObject({ wrote: true });
   const payloads = files.map((file) => JSON.parse(fs.readFileSync(file, "utf8")));
   const v1 = catalog.parseRemoteModelCatalogBundle(payloads[0]);
   const v2 = catalog.parseRemoteModelCatalogBundleV2(payloads[1]);
+  const v3 = catalog.parseRemoteModelCatalogBundleV3(payloads[2]);
   expect(v1.providers).not.toHaveProperty("fixture");
   expect(v2.providers).not.toHaveProperty("fixture");
   expect(v2.models).toHaveLength(200);
+  expect(v3.models).toHaveLength(201);
+  const native = v3.models.find((model) => model.id === "native");
+  expect(native?.inference).toEqual(nativeModel.inference);
+  expect(native?.pricing).toEqual({ status: "unknown" });
+  expect(native).not.toHaveProperty("baseUrl");
+  expect(v3.providers.fixture).toEqual({});
+  expect(v3.models.find((model) => model.id === "chat-0")?.inference).toEqual({
+    chat: true,
+    decision,
+  });
   expect(v2.models.find((model) => model.id === "chat-0")).not.toHaveProperty("inference");
 });
 

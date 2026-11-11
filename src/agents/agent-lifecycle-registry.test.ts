@@ -15,6 +15,7 @@ import {
   createAgentDatabaseInspectionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
+import { agentDeletionJournalPublication } from "../state/agent-deletion-journal-publication.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
@@ -23,6 +24,7 @@ import {
   handoffAgentDeletionJournalInDatabase,
 } from "../state/agent-deletion-journal.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
+import { agentProvenancePublication } from "../state/agent-provenance-publication.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { recordAgentProvenanceInDatabase } from "../state/agent-provenance.kernel.js";
 import {
@@ -44,6 +46,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import * as stateReads from "../state/openclaw-state-read-operation.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
   beginAgentDeletionJournal,
@@ -649,6 +652,38 @@ describe("agent lifecycle registry", () => {
       expect(await matching).toBe(false);
     },
   );
+
+  it.each([
+    { domain: "provenance", publication: agentProvenancePublication },
+    { domain: "deletion", publication: agentDeletionJournalPublication },
+  ])("keeps a late lifecycle reply fenced after unknown $domain facts", async ({ publication }) => {
+    const config = { agents: { entries: { main: {} } } };
+    const identity = requireOpenClawStateDatabaseIdentity(openOpenClawStateDatabase(options)).key;
+    const binding = await captureAgentLifecycleBinding(() => config, "main", options);
+    expect(binding).toBeDefined();
+    const publishUnknown = (source: string | symbol) => {
+      publication.begin({ identity: source, assertCurrent() {} }).finish(false);
+    };
+    await withoutHostSql(async () => {
+      publishUnknown(Symbol("other-database"));
+      expect(matchesAgentLifecycleBinding(config, binding!, options)).toBe(true);
+      publishUnknown(identity);
+      expect(matchesAgentLifecycleBinding(config, binding!, options)).toBe(false);
+      const startRead = stateReads.startOpenClawStateReadOperation;
+      using _ = vi
+        .spyOn(stateReads, "startOpenClawStateReadOperation")
+        .mockImplementation((command, selection) =>
+          startRead(command, selection).then((reply) => {
+            if (command.type === "agentLifecycle.read") {
+              publishUnknown(identity);
+            }
+            return reply;
+          }),
+        );
+      expect(await captureAgentLifecycleBinding(() => config, "main", options)).toBeUndefined();
+      expect(matchesAgentLifecycleBinding(config, binding!, options)).toBe(false);
+    });
+  });
 
   it.each(["finish", "rollback"] as const)(
     "fences stale deletion owners and preserves provenance through recovery %s",

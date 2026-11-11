@@ -29,6 +29,7 @@ import {
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
 
@@ -226,7 +227,6 @@ export type SidebarSessionHovercardRow = Pick<
   | "hasActiveSubagentRun"
   | "lastRunError"
   | "label"
-  | "lastMessagePreview"
   | "expandedParticipants"
   | "participantCount"
   | "participants"
@@ -408,7 +408,7 @@ function sidebarSessionOwnerFilterStorageKey(gatewayUrl: string, selfUserId: str
   return `${SIDEBAR_SESSION_OWNER_FILTER_STORAGE_PREFIX}${gatewayOriginScope(gatewayUrl)}:${encodeURIComponent(selfUserId)}`;
 }
 
-/** Without a saved choice, guests start on Involving me and everyone else on their own sessions. */
+/** Without a saved choice, guests start on Involving me and everyone else on All owners. */
 export function loadStoredSidebarSessionOwnerFilter(
   gatewayUrl: string,
   selfUserId: string,
@@ -416,7 +416,7 @@ export function loadStoredSidebarSessionOwnerFilter(
 ): SidebarSessionOwnerFilter {
   const fallback = options.guest
     ? { ownerId: null, involvingMe: true }
-    : { ownerId: selfUserId, involvingMe: false };
+    : { ownerId: null, involvingMe: false };
   try {
     const stored = getSafeLocalStorage()?.getItem(
       sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId),
@@ -430,7 +430,7 @@ export function loadStoredSidebarSessionOwnerFilter(
       involvingMe: stored === "involving-me",
     };
   } catch {
-    // A disabled store still uses the signed-in default.
+    // A disabled store still uses the default.
     return fallback;
   }
 }
@@ -583,12 +583,12 @@ export function sessionCatalogHostKey(catalogId: string, hostId: string): string
   return `${catalogId}\u0000${hostId}`;
 }
 
-/** Archived pins leave Pinned so the archived view can still list them in place. */
+/** Hidden pins remain discoverable in their lifecycle views without a duplicate in Pinned. */
 export function isListedInPinnedSection(
-  row: Pick<SidebarRecentSession, "key" | "archived">,
+  row: Pick<SidebarRecentSession, "key" | "archived" | "snoozedUntil">,
   pinnedKeys: ReadonlySet<string>,
 ): boolean {
-  return pinnedKeys.has(row.key) && row.archived !== true;
+  return pinnedKeys.has(row.key) && row.archived !== true && !isSessionSnoozed(row, Date.now());
 }
 
 export type SidebarPinZone = {

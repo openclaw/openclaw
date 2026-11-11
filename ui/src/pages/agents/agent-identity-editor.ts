@@ -1,4 +1,3 @@
-import { action, createOptimistic, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -27,7 +26,6 @@ export function createAgentIdentityEditor(
   options: {
     snapshot: () => ApplicationGatewaySnapshot | null;
     saves: () => Map<string, RetainedIdentitySave>;
-    retired: () => Promise<void>;
     canCall: (method: string) => boolean;
     isCurrent: (
       client: GatewayBrowserClient,
@@ -38,13 +36,6 @@ export function createAgentIdentityEditor(
     onSaved: (agents: ApplicationContext["agents"]) => void;
   },
 ) {
-  const [saving, setSaving] = createOptimistic(false);
-  const presentSave = action(function* (completion: Promise<void>, retirement: Promise<void>) {
-    if (retirement === options.retired()) {
-      setSaving(true);
-    }
-    yield Promise.race([completion, retirement]);
-  });
   const autosave = createTimeout(() => void save(), 550);
 
   function schedule(delay = 550) {
@@ -87,13 +78,9 @@ export function createAgentIdentityEditor(
       canDispatch: () => options.canCall("agents.update") && isCurrent(),
       isCurrent,
       onSaved: () => options.onSaved(agents),
+      onRetry: save,
     });
     options.saves().set(agentId, { client, snapshot: options.snapshot(), promise: completion });
-    // Scope changes release presentation; the owner still settles its admitted write.
-    const retirement = options.retired();
-    onSettled(() => {
-      void presentSave(completion, retirement);
-    });
     try {
       await completion;
     } finally {
@@ -109,7 +96,6 @@ export function createAgentIdentityEditor(
   return {
     cancel: autosave.cancel,
     schedule,
-    saving,
     forAgent(selectedAgentId: string | null) {
       const canEdit = () =>
         selectedAgentId === state.agentsSelectedId && options.canCall("agents.update");

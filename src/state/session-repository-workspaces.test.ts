@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -440,7 +441,7 @@ it.runIf(process.platform !== "win32")(
         message: expect.stringContaining("SQLite database file identity changed"),
       });
       await expect.soft(fs.stat(store.artifactPath(workspace.workspaceId))).resolves.toBeDefined();
-      expect(await fs.readFile(database.path)).toEqual(replacementBytes);
+      expectBytesEqual(await fs.readFile(database.path), replacementBytes, "successor database");
     } finally {
       unsubscribe();
       for (const undo of restore) {

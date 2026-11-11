@@ -11,6 +11,7 @@ import {
 import { labelRuntimeContextText } from "../../llm/types.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { buildCliSessionDriftNote } from "../cli-session-drift.js";
 import { buildTemporalContextText } from "../date-time.js";
@@ -27,7 +28,9 @@ import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareAgentPromptRepoRoot } from "../prompt-projects.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
+import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { cliBackendLog } from "./log.js";
+import { resolveCliSkillsPrompt } from "./skills-prompt.js";
 import type { CliReusableSession, RunCliAgentParams } from "./types.js";
 
 export function finalizeCliSystemPrompt(
@@ -126,14 +129,16 @@ export async function prepareCliTurnPromptContext(
     .join("\n\n");
   try {
     const { resolveSystemPromptUsage } = await import("./helpers.js");
-    const mediaTaskContext = await buildMediaTaskRuntimeContext({
-      capabilityToolNames: params.capabilityToolNames,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      includeEmptySnapshots: true,
-    });
+    const [mediaTaskContext] = await settleCurrentReadPreparations([
+      buildMediaTaskRuntimeContext({
+        capabilityToolNames: params.capabilityToolNames,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        includeEmptySnapshots: true,
+      }),
+      prepareActiveNodeContext(params.requesterProfileId),
+    ] as const);
     const mediaTaskMessage = buildRuntimeContextCustomMessage(mediaTaskContext);
-    await prepareActiveNodeContext(params.requesterProfileId);
     const preparedAppendContext = [
       runtimeFacts?.relocatable,
       ...params.context,
@@ -226,14 +231,18 @@ export async function prepareCliSystemPrompt(
       });
     }
   }
-  await prepareActiveNodeContext(params.requesterProfileId);
-  const preparedGitCoauthorPrompt = await resolveSessionGitCoauthorPrompt({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-  });
-  const preparedTtsPreferences = params.preparedTtsPreferences ?? (await prepareTtsPreferences());
+  const [, preparedGitCoauthorPrompt, preparedTtsPreferences] = await settleCurrentReadPreparations(
+    [
+      prepareActiveNodeContext(params.requesterProfileId),
+      resolveSessionGitCoauthorPrompt({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      }),
+      params.preparedTtsPreferences ?? prepareTtsPreferences(),
+    ] as const,
+  );
   const runtimeCwd = params.cwd?.trim() || params.workspaceDir;
   return buildCliAgentSystemPrompt({
     ...params,
@@ -301,4 +310,53 @@ export function buildCliCurrentPrompt(
         privateContext ? undefined : { prependContext: notes.sessionGapContext },
       ),
   };
+}
+
+export async function prepareCliPromptSources(params: {
+  run: RunCliAgentParams;
+  workspaceDir: string;
+  cwd: string;
+  agentId: string;
+  skipTurnPreparation: boolean;
+  skipSkills: boolean;
+  moduleUrl: string;
+}): Promise<{
+  openClawReferences: Awaited<
+    ReturnType<typeof import("../docs-path.js").resolveOpenClawReferencePaths>
+  >;
+  preparedSkills: Awaited<ReturnType<typeof resolveCliSkillsPrompt>>;
+}> {
+  const { run, workspaceDir, cwd, agentId } = params;
+  const assertCurrent = run.admittedRunContext
+    ? createCliRunCurrentAssertion({ ...run, admittedRunContext: run.admittedRunContext })
+    : () => {
+        run.assertCurrent?.();
+        run.abortSignal?.throwIfAborted();
+        run.preparedRunAdmission?.assertSourceCurrent();
+      };
+  const [openClawReferences, preparedSkills] = await settleCurrentReadPreparations([
+    params.skipTurnPreparation
+      ? { docsPath: null, sourcePath: null }
+      : import("../docs-path.js").then(({ resolveOpenClawReferencePaths }) =>
+          resolveOpenClawReferencePaths({
+            workspaceDir,
+            argv1: process.argv[1],
+            cwd,
+            moduleUrl: params.moduleUrl,
+          }),
+        ),
+    params.skipTurnPreparation || params.skipSkills
+      ? { prompt: "" }
+      : resolveCliSkillsPrompt({
+          assertCurrent,
+          run,
+          workspaceDir,
+          executionWorkspaceDir: cwd,
+          config: run.config,
+          agentId,
+          sessionKey: run.sessionKey?.trim() || run.sessionId,
+        }),
+  ] as const);
+  assertCurrent();
+  return { openClawReferences, preparedSkills };
 }

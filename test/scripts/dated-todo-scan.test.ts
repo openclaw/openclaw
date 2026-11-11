@@ -1,17 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const scriptPath = path.resolve("scripts/dated-todo-scan.mts");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function writeFixture(root: string, file: string, contents: string) {
-  const target = path.join(root, file);
-  mkdirSync(path.dirname(target), { recursive: true });
-  writeFileSync(target, contents);
-}
 
 describe("dated-todo-scan", () => {
   it("finds nearby dated commitments, ignores noise, and includes deprecated compat records", () => {
@@ -46,12 +41,12 @@ describe("dated-todo-scan", () => {
         'const prefix = { code: "fixture-deprecation-extra" };\nconst record = { code: "fixture-deprecation" };\n',
     };
     for (const [file, contents] of Object.entries(fixtures)) {
-      writeFixture(root, file, contents);
+      fixtureFiles(root).write(file, contents);
     }
     spawnSync("git", ["init", "-q"], { cwd: root });
     spawnSync("git", ["add", "."], { cwd: root });
     spawnSync("git", ["add", "-f", "config/ignored.ts"], { cwd: root });
-    writeFixture(root, "src/untracked.ts", "// TODO remove after 2026-12-01\n");
+    fixtureFiles(root).write("src/untracked.ts", "// TODO remove after 2026-12-01\n");
 
     const compatReport = path.join(reportRoot, "compat.json");
     const records = [

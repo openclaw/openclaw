@@ -56,13 +56,17 @@ import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
-import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
+import {
+  modelPolicyWildcardMatches,
+  parseModelPolicyWildcardRef,
+} from "../../config/model-policy-ref.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
@@ -157,7 +161,7 @@ function parseProbeOption(
   const parsed =
     kind === "integer" ? parseStrictPositiveInteger(raw) : parseStrictFiniteNumber(raw);
   if (parsed === undefined || parsed <= 0) {
-    throw new Error(`${label} must be a positive ${kind}.`);
+    throwExpectedCliError(`${label} must be a positive ${kind}.`);
   }
   return parsed;
 }
@@ -216,7 +220,7 @@ export async function modelsStatusCommand(
 ) {
   ensureFlagCompatibility(opts);
   if (opts.plain && opts.probe) {
-    throw new Error("--probe cannot be used with --plain output.");
+    throwExpectedCliError("--probe cannot be used with --plain output.");
   }
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({
@@ -224,10 +228,6 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
-  const gatewayCatalog = await readModelCatalog(cfg, opts.agent?.trim());
-  for (const warning of getModelCatalogWarnings(gatewayCatalog)) {
-    runtime.error(terminalText`${warning.message} ${warning.fixHint}`);
-  }
   const explicitAgentId = opts.agent?.trim();
   const envAgentDir =
     process.env.OPENCLAW_AGENT_DIR?.trim() || process.env.PI_CODING_AGENT_DIR?.trim();
@@ -235,6 +235,10 @@ export async function modelsStatusCommand(
     agentDirOverride: !explicitAgentId && envAgentDir ? resolveUserPath(envAgentDir) : undefined,
     kind: "read",
   });
+  const gatewayCatalog = await readModelCatalog(cfg, workspaceAgentId);
+  for (const warning of getModelCatalogWarnings(gatewayCatalog)) {
+    runtime.error(terminalText`${warning.message} ${warning.fixHint}`);
+  }
   // Only an explicit --agent narrows the reported model/fallback overrides; an inferred
   // system-agent target still reports unscoped defaults, matching this command's shipped output.
   const agentId = explicitAgentId ? workspaceAgentId : undefined;
@@ -498,15 +502,9 @@ export async function modelsStatusCommand(
             ...new Set([
               ...visibilityPolicy.allowedCatalog.map((entry) => modelKey(entry.provider, entry.id)),
               ...configuredAllowRefs.flatMap((raw) => {
-                const wildcard = parseModelPolicyWildcardRef(raw);
-                if (!wildcard) {
-                  return [];
-                }
-                const prefix = wildcard.key.slice(0, -1);
-                const hasCatalogMatch = catalog.entries.some((entry) =>
-                  modelKey(entry.provider, entry.id).startsWith(prefix),
-                );
-                return hasCatalogMatch ? [] : [wildcard.key];
+                const key = parseModelPolicyWildcardRef(raw)?.key;
+                const keys = catalog.entries.map((entry) => modelKey(entry.provider, entry.id));
+                return key && !keys.some((k) => modelPolicyWildcardMatches(key, k)) ? [key] : [];
               }),
             ]),
           ].toSorted();
@@ -963,12 +961,11 @@ export async function modelsStatusCommand(
         2,
         "integer",
       );
-      const probeMaxTokens = parseProbeOption(
-        opts.probeMaxTokens,
-        "--probe-max-tokens",
-        8,
-        "integer",
-      );
+      // No default cap: a small cap leaves reasoning models with no visible reply.
+      const probeMaxTokens =
+        opts.probeMaxTokens === undefined || opts.probeMaxTokens === null
+          ? undefined
+          : parseProbeOption(opts.probeMaxTokens, "--probe-max-tokens", 1, "integer");
 
       let probeSummary: Awaited<ReturnType<typeof runAuthProbes>> | undefined;
       if (opts.probe) {

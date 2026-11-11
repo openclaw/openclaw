@@ -74,6 +74,7 @@ function prepareDocsPublisher() {
     "check-docs-mdx.mjs",
     "check-docs-mdx.mts",
     "lib/arg-utils.runtime.mjs",
+    "lib/numeric-options.mjs",
     "lib/tsx-cli-shim.mjs",
     "lib/managed-cleanup-handoff.mts",
     "lib/local-check-runtime.mts",

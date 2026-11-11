@@ -140,6 +140,7 @@ describe("agent directory registry", () => {
     using observed = observeOwners(fleet);
     const { watch, closes } = observed;
     const initialWatches = watch.mock.calls.length;
+    const expectedPath = fs.realpathSync.native(fleet[0]!.agentDir);
     using realpath = vi.spyOn(fs.realpathSync, "native");
     for (const owner of fleet) {
       expect(registerDir(owner)).toBe(false);
@@ -150,7 +151,7 @@ describe("agent directory registry", () => {
     expect(realpath).not.toHaveBeenCalled();
     // Destructive admission bypasses the prepared identity even when lookups reuse it.
     const { agentDir } = fleet[0]!;
-    expect(normalizePath(agentDir)).toBe(fs.realpathSync.native(agentDir));
+    expect(normalizePath(agentDir)).toBe(expectedPath);
     expect(realpath).toHaveBeenCalled();
   });
 

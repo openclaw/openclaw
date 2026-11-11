@@ -394,7 +394,7 @@ describe("legacy channel webhook ports", () => {
       200,
       "rewritten sibling: /webhook?oc_cap=vendor",
     ],
-    ["incomplete capability", "/__openclaw__/cap/vendor", 401, 401, undefined],
+    ["incomplete capability", "/__openclaw__/cap/vendor", 400, 400, undefined],
   ] as const)(
     "preserves %s on the legacy port and the primary listener's policy",
     async (_name, path, primaryStatus, forwardedPrimaryStatus, primaryBody) => {

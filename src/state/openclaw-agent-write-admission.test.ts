@@ -11,6 +11,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   onInternalDiagnosticEvent,
@@ -28,6 +29,7 @@ import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { trackWorkerRequest } from "../infra/worker-request-diagnostics.js";
 import * as logging from "../logging/logger.js";
+import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import {
   runOpenClawAgentWorkerWrite as workerWrite,
   runOpenClawAgentBoardReadAdmission as boardRead,
@@ -210,6 +212,53 @@ it("keeps a missing reservation current when its database is created", async () 
     fs.writeFileSync(pathname, "created");
     expect(assertCurrent).not.toThrow();
   });
+});
+
+it("reserves an admitted database without filesystem probes and refuses a replacement owner", async ({
+  signal,
+}) => {
+  const { options } = makeFixture();
+  // Host descriptor custody is intentionally unavailable in an unhosted Vitest worker.
+  const result = await runNodeScript(
+    createNodeEvalArgs(
+      `
+    import assert from "node:assert/strict";
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    import { openNodeSqliteDatabase } from ${JSON.stringify(new URL("../infra/node-sqlite.ts", import.meta.url).href)};
+    import { admitSqliteSchema } from ${JSON.stringify(new URL("../infra/sqlite-schema-facts.ts", import.meta.url).href)};
+    import { readDatabasePathIdentitySync } from ${JSON.stringify(new URL("../infra/sqlite-worker-identity.ts", import.meta.url).href)};
+    import { runOpenClawAgentPathWriteAdmission } from ${JSON.stringify(new URL("./openclaw-agent-write-admission.ts", import.meta.url).href)};
+    const pathname = ${JSON.stringify(options.path)};
+    using database = openNodeSqliteDatabase(pathname);
+    database.exec("CREATE TABLE proof(value INTEGER)");
+    admitSqliteSchema(database);
+    const expected = readDatabasePathIdentitySync(pathname);
+    let calls = 0;
+    for (const [owner, name] of [[fs, "statSync"], [fs.realpathSync, "native"]]) {
+      const original = owner[name];
+      owner[name] = (...args) => { calls++; return original(...args); };
+    }
+    syncBuiltinESMExports();
+    await runOpenClawAgentPathWriteAdmission(pathname, async (identity, assertCurrent) => {
+      assert.deepEqual(identity, expected);
+      await Promise.resolve();
+      assertCurrent();
+      assert.equal(calls, 0, "warm reservation must not probe the filesystem");
+      database.close();
+      fs.renameSync(pathname, pathname + ".retired");
+      using replacement = openNodeSqliteDatabase(pathname);
+      assert.throws(assertCurrent, /database target changed/);
+    });
+  `,
+      { imports: [import.meta.resolve("tsx/esm")] },
+    ),
+    process.env,
+    undefined,
+    { signal },
+  );
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
 });
 
 it.each(["symlink", "hardlink"] as const)(

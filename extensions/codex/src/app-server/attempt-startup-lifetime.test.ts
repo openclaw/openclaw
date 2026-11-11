@@ -30,7 +30,10 @@ vi.mock("./desktop-generation.js", async (importOriginal) => ({
 }));
 
 const tempRoots = new Set<string>();
-const pluginConfig: CodexPluginConfig = { appServer: { command: "codex" } };
+const pluginConfig: CodexPluginConfig = {
+  appServer: { command: "codex" },
+  computerUse: { enabled: false },
+};
 const startThreadWithHarness = startup.createAttemptThreadStarter(tempRoots, pluginConfig);
 const threadStartResult = (threadId = "thread-1") => createThreadStartResult(threadId, "/repo");
 const bindingKey = {
@@ -187,7 +190,10 @@ describe("Codex runtime startup resource lifetime", () => {
 
       try {
         const run = attempts.runCodexAppServerAttempt(params, {
-          pluginConfig: { appServer: { mode: "yolo", experimental: { sandboxExecServer: true } } },
+          pluginConfig: {
+            appServer: { mode: "yolo", experimental: { sandboxExecServer: true } },
+            computerUse: { enabled: false },
+          },
           nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
         });
         const rejected = expect(run).rejects.toBe(setupError);

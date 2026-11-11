@@ -182,6 +182,65 @@ describe("ClawRouter plugin", () => {
     },
   );
 
+  it.each([
+    ["a configured row", {}],
+    [
+      "a discovered row",
+      {
+        params: {
+          clawrouterRoute: {
+            api: "openai-responses",
+            baseUrl: "https://clawrouter.example/v1",
+            upstreamModel: "gpt-5.5",
+          },
+        },
+      },
+    ],
+  ] as const)("keeps optional tool inputs optional for %s on OpenAI Responses", async (_, row) => {
+    const payloads: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof globalThis.fetch>(async (input, init) => {
+        payloads.push((await new Request(input, init).json()) as Record<string, unknown>);
+        const completed = { status: "completed", output: [], usage: { input_tokens: 1 } };
+        return new Response(
+          `data: ${JSON.stringify({ type: "response.completed", response: completed })}\n\n`,
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      }),
+    );
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "clawrouter",
+      modelId: "openai/gpt-5.5",
+      streamFn: streamSimple,
+    });
+    const parameters = {
+      type: "object",
+      properties: { document: { type: "string" }, recommendation: { type: "string" } },
+      required: ["document"],
+      additionalProperties: false,
+    };
+    const stream = await wrapped!(
+      streamModel(row),
+      {
+        messages: [{ role: "user", content: "Send the synthetic document", timestamp: 1 }],
+        tools: [{ name: "send_report", description: "Send a document", parameters }],
+      },
+      { apiKey: "synthetic-router-key", cacheRetention: "none" },
+    );
+    await stream.result();
+    // Omitted strictness makes OpenAI require every optional input.
+    expect(payloads[0]?.tools).toEqual([
+      {
+        type: "function",
+        name: "send_report",
+        description: "Send a document",
+        strict: false,
+        parameters,
+      },
+    ]);
+  });
+
   it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
     "%s preserves the catalog model identity through an Anthropic response",
     async (hook) => {
@@ -435,6 +494,98 @@ describe("ClawRouter plugin", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("discovers Fusion only from its key's unified offer and executes the chat stream", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({ apiKey: "fusion-key" });
+    const offer = {
+      modelId: "clawrouter/fusion",
+      endpoint: "chat_completions",
+      transport: "http",
+      routeKind: "unified",
+      route: "/v1/chat/completions",
+      eligible: true,
+    };
+    const row = {
+      id: "clawrouter",
+      displayName: "ClawRouter Fusion",
+      allowed: true,
+      executable: true,
+      openaiCompatible: true,
+      nativeBaseUrl: "/v1",
+      routes: [],
+      offers: [offer],
+      models: [
+        {
+          id: "clawrouter/fusion",
+          upstream: "clawrouter/fusion",
+          capabilities: ["llm.chat"],
+        },
+      ],
+    };
+    let advertisedOffer = offer;
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url.endsWith("/v1/catalog")) {
+        return Response.json({ providers: [{ ...row, offers: [advertisedOffer] }] });
+      }
+      expect(request.url).toBe("https://clawrouter.example/v1/chat/completions");
+      expect(request.headers.get("authorization")).toBe("Bearer fusion-key");
+      expect(await request.json()).toMatchObject({ model: "clawrouter/fusion", stream: true });
+      const chunk = {
+        id: "fixture",
+        object: "chat.completion.chunk",
+        created: 0,
+        model: "clawrouter/fusion",
+        choices: [
+          { index: 0, delta: { role: "assistant", content: "Hello" }, finish_reason: "stop" },
+        ],
+        usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+      };
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const context = {
+      ...dynamicModelContext(),
+      modelId: "clawrouter/fusion",
+      providerConfig: { baseUrl: "https://clawrouter.example/v1", models: [] },
+    };
+    const model = await prepare(context);
+    expect(model).toMatchObject({ id: "clawrouter/fusion", api: "openai-completions" });
+    if (!model) {
+      throw new Error("Fusion was not discovered");
+    }
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "clawrouter",
+      modelId: model.id,
+      streamFn: streamSimple,
+    });
+    if (!wrapped) {
+      throw new Error("missing stream wrapper");
+    }
+    const result = await (
+      await wrapped(
+        model,
+        { messages: [{ role: "user", content: "Hello", timestamp: 0 }] },
+        { apiKey: "fusion-key", maxTokens: 64 },
+      )
+    ).result();
+    expect(result.content).toEqual([{ type: "text", text: "Hello" }]);
+    expect(result.usage).toMatchObject({ input: 2, output: 1 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const patch of [
+      { eligible: false },
+      { modelId: "other/model" },
+      { routeKind: "native" },
+      { route: "/v1/playground/v1/chat/completions" },
+      { endpoint: "responses" },
+    ]) {
+      clearLiveCatalogCacheForTests();
+      advertisedOffer = { ...offer, ...patch };
+      await expect(prepare(context)).resolves.toBeUndefined();
+    }
+  });
+
   it("surfaces catalog refresh failures", async () => {
     providerAuthRuntimeMocks.resolveApiKeyForProvider
       .mockResolvedValueOnce({ apiKey: "decoy-token" })
@@ -459,6 +610,13 @@ describe("ClawRouter plugin", () => {
     ],
     ["google-generative-ai", "google/gemini-3.5-flash", { validateGeminiTurns: true }],
     ["openai-completions", "deepseek/deepseek-v4-flash", { sanitizeToolCallIds: true }],
+    [
+      "openai-completions",
+      "mistral/mistral-large-latest",
+      { sanitizeToolCallIds: true, toolCallIdMode: "strict9" },
+    ],
+    ["openai-completions", "openrouter/mistralai/large", { toolCallIdMode: "strict" }],
+    ["openai-responses", "mistral/mistral-large-latest", { toolCallIdMode: "strict" }],
   ])("dispatches replay policy for %s", (modelApi, modelId, expected) => {
     expect(
       provider.buildReplayPolicy?.({ provider: "clawrouter", modelApi, modelId } as never),

@@ -37,7 +37,12 @@ it("runs release tooling only from the trusted revision without persisted creden
   expect(tooling.length).toBeGreaterThan(0);
   for (const entry of tooling) {
     const checkout = entry.with as Record<string, unknown>;
-    expect(checkout).toMatchObject({ ref: "${{ github.sha }}", "persist-credentials": false });
+    // The publisher tooling scan runs the admitted publisher P, FRV's other trusted revision.
+    const ref =
+      entry.name === "Checkout publisher tooling"
+        ? "${{ env.PUBLISHER_SHA }}"
+        : "${{ github.sha }}";
+    expect(checkout).toMatchObject({ ref, "persist-credentials": false });
     const sparseCheckout = checkout["sparse-checkout"];
     if (sparseCheckout !== undefined) {
       assert(typeof sparseCheckout === "string");
@@ -51,6 +56,25 @@ it("runs release tooling only from the trusted revision without persisted creden
     expect(checkout.path).not.toBe("workflow");
     expect(String(checkout["sparse-checkout"]).split(/\s+/u)).not.toContain("scripts");
   }
+});
+
+it("scans with publisher tooling while the plugin npm preflight child runs", () => {
+  const job = workflow.jobs.prepare_plugin_npm;
+  const names = job?.steps.map((entry) => entry.name) ?? [];
+  const from = names.indexOf("Dispatch exact plugin npm artifact preflight") + 1;
+  const scan = job?.steps.slice(
+    from,
+    names.indexOf("Resolve and seal exact plugin npm artifact descriptor"),
+  );
+  expect(scan?.map((entry) => entry.if)).toEqual(
+    Array(5).fill(
+      "env.PUBLISHER_SHA != '' && env.PUBLISHER_SHA != github.sha && env.PUBLICATION_ROUTE == 'normal'",
+    ),
+  );
+  expect(job?.env?.PUBLISHER_SHA).toContain(".qualificationAdmission.workflowSha");
+  expect(scan?.at(-1)?.run).toMatch(
+    /tsx \.release-tooling\/scripts\/plugin-npm-release-plan\.ts[\s\S]*tsx \.release-tooling\/scripts\/check-plugin-npm-security-scan\.mts \\\n\s+--tooling-root \.release-tooling/u,
+  );
 });
 
 describe("full release same-parent recovery workflow", () => {
@@ -200,18 +224,72 @@ describe("full release same-parent recovery workflow", () => {
     expect(source).not.toContain("continuation_plan_json");
   });
 
-  it("routes compact reuse revalidation through the admitted verifier and exact target", () => {
-    expect(step("evidence_reuse", "Find reusable validation evidence").env).toMatchObject({
-      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:
-        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}",
-      TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
-    });
-    expect(step("summary", "Write release validation manifest").env).toMatchObject({
-      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:
-        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}",
-      TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
-    });
-  });
+  it.each([
+    ["failure", false, "/workspace"],
+    ["success", true, "/workspace/qualification-verifier"],
+  ] as const)(
+    "uses materialized verifier paths after %s target resolution",
+    (result, verifierCheckedOut, verifierRoot) => {
+      const verifierSha = "a".repeat(40);
+      const targetSha = "b".repeat(40);
+      const evaluate = (expression: unknown): unknown => {
+        assert(typeof expression === "string");
+        return runInNewContext(expression.replace(/^\$\{\{|\}\}$/gu, ""), {
+          needs: {
+            resolve_target: {
+              result,
+              outputs: {
+                source_admission_json: JSON.stringify({
+                  qualificationAdmission: { workflowSha: verifierSha },
+                }),
+                sha: targetSha,
+              },
+            },
+          },
+          github: { workspace: "/workspace" },
+          fromJSON: JSON.parse,
+          format: (pattern: string, value: string) => pattern.replace("{0}", value),
+        });
+      };
+      for (const jobName of [
+        "release_decision",
+        "diagnostic_drain",
+        "summary",
+        "release_execution_plan",
+        "evidence_reuse",
+      ]) {
+        const job = workflow.jobs[jobName];
+        assert(job);
+        const checkout = step(jobName, "Checkout admitted qualification verifier");
+        expect(evaluate(checkout.if), jobName).toBe(verifierCheckedOut);
+        expect(evaluate((checkout.with as Record<string, unknown>).ref), jobName).toBe(verifierSha);
+        if (job.env?.RELEASE_STATE_SCRIPT) {
+          expect(evaluate(job.env.RELEASE_STATE_SCRIPT), jobName).toBe(
+            `${verifierRoot}/scripts/full-release-validation-state.mjs`,
+          );
+        }
+        for (const entry of job.steps) {
+          const env = entry.env as Record<string, unknown> | undefined;
+          if (env?.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR) {
+            const root =
+              jobName === "evidence_reuse" && !verifierCheckedOut
+                ? "/workspace/workflow"
+                : verifierRoot;
+            expect(evaluate(env.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR), jobName).toBe(
+              `${root}/scripts/release-ci-summary.mjs`,
+            );
+          }
+        }
+      }
+      for (const [jobName, stepName] of [
+        ["evidence_reuse", "Find reusable validation evidence"],
+        ["summary", "Write release validation manifest"],
+      ] as const) {
+        const env = step(jobName, stepName).env as Record<string, unknown>;
+        expect(evaluate(env.TARGET_SHA)).toBe(targetSha);
+      }
+    },
+  );
 
   it("restores the immutable attempt-one plan instead of rebuilding child identity", () => {
     const cache = step("release_execution_plan", "Cache immutable release execution plan");

@@ -135,10 +135,18 @@ it("opens during activation and preserves filter focus and query across catalog 
   expect(beta.checkVisibility()).toBe(true);
   beta.focus();
   expect(document.activeElement).toBe(beta);
+  params.modelOptions = params.modelOptions.toReversed();
+  params.selectedModelValue = "other/gamma";
   update();
   await Promise.resolve();
   expect(document.activeElement).toBe(beta);
+  expect(option("example/beta")).toBe(beta);
   expect(search.value).toBe("beta");
+  expect(
+    [...container.querySelectorAll<HTMLElement>("[data-chat-model-provider-group]")].map(
+      (group) => group.dataset.chatModelProviderGroup,
+    ),
+  ).toEqual(["other", "example"]);
   trigger.focus();
   await userEvent.keyboard("1");
   expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);

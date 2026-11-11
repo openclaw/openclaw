@@ -54,6 +54,7 @@ export async function ensureDeviceToken(params: {
   role: string;
   scopes: string[];
   issuer?: DeviceAuthToken["issuer"];
+  approval?: DeviceAuthToken["approval"];
   isIssuanceCurrent?: () => boolean;
 }): Promise<DeviceAuthToken | null> {
   const { isIssuanceCurrent, ...input } = params;

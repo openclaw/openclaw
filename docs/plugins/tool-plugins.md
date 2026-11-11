@@ -280,6 +280,13 @@ policy, not authority: a wake is never an owner turn (`senderIsOwner` is not
 callers. Restart uses the root session’s standard resume input rather than an
 "Exec lost" notification.
 
+`toolContext.backgroundRun` is present when the tool runs inside a hidden
+background fork of another session: `sourceSessionKey` names that session, and
+`ownerPluginId` names the plugin that started the fork with
+[`api.runtime.subagent.runForkedTurn`](/plugins/sdk-runtime#forked-turns-with-plugin-tools).
+It is absent for forks core starts. Like `inputProvenance`, it is a fact for
+plugin-owned policy, not authority.
+
 A factory may return a core `AgentTool`, an array of them, or `null` or
 `undefined` to opt out, as the example above does. When it returns a concrete
 tool, that tool uses the core runtime signature
@@ -334,6 +341,12 @@ run/worker authority; a continuation also checks the original owner's live
 exact-parent binding. Standalone HTTP/RPC calls use their authenticated request
 lifetime, while MCP tools retain the existing authenticated grant or
 loopback-runtime lifetime.
+The guard identifies the invoking call from its async context. Awaited work keeps
+that context, but callbacks from an event source shared across calls, such as a
+cached connection's event listeners, can run in another call's context, such as
+the call that created the source. Capture `AsyncLocalStorage.snapshot()` when the call starts and run
+the guard through it in those callbacks. The same applies to runtime helpers that
+act as the current caller, such as `api.runtime.gateway.request`.
 Metadata-only catalog construction does not grant invocation authority. A retained
 versioned tool without an admitted invocation fails when its guard is called.
 

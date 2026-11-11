@@ -15,7 +15,6 @@ import {
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
 import { normalizeControlUiMockAuth, type ControlUiMockAuth } from "./control-ui-mock-auth.ts";
 import type { ControlUiMockPresenceScenario } from "./control-ui-mock-presence.ts";
-import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
 
 export interface ControlUiMockGatewayScenario
@@ -23,7 +22,6 @@ export interface ControlUiMockGatewayScenario
   bootstrapPreferences?: ControlUiBootstrapConfig["preferences"];
   /** Auto-wait for sidebar rosters unless startup is held or connect fails; true overrides those skips, false disables the wait. */
   awaitInitialRoster?: boolean;
-  nativePlugins?: readonly NativeControlUiPluginFixture[];
   pluginAssetsRequireAuth?: boolean;
   pluginSurfaceUrls?: Record<string, string>;
   attachmentMaxBytes?: number;
@@ -60,6 +58,8 @@ export interface ControlUiMockGatewayScenario
   heldMethods?: string[];
   /** Hold only requests matching these method and parameter selectors. */
   heldRequests?: MockGatewayRequestSelector[];
+  /** Delay only these RPC handlers; `forever` waits for setMethodDelay to release it. */
+  methodDelays?: Record<string, number | "forever">;
   /** Fail each admission-dependent read this many times before serving its normal response. */
   startupPendingResponses?: number;
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
@@ -75,6 +75,9 @@ export interface ControlUiMockGatewayScenario
   updateSchedule?: UpdateScheduleState | null;
   controlUiBuildSource?: "bundled" | "configured";
   serverVersion?: string;
+  /** Startup-bound Gateway commit and build time; empty values are omitted from hello. */
+  serverCommit?: string;
+  serverBuiltAt?: string;
   featureEvents?: string[];
   featureMethods?: string[];
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
@@ -141,11 +144,17 @@ type ControlUiPluginHello = Required<
 export type NormalizedControlUiMockGatewayScenario = Required<
   Omit<
     ControlUiMockGatewayScenario,
-    "nativePlugins" | "awaitInitialRoster" | "bootstrapPreferences" | keyof ControlUiPluginHello
+    | "awaitInitialRoster"
+    | "bootstrapPreferences"
+    | "profileActivityViewerId"
+    | keyof ControlUiPluginHello
   >
 > &
-  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences"> & {
+  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences" | "profileActivityViewerId"> & {
+    operatorRolePolicy: ReturnType<typeof normalizeControlUiMockAuth>["operatorRolePolicy"];
     controlUiPluginHello: ControlUiPluginHello;
+    /** Running-Gateway identity in hello; unset commit and build time are omitted. */
+    serverRelease: { version: string; commit?: string; builtAt?: string };
   };
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
@@ -207,6 +216,7 @@ export function normalizeScenario(
     deferredRequests: scenario.deferredRequests ?? [],
     heldMethods: scenario.heldMethods ?? [],
     heldRequests: scenario.heldRequests ?? [],
+    methodDelays: scenario.methodDelays ?? {},
     startupPendingResponses: scenario.startupPendingResponses ?? 0,
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || sharedBuildInfo?.buildId || "e2e",
@@ -216,6 +226,13 @@ export function normalizeScenario(
     updateSchedule: scenario.updateSchedule ?? null,
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
     serverVersion: scenario.serverVersion?.trim() || sharedBuildInfo?.version || "e2e",
+    serverCommit: scenario.serverCommit ?? "",
+    serverBuiltAt: scenario.serverBuiltAt ?? "",
+    serverRelease: {
+      version: scenario.serverVersion?.trim() || sharedBuildInfo?.version || "e2e",
+      ...(scenario.serverCommit ? { commit: scenario.serverCommit } : {}),
+      ...(scenario.serverBuiltAt ? { builtAt: scenario.serverBuiltAt } : {}),
+    },
     ...normalizeControlUiMockAuth(scenario),
     featureEvents: scenario.featureEvents ?? [],
     // Baseline scenarios represent a current Gateway. Tests for unsupported or

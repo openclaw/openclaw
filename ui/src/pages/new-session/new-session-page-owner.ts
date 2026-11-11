@@ -2,6 +2,7 @@ import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { patchSettings } from "../../app/settings.ts";
+import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
@@ -34,8 +35,15 @@ import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import type { SubmissionPresentation } from "./submission-action.ts";
 
+export type NewSessionPageProps = {
+  data: NewSessionRouteData | undefined;
+  /** Shell facts for the phone header, which the draft owns as chat does. */
+  navDrawerOpen: boolean;
+  gatewayStatus: GatewayStatusProps | null;
+};
+
 export type PageHost = SolidBridgeElement<
-  { data: NewSessionRouteData | undefined },
+  NewSessionPageProps,
   {
     focusComposer(): void;
   }
@@ -111,7 +119,7 @@ export class NewSessionPageOwner {
     }
   };
   imageLightbox: ImageLightboxItem | null = null;
-  agentPickerOpen = false;
+  readAgentIdentityTargets: () => readonly string[] = () => [];
   agentPicker: HTMLSpanElement | undefined;
   readonly draft: NewSessionDraft;
   readonly gateway: DraftGatewayState;
@@ -184,6 +192,8 @@ export class NewSessionPageOwner {
     this.dictation = new DirectDictationControl({
       textarea: this.submission.composerTextarea,
       getClient: () => this.gateway.client,
+      prepareSession: () => this.submission.sessionStartup.prepareDictationSession(),
+      getSessionKey: () => this.submission.sessionStartup.dictationSessionKey(),
       isConnected: () => this.gateway.connected,
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),
@@ -297,9 +307,9 @@ export class NewSessionPageOwner {
       this.connectMachine.close();
     }
     this.gateway.retryPendingCatalogTarget();
-    void this.context?.agentIdentity.ensure(
-      this.agentPickerOpen ? this.place.agents().map((agent) => agent.id) : [this.place.agentId],
-    );
+    void this.context?.agentIdentity.ensure([
+      ...new Set([this.place.agentId, ...this.readAgentIdentityTargets()]),
+    ]);
     const agentsReady = this.draft.agentsReady();
     this.place.modelControl.loadCatalogTargets(
       this.context,
@@ -410,8 +420,6 @@ export class NewSessionPageOwner {
       },
       mentions: submission.mentions,
       getMentions: () => submission.mentions,
-      visibility: submission.visibility,
-      draftAvailable: capabilities.canStartAsDraft(context),
       ...capabilities.composerProps(context, gateway, place.agentId),
       modelControl: place.modelControl,
       requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
@@ -431,17 +439,22 @@ export class NewSessionPageOwner {
       onInput: (message, mentions) => this.setMessageFromUser(message, mentions),
       onOpenImage: this.setImageLightbox,
       onOpenSidebar: this.openAttachmentPanel,
-      onVisibilityChange: (visibility) => {
-        if (!submission.submitting && !submission.pendingPlacement.sessionKey) {
-          submission.setVisibility(visibility);
-        }
-      },
       onSubmit: () => void this.submit(),
       onBackgroundSubmit:
         submission.visibility === "draft" || isCatalogTarget
           ? undefined
           : () => void this.submit(true),
     };
+  }
+
+  welcomeHint(): string {
+    return t(
+      catalog.isTarget(this.data)
+        ? "newSession.nativeTerminalHint"
+        : this.place.requiredPlacement
+          ? "newSession.requiredWorkerHint"
+          : "newSession.hint",
+    );
   }
 
   welcomeOptions(): DraftWelcomeOptions {
@@ -453,13 +466,7 @@ export class NewSessionPageOwner {
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
       assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
       assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),
-      hint: t(
-        catalog.isTarget(this.data)
-          ? "newSession.nativeTerminalHint"
-          : this.place.requiredPlacement
-            ? "newSession.requiredWorkerHint"
-            : "newSession.hint",
-      ),
+      hint: this.welcomeHint(),
       hideSecondaryContent: this.submission.visibility === "incognito",
       fadeSecondaryContent: this.submission.message.trim().length > 0,
       modelSetupRequired: this.submission.requiresModelSetup(),

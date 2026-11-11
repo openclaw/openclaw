@@ -70,9 +70,9 @@ async function writeRichProject(root: string): Promise<void> {
 
 describe("Template projects", () => {
   it("matches the cross-platform golden artifact digest", async () => {
-    const output = join(tempDirs.make("openclaw-template-golden-"), "golden.tgz");
-    const result = await buildTemplateProject(goldenProject, output);
-
+    const project = join(tempDirs.make("openclaw-template-golden-"), "project");
+    await symlink(goldenProject, project, process.platform === "win32" ? "junction" : "dir");
+    const result = await buildTemplateProject(project, `${project}.tgz`);
     expect(result.integrity).toBe(GOLDEN_ARTIFACT_INTEGRITY);
   });
 

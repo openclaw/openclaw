@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://127.0.0.1:18789/new"} */
-import { PROTOCOL_VERSION } from "@openclaw/gateway-client/browser";
+import { gatewayCredentialScope, PROTOCOL_VERSION } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { takeEarlyGatewaySubscription } from "../api/gateway-boot.ts";
 import {
   getLatestWebSocket,
   MockWebSocket,
@@ -9,8 +10,18 @@ import {
   wsInstances,
 } from "../api/gateway-socket.test-support.ts";
 import type { startControlUi } from "../main.runtime.ts";
+import {
+  discardPrewarmedChatSnapshot,
+  peekPrewarmedChatSnapshot,
+} from "../pages/chat/chat-snapshot-prewarm.ts";
+import * as snapshotDatabase from "../pages/chat/session-snapshot-database.ts";
+import {
+  CHAT_SNAPSHOT_PROJECTION_VERSION,
+  type SessionSnapshotRecord,
+} from "../pages/chat/session-snapshot-record.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { prepareApplicationStartup } from "./bootstrap-connection.ts";
+import { makeBootRecord } from "./bootstrap.test-support.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import { startEarlyApplicationGateway, type EarlyApplicationGateway } from "./early-gateway.ts";
 import * as gatewayCredentials from "./gateway-store.credentials.ts";
@@ -45,6 +56,7 @@ beforeEach(() => {
 afterEach(() => {
   runtime?.stop();
   early?.transport.client.stop();
+  discardPrewarmedChatSnapshot();
   runtime = undefined;
   early = undefined;
   mainRuntime.startControlUi.mockClear();
@@ -151,21 +163,189 @@ it("rejects preconnection when the document URL changes before adoption", async 
   expect(wsInstances[0]?.readyState).toBe(3);
 });
 
-it.each(["native", "confirmation", "document", "relay"])(
-  "keeps %s startup with its ordinary owner",
-  (boundary) => {
-    const initial = prepareApplicationStartup();
-    if (boundary === "native") {
-      initial.startup.nativeClient = { clientName: "openclaw-control-ui", mode: "webchat" };
-    } else if (boundary === "confirmation") {
-      initial.hasPendingGateway = true;
-    } else if (boundary === "document") {
-      initial.ownsWarmBoot = false;
-    } else {
-      document.documentElement.setAttribute("data-openclaw-remote-ingress", "true");
-    }
-    expect(startEarlyApplicationGateway(initial)).toBeUndefined();
+it.each([
+  ["native", "/new"],
+  ["confirmation", "/new"],
+  ["document", "/new"],
+  ["relay", "/new"],
+  ["confirmation", "/dashboard/main/dashboard/proof"],
+])("keeps %s startup with its ordinary owner on %s", (boundary, pathname) => {
+  window.history.replaceState({}, "", pathname);
+  const initial = prepareApplicationStartup();
+  if (boundary === "native") {
+    initial.startup.nativeClient = { clientName: "openclaw-control-ui", mode: "webchat" };
+  } else if (boundary === "confirmation") {
+    initial.hasPendingGateway = true;
+  } else if (boundary === "document") {
+    initial.ownsWarmBoot = false;
+  } else {
+    document.documentElement.setAttribute("data-openclaw-remote-ingress", "true");
+  }
+  expect(startEarlyApplicationGateway(initial)).toBeUndefined();
+  expect(wsInstances).toHaveLength(0);
+});
+
+it.each(["/dashboard/main", "/dashboard/main/abcdef12"])(
+  "leaves non-literal dashboard route %s with its resolver",
+  (pathname) => {
+    window.history.replaceState({}, "", pathname);
+    expect(startEarlyApplicationGateway(prepareApplicationStartup())).toBeUndefined();
     expect(wsInstances).toHaveLength(0);
+  },
+);
+
+it("starts literal dashboard history on the early transport after hello", async () => {
+  window.history.replaceState({}, "", "/dashboard/main/dashboard/proof");
+  early = startEarlyApplicationGateway(prepareApplicationStartup());
+  expect(early).toBeDefined();
+  expect(wsInstances).toHaveLength(1);
+  const socket = getLatestWebSocket();
+  socket.emitOpen();
+  socket.emitConnectChallenge({ nonce: "dashboard-early", ts: 1_800_000_000_000 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(socket.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
+  const connect = JSON.parse(socket.sent[0]!);
+  socket.emitMessage({
+    type: "res",
+    id: connect.id,
+    ok: true,
+    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual(
+    expect.objectContaining({
+      method: "sessions.messages.subscribe",
+      params: expect.objectContaining({
+        key: "agent:main:dashboard:proof",
+        initialHistory: { limit: 80, knownState: {}, maxBytes: 262144, toolResultMaxChars: 2000 },
+      }),
+    }),
+  );
+});
+
+function prepareWarmSnapshot(pathname = "/chat/main/warm", savedKey = "agent:main:warm") {
+  window.history.replaceState({}, "", pathname);
+  const gatewayUrl = loadSettings().gatewayUrl;
+  persistSessionToken(gatewayUrl, "test-token");
+  saveSettings({ ...loadSettings(), sessionKey: savedKey, lastActiveSessionKey: savedKey });
+  const record = makeBootRecord(gatewayCredentialScope(gatewayUrl), {
+    recoveryScope: "account-a",
+  });
+  localStorage.setItem("openclaw.control.bootRecord.v1:" + record.scope, JSON.stringify(record));
+  const read = Promise.withResolvers<unknown>();
+  vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValue(read.promise);
+  const initial = prepareApplicationStartup();
+  early = startEarlyApplicationGateway(initial);
+  initial.prewarmChatSnapshot();
+  if (!early?.credentials) {
+    throw new Error("Expected a warm early Gateway");
+  }
+  const entry = peekPrewarmedChatSnapshot();
+  if (!entry) {
+    throw new Error("Expected startup to prewarm the scoped snapshot");
+  }
+  return {
+    initial,
+    entry,
+    transport: early.transport,
+    resolve() {
+      read.resolve({
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
+        savedAt: 1,
+        sessionKey: entry.cacheKey,
+        sessionId: "warm-session",
+        snapshot: {
+          messages: [{ role: "assistant", content: "Stored conversation" }],
+          pagination: { hasMore: false, completeSnapshot: true },
+          sessionId: "warm-session",
+          deltaCursor: "warm-cursor",
+          historyState: { stateRevision: { commands: "commands-1" }, commands: [] },
+        },
+      } satisfies SessionSnapshotRecord);
+      return entry.ready;
+    },
+  };
+}
+
+async function connectWarmGateway() {
+  const socket = getLatestWebSocket();
+  socket.emitOpen();
+  socket.emitConnectChallenge({ nonce: "warm-early", ts: 1_800_000_000_000 });
+  await vi.advanceTimersByTimeAsync(0);
+  const connect = JSON.parse(socket.sent[0]!);
+  socket.emitMessage({
+    type: "res",
+    id: connect.id,
+    ok: true,
+    payload: {
+      type: "hello-ok",
+      protocol: PROTOCOL_VERSION,
+      auth: { method: "token", role: "operator", scopes: [], recoveryScope: "account-a" },
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  return socket;
+}
+
+it.each(["before", "after"])(
+  "requests warm cursor history prepared %s hello before mounting the pane",
+  async (timing) => {
+    const warm = prepareWarmSnapshot();
+    if (timing === "before") {
+      await warm.resolve();
+    }
+    expect(getLatestWebSocket().sent).toEqual([]);
+    const socket = await connectWarmGateway();
+    if (timing === "after") {
+      await warm.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual(
+      expect.objectContaining({
+        method: "sessions.messages.subscribe",
+        params: expect.objectContaining({
+          key: "agent:main:warm",
+          initialHistory: {
+            limit: 80,
+            maxBytes: 262144,
+            toolResultMaxChars: 2000,
+            cursor: "warm-cursor",
+            knownState: { commands: "commands-1" },
+          },
+        }),
+      }),
+    );
+    expect(runtime).toBeUndefined();
+  },
+);
+
+it.each(["different route cache", "foreground handoff", "retired recovery scope"])(
+  "leaves warm history with the pane after %s",
+  async (change) => {
+    const warm =
+      change === "different route cache"
+        ? prepareWarmSnapshot(
+            "/dashboard/main/mission-control",
+            "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+          )
+        : prepareWarmSnapshot();
+    const socket = await connectWarmGateway();
+    if (change === "foreground handoff") {
+      expect(
+        warm.transport.adopt({
+          url: warm.initial.settings.gatewayUrl,
+          token: warm.initial.settings.token,
+        }),
+      ).toBe(warm.transport.client);
+      await expect(
+        takeEarlyGatewaySubscription(warm.transport.client, "agent:main:warm", {}),
+      ).resolves.toBeNull();
+    } else if (change === "retired recovery scope") {
+      warm.transport.client.retireOfflineRecoveryScope();
+    }
+    await warm.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
   },
 );
 

@@ -539,6 +539,7 @@ describe("update repair ledger recovery", () => {
     const root = fs.realpathSync(await mocks.resolveRoot());
     const handoff = createManagedHandoffRecoveryFixture(root);
     handoff.seedCancellation({ ageMs: 60_000 });
+    handoff.processCensus.unverifiedPids.push(81236);
     const family = handoff.rows();
 
     await expect(withCliProcessScope(() => updateRepairCommand({ json: true }))).rejects.toEqual(
@@ -559,7 +560,9 @@ describe("update repair ledger recovery", () => {
         owner: "original-owner",
         leaseVersion: 4,
         lastActivityAt: new Date(family[0]!.updated_at).toISOString(),
-        reason: expect.stringContaining("recovery grace ends at"),
+        reason: expect.stringContaining(
+          "Handoff descendants remain alive or unverified: PID 81236",
+        ),
       },
     });
     expect(handoff.rows()).toEqual(family);

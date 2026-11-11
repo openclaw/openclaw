@@ -301,22 +301,11 @@ a.activity-current-work__row:hover {
   color: var(--text-strong);
 }
 
-.activity-feed__people-count,
-.activity-feed__people-group-label {
+.activity-feed__people-count {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-}
-
-.activity-feed__people-count {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
-}
-
-.activity-feed__people-group-label {
-  padding: var(--space-1) var(--space-2);
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .activity-feed__main {
@@ -350,7 +339,12 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
+.activity-feed__loading {
+  --skeleton-base: var(--skeleton-base-raised);
+}
+
 .activity-pulse--loading {
+  background: var(--skeleton-base);
   height: 108px;
 }
 
@@ -391,7 +385,7 @@ a.activity-current-work__row:hover {
   height: 7px;
   margin-right: var(--space-1);
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--status-running);
 }
 
 .activity-pulse__bars {
@@ -454,11 +448,6 @@ a.activity-current-work__row:hover {
 
 .activity-feed__day > h3 {
   margin: 0 0 var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .activity-feed__sessions,
@@ -497,14 +486,6 @@ a.activity-current-work__row:hover {
   margin: 0;
 }
 
-.activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
-  background: linear-gradient(90deg, var(--text) 35%, var(--muted) 50%, var(--text) 65%);
-  background-size: 200% 100%;
-  background-clip: text;
-  color: transparent;
-  animation: text-shimmer 2.4s ease-in-out infinite;
-}
-
 .activity-feed__recap-skeleton {
   display: grid;
   gap: var(--space-2);
@@ -521,14 +502,6 @@ a.activity-current-work__row:hover {
   width: 30%;
   height: 11px;
   margin-top: var(--space-1);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
-    animation: none;
-    background: none;
-    color: var(--text);
-  }
 }
 
 .activity-feed__note,
@@ -726,7 +699,7 @@ a.activity-current-work__row:hover {
   bottom: auto;
   left: -2px;
   border-color: var(--card);
-  background: var(--accent);
+  background: var(--status-running);
   animation: pulse-subtle 1.8s ease-in-out infinite;
 }
 
@@ -924,7 +897,8 @@ a.activity-current-work__row:hover {
   padding: 0;
 }
 
-.activity-live-filter-trigger.active {
+.activity-live-filter-trigger.active,
+.activity-feed__people-trigger.active {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-subtle);
@@ -959,11 +933,6 @@ a.activity-current-work__row:hover {
   cursor: var(--cursor-action);
 }
 
-.activity-status-filter input {
-  margin: 0;
-}
-
-.activity-status-filter:focus-within,
 .activity-entry__summary:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
@@ -1170,5 +1139,211 @@ a.activity-current-work__row:hover {
     display: block;
     width: auto;
     height: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Search and person share a row; the time range takes the full row below. */
+  .activity-feed__search,
+  .activity-live-search {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .activity-feed__search input,
+  .activity-live-search input {
+    text-overflow: ellipsis;
+  }
+
+  .activity-feed__people-control {
+    margin-left: 0;
+  }
+
+  .activity-feed__time-filter {
+    display: flex;
+    flex: 1 0 100%;
+    order: 1;
+  }
+
+  .activity-feed__time-filter > .settings-segmented__btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .activity-feed__people-trigger,
+  .activity-live-filter-trigger,
+  .activity-live-actions__trigger {
+    width: var(--settings-control-height);
+    min-width: 0;
+    max-width: none;
+    height: var(--settings-control-height);
+    padding: 0;
+    justify-content: center;
+  }
+
+  .activity-feed__people-trigger svg,
+  .activity-live-actions__trigger svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .activity-live-actions__trigger .oc-menu-item__label {
+    display: inline-flex;
+    flex: none;
+  }
+
+  .activity-live-toolbar {
+    flex-wrap: nowrap;
+  }
+
+  .activity-live-filter-trigger {
+    margin-left: 0;
+  }
+
+  .activity-live-filter-popover__panel {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .activity-live-autofollow {
+    justify-content: space-between;
+  }
+
+  /* The panel's labels read as one set: statuses, Tool and Auto-follow. */
+  .activity-live-filter-popover__panel .field > span,
+  .activity-live-autofollow {
+    color: var(--text);
+    font-size: var(--control-ui-text-sm);
+    font-weight: var(--control-ui-font-weight-normal);
+  }
+
+  /* The page scrolls here, so Active sessions takes the height it needs instead of
+     clipping a row inside a second scroller. */
+  .activity-current-work {
+    max-height: none;
+  }
+
+  .activity-current-work__rows {
+    overflow: clip;
+  }
+
+  /* Live rows separate by spacing, not hairlines. */
+  .activity-stream {
+    border-top: 0;
+  }
+
+  .activity-entry {
+    border-bottom: 0;
+  }
+
+  .activity-entry + .activity-entry {
+    margin-top: var(--space-1);
+  }
+
+  /* Feedback keeps its reserved box but no longer holds a gap open: it floats over
+     the content when there is something to say, so results still never shift. */
+  .activity-feed__feedback {
+    position: relative;
+    z-index: 1;
+    margin: 0 0 calc(-1 * var(--settings-control-height));
+    pointer-events: none;
+  }
+
+  .activity-feed__feedback:has(> span:not(:empty), > button) {
+    padding-inline: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    pointer-events: auto;
+  }
+
+  .activity-feed__toolbar {
+    padding-block: var(--space-3);
+  }
+
+  .activity-feed__main {
+    padding-top: 0;
+  }
+
+  /* Rows: title, one meta line, recap, with Inspect run closing the last line. */
+  .activity-feed__session {
+    align-items: start;
+  }
+
+  .activity-feed__automation-group {
+    align-items: center;
+  }
+
+  .activity-feed__session-row:has(.activity-feed__inspect-run) .activity-feed__session {
+    padding-right: var(--space-4);
+  }
+
+  .activity-feed__session-headline {
+    color: var(--muted);
+    font-size: var(--control-ui-text-sm);
+  }
+
+  .activity-feed__session-meta--line {
+    align-items: baseline;
+    gap: var(--space-1);
+    white-space: nowrap;
+  }
+
+  .activity-feed__session-meta--line > * + *::before {
+    margin-inline-end: var(--space-1);
+    content: "\00b7";
+  }
+
+  .activity-feed__session-meta--line > .activity-feed__session-owner {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .activity-feed__session-meta--line > .activity-feed__session-scope {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .activity-feed__session-meta--line > .activity-feed__session-source,
+  .activity-feed__session-meta--line > .activity-feed__session-time {
+    display: block;
+    flex: none;
+    max-width: none;
+  }
+
+  .activity-feed__session-meta--line .agent-row-chip__avatar {
+    display: none;
+  }
+
+  .activity-feed__session-meta--line openclaw-agent-row-chip {
+    vertical-align: baseline;
+  }
+
+  /* Inspect run shares a short recap's line; otherwise it wraps below at one fixed gap,
+     so text, loading and note states all place it the same way. */
+  .activity-feed__recap:not(.activity-feed__recap-skeleton) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .activity-feed__recap-text {
+    min-width: 0;
+  }
+
+  .activity-feed__recap > .activity-feed__recap-skeleton {
+    flex: 1 0 100%;
+  }
+
+  .activity-feed__inspect-run {
+    position: static;
+    flex: none;
+    margin-inline-start: auto;
+    opacity: 1;
+    pointer-events: auto;
+    translate: none;
   }
 }

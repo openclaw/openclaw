@@ -67,6 +67,7 @@ import {
 import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
 import {
   buildGatewayExecApprovalFollowupSummary,
+  buildGatewayExecAllowlistDeniedMessage,
   publishGatewayGuardianReview,
   buildGatewayExecApprovalDeniedToolResult,
   resolveGatewayExecApprovalFollowupText,
@@ -112,7 +113,6 @@ function recordAutoReviewDenial(sessionKey: string | undefined): number {
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
-  const cleanupMs = params.cleanupMs;
   const deny = (deniedReason: string, approvalId?: string): ProcessGatewayAllowlistResult => ({
     deniedResult: buildGatewayExecApprovalDeniedToolResult({
       approvalId,
@@ -1110,7 +1110,7 @@ export async function processGatewayAllowlist(
               warnings: params.warnings,
               maxOutput: params.maxOutput,
               pendingMaxOutput: params.pendingMaxOutput,
-              cleanupMs,
+              cleanupMs: params.cleanupMs,
               notifyOnExit: false,
               notifyOnExitEmptySuccess: false,
               scopeKey: params.scopeKey,
@@ -1220,7 +1220,7 @@ export async function processGatewayAllowlist(
   }
 
   if (hasAllowlistMiss) {
-    throw new Error("exec denied: allowlist miss");
+    throw new Error(buildGatewayExecAllowlistDeniedMessage(allowlistEval));
   }
 
   await commitExecutionAuthorization({

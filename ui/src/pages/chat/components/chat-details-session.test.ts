@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
-import { createComponent, createSignal } from "solid-js";
+import { Loading, createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
+import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
+import { createContext, createSessions } from "../../../test-helpers/app-sidebar.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
 import {
   createGatewayRequestMock,
@@ -15,6 +17,7 @@ import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatContextPanel } from "./chat-context-panel.tsx";
 import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
@@ -22,11 +25,8 @@ import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { publication, sessionBranch, pullRequest } from "./chat-pull-requests.test-support.ts";
-import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
-type ChatSubagentActivityLive = SolidBridgeElement<SubagentActivityProps>;
-
-async function mount(overrides: Partial<ChatDetailsProps> = {}) {
+async function mount(overrides: Partial<ChatDetailsProps> = {}, context?: ApplicationContext) {
   const value: ChatDetailsProps = {
     sessionKey: "agent:main:details",
     currentAgentId: "main",
@@ -34,10 +34,20 @@ async function mount(overrides: Partial<ChatDetailsProps> = {}) {
     selectedSession: { key: "agent:main:details", kind: "direct" },
     ...overrides,
   };
-  const view = mountSolid(() =>
-    createComponent(ChatDetailsSession, { props: value, presented: true }),
+  const view = mountSolid(
+    () =>
+      createComponent(Loading, {
+        get children() {
+          return createComponent(ChatDetailsSession, { props: value, presented: true });
+        },
+      }),
+    { wrapper: context ? createSolidApplicationContextProvider(context).wrapper : undefined },
   );
-  const element = view.container.querySelector("openclaw-chat-details-session")!;
+  const element = await waitForSolid(() => {
+    const host = view.container.querySelector("openclaw-chat-details-session");
+    expect(host).not.toBeNull();
+    return host!;
+  });
   await element.updateComplete;
   return element;
 }
@@ -45,6 +55,90 @@ async function updateDetails(element: ChatDetailsSession, patch: Partial<ChatDet
   element.props = { ...element.props!, ...patch };
   await element.updateComplete;
 }
+it("hides only the authenticated viewer's complete self-only desktop People section", async () => {
+  const self = { identity: { type: "profile", id: "alex" }, label: "Alex" } as const;
+  const actor = { type: "human", id: "native-alex", ...self } as const;
+  const { gateway, publish } = createApplicationGateway();
+  const context = createContext(gateway, createSessions("main", []));
+  onTestFinished(disposeSidebarContextLifecycles);
+  const element = await mount(
+    {
+      sessionFactsReady: true,
+      desktopPresentation: {
+        peopleLabel: "People",
+        outputsLabel: "Outputs",
+        subagentsWorkingLabel: "Working",
+      },
+    },
+    context,
+  );
+  element.desktop = true;
+  const section = () => element.querySelector('[data-details-group="people"]');
+  const select = async (facts: Partial<GatewaySessionRow>, visible: boolean) => {
+    await updateDetails(element, {
+      selectedSession: { key: "agent:main:details", kind: "direct", ...facts },
+    });
+    expect(Boolean(section())).toBe(visible);
+  };
+  const onlySelf = {
+    owner: { actor },
+    createdActor: actor,
+    participants: [self],
+    participantCount: 1,
+  };
+  await select(onlySelf, true);
+  publish({
+    ...gateway.snapshot,
+    selfUser: {
+      id: "unrelated-native-id",
+      identity: self.identity,
+      name: "Different display name",
+    },
+  });
+  await waitForSolid(() => expect(section()).toBeNull());
+  // sessions.describe omits the owner from participants and omits empty metadata on the wire.
+  await select({ owner: { actor }, createdActor: actor }, false);
+  await select({ owner: { actor }, participants: [], participantCount: 0 }, false);
+  await select({ ...onlySelf, participantCount: undefined }, false);
+  await select({ ...onlySelf, participants: [self, { ...self, label: "Duplicate self" }] }, false);
+  const other = { identity: { type: "profile", id: "other" }, label: "Alex" } as const;
+  await select(
+    { owner: { actor: { type: "human", id: "other", ...other } }, participantCount: 0 },
+    true,
+  );
+  await select({ ...onlySelf, expandedParticipants: [self, other], participantCount: 2 }, true);
+  for (const facts of [
+    { ...onlySelf, participantCount: 2 },
+    { ...onlySelf, owner: { actor: { type: "human" as const, id: "alex", label: "Alex" } } },
+    { ...onlySelf, createdActor: { type: "human" as const, id: "alex", label: "Alex" } },
+    {
+      participantCount: 1,
+      participants: [
+        {
+          identity: {
+            type: "remote" as const,
+            pluginId: "chat",
+            domain: "team",
+            idKind: "user",
+            id: "alex",
+          },
+          label: "Alex",
+        },
+      ],
+    },
+  ]) {
+    await select(facts, true);
+  }
+  await select(onlySelf, false);
+  await updateDetails(element, { sessionFactsReady: false });
+  expect(section()).not.toBeNull();
+  await updateDetails(element, { sessionFactsReady: true });
+  expect(section()).toBeNull();
+  publish({ ...gateway.snapshot, selfUser: { id: "alex", name: "Alex" } });
+  await waitForSolid(() => expect(section()).not.toBeNull());
+  publish({ ...gateway.snapshot, selfUser: undefined });
+  await waitForSolid(() => expect(section()).not.toBeNull());
+});
 it("omits empty linked-work disclosures and opens arriving pull requests", async () => {
   const element = await mount();
   const linkedWork = () =>
@@ -271,6 +365,51 @@ it("uses the current PR renderer and preserves CI session identity and branch di
   });
   expect(element.querySelector(".chat-pr")).toBeNull();
 });
+it.each([false, true])(
+  "omits subsessions from Details, including retained snapshots (desktop=%s)",
+  async (desktop) => {
+    const parent = "agent:main:details";
+    const child = (key: string, label: string): GatewaySessionRow => ({
+      key,
+      label,
+      kind: "direct",
+      parentSessionKey: parent,
+      status: "done",
+    });
+    const ordinary = child("agent:main:acp:coder", "Ordinary child");
+    const native = child("agent:main:subagent:review", "Native review");
+    const element = await mount({
+      subagentSessions: [ordinary, native],
+      subagentSessionsHydrated: true,
+      onOpenSubagent: vi.fn(),
+      onOpenSubagents: vi.fn(),
+      desktopPresentation: {
+        peopleLabel: "People",
+        outputsLabel: "Outputs",
+        subagentsWorkingLabel: "Working",
+      },
+    });
+    element.desktop = desktop;
+    await element.updateComplete;
+    await waitForSolid(() => expect(element.textContent).toContain("Native review"));
+    expect(element.textContent).not.toContain("Ordinary child");
+    await updateDetails(element, { subagentSessions: [ordinary] });
+    expect(element.querySelector('[data-details-group="subagents"]')).toBeNull();
+    await updateDetails(element, {
+      subagentSessionsHydrated: false,
+      cachedDetails: {
+        locale: "en",
+        subagents: {
+          total: 1,
+          rows: [{ key: ordinary.key, label: ordinary.label!, status: "done", listed: false }],
+          counts: [{ status: "done", count: 1, listed: false }],
+        },
+      },
+    });
+    expect(element.querySelector('[data-details-group="subagents"]')).toBeNull();
+  },
+);
+
 it("groups every direct subagent with counts, live activity first, and a bounded preview", async () => {
   const parent = "agent:main:details";
   const child = (slug: string, state: Partial<GatewaySessionRow>): GatewaySessionRow => ({
@@ -321,12 +460,10 @@ it("groups every direct subagent with counts, live activity first, and a bounded
       (segment) => segment.dataset.state,
     ),
   ).toEqual(["done", "failed", "stopped", "running", "queued"]);
-  await waitForSolid(() =>
-    expect(lane.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
-  );
-  const live = lane.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
-  await live.updateComplete;
-  expect(live.rows[0]?.session).toBe(active);
+  // Load the lazy live activity first: a cold CI import can outlast a polling budget.
+  await vi.dynamicImportSettled();
+  const live = lane.querySelector(".chat-subagent-activity")!;
+  expect(live).not.toBeNull();
   expect(live.querySelector(".chat-details__agent-avatar")?.getAttribute("style")).toContain(
     String(fnv1aUtf16(active.key) % 360),
   );
@@ -339,7 +476,7 @@ it("groups every direct subagent with counts, live activity first, and a bounded
   const more = lane.querySelector<HTMLButtonElement>(".chat-details__more")!;
   expect(more.textContent).toBe("Show 2 more");
   more.click();
-  await live.updateComplete;
+  flush();
   expect(shownKeys()).toEqual(["review", "queued", "bench", "lint", "docs"]);
   expect(more.textContent).toBe("Show less");
   expect(
@@ -358,7 +495,7 @@ it("groups every direct subagent with counts, live activity first, and a bounded
   expect(openSubagents).toHaveBeenCalledOnce();
   element.presented = false;
   await element.updateComplete;
-  expect(element.querySelector("openclaw-chat-subagent-activity")).toBeNull();
+  expect(element.querySelector(".chat-subagent-activity")).toBeNull();
   lane.querySelector<HTMLButtonElement>(".chat-details__navigation")?.click();
   expect(openSubagents).toHaveBeenCalledOnce();
   element.presented = true;
@@ -367,15 +504,14 @@ it("groups every direct subagent with counts, live activity first, and a bounded
     subagentSessions: [child("done", { status: "done" })],
   });
   const finished = element.querySelector('[data-details-group="subagents"]')!;
-  expect(finished.querySelector(".chat-details__tally-summary")?.textContent).toBe("1 done");
+  await waitForSolid(() =>
+    expect(finished.querySelector(".chat-details__tally-summary")?.textContent).toBe("1 done"),
+  );
   expect(finished.querySelector(".chat-details__more")).toBeNull();
   await waitForSolid(() =>
-    expect(finished.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+    expect(finished.querySelector(".chat-subagent-activity")).not.toBeNull(),
   );
-  const completed = finished.querySelector<ChatSubagentActivityLive>(
-    "openclaw-chat-subagent-activity",
-  )!;
-  await completed.updateComplete;
+  const completed = finished.querySelector(".chat-subagent-activity")!;
   expect(completed.querySelector(".chat-subagent-activity__status")?.textContent).toBe("Completed");
   await updateDetails(element, { subagentSessionsHydrated: false });
   expect(element.querySelector('[data-details-group="subagents"]')).toBeNull();

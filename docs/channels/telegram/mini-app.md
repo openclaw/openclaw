@@ -19,7 +19,7 @@ The Control UI Mini App opens the full [OpenClaw Control UI](/web/control-ui) as
 
 Requirements:
 
-- `gateway.tailscale.mode: "serve"` or `"funnel"` for the published HTTPS Mini App URL.
+- An HTTPS `gateway.publicOrigin`, or `gateway.tailscale.mode: "serve"` or `"funnel"`, for the published Mini App URL.
 - Your numeric Telegram user ID must be in the selected account's effective `allowFrom` or in `commands.ownerAllowFrom`. Wildcards and usernames do not grant Mini App owner access.
 - Use a DM. In groups, `/controlui` replies with `open this in a DM with the bot` and sends no button.
 - Docker installs: Serve/Funnel modes require the gateway to bind loopback next to `tailscaled`, which bridge networking with published ports cannot satisfy. Run the gateway container with `network_mode: host` and mount the host `tailscaled` socket (`/var/run/tailscale`) plus the `tailscale` CLI into the container.
@@ -38,7 +38,9 @@ After an upgrade, wildcard-only access groups no longer grant Control UI launch 
 
 ## Publish the Mini App
 
-Configure one of the supported Tailscale publishing modes:
+For an existing HTTPS reverse proxy or tunnel, set `gateway.publicOrigin` to its bare origin (for example, `https://gateway.example.com`). The Mini App prefers this origin when `gateway.controlUi.allowedOrigins` is unset or includes the origin (or `"*"`). An explicit list, including `[]`, overrides that default. If the public origin is excluded or is not HTTPS, the Mini App falls back to Tailscale Serve/Funnel.
+
+Alternatively, configure Tailscale publishing:
 
 ```json5
 {
@@ -57,9 +59,9 @@ When the Mini App opens, Telegram provides signed WebApp `initData`. OpenClaw ve
 If `/controlui` cannot resolve a published HTTPS URL, it replies with:
 
 ```text
-Mini App needs an HTTPS gateway URL. Set `gateway.tailscale.mode: serve` or `funnel`, then retry /controlui.
+Mini App needs an HTTPS gateway URL. Configure an allowed HTTPS `gateway.publicOrigin` or Tailscale Serve/Funnel, then retry /controlui.
 ```
 
-Set one of the modes shown above, make sure Tailscale is running on the gateway host, and retry the command.
+Check the public origin and Control UI origin allowlist, or make sure Tailscale is running in one of the modes shown above, then retry the command.
 
-The Mini App is a Tailscale-only v1 path and does not support Telegram Web iframe.
+The Mini App does not support Telegram Web iframe.

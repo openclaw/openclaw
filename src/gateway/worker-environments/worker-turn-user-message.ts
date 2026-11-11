@@ -20,6 +20,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
@@ -119,14 +120,13 @@ export async function persistWorkerTurnInput(
     turn: SessionPlacementTurnParams;
     cwd: string;
     assertCurrent: () => void;
-    workerAdmission: boolean;
     userMessageAlreadyPersisted: boolean;
     baseLeafId: string | null;
   },
 ) {
   await persistWorkerTurnRecordedInput(params);
   const recorder = params.turn.userTurnTranscriptRecorder;
-  if (recorder && params.workerAdmission && !params.userMessageAlreadyPersisted) {
+  if (recorder && !params.userMessageAlreadyPersisted) {
     return recorder.getAdmissionReceipt()?.entryId ?? params.baseLeafId;
   }
   return !recorder && !params.userMessageAlreadyPersisted
@@ -134,27 +134,21 @@ export async function persistWorkerTurnInput(
     : params.baseLeafId;
 }
 
+type WorkerTurnPreparedInput = Pick<
+  Awaited<ReturnType<typeof prepareWorkerTurnMedia>>,
+  "prompt" | "history" | "images"
+>;
+
 export function createWorkerTurnInputAdmission(
   params: WorkerTurnInputParams & {
     runtime: PreparedModelRuntimeSnapshot;
-    preparedInput: Pick<Awaited<ReturnType<typeof prepareWorkerTurnMedia>>, "prompt" | "history">;
+    preparedInput: WorkerTurnPreparedInput;
     persist: () => Promise<string | null>;
     onBlockedResult: (result: NonNullable<Awaited<ReturnType<typeof gateWorkerTurnInput>>>) => void;
   },
 ) {
   // The RPC retains the launching turn's transcript and plugin scopes.
   const runAdmission = AsyncLocalStorage.snapshot();
-  const { prompt, history } = params.preparedInput;
-  const preparedInput = {
-    prompt:
-      typeof prompt === "string"
-        ? prompt
-        : prompt
-            .filter((part) => part.type === "text")
-            .map((part) => part.text)
-            .join("\n"),
-    messages: convertToLlm(history),
-  };
   let started = false;
   return (
     request: WorkerTurnAdmissionParams,
@@ -178,7 +172,7 @@ export function createWorkerTurnInputAdmission(
             gateWorkerTurnInput(
               { ...params, assertCurrent },
               {
-                ...preparedInput,
+                ...params.preparedInput,
                 systemPrompt: request.systemPrompt,
               },
             ),
@@ -209,33 +203,25 @@ export async function gateWorkerTurnInput(
     assertSourceCurrent,
     onBlocked,
   }: WorkerTurnInputParams,
-  event?: Pick<PluginHookBeforeAgentRunEvent, "prompt" | "systemPrompt" | "messages">,
+  event: WorkerTurnPreparedInput & Pick<PluginHookBeforeAgentRunEvent, "systemPrompt">,
 ) {
   const recorder = turn.userTurnTranscriptRecorder;
   const runner = getGlobalHookRunner();
   if (!runner?.hasHooks("before_agent_run")) {
     return undefined;
   }
-  const input: Pick<PluginHookBeforeAgentRunEvent, "prompt" | "systemPrompt" | "messages"> =
-    event ?? {
-      prompt: turn.prompt,
-      messages: convertToLlm(
-        (
-          await SessionManager.openModelContextAsync(transcriptTarget, {
-            admission: recorder?.getAdmissionReceipt(),
-            signal: turn.abortSignal,
-          })
-        ).buildSessionContext().messages,
-      ),
-    };
   assertCurrent();
   const channel = buildAgentHookContextChannelFields(turn);
   const block = await runBeforeAgentRunGate(
     runner,
     {
-      prompt: input.prompt,
-      messages: input.messages,
-      ...(input.systemPrompt === undefined ? {} : { systemPrompt: input.systemPrompt }),
+      prompt:
+        typeof event.prompt === "string"
+          ? event.prompt
+          : event.prompt.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
+      messages: convertToLlm(event.history),
+      images: event.images,
+      ...(event.systemPrompt === undefined ? {} : { systemPrompt: event.systemPrompt }),
       channelId: channel.channelId,
       accountId: turn.agentAccountId,
       senderId: turn.senderId ?? undefined,
@@ -266,11 +252,8 @@ export async function gateWorkerTurnInput(
         turn.onUserMessagePersisted?.(persisted.message);
       }
     } else {
-      const manager = await SessionManager.openAsync(
-        transcriptTarget,
-        undefined,
-        undefined,
-        turn.abortSignal,
+      const manager = await withSessionTranscriptHydrationCaller("worker-input", () =>
+        SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal),
       );
       assertCurrent();
       await withSessionManagerWrite(manager, () => manager.appendMessageAsync(message));
@@ -289,20 +272,11 @@ export async function gateWorkerTurnInput(
   });
 }
 
-export async function readWorkerTurnInputContext(
-  params: WorkerTurnInputParams,
-  pendingAdmission = false,
-) {
-  if (!pendingAdmission) {
-    await persistWorkerTurnRecordedInput(params);
-  }
+export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) {
   const { turn, transcriptTarget, modelRef, assertCurrent } = params;
   const recorder = turn.userTurnTranscriptRecorder;
   const receipt = recorder?.getAdmissionReceipt();
   const admission = receipt ? { ...receipt } : undefined;
-  if (recorder && !admission && !pendingAdmission) {
-    throw new Error("Cloud worker turn has no readable canonical user admission");
-  }
   const userMessageAlreadyPersisted =
     admission !== undefined || turn.suppressNextUserMessagePersistence === true;
   // Validate context after reentrant phase callbacks have finished.
@@ -317,7 +291,9 @@ export async function readWorkerTurnInputContext(
         admission,
         signal: turn.abortSignal,
       })
-    : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
+    : await withSessionTranscriptHydrationCaller("worker-input", () =>
+        SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal),
+      );
   assertCurrent();
   let baseLeafId = admission?.entryId ?? manager.getLeafId();
   // Reuse the fenced read's source watermark. Later writes still face the commit fence.

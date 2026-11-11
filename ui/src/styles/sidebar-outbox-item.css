@@ -1,16 +1,3 @@
-.sidebar-issues-panel__summary.sidebar-outbox-row {
-  min-height: 72px;
-  padding-block: 12px;
-}
-
-.sidebar-outbox-row .sidebar-outbox-row__icon--warning {
-  color: var(--warn);
-}
-
-.sidebar-outbox-row .sidebar-outbox-row__icon--error {
-  color: var(--danger);
-}
-
 .sidebar-outbox-row__meta {
   display: flex;
   min-width: 0;
@@ -32,8 +19,8 @@
 .sidebar-outbox-row__offline {
   flex: none;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.4;
+  font-size: var(--sidebar-issues-text-meta);
+  line-height: var(--sidebar-issues-line-meta);
   white-space: nowrap;
 }
 

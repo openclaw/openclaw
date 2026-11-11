@@ -98,6 +98,10 @@ type SeedCase = Partial<typeof allowance> & {
   decline?: boolean;
   oversizedSummary?: boolean;
   oversizedTail?: boolean;
+  details?: { qualityDegraded?: true; summaryRefused?: true };
+  observerFailure?: "throws" | "rejects";
+  abortAt?: "start" | "summary";
+  summaryThrows?: boolean;
 };
 
 const generatedSummary = "covered old discussion; recent request";
@@ -113,6 +117,13 @@ it.each<SeedCase>([
   { name: "unsummarized retained tail", summary: "older prefix covered" },
   { name: "revoked source", revoke: true },
   { name: "replaced writer", replaceWriter: true },
+  { name: "degraded summary", details: { qualityDegraded: true } },
+  { name: "refused summary", details: { summaryRefused: true } },
+  { name: "throwing observer", observerFailure: "throws" },
+  { name: "rejecting observer", observerFailure: "rejects" },
+  { name: "cancelled start", abortAt: "start", expected: 0 },
+  { name: "cancelled summary", abortAt: "summary" },
+  { name: "throwing summary", summaryThrows: true },
 ])(
   "prepares a bounded seed for $name",
   ({
@@ -129,6 +140,10 @@ it.each<SeedCase>([
     expectedBytes = maxBytes,
     oversizedSummary,
     oversizedTail,
+    details,
+    observerFailure,
+    abortAt,
+    summaryThrows,
   }) =>
     withOpenClawTestState({ label: "native-seed" }, async (state) => {
       const fixture = await seedFixture(state, "seed", {
@@ -156,8 +171,38 @@ it.each<SeedCase>([
       manager = await fixture.open();
       const originalEvents = loadTranscriptEventsSync(target);
       const assertCurrent = vi.fn();
+      const source = new AbortController();
+      const events: Record<string, unknown>[] = [];
+      let startSettled = false;
+      const onAgentEvent: NonNullable<Parameters<typeof bindBoundedSeed>[0]["onAgentEvent"]> = (
+        event,
+      ) => {
+        events.push(event.data);
+        if (abortAt === "start" && event.data.phase === "start") {
+          source.abort(new Error("seed cancelled"));
+        }
+        if (observerFailure === "throws") {
+          throw new Error("observer down");
+        }
+        if (observerFailure === "rejects") {
+          return Promise.reject(new Error("observer down"));
+        }
+        return Promise.resolve().then(() => {
+          startSettled = true;
+        });
+      };
       const compact = vi.mocked(compactSession).mockReset();
       compact.mockImplementationOnce(async (params, persist) => {
+        expect(events).toEqual([{ phase: "start" }]);
+        if (!observerFailure) {
+          expect(startSettled).toBe(true);
+        }
+        if (summaryThrows) {
+          throw new Error("summary failed");
+        }
+        if (abortAt === "summary") {
+          source.abort(new Error("seed cancelled"));
+        }
         if (decline) {
           return { ok: false, compacted: false, reason: "fixture declines compaction" };
         }
@@ -176,7 +221,9 @@ it.each<SeedCase>([
           DEFAULT_COMPACTION_SETTINGS,
           "unresolved",
           {
-            preserveFromEntryId: constraints?.pendingUserEntryId,
+            requestBoundary: constraints?.pendingUserEntryId
+              ? { entryId: constraints.pendingUserEntryId, preserve: true }
+              : undefined,
             budget: budget
               ? {
                   ...resolveCompactionRetentionBudget(budget, []),
@@ -197,19 +244,36 @@ it.each<SeedCase>([
             2048,
           ),
         );
-        return { ok: true, compacted: true };
+        return {
+          ok: true,
+          compacted: true,
+          result: {
+            summary: generatedSummary,
+            firstKeptEntryId: prepared.firstKeptEntryId,
+            tokensBefore: 2048,
+            details: { readFiles: [], modifiedFiles: [], ...details },
+          },
+        };
       });
       const maybePrepare = fixture.bind({
         sessionTarget: { ...target, expectedWriterRunId: "seed-writer" },
         contextTokenBudget: contextTokens,
         config: seedConfig(maxBytes),
         userTurnTranscriptRecorder: recorder,
+        onAgentEvent,
+        abortSignal: source.signal,
       })?.prepareBoundedSeed;
       const prepare = expectDefined(maybePrepare, "missing seed capability");
       const result = prepare({ assertCurrent, tokenBudget: requestTokens });
-      if (revoke || replaceWriter) {
+      if (revoke || replaceWriter || abortAt || summaryThrows) {
         await expect(result).rejects.toThrow(
-          revoke ? "native binding revoked" : /writer|claim|changed/i,
+          revoke
+            ? "native binding revoked"
+            : abortAt
+              ? "seed cancelled"
+              : summaryThrows
+                ? "summary failed"
+                : /writer|claim|changed/i,
         );
         expect(loadTranscriptEventsSync(target)).toEqual(originalEvents);
       } else {
@@ -235,7 +299,26 @@ it.each<SeedCase>([
           );
         }
         expect(loadTranscriptEventsSync(target)).toEqual(expect.arrayContaining(originalEvents));
+        if (name === "narrow delivery allowance") {
+          const delivered = events.length;
+          await prepare({ assertCurrent, tokenBudget: requestTokens });
+          expect(events).toHaveLength(delivered);
+        }
       }
+      expect(events.filter((event) => event.phase !== "context_bounded")).toEqual(
+        revoke || abortAt
+          ? [{ phase: "start" }]
+          : expected
+            ? [
+                { phase: "start" },
+                {
+                  phase: "end",
+                  completed: !decline && !replaceWriter && !summaryThrows,
+                  ...details,
+                },
+              ]
+            : [],
+      );
       expect(compact).toHaveBeenCalledTimes(expected);
     }),
 );

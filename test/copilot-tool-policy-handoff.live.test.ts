@@ -7,6 +7,7 @@ import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createNativeCopilotPolicyHarnessFixtureForTest,
+  makeUserTurnRecorder,
   type CopilotSessionBindingForTest,
 } from "../extensions/copilot/test-api.js";
 import {
@@ -70,30 +71,6 @@ afterEach(async () => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createUserTurnRecorder(message: Extract<AgentMessage, { role: "user" }>) {
-  let blocked = false;
-  let persisted = false;
-  return {
-    message,
-    resolveMessage: vi.fn(async () => message),
-    markRuntimePersistencePending: vi.fn(),
-    markRuntimePersisted: vi.fn(() => {
-      persisted = true;
-    }),
-    markBlocked: vi.fn(() => {
-      blocked = true;
-    }),
-    hasPersisted: () => persisted,
-    isBlocked: () => blocked,
-    hasRuntimePersistencePending: () => false,
-    getAdmissionReceipt: () => undefined,
-    waitForRuntimePersistence: vi.fn(async () => undefined),
-    persistApproved: vi.fn(async () => undefined),
-    persistBlocked: vi.fn(async () => undefined),
-    persistFallback: vi.fn(async () => undefined),
-  };
-}
-
 function createHostCapabilities(): AgentHarnessAttemptParamsV2["hostCapabilities"] {
   return Object.freeze({
     kind: "agent-harness-host-capability",
@@ -114,7 +91,6 @@ async function runLiveCopilotTurn(params: {
   prompt: string;
   runId: string;
   sessionId: string;
-  toolAuthorityFingerprint: string;
   workspaceDir: string;
 }) {
   const admission = prepareAgentRunAdmission({
@@ -184,8 +160,7 @@ async function runLiveCopilotTurn(params: {
       },
       thinkLevel: "low" as const,
       timeoutMs: 90_000,
-      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-      userTurnTranscriptRecorder: createUserTurnRecorder(message),
+      userTurnTranscriptRecorder: makeUserTurnRecorder(message),
       workspaceDir: params.workspaceDir,
       ...params.policy,
     } satisfies CopilotLiveAttemptParams;
@@ -202,7 +177,6 @@ describeLive("Copilot tool policy live handoff", () => {
     const workspaceDir = tempDirs.make("openclaw-copilot-policy-live-");
     const sessionId = "copilot-policy-live-session";
     const sessionKey = `agent:copilot-policy-live-proof:${sessionId}`;
-    const toolAuthorityFingerprint = "copilot-policy-live-authority";
     const bindings = new Map<string, CopilotSessionBindingForTest>();
     const sessionStore = {
       async delete(key: string) {
@@ -239,7 +213,6 @@ describeLive("Copilot tool policy live handoff", () => {
         "Call ask_user exactly once. Ask 'Select the live proof mode' with choices Alpha and Beta and no freeform. After the answer, reply briefly. Do not use any other tool.",
       runId: "copilot-policy-live-allowed",
       sessionId,
-      toolAuthorityFingerprint,
       workspaceDir,
     });
     const allowedResult = await allowedTurn;
@@ -279,7 +252,6 @@ describeLive("Copilot tool policy live handoff", () => {
         "Call ask_user exactly once and ask 'This question must be blocked'. If no such tool is available, reply exactly RESTRICTED-NO-ASK-USER.",
       runId: "copilot-policy-live-disabled-create",
       sessionId: disabledCreateSessionId,
-      toolAuthorityFingerprint,
       workspaceDir,
     });
     expect(disabledCreateResult.terminal).toEqual({ kind: "ok" });
@@ -304,7 +276,6 @@ describeLive("Copilot tool policy live handoff", () => {
         "Call ask_user exactly once and ask 'This question must be blocked'. If no such tool is available, reply exactly RESTRICTED-NO-ASK-USER.",
       runId: "copilot-policy-live-restricted-resume",
       sessionId,
-      toolAuthorityFingerprint,
       workspaceDir,
     });
     expect(restrictedResult.terminal).toEqual({ kind: "ok" });

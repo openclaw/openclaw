@@ -124,7 +124,10 @@ function TypingRow(props: { actor: ChatTypingActorView; avatarPlacement: AvatarP
                 {props.actor.label}
               </span>
               <span
-                class="agent-chat__typing-state agent-chat__typing-text"
+                class={[
+                  "agent-chat__typing-state agent-chat__typing-text",
+                  { "text-shimmer": !props.actor.paused },
+                ]}
                 data-typing={props.actor.paused ? undefined : ""}
               >
                 {t(
@@ -217,7 +220,7 @@ export function ChatTypingIndicator(props: {
                   </span>
                 </Show>
                 <span class="agent-chat__typing-summary">
-                  <span class="agent-chat__typing-text" data-typing="">
+                  <span class="agent-chat__typing-text text-shimmer" data-typing="">
                     {groupLabel()?.content}
                   </span>
                 </span>

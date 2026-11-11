@@ -604,6 +604,17 @@ struct IOSGatewayChatTransportTests {
         }
     }
 
+    @Test func `write-scoped operators can change thinking and fast mode but not tool details`() async throws {
+        try await self.withSessionTransport { transport, _ in
+            let catalog = await transport.loadComposerCapabilityCatalog(sessionKey: "main", agentID: nil)
+            // sessions.patch accepts thinkingLevel and fastMode with operator.write, as it does model;
+            // verboseLevel still needs operator.admin.
+            #expect(catalog.modelMutationAvailable)
+            #expect(catalog.effortMutationAvailable)
+            #expect(!catalog.verboseMutationAvailable)
+        }
+    }
+
     @Test func `advanced session creation forwards agent worktree and base ref`() async throws {
         try await self.withSessionTransport { transport, recorder in
             let created = try await transport.createSession(

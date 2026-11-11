@@ -26,6 +26,7 @@ import {
 } from "../operator-role-policy.js";
 import { APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
+import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
 export function authorizeGatewayMethod(
@@ -95,6 +96,10 @@ export function authorizeGatewayMethod(
     );
   }
   if (!scopeAuth.allowed) {
+    // Handlers recheck the stored human owner at the mutation commit boundary.
+    if (isHumanCronMutation(method) && isDirectCronOwnerClient(client)) {
+      return { error: null };
+    }
     // A configured channel owner's automation management runs without operator.admin; its
     // one-use grant, bound to this method and run, is the admitted authority instead.
     const runtimeIdentity = client.internal?.agentRuntimeIdentity;
@@ -105,7 +110,7 @@ export function authorizeGatewayMethod(
       return { error: null };
     }
     // Only an authenticated agent runtime supplies the conversation/account boundary
-    // enforced by the cron handlers. Direct/global scheduler APIs remain admin-only.
+    // enforced by the cron handlers. Other global scheduler mutations remain admin-only.
     const cronScope = runtimeIdentity && resolveAgentRuntimeCronScope(method);
     if (cronScope && operatorScopeSatisfied(cronScope, scopes)) {
       return { error: null };

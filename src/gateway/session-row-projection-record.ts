@@ -145,6 +145,7 @@ export type SelectionChange =
       id: string;
       key: string;
       agentId: string;
+      storePath: string;
       row: SelectionRow | undefined;
       /** Synchronous internal publication scope; deferred refreshes have no causal label. */
       scope?: string;
@@ -196,11 +197,13 @@ export type Query = {
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
 export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
   childActivity?: SessionChildActivity;
+  backgroundProcessCount?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   active?: boolean;
   subagentRuns?: SessionListRowContext["subagentRuns"];
   preparedFacts?: ReturnType<NonNullable<Row["facts"]>["present"]>;
+  preparedRunState?: Parameters<typeof rowProjection.presentSessionRow>[1]["preparedRunState"];
 };
 export type Lookup = { agentId: string; key: string; storePath?: string };
 type RowTarget = Pick<Row, "agentId" | "key" | "storeTarget">;
@@ -505,6 +508,8 @@ export function present(
     activeModel: active ? (live ?? undefined) : record.fallbackModel,
     excludedChildKeys: options.excludedChildKeys,
     childActivity: options.childActivity,
+    backgroundProcessCount: options.backgroundProcessCount,
+    preparedRunState: options.preparedRunState,
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;

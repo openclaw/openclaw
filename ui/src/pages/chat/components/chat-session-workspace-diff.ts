@@ -1,4 +1,6 @@
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { hasOperatorSelfReadAccess } from "../../../app/operator-access.ts";
+import { t } from "../../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { readWorkspaceFileText } from "./chat-session-workspace-file-content.ts";
 import {
@@ -8,17 +10,28 @@ import {
   trackSessionCheckoutSidebar,
 } from "./chat-session-workspace-state.ts";
 import type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
-import type { SessionWorkspacePreview, SidebarContent } from "./chat-sidebar-content-types.ts";
+import type {
+  SessionWorkspacePreview,
+  SidebarContent,
+  SidebarSelection,
+} from "./chat-sidebar-content-types.ts";
 
 export function resolveSessionWorkspaceDiff(
   state: SessionWorkspaceHost,
   openFile: (path: string) => Promise<SessionWorkspacePreview | undefined> | undefined,
   canEditFile: (path: string) => Promise<boolean>,
-): SidebarContent | null {
+): SidebarSelection | null {
   const workspace = getSessionWorkspace(state);
   const client = state.client;
   if (isGatewayMethodAdvertised(state, "sessions.diff") !== true || !client) {
     return null;
+  }
+  const reason = state.sessionWorkspaceReadDisabledReason;
+  if (reason === undefined || !hasOperatorSelfReadAccess(state.hello?.auth ?? null)) {
+    return null;
+  }
+  if (reason) {
+    return { kind: "unavailable", message: reason, permission: true };
   }
   if (workspace.diffContent) {
     return workspace.diffContent;
@@ -34,6 +47,10 @@ export function resolveSessionWorkspaceDiff(
     // Checkout retirement replaces this identity; ordinary refreshes retain it.
     owner: workspace,
     load: (scope, options) => {
+      const currentReason = state.sessionWorkspaceReadDisabledReason;
+      if (currentReason !== null || !hasOperatorSelfReadAccess(state.hello?.auth ?? null)) {
+        return Promise.reject(new Error(currentReason ?? t("chat.detailPanel.unavailable")));
+      }
       // Counts and patch readers share only matching work; refresh revalidates native state.
       const summaryOnly = options?.summaryOnly === true;
       const pending = scope.scope === "uncommitted" && uncommittedLoads.get(summaryOnly);

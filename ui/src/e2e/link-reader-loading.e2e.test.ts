@@ -49,7 +49,7 @@ it("makes the overview readable before extras and retains visible content throug
         { code: "UNAVAILABLE", message: "Temporarily unavailable", retryable: true },
         { match: { section: "checks" } },
       );
-      await panel.getByText("Could not load Checks.", { exact: true }).waitFor();
+      await panel.getByText("Couldn’t load Checks. Try again.", { exact: true }).waitFor();
       await gateway.resolveDeferred(
         "forge.detail",
         {
@@ -88,7 +88,7 @@ it("makes the overview readable before extras and retains visible content throug
       const top = await content.evaluate((node) => node.scrollTop);
       const document = await panel.locator(".lr-document").elementHandle();
       await button("Refresh item").click();
-      await panel.getByText("Showing previous details · refreshing…", { exact: true }).waitFor();
+      await expect.poll(() => button("Refresh item").getAttribute("aria-busy")).toBe("true");
       expect(await content.evaluate((node) => node.scrollTop)).toBe(top);
       expect(await document!.evaluate((node) => node.isConnected)).toBe(true);
       await gateway.waitForRequest("forge.detail", { after: 1, match: { section: "overview" } });

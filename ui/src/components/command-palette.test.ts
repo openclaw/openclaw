@@ -185,7 +185,7 @@ describe("CommandPalette search", () => {
     expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
     await settlePalette(palette);
     expect(query('.cmd-palette__search [role="status"]')?.textContent).toContain(
-      "Model search unavailable",
+      "Couldn’t search models",
     );
     expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
 
@@ -228,7 +228,7 @@ describe("CommandPalette search", () => {
       await palette.updateComplete;
       if (replacement === "connection") {
         expect(findPaletteOption(palette, "Needle old")).toBeDefined();
-        expect(palette.textContent).toContain("Reconnect to search Gateway content.");
+        expect(palette.textContent).toContain("Reconnect to search sessions.");
       } else if (replacement !== "publication") {
         expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
       }
@@ -310,8 +310,8 @@ describe("CommandPalette search", () => {
     await searchPalette(palette, "n");
 
     expect(list).not.toHaveBeenCalled();
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
-    expect(query('[role="listbox"]')?.getAttribute("aria-label")).toBe(
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-label")).toBe(
       query("textarea")?.getAttribute("aria-label"),
     );
     expect(palette.textContent).not.toContain("Searching sessions");
@@ -552,7 +552,7 @@ describe("CommandPalette search", () => {
     await searchPalette(palette, query);
 
     expect(list).toHaveBeenCalledOnce();
-    expect(palette.textContent).toContain("Chat search failed");
+    expect(palette.textContent).toContain("Couldn’t search sessions");
     expect(palette.textContent).not.toContain("No results");
     expect(findPaletteOption(palette, "Plugins")).toBeDefined();
 
@@ -564,7 +564,7 @@ describe("CommandPalette search", () => {
 
     setInputValue(input, "zz");
     await palette.updateComplete;
-    expect(palette.textContent).not.toContain("Chat search failed");
+    expect(palette.textContent).not.toContain("Couldn’t search sessions");
     await settlePalette(palette);
     expect(palette.textContent).toContain("Recovered chat");
   });

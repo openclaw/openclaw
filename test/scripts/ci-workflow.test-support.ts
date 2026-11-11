@@ -97,9 +97,15 @@ export function requiredWorkflowStep(steps: readonly { name?: string }[], name: 
 type Strings<K extends string> = Partial<Record<K, string>>;
 type Flags<K extends string> = Partial<Record<K, boolean>>;
 type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maintainerCommands"> &
-  Strings<"dispatchId" | "headRepository" | "headSha" | "ref" | "sha"> &
+  Strings<"dispatchId" | "headRepository" | "headSha" | "job" | "ref" | "sha"> &
   Strings<"preflightResult" | "failureReportResult" | "releaseScope"> &
-  Strings<"releaseRunnerGroup" | "releasePublishRunId" | "releasePriorityRun" | "runnerGroup"> &
+  Strings<
+    | "boatReleaseRunnerGroup"
+    | "releaseRunnerGroup"
+    | "releasePublishRunId"
+    | "releasePriorityRun"
+    | "runnerGroup"
+  > &
   Strings<"runnerTemp" | "ciOnPush" | "targetContextRef" | "targetRef"> &
   Strings<"testRuntimePolicy" | "workflow" | "workflowSha" | "workflowToken"> &
   Strings<"windowsCiReplay" | "workspace"> &
@@ -137,8 +143,8 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     resolveTargetOutputs?: Record<string, string>;
     validationTier?: "full" | "main";
     repository: string;
-    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
-    requestedRunnerBackend?: "default" | "hybrid" | "runson";
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson" | "boat";
+    requestedRunnerBackend?: "default" | "hybrid" | "runson" | "boat";
     ciShape?: "default" | "main";
     inputs?: Record<string, unknown>;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
@@ -152,26 +158,28 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     >;
   };
 
-export function evaluateWorkflowExpression(expression: unknown, context: WorkflowContext) {
+export function evaluateWorkflowExpression(
+  expression: unknown,
+  context: WorkflowContext,
+  sandbox = {},
+) {
   if (typeof expression !== "string") {
     throw new TypeError("workflow expression must be a string");
   }
-  const match = expression.match(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/u);
-  if (!match) {
-    throw new Error(`invalid workflow expression: ${expression}`);
-  }
-  const source = match[1];
+  const source = expression.match(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/u)?.[1];
   if (source === undefined) {
-    throw new Error(`workflow expression has no body: ${expression}`);
+    throw new Error(`invalid workflow expression: ${expression}`);
   }
   // Actions permits dashes in property names; preserve quoted literals while
   // translating those accesses for the JavaScript fixture evaluator.
-  const evaluableSource = source.replace(
-    /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
-    (token: string, property: string | undefined) =>
-      property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
-  );
-  return runInNewContext(evaluableSource, {
+  const evaluableSource = source
+    .replaceAll("needs.*.result", "Object.values(needs).map(need => need.result)")
+    .replace(
+      /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
+      (token: string, property: string | undefined) =>
+        property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
+    );
+  const globals = {
     always: () => true,
     success: () => !context.failed && !context.cancelled,
     failure: () => context.failed ?? false,
@@ -196,6 +204,7 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
     github: {
       actor: context.actor ?? "",
       event_name: context.eventName,
+      job: context.job ?? "",
       repository: context.repository,
       repository_owner: context.repository.split("/")[0],
       server_url: "https://github.com",
@@ -254,6 +263,9 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
       ...context.steps,
     },
     needs: {
+      ...Object.fromEntries(
+        Object.entries(context.jobResults ?? {}).map(([name, result]) => [name, { result }]),
+      ),
       "build-artifacts": {
         result: context.jobResults?.["build-artifacts"] ?? "success",
         outputs: {},
@@ -300,10 +312,12 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
       MAINTAINER_COMMAND_REACTIONS: context.maintainerCommands ?? "",
       OPENCLAW_CI_RUNNER_BACKEND: context.runnerBackend ?? "",
       OPENCLAW_RELEASE_RUNNER_GROUP: context.releaseRunnerGroup ?? "",
+      BOAT_RELEASE_RUNNER_GROUP: context.boatReleaseRunnerGroup ?? "",
       OPENCLAW_CI_ON_PUSH: context.ciOnPush ?? "",
       OPENCLAW_RELEASE_PRIORITY_RUN: context.releasePriorityRun ?? "",
     },
-  });
+  };
+  return runInNewContext(evaluableSource, Object.assign(sandbox, globals));
 }
 
 export function evaluateWorkflowRunner(

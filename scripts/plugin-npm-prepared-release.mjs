@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import {
   downloadActionsArtifactArchive,
   inspectActionsArtifactZipWithPolicy,
@@ -21,7 +22,10 @@ import {
 } from "./lib/npm-publish-plan.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { isPluginPublicationEnabled } from "./lib/plugin-publication-target.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
+import { createReleaseEvidenceReplay } from "./lib/release-evidence-replay.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
+import { loadNpmEvidenceReplay, npmEvidenceBinding } from "./plugin-npm-evidence-reuse.mjs";
 import {
   inspectPackageTarballBytes,
   verifyPluginPublicationArtifact,
@@ -156,6 +160,158 @@ export function validatePreparedNpmArtifactDescriptor(value, expected) {
     },
     producer,
   );
+}
+
+// P consumes Q's bytes as data. Neither a caller-supplied Q SHA nor a matching
+// artifact name grants authority: the original successful FRV attempt owns it.
+export async function authenticatePreparedNpmArtifact(params) {
+  return authenticatePreparedNpmArtifactEvidence(params, true);
+}
+
+// Only the CLI owns the deferred boundary: every successful load, consume or
+// authorize below revalidates after its last acquisition and before its output.
+// Public callers retain the return-time authority check.
+async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnReturn) {
+  const { repository, sourceSha, workflowSha, artifact } = params;
+  if (!params.fullReleaseValidationRunId && !params.fullReleaseValidationRunAttempt) {
+    return {
+      artifact: validatePreparedNpmArtifactDescriptor(artifact, params),
+      workflowSha,
+      publisherPolicySha256: params.publisherPolicySha256,
+      revalidateAuthority: undefined,
+    };
+  }
+  requireValue(
+    [params.fullReleaseValidationRunId, params.fullReleaseValidationRunAttempt].every(
+      (value) => /^[1-9][0-9]*$/u.test(String(value)) && Number.isSafeInteger(Number(value)),
+    ),
+    "Prepared npm adoption requires the exact FRV run and attempt.",
+  );
+  const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
+  const { authenticateFullReleaseValidationEvidence } =
+    await import("./validate-full-release-validation-evidence.mjs");
+  const client =
+    params.evidenceClient ??
+    createReleaseEvidenceClient(repository, { immutableReads: params.immutableReads });
+  const runId = String(params.fullReleaseValidationRunId);
+  const runAttempt = Number(params.fullReleaseValidationRunAttempt);
+  const { manifest } = await client.loadManifest(runId, runAttempt);
+  const selected = manifest.sourceAdmission?.publicationSelection;
+  // Derive the operation only after the validator authenticates the whole
+  // admission. Its owner decides whether this is a covered plugin-only subset.
+  let operation;
+  const publicationOperation = () => {
+    requireValue(
+      selected &&
+        (selected.npmDistTag === "extended-stable" ? "extended-stable" : "default") ===
+          params.npmDistTag,
+      "Prepared npm adoption differs from the admitted publication channel.",
+    );
+    requireValue(
+      !params.publicationSelection || isDeepStrictEqual(params.publicationSelection, selected),
+      "Prepared npm adoption differs from the expected original publication selection.",
+    );
+    operation = {
+      ...selected,
+      pluginPublishScope: params.selectionMode,
+      plugins: (params.plugins ?? "")
+        .split(/[,\s]+/u)
+        .filter(Boolean)
+        .toSorted(),
+      publishOpenclawNpm: params.selectionMode === "selected" ? false : selected.publishOpenclawNpm,
+    };
+    return operation;
+  };
+  const authenticated = await authenticateFullReleaseValidationEvidence(
+    {
+      run: await client.getRunAttempt(runId, runAttempt),
+      manifest,
+      expectedRepository: repository,
+      expectedRunId: runId,
+      expectedRunAttempt: runAttempt,
+      expectedTargetSha: sourceSha,
+      expectedReleaseTag: params.releaseTag ?? `v${manifest.sourceAdmission?.projection?.version}`,
+      expectedTrustedWorkflowFullRef: params.workflowFullRef,
+      expectedTrustedWorkflowSha: workflowSha,
+      ...(selected
+        ? { expectedPublicationOperation: publicationOperation }
+        : { expectedPublicationSelection: params.publicationSelection }),
+      verifierSourceSha: workflowSha,
+      verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
+      isTrustedMainAncestor:
+        params.isTrustedMainAncestor ??
+        ((sha) => {
+          const comparison = client.compareCommits(sha, "main");
+          return (
+            ["ahead", "identical"].includes(comparison.status) &&
+            comparison.merge_base_commit?.sha === sha
+          );
+        }),
+    },
+    client,
+  );
+  const current = authenticated.evidence.current;
+  const producerSha =
+    retainedPublicationArtifactSource(current.manifest)?.workflow.sha ??
+    current.manifest.workflowSha;
+  if (producerSha !== workflowSha) {
+    requireValue(
+      producerSha === sourceSha &&
+        current.workflowRefProof ===
+          (current.manifest.receiptRecovery
+            ? "receipt-backed-recovery-v1"
+            : "candidate-owned-admission-v1") &&
+        typeof authenticated.revalidateAuthority === "function",
+      "Prepared npm Q != P adoption requires live candidate-owned qualification.",
+    );
+  }
+  const descriptor = validatePreparedNpmArtifactDescriptor(
+    current.manifest.publicationArtifacts?.pluginNpm,
+    { repository, sourceSha, workflowSha: producerSha },
+  );
+  if (artifact) {
+    requireValue(
+      isDeepStrictEqual(
+        validatePreparedNpmArtifactDescriptor(artifact, {
+          repository,
+          sourceSha,
+          workflowSha: producerSha,
+        }),
+        descriptor,
+      ),
+      "Prepared npm artifact differs from the authenticated FRV descriptor.",
+    );
+  }
+  const publisherPolicySha256 =
+    producerSha === workflowSha && params.publisherPolicySha256 && !params.immutableReads
+      ? params.publisherPolicySha256
+      : sha256(client.getWorkflowSource(producerSha, WORKFLOW_PATH));
+  if (params.immutableReads && producerSha === workflowSha && params.publisherPolicySha256) {
+    requireValue(
+      publisherPolicySha256 === params.publisherPolicySha256,
+      "Prepared npm publisher policy differs from immutable source",
+    );
+  }
+  // Replay validation is asynchronous; live qualification authority is synchronous.
+  /** @type {(() => void | Promise<void>) | undefined} */
+  const revalidateAuthority = params.immutableReads
+    ? async () => {
+        await params.immutableReads.revalidate(client);
+        authenticated.revalidateAuthority?.();
+      }
+    : authenticated.revalidateAuthority;
+  if (revalidateOnReturn) {
+    await revalidateAuthority?.();
+  }
+  return {
+    artifact: descriptor,
+    workflowSha: producerSha,
+    publisherPolicySha256,
+    publicationSelection: selected,
+    publicationOperation: operation,
+    evidenceClient: params.immutableReads ? client : undefined,
+    revalidateAuthority,
+  };
 }
 
 function sourcePackageRoster(sourceRoot, npmDistTag, selectedNames) {
@@ -334,11 +490,62 @@ export function createPreparedNpmRelease(params) {
   );
 }
 
+// First/last existing metadata responses, not extra quota probes. gh-backed
+// evidence/authority reads are outside this boundary; these partial counts
+// cannot establish a dispatch budget.
+export function createPreparedNpmCapacityObserver(fetchImpl = fetch) {
+  let before;
+  let after;
+  const requests = { fixed: 0, perPackage: 0 };
+  const observe = (phase) => async (url, options) => {
+    const response = await fetchImpl(url, options);
+    const endpoint = new URL(url);
+    // ZIP fetches follow storage redirects, whose headers are not GitHub quota.
+    if (endpoint.hostname !== "api.github.com" || endpoint.pathname.endsWith("/zip")) {
+      return response;
+    }
+    requests[phase] += 1;
+    const capacity = {};
+    for (const name of [
+      "x-ratelimit-limit",
+      "x-ratelimit-remaining",
+      "x-ratelimit-used",
+      "x-ratelimit-reset",
+      "retry-after",
+    ]) {
+      const value = response.headers.get(name);
+      if (value && /^[0-9]{1,16}$/u.test(value)) {
+        capacity[name] = value;
+      }
+    }
+    const resource = response.headers.get("x-ratelimit-resource");
+    if (resource && /^[a-z_]{1,32}$/u.test(resource)) {
+      capacity["x-ratelimit-resource"] = resource;
+    }
+    after = capacity;
+    if (!before) {
+      before = capacity;
+      console.error(JSON.stringify({ githubCapacity: { phase: "before", ...before } }));
+    }
+    return response;
+  };
+  return {
+    fetchImpl: observe("fixed"),
+    packageFetchImpl: observe("perPackage"),
+    report(packages) {
+      console.error(
+        JSON.stringify({
+          githubCapacity: { phase: "after", ...after },
+          githubRequestAccounting: { scope: "fetch-metadata-only", ...requests, packages },
+        }),
+      );
+    },
+  };
+}
+
 export async function downloadPreparedNpmRelease(params) {
-  requireValue(
-    typeof params.sourceRoot === "string",
-    "Prepared npm admission requires the frozen source root.",
-  );
+  // Load verifies the full source roster; package consumers authenticate this
+  // same sealed manifest and check their source package without a full checkout.
   const producer = normalizeProducer(params.artifact);
   requireValue(
     producer.repository === params.repository &&
@@ -346,13 +553,25 @@ export async function downloadPreparedNpmRelease(params) {
       params.artifact.artifactName === preparedNpmArtifactName(params.sourceSha, producer),
     "Prepared npm manifest artifact differs from the approved producer.",
   );
-  const downloaded = await downloadActionsArtifactArchive({
+  const download = {
     token: params.token,
     fetchImpl: params.fetchImpl,
     expected: { ...params.artifact, runStatePolicy: "completed-success" },
     archivePath: params.archivePath,
     maxArchiveBytes: MAX_MANIFEST_BYTES,
-  });
+  };
+  // Authenticated FRV consumers reuse only archive bytes; metadata and final
+  // qualification authority stay live in every command.
+  const downloaded = params.evidenceClient
+    ? await params.evidenceClient.downloadArtifactArchive({
+        ...download,
+        expected: {
+          ...download.expected,
+          artifactExpiresAt: (await params.evidenceClient.getArtifact(params.artifact.artifactId))
+            .expires_at,
+        },
+      })
+    : await downloadActionsArtifactArchive(download);
   const files = inspectActionsArtifactZipWithPolicy(downloaded.archiveBytes, {
     minEntries: 1,
     maxEntries: 1,
@@ -423,6 +642,37 @@ export async function consumePreparedNpmPackage(params) {
     outputDir: params.outputDir,
     verificationOutput: params.verificationOutput,
   });
+}
+
+// Prune only after verifying the original qualified package, registry bytes, and
+// selectors. Final core publication requires every original plugin to be present.
+export async function selectUnpublishedPreparedNpmPackages(params) {
+  const pending = [];
+  for (const entry of params.packages) {
+    const qualified = await consumePreparedNpmPackage({
+      ...params,
+      package: entry,
+      sourcePackageJson: join(params.sourceRoot, entry.packageDir, "package.json"),
+      outputDir: join(params.outputDir, entry.extensionId),
+    });
+    const { alreadyPublished } = await verifyPreparedNpmRegistry({
+      packageName: entry.packageName,
+      version: entry.version,
+      publishTags: [entry.publishTag],
+      route: entry.route,
+      tarballPath: qualified.tarballPath,
+      allowMissing: true,
+      fetchImpl: params.fetchImpl,
+    });
+    requireValue(
+      alreadyPublished || !params.requirePublished,
+      `${entry.packageName}@${entry.version}: final core publication requires the complete original plugin roster.`,
+    );
+    if (!alreadyPublished) {
+      pending.push(entry);
+    }
+  }
+  return pending;
 }
 
 export async function verifyPreparedNpmRegistry(params) {
@@ -578,7 +828,7 @@ function outputValues(file, values) {
   );
 }
 
-async function main(argv) {
+export async function main(argv) {
   const [command, ...args] = argv;
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
@@ -591,9 +841,9 @@ async function main(argv) {
   }
   const common = {
     repository: process.env.GITHUB_REPOSITORY,
-    workflowSha: process.env.GITHUB_SHA,
+    workflowSha: process.env.GITHUB_WORKFLOW_SHA ?? process.env.GITHUB_SHA,
     sourceSha: options["--source-sha"],
-    npmDistTag: options["--npm-dist-tag"] ?? "default",
+    npmDistTag: options["--npm-dist-tag"] ?? process.env.PREPARED_NPM_DIST_TAG ?? "default",
     selectionMode: options["--selection-mode"],
     plugins: options["--plugins"] ?? "",
     publisherPolicySha256: options["--policy-file"]
@@ -601,7 +851,85 @@ async function main(argv) {
       : undefined,
     token: process.env.GH_TOKEN,
   };
-  if (command === "seal") {
+  const capacity =
+    command === "load" && options["--report-capacity"] === "true"
+      ? createPreparedNpmCapacityObserver()
+      : undefined;
+  if (capacity) {
+    common.fetchImpl = capacity.fetchImpl;
+  }
+  let adoption;
+  let prepared;
+  let selectedPackages;
+  let writeEvidenceOutput;
+  if (["load", "consume", "authorize"].includes(command)) {
+    const adoptionParams = {
+      ...common,
+      selectionMode: common.selectionMode ?? process.env.PREPARED_NPM_SELECTION_MODE,
+      plugins: options["--plugins"] ?? process.env.PREPARED_NPM_PLUGINS ?? "",
+      artifact: JSON.parse(options["--artifact"] ?? process.env.PREPARED_NPM_ARTIFACT),
+      workflowFullRef: process.env.GITHUB_REF,
+      fullReleaseValidationRunId: process.env.PREPARED_NPM_FRV_RUN_ID,
+      fullReleaseValidationRunAttempt: process.env.PREPARED_NPM_FRV_RUN_ATTEMPT,
+    };
+    if (options["--evidence-output"] || process.env.PREPARED_NPM_EVIDENCE_ID) {
+      const binding = npmEvidenceBinding(adoptionParams);
+      const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
+      adoptionParams.immutableReads = options["--evidence-output"]
+        ? createReleaseEvidenceReplay(binding)
+        : await loadNpmEvidenceReplay({
+            binding,
+            artifactId: process.env.PREPARED_NPM_EVIDENCE_ID,
+            artifactDigest: process.env.PREPARED_NPM_EVIDENCE_DIGEST,
+            token: common.token,
+            archivePath: process.env.RUNNER_TEMP + "/plugin-npm-evidence.zip",
+            client: createReleaseEvidenceClient(common.repository),
+          });
+    }
+    adoption = await authenticatePreparedNpmArtifactEvidence(adoptionParams, false);
+    if (options["--evidence-output"]) {
+      requireValue(command === "load", "Only trusted preview load can write an evidence handoff");
+      writeEvidenceOutput = () =>
+        writeFileSync(options["--evidence-output"], adoptionParams.immutableReads.serialize(), {
+          flag: "wx",
+        });
+    }
+    Object.assign(common, {
+      workflowSha: adoption.workflowSha,
+      publisherPolicySha256: adoption.publisherPolicySha256,
+      selectionMode: adoptionParams.selectionMode,
+      plugins: adoptionParams.plugins,
+    });
+    if (command !== "authorize" || options["--package"]) {
+      prepared = await downloadPreparedNpmRelease({
+        ...common,
+        selectionMode: adoption.publicationSelection?.pluginPublishScope ?? common.selectionMode,
+        plugins: adoption.publicationSelection?.plugins.join(",") ?? common.plugins,
+        // Preview checks the complete frozen source. Sparse publisher jobs instead
+        // authenticate that sealed manifest and verify their exact source package.
+        sourceRoot: options["--source-root"] ?? (command === "load" ? process.cwd() : undefined),
+        artifact: adoption.artifact,
+        evidenceClient: adoption.evidenceClient,
+        archivePath: options["--archive-path"],
+      });
+      selectedPackages =
+        common.selectionMode === "selected"
+          ? prepared.packages.filter((entry) =>
+              common.plugins.split(/[,\s]+/u).includes(entry.packageName),
+            )
+          : prepared.packages;
+      if (command !== "load") {
+        const entry = JSON.parse(options["--package"]);
+        requireValue(
+          selectedPackages.some((candidate) => isDeepStrictEqual(candidate, entry)),
+          "Prepared npm package differs from the authenticated current operation.",
+        );
+      }
+    }
+  }
+  if (command === "authorize") {
+    await adoption.revalidateAuthority?.();
+  } else if (command === "seal") {
     const producer = {
       repository: common.repository,
       runId: Number(process.env.GITHUB_RUN_ID),
@@ -628,30 +956,48 @@ async function main(argv) {
       artifact_name: preparedNpmArtifactName(common.sourceSha, producer),
     });
   } else if (command === "load") {
-    const manifest = await downloadPreparedNpmRelease({
-      ...common,
-      sourceRoot: options["--source-root"] ?? process.cwd(),
-      artifact: JSON.parse(options["--artifact"]),
-      archivePath: options["--archive-path"],
-    });
-    writeFileSync(options["--output"], JSON.stringify(manifest));
+    const requirePublished = options["--require-published"] === "true";
+    requireValue(
+      !requirePublished ||
+        (common.selectionMode === "all-publishable" &&
+          adoption.publicationOperation?.publishOpenclawNpm),
+      "Final npm roster verification requires the original all-package core operation.",
+    );
+    const matrix =
+      options["--prune-published"] === "true" || requirePublished
+        ? await selectUnpublishedPreparedNpmPackages({
+            ...common,
+            fetchImpl: capacity?.packageFetchImpl ?? common.fetchImpl,
+            packages: selectedPackages,
+            sourceRoot: options["--source-root"] ?? process.cwd(),
+            cacheDir: options["--cache-dir"],
+            outputDir: options["--output-dir"],
+            requirePublished,
+          })
+        : selectedPackages;
+    await adoption.revalidateAuthority?.();
+    capacity?.report(selectedPackages.length);
+    writeEvidenceOutput?.();
+    writeFileSync(options["--output"], JSON.stringify(prepared));
     outputValues(options["--github-output"], {
-      has_candidates: true,
-      has_selection: true,
-      candidate_count: manifest.packages.length,
-      selection_count: manifest.packages.length,
-      matrix: JSON.stringify(manifest.packages),
-      all_matrix: JSON.stringify(manifest.packages),
+      has_candidates: matrix.length > 0,
+      has_selection: matrix.length > 0,
+      candidate_count: matrix.length,
+      selection_count: matrix.length,
+      matrix: JSON.stringify(matrix),
+      all_matrix: JSON.stringify(selectedPackages),
     });
   } else if (command === "consume") {
+    const entry = JSON.parse(options["--package"]);
     const result = await consumePreparedNpmPackage({
       ...common,
-      package: JSON.parse(options["--package"]),
+      package: entry,
       sourcePackageJson: options["--source-package-json"],
       cacheDir: options["--cache-dir"],
       outputDir: options["--output-dir"],
       verificationOutput: options["--verification-output"],
     });
+    await adoption.revalidateAuthority?.();
     outputValues(options["--github-output"], {
       package_name: result.manifest.package.name,
       package_version: result.manifest.package.version,
@@ -697,17 +1043,16 @@ async function main(argv) {
     );
   } else {
     throw new Error(
-      "Usage: plugin-npm-prepared-release.mjs <seal|load|consume|registry> [options]",
+      "Usage: plugin-npm-prepared-release.mjs <seal|load|consume|authorize|registry> [options]",
     );
   }
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  try {
-    await main(process.argv.slice(2));
-  } catch (error) {
+  // Let this module finish evaluating before a lazy import cycles back to it.
+  void main(process.argv.slice(2)).catch((/** @type {unknown} */ error) => {
     console.error(error instanceof Error ? error.message : String(error));
     console.error("[plugin-npm-prepared-release] FAILED (exit 1)");
     process.exitCode = 1;
-  }
+  });
 }

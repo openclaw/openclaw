@@ -148,47 +148,52 @@ struct GatewayEnvironmentTests {
         }
     }
 
-    @Test func `named profiles derive stable distinct gateway ports after explicit precedence`() {
-        let work = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+    @Test(arguments: ["work", "dev"])
+    func `named profiles derive stable distinct gateway ports after explicit precedence`(name: String) {
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": name])
         let personal = AppProfile(environment: ["OPENCLAW_PROFILE": "personal"])
         let workPort = GatewayEnvironment.resolvedGatewayPort(
             environment: [:],
             configPort: nil,
             storedPort: 0,
-            profile: work)
-        #expect((20000..<60000).contains(workPort))
-        #expect(workPort == work.defaultGatewayPort)
+            profile: profile)
+        if name == "dev" {
+            #expect(workPort == 19001)
+        } else {
+            #expect((20000..<60000).contains(workPort))
+        }
+        #expect(workPort == profile.defaultGatewayPort)
         #expect(workPort != personal.defaultGatewayPort)
         #expect(GatewayEnvironment.resolvedGatewayPort(
             environment: ["OPENCLAW_GATEWAY_PORT": "21001"],
             configPort: 22001,
             storedPort: 23001,
-            profile: work) == 21001)
+            profile: profile) == 21001)
         #expect(GatewayEnvironment.resolvedGatewayPort(
             environment: [:],
             configPort: 22001,
             storedPort: 23001,
-            profile: work) == 22001)
+            profile: profile) == 22001)
         #expect(GatewayEnvironment.resolvedGatewayPort(
             environment: [:],
             configPort: nil,
             storedPort: 23001,
-            profile: work) == 23001)
+            profile: profile) == 23001)
         #expect(GatewayEnvironment.resolvedGatewayPort(
             environment: ["OPENCLAW_GATEWAY_PORT": "65536"],
             configPort: 22001,
             storedPort: 23001,
-            profile: work) == 22001)
+            profile: profile) == 22001)
         #expect(GatewayEnvironment.resolvedGatewayPort(
             environment: [:],
             configPort: 65536,
             storedPort: 23001,
-            profile: work) == 23001)
+            profile: profile) == 23001)
         #expect(GatewayEnvironment.resolvedGatewayPort(
             environment: [:],
             configPort: nil,
             storedPort: 65536,
-            profile: work) == work.defaultGatewayPort)
+            profile: profile) == profile.defaultGatewayPort)
         #expect(AppProfile(environment: [:]).defaultGatewayPort == 18789)
     }
 }

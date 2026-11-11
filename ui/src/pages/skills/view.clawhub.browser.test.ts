@@ -20,6 +20,59 @@ const nextFrame = () =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
 
+it("appends grouped inventory without moving focus and completes later filters", async () => {
+  document.body.append(container);
+  const skills = Array.from({ length: 1_000 }, (_, index) =>
+    createSkill({
+      name: `Inventory skill ${String(index).padStart(4, "0")}`,
+      skillKey: `inventory-${index}`,
+      source: index % 2 === 0 ? "openclaw-workspace" : "openclaw-managed",
+    }),
+  );
+  const [query, setQuery] = createSignal("");
+  const props = createProps({ report: createReport(skills), onFilterChange: setQuery });
+  renderSkills(
+    {
+      ...props,
+      state: {
+        ...props.state,
+        get skillsFilter() {
+          return query();
+        },
+      },
+    },
+    container,
+  );
+  const rows = () => [
+    ...container.querySelectorAll<HTMLButtonElement>(".plugins-item__detail-button"),
+  ];
+  expect(rows().length).toBeGreaterThan(0);
+  expect(rows().length).toBeLessThan(skills.length);
+  expect(container.querySelectorAll(".skills-group")).toHaveLength(1);
+  expect(container.querySelector(".skills-group .settings-count")?.textContent).toBe("500");
+  expect(container.querySelector(".skills-group")?.getAttribute("aria-busy")).toBe("true");
+  const first = rows()[0]!;
+  first.focus();
+  await waitForSolid(() => {
+    expect(rows()).toHaveLength(1_000);
+    expect(container.querySelectorAll('.skills-group[aria-busy="true"]')).toHaveLength(0);
+  });
+  expect(rows()[0]).toBe(first);
+  expect(document.activeElement).toBe(first);
+  expect(rows()[499]?.getAttribute("aria-label")).toBe("Open Inventory skill 0998 details");
+  expect(rows()[500]?.getAttribute("aria-label")).toBe("Open Inventory skill 0001 details");
+  const search = container.querySelector<HTMLInputElement>('input[name="skills-filter"]')!;
+  await userEvent.fill(search, "Inventory skill 09");
+  await waitForSolid(() => {
+    expect(rows()).toHaveLength(100);
+    expect(container.querySelectorAll('.skills-group[aria-busy="true"]')).toHaveLength(0);
+  });
+  expect(
+    rows().every((row) => row.getAttribute("aria-label")?.includes("Inventory skill 09")),
+  ).toBe(true);
+  expect(document.activeElement).toBe(search);
+});
+
 it("windows skill discovery while preserving keyboard traversal, notices, details, and filtering", async () => {
   await page.viewport(1440, 900);
   container.className = "content";
@@ -38,7 +91,9 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
     }),
   );
   const [query, setQuery] = createSignal("");
-  const [notice, setNotice] = createSignal<{ kind: "error"; text: string } | null>(null);
+  const [notice, setNotice] = createSignal<{ ref: string; kind: "error"; text: string } | null>(
+    null,
+  );
   const onDetailOpen = vi.fn();
   const props = createProps({
     surface: "discovery",
@@ -108,7 +163,11 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
     });
   };
   await expectEndVisible();
-  setNotice({ kind: "error", text: "The registry could not refresh this catalog. ".repeat(100) });
+  setNotice({
+    ref: "other",
+    kind: "error",
+    text: "The registry could not refresh this catalog. ".repeat(100),
+  });
   await expectEndVisible();
   setNotice(null);
   await expectEndVisible();
@@ -150,17 +209,24 @@ describe("ClawHub detail content", () => {
       }),
       container,
     );
-    const body = container.querySelector<HTMLElement>(".skill-reader-dialog__body")!;
     await expect
       .element(page.getByRole("button", { name: "Install Guide", exact: true }))
       .toBeVisible();
+    const body = container.querySelector<HTMLElement>(".skill-reader-dialog__body")!;
     const footer = container.querySelector<HTMLElement>(
       "openclaw-modal-actions.skill-reader-dialog__actions",
     )!;
     expect(footer.parentElement?.lastElementChild).toBe(footer);
     expect(body.contains(footer)).toBe(false);
+    await Promise.all(
+      footer
+        .closest("dialog")!
+        .getAnimations()
+        .map((animation) => animation.finished),
+    );
     const footerTop = footer.getBoundingClientRect().top;
     body.scrollTop = body.scrollHeight;
+    await nextFrame();
     expect(footer.getBoundingClientRect().top).toBe(footerTop);
     expect(body.clientWidth).toBeGreaterThan(0);
     expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);

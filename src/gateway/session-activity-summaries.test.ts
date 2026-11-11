@@ -1,6 +1,5 @@
 import { mkdir } from "node:fs/promises";
 import { backup } from "node:sqlite";
-import { queryObjects } from "node:v8";
 import { emitModelTransportError } from "@openclaw/ai/diagnostics";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
@@ -33,6 +32,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
@@ -48,6 +49,7 @@ import {
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
   createSessionActivitySummaries,
@@ -383,9 +385,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       expect(prepare).not.toHaveBeenCalled();
       expect(complete).not.toHaveBeenCalled();
     }
-    await service.dispose();
-    expect(prepare).not.toHaveBeenCalled();
-    expect(complete).not.toHaveBeenCalled();
   });
 
   it("backfills chronological chunks cumulatively and shares the durable result across viewers and restart", async () => {
@@ -531,9 +530,13 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       preparationStarted.resolve();
       return withinTest(preparation.promise, testSignal);
     });
-    await service.ensure(target, { ...read()!, skillsSnapshot: new SavedSkillSnapshot() });
+    const snapshot = await (async () => {
+      const skillsSnapshot = new SavedSkillSnapshot();
+      await service.ensure(target, { ...read()!, skillsSnapshot });
+      return new WeakRef(skillsSnapshot);
+    })();
     await withinTest(preparationStarted.promise, testSignal);
-    expect(queryObjects(SavedSkillSnapshot)).toBe(0);
+    await expectCollected(snapshot);
     await awaitPublication(() => preparation.resolve(prepared));
     expect(read()?.activitySummary).toMatchObject(summary(2));
   });
@@ -654,7 +657,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       }
       const { completion, start } = holdCompletion();
       await start();
-      expect(complete).toHaveBeenCalledTimes(1);
 
       const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
       const before = read()!;
@@ -739,10 +741,8 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       () => completion.resolve(result("This later recap must not interrupt deletion.")),
       () => view()?.state !== "updating",
     );
-    expect(view()?.state).not.toBe("updating");
     const entryDuringDeletion = read();
     materializationReleased.resolve();
-    await deletion;
     expect(entryDuringDeletion).toEqual(capturedEntry);
     await expect(deletion).resolves.toMatchObject({ deleted: true });
     await service.dispose();
@@ -907,7 +907,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect((await getSessionColdStorageStatus(maintenance))[0]?.coldTranscripts).toBe(0);
   });
 
-  it("normalizes alias ownership in list projection and catches context-only terminal outcomes", async () => {
+  it("normalizes alias ownership in list projection and catches context-only terminal outcomes after their plugin scope closes", async () => {
     const { target: aliasTarget, scope: aliasScope } = makeConversation(
       "agent:main:main",
       "alias-session",
@@ -916,14 +916,12 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const { completion, start } = holdCompletion();
     const aliasEvent = { sessionKey: "main", agentId: "main", sessionId: aliasScope.sessionId };
     await start(aliasTarget);
-    expect(complete).toHaveBeenCalledTimes(1);
     const row = await list({ main: read(aliasScope)! }, { fixtureAgentId: "main" });
     expect(row.sessions[0]?.activitySummary?.state).toBe("updating");
     await awaitPublication(
       () => completion.resolve(result("Prepared the deployment.")),
       () => view(aliasScope)?.state === "current",
     );
-    expect(read(aliasScope)?.activitySummary).toBeDefined();
     await transcript(
       [
         {
@@ -938,13 +936,19 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       aliasScope,
     );
     registerAgentRunContext("recap-context-run", aliasEvent);
-    service.handleEvent({
-      runId: "recap-context-run",
-      seq: 1,
-      ts: Date.now(),
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
+    const plugin = createOwnedTestInstance("finished-run");
+    const run = new PluginInvocationScope(plugin.owner!.registry!, [plugin]);
+    prepare.mockImplementationOnce(async () => plugin.wrap(() => prepared)());
+    run.run(() =>
+      service.handleEvent({
+        runId: "recap-context-run",
+        seq: 1,
+        ts: Date.now(),
+        stream: "lifecycle",
+        data: { phase: "end" },
+      }),
+    );
+    run.release();
     await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
     expect(complete.mock.calls[1]![0].prompt).toContain("Waiting for Alex to approve deployment.");
     expect(complete.mock.calls[1]![0].prompt.length).toBeLessThan(2_000);

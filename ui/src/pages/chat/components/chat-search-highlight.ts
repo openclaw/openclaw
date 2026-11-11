@@ -3,7 +3,7 @@ import { phraseQueryPattern } from "../../../lib/text-match.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 /** CSS name shared by the independent pane owners. */
-export const CHAT_SEARCH_HIGHLIGHT = "openclaw-chat-search";
+const CHAT_SEARCH_HIGHLIGHT = "openclaw-chat-search";
 
 type BlockText = { text: string; nodes: Text[]; starts: number[] };
 type Viewport = Pick<DOMRect, "top" | "right" | "bottom" | "left">;
@@ -28,17 +28,8 @@ const panes = new Map<HTMLElement, PaneHighlight>();
 const textBlocks = new Set<HTMLElement>();
 let highlight: Highlight | undefined;
 
-function highlightRegistry(): HighlightRegistry | null {
-  return typeof CSS !== "undefined" && CSS.highlights && typeof Highlight === "function"
-    ? CSS.highlights
-    : null;
-}
-
 function publish(): void {
-  const registry = highlightRegistry();
-  if (!registry) {
-    return;
-  }
+  const registry = CSS.highlights;
   if (highlight?.size) {
     if (registry.get(CHAT_SEARCH_HIGHLIGHT) !== highlight) {
       registry.set(CHAT_SEARCH_HIGHLIGHT, highlight);
@@ -340,10 +331,7 @@ export function registerChatSearchTextBlock(element: HTMLElement): () => void {
 }
 
 /** Tracks only mutations to registered text blocks while this pane is searching. */
-export function syncChatSearchHighlight(root: HTMLElement, query: string): void {
-  if (!highlightRegistry()) {
-    return;
-  }
+function syncChatSearchHighlight(root: HTMLElement, query: string): void {
   const pattern = phraseQueryPattern(query);
   if (!pattern) {
     releaseChatSearchHighlight(root);

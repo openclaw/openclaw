@@ -291,10 +291,11 @@ export async function prepareBoundGitHubPublication(params: {
   );
   params.assertCurrent();
   let expectedHead = binding.head.commit;
+  // Retargeting changes the comparison, not the head this session already published.
   if (
     published?.head_commit &&
     published.repository === binding.base.repository &&
-    published.base_branch === binding.base.branch &&
+    published.branch === binding.head.branch &&
     published.pull_request_url === binding.url
   ) {
     const ancestry = await runPublicationCommand(

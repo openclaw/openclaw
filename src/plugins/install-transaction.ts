@@ -44,9 +44,7 @@ export function attachPluginInstallTransaction<T extends object>(
   return result;
 }
 
-export function resolvePluginInstallTransaction(
-  result: object,
-): PluginInstallTransaction | undefined {
+function resolvePluginInstallTransaction(result: object): PluginInstallTransaction | undefined {
   return (result as { [PLUGIN_INSTALL_TRANSACTION]?: PluginInstallTransaction })[
     PLUGIN_INSTALL_TRANSACTION
   ];

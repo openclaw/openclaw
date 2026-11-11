@@ -104,26 +104,6 @@ function attributionSummary(container: ParentNode): string {
 }
 
 describe("session hovercard", () => {
-  it("shows the owning session failure above the notepad", () => {
-    const reason = "Validation failed.\n<worker> was unavailable; retry after reconnecting.";
-    const failed = row({
-      attention: { kind: "error", reason, sourceSessionKey: "agent:main:failed" },
-    });
-    const container = renderCard({ row: failed, progressCard: progressCard() });
-    const error = container.querySelector(".session-hovercard__error");
-    expect(error?.textContent).toContain(reason);
-    expect(error?.textContent).toContain("Run failed:");
-    expect(error?.querySelector("worker")).toBeNull();
-    expect(error?.querySelector("svg")).not.toBeNull();
-    expect(error?.nextElementSibling?.classList.contains("session-hovercard__notepad")).toBe(true);
-
-    renderCard({ row: failed }, container);
-    expect(container.querySelector(".session-hovercard__error")?.textContent).toContain(reason);
-    expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
-    renderCard({ row: row({ attention: { kind: "none" } }) }, container);
-    expect(container.querySelector(".session-hovercard__error")).toBeNull();
-  });
-
   it.each([
     {
       name: "group conversation with contributors",
@@ -479,7 +459,9 @@ describe("session hovercard", () => {
         );
         const notice = container.querySelector('[role="status"]');
         expect(notice?.textContent).toContain(
-          status === "rate-limited" ? "GitHub API rate limit reached" : "could not be refreshed",
+          status === "rate-limited"
+            ? "GitHub API rate limit reached"
+            : "Couldn’t refresh GitHub status",
         );
         if (status === "unavailable") {
           expect(notice?.textContent).not.toContain("rate limit");
@@ -560,16 +542,14 @@ describe("session hovercard", () => {
     ).not.toBeNull();
   });
 
-  it("renders the latest turn as plain text when progress is absent", () => {
+  it("reserves the task area for progress reports, never the latest message", () => {
+    const latestMessage = "Land";
     const container = renderCard({
-      row: row({ lastMessagePreview: "  Finished <strong>without markup</strong>.  " }),
+      row: row({ lastMessagePreview: latestMessage }),
     });
 
-    expect(container.querySelector(".session-hovercard__excerpt")?.textContent).toBe(
-      "Finished <strong>without markup</strong>.",
-    );
-    expect(container.querySelector(".session-hovercard__excerpt strong")).toBeNull();
-    expect(container.querySelector(".session-progress-card")).toBeNull();
+    expect(container.textContent).not.toContain(latestMessage);
+    expect(container.querySelector(".session-hovercard__task")).toBeNull();
   });
 
   it.each(["active", "markdown-only", "completed"])(
@@ -577,10 +557,7 @@ describe("session hovercard", () => {
     (mode) => {
       const card = progressCard();
       const container = renderCard({
-        row: row({
-          ...(mode === "active" ? { lastMessagePreview: "This must not appear." } : {}),
-          ...(mode === "completed" ? { status: "done" } : {}),
-        }),
+        row: row(mode === "completed" ? { status: "done" } : {}),
         progressCard: {
           ...card,
           steps:
@@ -607,8 +584,6 @@ describe("session hovercard", () => {
       );
       expect(container.querySelector(".session-progress-card")).toBeNull();
       expect(container.querySelector("time")).toBeNull();
-      expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
-      expect(container.textContent).not.toContain("This must not appear.");
     },
   );
 

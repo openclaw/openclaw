@@ -616,8 +616,15 @@ it("retains default Review content and collapsed files while switching tabs, foc
     client: { request },
     connected: true,
     connectionEpoch: 1,
-    hello: { features: { methods: ["sessions.diff"] } },
+    hello: gatewayHelloForMethods(["sessions.diff"]),
     sessionKey: "agent:main:review",
+    sessionsResult: {
+      ts: 1,
+      path: "test",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: "agent:main:review", kind: "direct", workspaceReadDisabledReason: null }],
+    },
     sidebarLayout: { columns: [] },
   });
   let presented = true;
@@ -726,7 +733,7 @@ it("shows why a file could not open instead of falling back to the session diff"
   const notice = query(".review-unavailable");
   expect(notice?.getAttribute("role")).toBe("alert");
   expect(notice?.classList.contains("danger")).toBe(true);
-  expect(notice?.querySelector("strong")?.textContent).toBe("Unable to open");
+  expect(notice?.querySelector("strong")?.textContent).toBe("Couldn’t open file");
   expect(notice?.querySelector("span")?.textContent).toBe(message);
   expect(notice?.querySelector("img")).toBeNull();
   expect(query("openclaw-session-diff")).toBeNull();

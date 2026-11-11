@@ -409,6 +409,7 @@ describe("actions on the imported original PR", () => {
     ["edit", "head"],
     ["edit", "title"],
     ["request_review", "requester"],
+    ["request_review", "requester and transport"],
     ["request_review", "head"],
     ["request_review", "closed"],
     ["request_review", "author"],
@@ -417,8 +418,11 @@ describe("actions on the imported original PR", () => {
     let reads = 0;
     f.onRead(async (endpoint) => {
       if (endpoint.endsWith("/pulls/7") && ++reads === 2) {
-        if (change === "requester") {
+        if (change === "requester" || change === "requester and transport") {
           await f.revoke();
+          if (change === "requester and transport") {
+            throw new Error("Synthetic GitHub read failure");
+          }
         }
         if (change === "head") {
           f.state.head.sha = "f".repeat(40);
@@ -440,7 +444,7 @@ describe("actions on the imported original PR", () => {
         ...(action === "edit" ? { title: "Requested title", expectedTitle: "Original title" } : {}),
       }),
     ).rejects.toThrow(
-      change === "requester"
+      change === "requester" || change === "requester and transport"
         ? /role changed/
         : change === "head"
           ? /head changed/

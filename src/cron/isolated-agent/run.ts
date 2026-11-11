@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { readAgentTerminalSnapshot } from "../../agents/agent-terminal-snapshot.js";
 import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
@@ -9,6 +10,7 @@ import {
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
+import type { restoreCronOperatorSource } from "../../gateway/cron-operator-source.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -27,6 +29,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import { GatewayDispatchUnavailableError } from "../../infra/restart-recovery-errors.js";
 import {
   logMessageDispatchCompleted,
   logMessageDispatchStarted,
@@ -39,6 +42,7 @@ import { getCurrentSessionControllerOwner } from "../../sessions/session-control
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronExecutionIdle } from "../execution-idle.js";
+import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
@@ -101,6 +105,10 @@ async function runCronIsolatedAgentTurnInTrace(
   params: RunCronAgentTurnParams,
 ): Promise<RunCronAgentTurnResult> {
   params.assertCurrent?.();
+  const ownerTransferError = resolveCronOwnerTransferRecoveryError(params.job);
+  if (ownerTransferError) {
+    return { status: "error", error: ownerTransferError };
+  }
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
   const lifecycleAbortController = new AbortController();
@@ -395,18 +403,35 @@ async function runCronIsolatedAgentTurnInTrace(
                 },
               );
               const { executeCronRun } = await cronExecutorRuntimeLoader.load();
-              const operator = params.job.operatorSource
-                ? await (
-                    await cronOperatorSourceLoader.load()
-                  ).restoreCronOperatorSource({
-                    job: params.job,
-                    agentId: prepared.context.agentId,
-                    sessionKey: prepared.context.runSessionKey,
-                    entry: prepared.context.cronSession.sessionEntry,
-                    signal: abortSignal,
-                    deliveryAttemptFence: params.deliveryAttemptFence,
-                  })
-                : undefined;
+              let operator: Awaited<ReturnType<typeof restoreCronOperatorSource>>;
+              try {
+                operator = params.job.operatorSource
+                  ? await (
+                      await cronOperatorSourceLoader.load()
+                    ).restoreCronOperatorSource({
+                      job: params.job,
+                      target: {
+                        agentId: prepared.context.agentId,
+                        sessionKey: prepared.context.runSessionKey,
+                        entry: prepared.context.cronSession.sessionEntry,
+                      },
+                      signal: abortSignal,
+                      deliveryAttemptFence: params.deliveryAttemptFence,
+                    })
+                  : undefined;
+              } catch (error) {
+                if (!(error instanceof GatewayDispatchUnavailableError) || !error.retryable) {
+                  throw error;
+                }
+                // Source recovery precedes model/tool admission. Keep its typed
+                // transient disposition so a one-shot retries the same intent.
+                return {
+                  status: "error",
+                  error: normalizeCronRunErrorText(error),
+                  executionStarted: false,
+                  errorClassification: { kind: "reason", reason: "server_error" },
+                };
+              }
               if (operator) {
                 operatorLease.defer(operator.release);
               }
@@ -489,6 +514,7 @@ async function runCronIsolatedAgentTurnInTrace(
                   "restart";
                 if (finalized.interruptedByRestart) {
                   finalized.errorClassification = { kind: "aborted" };
+                  finalized.agentTerminal = undefined;
                 }
               }
               const delayMs = consumeCronNextCheckProposal(runId, params.job.id);
@@ -534,6 +560,12 @@ async function runCronIsolatedAgentTurnInTrace(
               return prepared.context.withRunSession({
                 status: "error",
                 error,
+                ...(!isCronLaneTimeout &&
+                !interruptedByRestart &&
+                executionStarted &&
+                !admissionDisposition
+                  ? { agentTerminal: readAgentTerminalSnapshot(err) }
+                  : {}),
                 interruptedByRestart,
                 errorClassification: interruptedByRestart
                   ? { kind: "aborted" }

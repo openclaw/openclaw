@@ -31,7 +31,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
   let repairedEvents = 0;
   const preserved = new Set<string>();
 
-  scanDoctorSessionTranscripts(
+  await scanDoctorSessionTranscripts(
     {
       cfg: params.cfg,
       env,
@@ -52,7 +52,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
         params.integrityCheck ?? "quick",
       ],
     },
-    ({ reader, target, databaseOptions, reportError, sessionId }) => {
+    async ({ reader, target, databaseOptions, reportError, sessionId }) => {
       const { agentId } = target;
       const readResult = reader.labelRepairSnapshot(
         sessionId,
@@ -95,16 +95,16 @@ export async function noteSessionTranscriptLabelHealth(params: {
           if (hasMalformedRow) {
             throw new Error(`transcript contains malformed event JSON for ${sessionId}`);
           }
+          if (!preserved.has(target.sqlitePath)) {
+            const backup = await backupDoctorSqliteRepair(target.sqlitePath, "transcript-labels");
+            preserved.add(target.sqlitePath);
+            note(`- Saved pre-repair SQLite backup: ${backup}`, NOTE_TITLE);
+          }
           runOpenClawAgentWriteTransaction(
             (writeDatabase) => {
               const currentRows = readTranscriptEventRows(writeDatabase, sessionId);
               if (!transcriptSnapshotsMatch(readResult.rows, currentRows)) {
                 throw new Error(`transcript changed while preparing rewrite for ${sessionId}`);
-              }
-              if (!preserved.has(target.sqlitePath)) {
-                const backup = backupDoctorSqliteRepair(target.sqlitePath, "transcript-labels");
-                preserved.add(target.sqlitePath);
-                note(`- Saved pre-repair SQLite backup: ${backup}`, NOTE_TITLE);
               }
               // Surgical per-row update: preserves seq, created_at, and sessions row.
               updateSqliteTranscriptEventJsonInTransaction(writeDatabase, sessionId, updates);

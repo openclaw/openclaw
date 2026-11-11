@@ -9,6 +9,7 @@ import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx"
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import { StreamGroup, type StreamGroupPart } from "./chat-message-stream-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
+import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -40,17 +41,32 @@ describe("chat message headings", () => {
     ).toBeTruthy();
   });
 
-  it.each(["tool", "commentary"])("does not add a sender heading to a %s turn block", (kind) => {
-    const group = createMessageGroup(
-      { role: "assistant", content: "Working on the answer", phase: "commentary" },
-      kind === "tool" ? "tool" : "assistant",
-    );
-    const view = mountSolid(() => (
-      <MessageGroup group={group} options={{ showReasoning: false }} />
-    ));
-    flush();
-    expect(view.queryAllByRole("heading")).toHaveLength(0);
-  });
+  it.each(["tool", "commentary", "continuation"])(
+    "does not add a sender heading to a %s turn block",
+    (kind) => {
+      const group = createMessageGroup(
+        {
+          role: "assistant",
+          content: "Working on the answer",
+          phase: kind === "continuation" ? "final" : "commentary",
+        },
+        kind === "tool" ? "tool" : "assistant",
+      );
+      const view = mountSolid(() => (
+        <MessageGroup
+          group={group}
+          options={{
+            showReasoning: false,
+            ...(kind === "continuation"
+              ? { frameHeader: false, frameContent: ["Continued reply"] }
+              : {}),
+          }}
+        />
+      ));
+      flush();
+      expect(view.queryAllByRole("heading")).toHaveLength(0);
+    },
+  );
 
   it("keeps one sender heading through working, segmented streaming, and settlement", () => {
     const first: StreamGroupPart = {
@@ -135,14 +151,13 @@ describe("chat message headings", () => {
     const rows = Array.from({ length: 100 }, (_, index) => ({
       kind: "content" as const,
       key: `turn:${index}`,
-      content: () => (
-        <MessageGroup
-          group={createMessageGroup({ role: "assistant", content: `Reply ${index}` }, "assistant", {
-            key: `turn:${index}`,
-          })}
-          options={{ assistantName: `Assistant ${index}`, showReasoning: false }}
-        />
-      ),
+      content: new GuardedTranscriptItem([index], {
+        kind: "group",
+        group: createMessageGroup({ role: "assistant", content: `Reply ${index}` }, "assistant", {
+          key: `turn:${index}`,
+        }),
+        options: { assistantName: `Assistant ${index}`, showReasoning: false },
+      }),
     }));
     const { container, transcript, renderRows } = await mountTestTranscript("heading-window", rows);
     try {

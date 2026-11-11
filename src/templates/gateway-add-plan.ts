@@ -57,10 +57,39 @@ async function selectNewWorkspace(
   throw new Error("No available Template workspace suffix");
 }
 
+export async function selectTemplateAgentWorkspace(
+  config: OpenClawConfig,
+  agentId: string,
+): Promise<string> {
+  const existingAgentIds = listAgentIds(config);
+  const configuredWorkspace = resolveAgentWorkspaceDir(config, agentId);
+  const existingWorkspaces = existingAgentIds.map((existingAgentId) => ({
+    agentId: normalizeAgentId(existingAgentId),
+    workspace: resolveAgentWorkspaceDir(config, existingAgentId),
+  }));
+  const claimedWorkspaces = existingWorkspaces
+    .filter((existing) => existing.agentId !== agentId)
+    .map((existing) => resolveCanonicalWorkspacePath(existing.workspace));
+  const overlapsConfiguredWorkspace = claimedWorkspaces.some((workspace) =>
+    workspacesOverlap(workspace, resolveCanonicalWorkspacePath(configuredWorkspace)),
+  );
+  const baseWorkspace =
+    !resolveAgentConfig(config, agentId)?.workspace && overlapsConfiguredWorkspace
+      ? path.join(resolveStateDir(), `workspace-${agentId}`)
+      : configuredWorkspace;
+  return existingWorkspaces.some((existing) => existing.agentId === agentId)
+    ? baseWorkspace
+    : await selectNewWorkspace(baseWorkspace, claimedWorkspaces);
+}
+
 export type GatewayTemplateAddPlanningContext = {
   config: OpenClawConfig;
-  sourceMcpServers: Record<string, Record<string, unknown>>;
+  sourceMcpServers:
+    | Record<string, Record<string, unknown>>
+    | (() => Promise<Record<string, Record<string, unknown>>>);
   agentId?: string;
+  /** Trusted in-flight creation receipt; never a wire field. */
+  admittedWorkspace?: string;
   packagePreflight?: TemplatePackagePreflight;
 };
 
@@ -72,24 +101,11 @@ export async function buildGatewayTemplateAddPlan(
   const agentId = context.agentId
     ? normalizeAgentId(context.agentId)
     : selectNextTemplateAgentId(source.manifest.agent.id, existingAgentIds);
-  const configuredWorkspace = resolveAgentWorkspaceDir(context.config, agentId);
-  const existingWorkspaces = existingAgentIds.map((existingAgentId) => ({
-    agentId: normalizeAgentId(existingAgentId),
-    workspace: resolveAgentWorkspaceDir(context.config, existingAgentId),
-  }));
-  const claimedWorkspaces = existingWorkspaces
-    .filter((existing) => existing.agentId !== agentId)
-    .map((existing) => resolveCanonicalWorkspacePath(existing.workspace));
-  const overlapsConfiguredWorkspace = claimedWorkspaces.some((workspace) =>
-    workspacesOverlap(workspace, resolveCanonicalWorkspacePath(configuredWorkspace)),
+  const workspace =
+    context.admittedWorkspace ?? (await selectTemplateAgentWorkspace(context.config, agentId));
+  const existingWorkspaces = existingAgentIds.map((id) =>
+    resolveAgentWorkspaceDir(context.config, id),
   );
-  const baseWorkspace =
-    !resolveAgentConfig(context.config, agentId)?.workspace && overlapsConfiguredWorkspace
-      ? path.join(resolveStateDir(), `workspace-${agentId}`)
-      : configuredWorkspace;
-  const workspace = existingWorkspaces.some((existing) => existing.agentId === agentId)
-    ? baseWorkspace
-    : await selectNewWorkspace(baseWorkspace, claimedWorkspaces);
   return await buildTemplateAddPlan({
     manifest: source.manifest,
     templateMarkdownBody: source.templateMarkdownBody,
@@ -103,8 +119,16 @@ export async function buildGatewayTemplateAddPlan(
       ...(!context.agentId ? { agentId } : {}),
       workspace,
       existingAgentIds,
-      existingWorkspacePaths: existingWorkspaces.map((existing) => existing.workspace),
-      existingMcpServers: context.sourceMcpServers,
+      existingWorkspacePaths: existingWorkspaces,
+      ...(context.admittedWorkspace ? { admittedWorkspace: context.admittedWorkspace } : {}),
+      // Most Templates have no MCP declarations. Do not read and validate the
+      // entire authored host configuration for an unrelated requirement type.
+      existingMcpServers:
+        Object.keys(source.manifest.mcpServers).length === 0
+          ? {}
+          : typeof context.sourceMcpServers === "function"
+            ? await context.sourceMcpServers()
+            : context.sourceMcpServers,
       packagePreflight:
         context.packagePreflight ??
         ((pkg, destinationWorkspace) =>

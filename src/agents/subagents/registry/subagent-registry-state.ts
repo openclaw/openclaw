@@ -48,6 +48,7 @@ import { resolveControllerSessionKey } from "./subagent-registry-read-topology.j
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
@@ -315,15 +316,17 @@ export async function prepareSubagentRegistrationRows(
   const runIds = new Set(selectedRunIds);
   const matches = (entry: SubagentRunReadRecord) =>
     runIds.has(entry.runId) || entry.childSessionKey.trim() === childSessionKey;
+  const children = new Set([childSessionKey]);
+  const select = (lookup: SubagentSessionReadLookup, additionalKeys: readonly string[]) =>
+    lookup.selectChildren(children, [...runIds, ...additionalKeys]);
   const prepared = new Map<string, SubagentRunRecord>();
-  for (const entry of snapshot.values()) {
-    if (matches(entry)) {
-      prepared.set(entry.runId, entry);
-    }
+  for (const runId of select(getSessionListLookup(persistedSubagentRunsReadCache, snapshot), [])) {
+    prepared.set(runId, snapshot.get(runId)!);
   }
   return () =>
     mergeSelectedFullRuns(persistedSubagentRunsReadCache, subagentRuns, prepared, matches, {
       context,
+      select,
     });
 }
 

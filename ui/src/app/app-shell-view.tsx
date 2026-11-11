@@ -1,10 +1,15 @@
-import "../lib/toast-host.tsx";
 import type { JSX as SolidJSX } from "@solidjs/web";
+import "../lib/toast-host.tsx";
 import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { registerModalSurface } from "../components/overlay-registry.ts";
-import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
+import {
+  LazySettingsSaveStatus,
+  LazySettingsSidebar,
+} from "../components/settings-sidebar-lazy.tsx";
+import { GatewayConnectionView } from "../components/solid/gateway-connection-view.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
+import { InlineAlert } from "../components/solid/inline-alert.tsx";
 import { ShortcutHint } from "../components/solid/kbd.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import {
@@ -12,6 +17,7 @@ import {
   renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
@@ -26,12 +32,12 @@ import type { ShellOwnedElements } from "./app-shell-components.ts";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
 import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
-import { readShellView, type ShellViewHost } from "./app-shell-view-state.ts";
+import { readShellView, type ShellView, type ShellViewHost } from "./app-shell-view-state.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
 import { RouterOutlet } from "./router-outlet.tsx";
-import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
+import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, patchSettings } from "./settings.ts";
 import { CollapsedHomeToggle } from "./shell-assistant-toggles.tsx";
 import { ShellLayoutProvider } from "./shell-layout-traits-solid.tsx";
 
@@ -78,7 +84,7 @@ declare module "@solidjs/web" {
 }
 
 export function ApplicationShell(props: {
-  host: ShellViewHost & { commitRenderedPresentation(): void };
+  host: ShellViewHost & { commitRenderedPresentation(view: ShellView): void };
 }): SolidJSX.Element {
   let content!: HTMLElement;
   let releaseNavDrawer: (() => void) | undefined;
@@ -97,6 +103,9 @@ export function ApplicationShell(props: {
     props.host.shellRevision();
     return readShellView(props.host);
   });
+  // Single-attribute bindings lack an equality guard; resize-only updates keep inert unchanged.
+  const navBackdropInert = createMemo(() => !view().navDrawerOpen);
+  const settingsSaveStatusInert = createMemo(() => view().mobileNavLayout && view().navDrawerOpen);
   const sessionOwner = createMemo(() => view().context.sessions);
   const sessionRows = createMemo(() =>
     projectOwner(sessionOwner(), (sessions) => sessions.state.result?.sessions),
@@ -147,9 +156,11 @@ export function ApplicationShell(props: {
           {
             "shell--navigation-rail": view().railAvailable,
             "shell--chat": view().chatLikeRoute,
+            "shell--session": view().sessionRoute,
             "shell--nav-collapsed": view().navCollapsed,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
+            "shell--floating-header": view().floatingHeader,
             "shell--nav-drawer-open": view().navDrawerOpen,
             "shell--onboarding": view().onboarding,
             "shell--embed": view().nativeEmbed,
@@ -189,12 +200,22 @@ export function ApplicationShell(props: {
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
             prop:gatewayStatus={view().mobileGatewayStatus}
+            prop:floating={view().floatingHeader}
+            prop:navigationLocked={view().initialGatewayConnection}
+            prop:onBack={view().floatingBack}
+            prop:pageTitle={view().pageTitle}
+            prop:registerPageActions={props.host.shellLayout.registerHeaderActions}
             prop:newSessionAction={() => (
               <Show
                 when={
                   view().mobileNavLayout &&
                   !view().mergedChatChrome &&
-                  !view().navDrawerOpen &&
+                  // New Session is already the destination of this action.
+                  view().activeRoute !== "new-session" &&
+                  // Settings starts no session; the phone pill keeps its shape on every page.
+                  (view().floatingHeader || !view().settingsTakeover) &&
+                  // The floating pill keeps its shape behind the drawer's backdrop.
+                  (view().floatingHeader || !view().navDrawerOpen) &&
                   !view().onboarding &&
                   !view().nativeWebChrome &&
                   !document.documentElement.classList.contains("openclaw-native-nav")
@@ -204,6 +225,7 @@ export function ApplicationShell(props: {
                   context={view().context}
                   class="header-new-session"
                   agentId={view().selectedAgentId}
+                  icon={view().floatingHeader ? "sessionNew" : undefined}
                 />
               </Show>
             )}
@@ -279,7 +301,7 @@ export function ApplicationShell(props: {
             class="shell-nav-backdrop"
             tabindex={-1}
             aria-hidden="true"
-            inert={!view().navDrawerOpen}
+            inert={navBackdropInert()}
             onClick={() => props.host.closeNavDrawer({ restoreFocus: true })}
           />
           <div
@@ -332,6 +354,7 @@ export function ApplicationShell(props: {
           <resizable-divider
             class="sidebar-resizer"
             prop:label={t("nav.resize")}
+            prop:measureSize={() => view().shellWidth}
             prop:splitRatio={view().expandedNavWidth / view().shellWidth}
             prop:minRatio={(NAV_WIDTH_MIN + view().railWidth) / view().shellWidth}
             prop:maxRatio={(NAV_WIDTH_MAX + view().railWidth) / view().shellWidth}
@@ -343,11 +366,27 @@ export function ApplicationShell(props: {
             }
           />
         </Show>
-        <Show when={view().runtime.readOnlyConfig} keyed>
+        <Show
+          when={
+            view().runtime.readOnlyConfig &&
+            view().uiSettings.dismissedReadOnlyConfigNotice !==
+              JSON.stringify(view().runtime.readOnlyConfig)
+              ? view().runtime.readOnlyConfig
+              : undefined
+          }
+          keyed
+        >
           {(notice) => (
-            <p
-              class="shell-config-read-only callout info"
+            <InlineAlert
+              tone="info"
+              class="shell-config-read-only"
               inert={view().mobileNavLayout && view().navDrawerOpen}
+              onDismiss={() =>
+                patchSettings({
+                  gatewayUrl: view().context.gateway.connection.gatewayUrl,
+                  dismissedReadOnlyConfigNotice: JSON.stringify(notice),
+                })
+              }
             >
               <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
               {notice.message || t("nav.gateway.configReadOnlyHint")}
@@ -362,7 +401,7 @@ export function ApplicationShell(props: {
                   {t("common.learnMore")}
                 </a>
               </Show>
-            </p>
+            </InlineAlert>
           )}
         </Show>
         <main
@@ -373,9 +412,10 @@ export function ApplicationShell(props: {
               "content--chat": view().chatLikeRoute,
               "content--workbench": view().workbenchRoute,
               "content--new-session": view().activeRoute === "new-session",
+              "content--connecting": view().initialGatewayConnection,
               "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
-              "content--workboard": view().activeRoute === "workboard",
+              "content--workboard": view().workboardLayout,
             },
           ]}
           ref={(element) => {
@@ -408,6 +448,16 @@ export function ApplicationShell(props: {
               },
             }}
           >
+            <Show when={view().initialGatewayConnection}>
+              <GatewayConnectionView
+                kind={view().connectionStatus ?? "connecting"}
+                onRetry={view().callbacks.retryGateway}
+                retryPending={isGatewayConnectionAttemptPending(view().gatewaySnapshot)}
+                hasFailedAttempt={view().gatewaySnapshot.offlineStable}
+                reconnectAt={view().gatewaySnapshot.reconnectAt}
+                onReload={props.host.refreshControlUi}
+              />
+            </Show>
             <RouterOutlet
               ref={(element) => (props.host.routeOutlet = element)}
               inert={view().reloadRequired}
@@ -421,6 +471,11 @@ export function ApplicationShell(props: {
             />
           </ShellLayoutProvider>
         </main>
+        <Show when={view().settingsTakeover}>
+          <div class="settings-save-status" inert={settingsSaveStatusInert()}>
+            <LazySettingsSaveStatus host={props.host} />
+          </div>
+        </Show>
         <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
           {connectionAnnouncement()}
         </span>
@@ -536,13 +591,16 @@ export function ApplicationShell(props: {
   );
   return (
     <>
-      <Show when={view()} keyed>
+      <Show when={(props.host.navigationRevision(), view(), {})} keyed>
         {(_view) => {
-          onSettled(() => props.host.commitRenderedPresentation());
+          onSettled(() => props.host.commitRenderedPresentation(view()));
           return null;
         }}
       </Show>
-      <Show when={view().routeReady} fallback={<ConnectingSplash />}>
+      <Show
+        when={view().routeReady || view().initialGatewayConnection}
+        fallback={<ConnectingSplash />}
+      >
         <PluginSurface
           surface="workspace"
           enabled={view().workspacePluginsEnabled}

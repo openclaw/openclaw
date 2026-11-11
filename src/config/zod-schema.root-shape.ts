@@ -2,10 +2,17 @@ import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { isValidCronExpression } from "../cron/expression.js";
 import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "./repository-branch-prefix.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
-import { AgentsSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
+import {
+  addDuplicateAgentIdKeyIssues,
+  AgentIdKeySchema,
+  AgentsSchema,
+  BindingsSchema,
+  BroadcastSchema,
+} from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { ChannelsSchema } from "./zod-schema.channels-config.js";
 import { CloudWorkersConfigSchema } from "./zod-schema.cloud-workers.js";
@@ -39,6 +46,26 @@ import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.sess
 import { StorageConfigSchema } from "./zod-schema.storage.js";
 import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
+const CronDefaultDeliveryDestinationSchema = z.strictObject({
+  channel: z.string().optional(),
+  to: z.string().trim().min(1),
+  threadId: z.union([z.string().trim().min(1), z.number().int()]).optional(),
+  accountId: z.string().optional(),
+});
+
+const CronFailureAlertRouteSchema = z.strictObject({
+  threadId: z.union([z.string().trim().min(1), z.number().int()]).optional(),
+  mode: z.enum(["announce", "webhook"]).optional(),
+  accountId: z.string().optional(),
+  channel: z.string().optional(),
+  to: z.string().optional(),
+});
+
+const CronScopedDefaultsSchema = z.strictObject({
+  delivery: CronDefaultDeliveryDestinationSchema.optional(),
+  failureAlert: CronFailureAlertRouteSchema.optional(),
+});
+
 export const OpenClawSchemaShape = {
   $schema: z.string().optional(),
   meta: z
@@ -48,6 +75,8 @@ export const OpenClawSchemaShape = {
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
           utilityModelSeparation: z.literal(true).optional(),
+          skillWorkshopPlugin: z.literal(true).optional(),
+          skillLibraryToolSplit: z.literal(true).optional(),
           webhookListeners: z
             .union([z.literal(true), z.record(z.string(), z.array(z.array(z.string())))])
             .optional(),
@@ -63,7 +92,7 @@ export const OpenClawSchemaShape = {
           timeoutMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
-      vars: z.record(z.string(), z.string()).optional(),
+      vars: z.record(z.string(), z.string().register(sensitive)).optional(),
     })
     .optional(),
   wizard: z
@@ -94,6 +123,11 @@ export const OpenClawSchemaShape = {
       auto: z
         .strictObject({
           enabled: z.boolean().optional(),
+          schedule: z
+            .string()
+            .trim()
+            .refine((value) => isValidCronExpression(value), "Invalid cron expression")
+            .optional(),
         })
         .optional(),
     })
@@ -410,20 +444,27 @@ export const OpenClawSchemaShape = {
        * Default: "24h".
        */
       sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
-      failureAlert: z
-        .strictObject({
-          enabled: z.boolean().optional(),
-          after: z.number().int().min(1).optional(),
-          cooldownMs: z.number().int().min(0).optional(),
-          includeSkipped: z.boolean().optional(),
-          mode: z.enum(["announce", "webhook"]).optional(),
-          accountId: z.string().optional(),
-          channel: z.string().optional(),
-          to: z.string().optional(),
-        })
-        .optional(),
+      /** Default announce destination for jobs that do not name their own route. */
+      delivery: CronDefaultDeliveryDestinationSchema.optional(),
+      failureAlert: CronFailureAlertRouteSchema.extend({
+        enabled: z.boolean().optional(),
+        after: z.number().int().min(1).optional(),
+        cooldownMs: z.number().int().min(0).optional(),
+        includeSkipped: z.boolean().optional(),
+      }).optional(),
+      /** Per-agent destinations that replace the Gateway-wide ones for that agent's jobs. */
+      agents: z.record(AgentIdKeySchema, CronScopedDefaultsSchema).optional(),
+      /**
+       * Per-creator destinations keyed by the Gateway profile id of the human who
+       * created the job; they replace agent and Gateway-wide defaults for those jobs.
+       */
+      creators: z.record(z.string().trim().min(1), CronScopedDefaultsSchema).optional(),
     })
     .superRefine((val, ctx) => {
+      addDuplicateAgentIdKeyIssues(Object.keys(val.agents ?? {}), ctx, {
+        label: "cron.agents",
+        path: ["agents"],
+      });
       if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
         try {
           parseDurationMs(normalizeStringifiedOptionalString(val.sessionRetention) ?? "", {
@@ -561,21 +602,6 @@ export const OpenClawSchemaShape = {
           maxSkillsPromptChars: z.number().int().min(0).optional(),
           /** Max size (bytes) allowed for a SKILL.md file to be considered. */
           maxSkillFileBytes: z.number().int().min(0).optional(),
-        })
-        .optional(),
-      workshop: z
-        .strictObject({
-          /** Autonomous Skill Workshop learning. */
-          autonomous: z
-            .strictObject({
-              /** "auto" lets background reviews change Workshop skills; "propose" saves their changes as drafts for review; "off" disables background learning. */
-              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
-              /** Post background review notices to supported channels. Default: false. */
-              channelNotices: z.boolean().optional(),
-            })
-            .optional(),
-          /** Maximum Workshop skill file size in bytes. */
-          maxSkillBytes: z.number().int().min(1).optional(),
         })
         .optional(),
       entries: z.record(z.string(), SkillEntrySchema).optional(),

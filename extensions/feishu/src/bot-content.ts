@@ -194,11 +194,12 @@ function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolea
 }
 
 export function normalizeFeishuCommandProbeBody(text: string): string {
-  return text
+  const body = text
     .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
     .replace(/(^|\s)@[^/\s]+(?=\s|$|\/)/gu, "$1")
-    .replace(/\s+/g, " ")
     .trim();
+  // Multiline command arguments must survive mention removal before core dispatch.
+  return body.startsWith("/") && /[\r\n]/.test(body) ? body : body.replace(/\s+/g, " ");
 }
 
 function parseMediaResource(

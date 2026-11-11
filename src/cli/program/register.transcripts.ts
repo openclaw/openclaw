@@ -4,6 +4,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { resolveStateDir } from "../../config/paths.js";
 import { normalizeExportText } from "../../transcripts/store-artifacts.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 
 type TranscriptsCliOptions = {
   json?: boolean;
@@ -84,7 +85,7 @@ export function registerTranscriptsCli(program: Command): void {
       const store = createStore();
       const entry = await store.readSessionEntry(sessionSelector);
       if (!entry) {
-        throw new Error(`transcripts session not found: ${sessionSelector}`);
+        throwExpectedCliError(`transcripts session not found: ${sessionSelector}`);
       }
       const storedSummary = await store.readSummary(entry.session);
       const materializedMarkdown =
@@ -104,7 +105,7 @@ export function registerTranscriptsCli(program: Command): void {
         return;
       }
       if (materializedMarkdown === undefined) {
-        throw new Error(`summary.md not found for transcripts session: ${sessionSelector}`);
+        throwExpectedCliError(`summary.md not found for transcripts session: ${sessionSelector}`);
       }
       process.stdout.write(materializedMarkdown.split("\n").map(sanitizeTerminalText).join("\n"));
     });
@@ -121,7 +122,7 @@ export function registerTranscriptsCli(program: Command): void {
       const store = createStore();
       const entry = await store.readSessionEntry(selector);
       if (!entry) {
-        throw new Error(`transcripts session not found: ${selector}`);
+        throwExpectedCliError(`transcripts session not found: ${selector}`);
       }
       const kind = options.dir
         ? "all"
@@ -143,7 +144,7 @@ export function registerTranscriptsCli(program: Command): void {
         return;
       }
       if (!exists) {
-        throw new Error(`summary.md not found for transcripts session: ${selector}`);
+        throwExpectedCliError(`summary.md not found for transcripts session: ${selector}`);
       }
       writeLine(selectedPath);
     });

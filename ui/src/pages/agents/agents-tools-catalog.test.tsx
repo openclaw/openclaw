@@ -115,7 +115,7 @@ describe("Agents tools catalog read", () => {
     first.reject(new Error("gateway unavailable"));
     await waitForSolid(() =>
       expect(view.container.textContent).toContain(
-        "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+        "Couldn’t load the tool catalog. Showing built-in tools instead.",
       ),
     );
     expect(profileButton()?.disabled).toBe(false);
@@ -125,7 +125,7 @@ describe("Agents tools catalog read", () => {
     view.page.read().agentSkills.onFilterChange("unrelated filter");
     await waitForSolid(() => expect(view.page.read().agentSkills.filter).toBe("unrelated filter"));
     await waitForSolid(() => {
-      expect(view.container.textContent).toContain("Showing built-in fallback list instead.");
+      expect(view.container.textContent).toContain("Showing built-in tools instead.");
       expect(
         Array.from(view.container.querySelectorAll("button")).some(
           (button) => button.textContent?.trim() === "Retry",
@@ -141,7 +141,7 @@ describe("Agents tools catalog read", () => {
     retry!.click();
     await waitForSolid(() => {
       expect(view.catalogCalls()).toHaveLength(2);
-      expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
+      expect(view.container.textContent).not.toContain("Showing built-in tools instead.");
       expect(
         view.container.querySelector('.settings-loading-skeleton[aria-busy="true"]'),
       ).not.toBeNull();
@@ -150,7 +150,7 @@ describe("Agents tools catalog read", () => {
     expect(view.container.querySelector("openclaw-github-identity")).toBe(identityHost);
     second.resolve(createReadToolCatalog("main", "read"));
     await waitForSolid(() => {
-      expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
+      expect(view.container.textContent).not.toContain("Showing built-in tools instead.");
       expect(view.preview()).toBe("read");
     });
     expect(view.container.querySelector("openclaw-github-identity")).toBe(identityHost);
@@ -193,7 +193,7 @@ describe("Agents tools catalog read", () => {
     await waitForSolid(() => expect(view.catalogCalls()).toHaveLength(1));
     first.reject(new Error("temporarily unavailable"));
     await waitForSolid(() =>
-      expect(view.container.textContent).toContain("Showing built-in fallback list instead."),
+      expect(view.container.textContent).toContain("Showing built-in tools instead."),
     );
 
     view.context.settingsAgentSelection.set("main");
@@ -201,7 +201,7 @@ describe("Agents tools catalog read", () => {
     second.resolve(createReadToolCatalog("main", "recovered-tool"));
     await waitForSolid(() => {
       expect(view.preview()).toBe("recovered-tool");
-      expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
+      expect(view.container.textContent).not.toContain("Showing built-in tools instead.");
     });
   });
 
@@ -238,7 +238,32 @@ describe("Agents tools catalog read", () => {
     await waitForSolid(() => {
       expect(view.preview()).toBe("current-tool");
       expect(view.container.textContent).not.toContain("stale-tool");
-      expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
+      expect(view.container.textContent).not.toContain("Showing built-in tools instead.");
     });
   });
 });
+
+it.each(["main", "Main"])(
+  "renders the authored %s allowlist path as code",
+  async (authoredAgentId) => {
+    const params = createBaseParams({
+      configForm: {
+        agents: { entries: { [authoredAgentId]: { tools: { profile: "full", allow: ["read"] } } } },
+        tools: { allow: ["read"] },
+      },
+      catalog: createReadToolCatalog(),
+    });
+    const view = mountSolid(() => <AgentTools {...params} />);
+    await waitForSolid(() => {
+      expect(
+        Array.from(view.container.querySelectorAll(".callout code"), (node) => node.textContent),
+      ).toEqual([`agents.entries.${authoredAgentId}.tools.allow`, "tools.allow"]);
+    });
+    expect(view.container.textContent).toContain(
+      "This agent uses a tool allowlist. Manage it in Config:",
+    );
+    expect(view.container.textContent).toContain(
+      "Agent overrides can’t enable tools blocked by the global allowlist:",
+    );
+  },
+);

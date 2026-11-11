@@ -4,7 +4,11 @@ import {
   buildCodeSpanIndex,
   createInlineCodeState,
 } from "../../packages/markdown-core/src/code-spans.js";
-import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
+import {
+  findFenceSpanAt,
+  scanFenceSpans,
+  type FenceScanState,
+} from "../../packages/markdown-core/src/fences.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { replaceOutsideCodeRegionParts } from "../utils/directive-tags.js";
 
@@ -167,8 +171,18 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
         if (tagStart === -1) {
           // A chunk can end on a single "["; hold it so the next chunk can
           // complete "[[" instead of leaking markup or swallowing the rest.
-          const tail = input.endsWith("[") ? input.length - 1 : input.length;
+          let tail = input.endsWith("[") ? input.length - 1 : input.length;
           if (!insideHiddenTextBlock) {
+            const ticks = /`+$/.exec(input.slice(index, tail));
+            if (ticks) {
+              const start = tail - ticks[0].length;
+              const before = buildCodeSpanIndex(input.slice(index, start), inlineCode, fence);
+              const fenced = scanFenceSpans(input.slice(index, tail), fence).spans;
+              // An opening run is not complete until the next block supplies lookahead.
+              if (!before.inlineState.open && !findFenceSpanAt(fenced, tail - index - 1)) {
+                tail = start;
+              }
+            }
             output += trackVisibleText(input.slice(index, tail));
           }
           pending = input.slice(tail);

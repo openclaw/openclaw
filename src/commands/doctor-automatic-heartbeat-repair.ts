@@ -127,7 +127,7 @@ export async function prepareAutomaticHeartbeatRepair(
     const { hasPendingHeartbeatCadenceMigration } =
       await import("./doctor-heartbeat-cadence-migration.js");
     try {
-      if (!hasPendingHeartbeatCadenceMigration(snapshot.sourceConfig, env)) {
+      if (!(await hasPendingHeartbeatCadenceMigration(snapshot.sourceConfig, env))) {
         return undefined;
       }
     } catch (error) {

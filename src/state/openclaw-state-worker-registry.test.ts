@@ -23,6 +23,27 @@ vi.mock("../infra/push-web-store.worker.js", () => {
 vi.mock("../agents/worktrees/dispatch.worker.js", () => {
   throw new Error("APNs preparation loaded worktrees");
 });
+vi.mock(
+  "../agents/subagents/completion/subagent-completion-admission.worker.js",
+  async (importOriginal) => {
+    loaded.push("subagent-completion");
+    return importOriginal();
+  },
+);
+
+vi.mock("../gateway/worker-environments/placement-lifecycle.worker.js", async (importOriginal) => {
+  loaded.push("placement-lifecycle");
+  return importOriginal();
+});
+vi.mock("../gateway/worker-environments/placement-turn-claim-events.js", async (importOriginal) => {
+  loaded.push("placement-turn-runtime");
+  return importOriginal();
+});
+
+vi.mock("../acp/runtime/session-meta-source.worker.js", async (importOriginal) => {
+  loaded.push("acp-session-source");
+  return importOriginal();
+});
 
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 
@@ -61,7 +82,7 @@ it("loads only the requested domain and routes exact operation names after prepa
   expect(read).toHaveBeenCalledExactlyOnceWith(command.input, context);
 });
 
-it("prepares exact operations without loading another kernel under the same namespace", async () => {
+it("prepares exact operations before their namespace fallback", async () => {
   type Operations = {
     "session.read": { input: string; output: string };
     "session.write": { input: string; output: void };
@@ -70,12 +91,14 @@ it("prepares exact operations without loading another kernel under the same name
     "session.read": (input: string, context: { agentId: string }) => `${context.agentId}:${input}`,
   }));
   const loadWrite = vi.fn(async () => ({ "session.write": (_input: string) => {} }));
-  const registry = createWorkerOperationRegistry<Operations, { agentId: string }, keyof Operations>(
-    {
-      "session.read": loadRead,
-      "session.write": loadWrite,
-    },
-  );
+  const registry = createWorkerOperationRegistry<
+    Operations,
+    { agentId: string },
+    "session.read" | "session"
+  >({
+    "session.read": loadRead,
+    session: loadWrite,
+  });
   const command = { type: "session.read", input: "entry" } as const;
   expect(() => registry.execute(command, { agentId: "agent" })).toThrow("not prepared");
   const preparation = registry.prepare(command.type);
@@ -92,4 +115,48 @@ it("prepares exact operations without loading another kernel under the same name
   expect(registry.prepare("session.write")).toBe(refused);
   expect(loadWrite).toHaveBeenCalledOnce();
   expect(registry.has({ type: "session.write", input: "entry" })).toBe(false);
+});
+
+it("prepares session maintenance without loading ACP recording", async () => {
+  for (const type of ["sessionState.prune", "sessionState.sweep"]) {
+    await stateWorkerRegistry.prepare(type);
+    expect(stateWorkerRegistry.has({ type, input: undefined })).toBe(true);
+  }
+  expect(loaded).not.toContain("acp-session-source");
+  await stateWorkerRegistry.prepare("sessionState.record");
+  expect(stateWorkerRegistry.has({ type: "sessionState.record", input: undefined })).toBe(true);
+  expect(loaded.filter((name) => name === "acp-session-source")).toHaveLength(1);
+});
+
+it("prepares placement recovery and reads without loading dispatch or turn execution", async () => {
+  for (const type of [
+    "workerPlacements.clearLocalTurnClaims",
+    "workerPlacements.readIdentities",
+    "workerPlacements.read",
+    "workerPlacements.readWithMove",
+    "workerPlacements.readMove",
+    "workerPlacements.readReconcile",
+  ]) {
+    await stateWorkerRegistry.prepare(type);
+    expect(stateWorkerRegistry.has({ type, input: undefined })).toBe(true);
+  }
+  expect(loaded).not.toContain("placement-lifecycle");
+  expect(loaded).not.toContain("placement-turn-runtime");
+  await stateWorkerRegistry.prepare("workerPlacements.startDispatch");
+  expect(stateWorkerRegistry.has({ type: "workerPlacements.startDispatch" })).toBe(true);
+  expect(loaded.filter((name) => name === "placement-lifecycle")).toHaveLength(1);
+});
+
+it("prepares session delivery recovery without loading subagent completion", async () => {
+  await stateWorkerRegistry.prepare("sessionDelivery.list");
+  expect(loaded).not.toContain("subagent-completion");
+  expect(stateWorkerRegistry.has({ type: "sessionDelivery.list", input: undefined })).toBe(true);
+  for (const type of [
+    "sessionDelivery.admitSubagentCompletion",
+    "sessionDelivery.mutateSubagentCompletion",
+  ]) {
+    await stateWorkerRegistry.prepare(type);
+    expect(stateWorkerRegistry.has({ type, input: undefined })).toBe(true);
+  }
+  expect(loaded.filter((name) => name === "subagent-completion")).toHaveLength(1);
 });

@@ -177,6 +177,21 @@ function mountRows(
     return method === "sessions.abort" ? (handlers.abort?.() ?? {}) : {};
   }, mobile);
 }
+it("resynchronizes descendants when a retained panel switches presentation", async () => {
+  const coordinator = child("coordinator");
+  const reviewer = { ...child("reviewer"), spawnedBy: coordinator.key };
+  coordinator.childSessions = [reviewer.key];
+  const f = mountRows(
+    (params) => (params?.spawnedBy === parentKey ? [coordinator] : [reviewer]),
+    true,
+  );
+  await f.waitForCount(".chat-subagents-mobile__open", 1);
+  Object.assign(f.panel, { mobile: false });
+  await f.waitForCount(".subagents-desktop__open", 2);
+  Object.assign(f.panel, { mobile: true });
+  await f.waitForCount(".chat-subagents-mobile__open", 1);
+});
+
 const openSelector = (mobile?: boolean) =>
   mobile === true
     ? ".chat-subagents-mobile__open"

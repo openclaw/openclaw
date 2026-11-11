@@ -19,7 +19,10 @@ import { acquireNativeMcpServer } from "./native-mcp-runtime.js";
 const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
-vi.mock("../logger.js", () => ({ logWarn: warn }));
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: warn,
+}));
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
     mcpServers: cfg.mcp?.servers ?? {},

@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { getLineInfo, parse } from "acorn";
+import { getLineInfo } from "acorn";
 import { decodeHTMLAttribute } from "entities";
+import { validateWidgetScript } from "./widget-script-validation.js";
 
 /** JavaScript MIME type essences per https://mimesniff.spec.whatwg.org/#javascript-mime-type. */
 const JAVASCRIPT_MIME_ESSENCES = new Set([
@@ -106,7 +107,7 @@ function findRawTextEnd(html: string, start: number, name: string, foreign: bool
  * are intentionally not modeled; such input yields an explicit tool error, never a hosted widget
  * with a script that cannot run.
  */
-export function findWidgetScriptSyntaxError(widgetCode: string) {
+export async function findWidgetScriptSyntaxError(widgetCode: string) {
   const tagPattern = /<\/?([a-z][^\t\n\f\r />]*)/iy;
   let position = 0;
   let scriptIndex = 0;
@@ -185,12 +186,8 @@ export function findWidgetScriptSyntaxError(widgetCode: string) {
       bodyStart += body.length - body.trimStart().length + "<![CDATA[".length;
       body = trimmed.slice("<![CDATA[".length, -"]]>".length);
     }
-    try {
-      parse(body, { ecmaVersion: "latest", sourceType });
-    } catch (error) {
-      if (!(error instanceof SyntaxError) || !("pos" in error) || typeof error.pos !== "number") {
-        throw error;
-      }
+    const error = await validateWidgetScript({ body, sourceType });
+    if (error) {
       const offset = bodyStart + error.pos;
       const { line, column } = getLineInfo(widgetCode, offset);
       const snippet = truncateUtf16Safe(
@@ -198,7 +195,7 @@ export function findWidgetScriptSyntaxError(widgetCode: string) {
         160,
       );
       return {
-        message: truncateUtf16Safe(error.message.replace(/ \(\d+:\d+\)$/u, ""), 200),
+        message: error.message,
         /** Location in the supplied widget_code: 1-based line, 0-based UTF-16 column. */
         line,
         column,

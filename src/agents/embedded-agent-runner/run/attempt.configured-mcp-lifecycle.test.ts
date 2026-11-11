@@ -28,7 +28,7 @@ let runtime: SessionMcpRuntime;
 // Restore harness-skipped tool owners; replace only the MCP transport.
 beforeAll(async () => {
   vi.doUnmock("../../agent-tool-definition-adapter.js");
-  vi.doUnmock("../../agent-tools.js");
+  vi.doUnmock("../../agent-tools.async.js");
   vi.doUnmock("../../tool-fs-policy.js");
   vi.doUnmock("../../model-auth.js");
   vi.doMock("../../agent-bundle-mcp-tools.js", async () => {
@@ -111,7 +111,6 @@ it.each([false, true])(
           });
         }),
       attemptOverrides: {
-        contextTokenBudget: 8192,
         runId,
         disableTools: false,
         sessionManager: SessionManager.inMemory(),

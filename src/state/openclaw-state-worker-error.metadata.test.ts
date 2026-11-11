@@ -36,9 +36,10 @@ it("preserves canonical metadata unavailability and SQLite causes through cleanu
   expect(decoded.cause).toMatchObject({ message: cleanup.message });
 });
 
-it("keeps shared error transport independent of agent schema classification", () => {
+it("keeps shared error transport independent of lease and agent schema classification", () => {
   expect(
     findSourceImportBackedges("src/state/openclaw-state-worker-error.ts", [
+      "src/shared/state-lease-loss.ts",
       "src/state/openclaw-agent-db-read-error.ts",
       "src/state/openclaw-agent-schema.ts",
       "src/state/openclaw-agent-db-schema-compatibility.ts",

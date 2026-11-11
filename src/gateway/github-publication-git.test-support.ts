@@ -283,6 +283,7 @@ export async function createRealPublicationWorkspace(params: {
   let interrupted = false;
   let remoteHead = "";
   let remoteBranch = branch;
+  const remoteHeads = new Map<string, string>();
   let publishedPullRequest: PublicationPullRequestFixture | undefined;
   const remoteCommits = new Set([baseHead]);
   const effects: string[] = [];
@@ -349,13 +350,17 @@ export async function createRealPublicationWorkspace(params: {
         throw new Error("Publication fixture expected an exact commit push.");
       }
       [remoteHead, remoteBranch] = refspec.split(":refs/heads/") as [string, string];
+      remoteHeads.set(`refs/heads/${remoteBranch}`, remoteHead);
       remoteCommits.add(remoteHead);
       interrupt("push", "synthetic push response lost");
       return commandResult();
     }
     if (argv.includes("ls-remote")) {
-      interrupt("observe", "synthetic remote observation unavailable", Boolean(remoteHead));
-      return commandResult(remoteHead ? `${remoteHead}\trefs/heads/${remoteBranch}\n` : "");
+      const ref = argv.at(-1) ?? "";
+      const head = remoteHeads.get(ref);
+      const observed = head ? `${head}\t${ref}\n` : "";
+      interrupt("observe", "synthetic remote observation unavailable", Boolean(observed));
+      return commandResult(observed);
     }
     const result = await local(argv, options);
     interrupt("index", "synthetic ref update response lost", argv.includes("update-ref"));

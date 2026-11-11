@@ -356,7 +356,7 @@ it("retires stale page data across a reload without a URL change", async () => {
   const reading = await heldCommand(h, cdp("Runtime.evaluate"));
   h.updateTab(101, { status: "loading" });
   reading.finish();
-  expectType(await reading.result, "error");
+  expectError(await reading.result, expect.stringContaining("document changed"));
 });
 
 describe("physical tab creation authority", () => {
@@ -664,7 +664,9 @@ describe("tab-scoped relay completions", () => {
     ["Network.setExtraHTTPHeaders", "selected", { headers: { "X-Test": "synthetic" } }, "result"],
     ["Network.setBypassServiceWorker", "selected", { bypass: true }, "result"],
     ["Network.getResponseBody", "selected", { requestId: "synthetic" }, "error"],
+    ["Network.getResponseBody", "all", { requestId: "synthetic" }, "error"],
     ["Fetch.getResponseBody", "selected", { requestId: "synthetic" }, "error"],
+    ["Fetch.getResponseBody", "all", { requestId: "synthetic" }, "error"],
   ] as const)(
     "settles native %s across a commit in %s mode",
     async (method, mode, params, type) => {
@@ -676,7 +678,10 @@ describe("tab-scoped relay completions", () => {
       });
       const response = await h.command(cdp(method, params));
       if (type === "error") {
-        expectError(response, "tab 101 access was revoked");
+        expectError(
+          response,
+          "tab 101 document changed while the command was in flight; inspect the current page before retrying",
+        );
         expect(response.result).toBeUndefined();
       } else {
         expectResult(response, {});
