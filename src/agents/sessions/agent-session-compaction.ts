@@ -39,6 +39,7 @@ import {
   createStandaloneCompactionRequestBudget,
   estimateCompactedRequestTokens,
   estimateCompactionHistoryTokens,
+  replayWindow,
   resolveCompactionRetentionBudget,
   type CompactionRequestBudget,
   type CompactionRequestConstraints,
@@ -506,10 +507,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     const completedCompaction = {
       ...compactionResult,
-      summary: commitCompactionSummary(compactionResult, preparation, withoutSummary, {
-        contextWindow: model.contextWindow,
-        retainedMessages: projectReplacement(compactionResult, ""),
-      }),
+      summary: commitCompactionSummary(compactionResult, preparation, withoutSummary, () =>
+        replayWindow(model, this.agent, projectReplacement(compactionResult, "")),
+      ),
     };
 
     // Custom hooks may choose a different retained boundary. Validate their

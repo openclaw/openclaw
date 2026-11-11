@@ -1,6 +1,5 @@
 /** Model-free record of a compacted region: the whole record without a summary, an appendix beside one. */
 import type { AgentMessage } from "../../types.js";
-import { estimateTokens } from "./compaction-cut-point.js";
 import { parseCompactionDetails } from "./compaction-details.js";
 import {
   capCompactionSummary,
@@ -197,7 +196,8 @@ function appendSummaryFloor(
 /**
  * The committed summary of every producer: capped at the summary ceiling, then followed by
  * the floor. No-summary artifacts already carry their floor inside the ceiling. Without a
- * foreground budget, the floor still has to fit the window beside the retained context.
+ * foreground budget, the floor still has to fit the window beside the fixed prompt, tools
+ * and retained history.
  */
 export function commitCompactionSummary(
   result: Pick<CompactionResult, "summary" | "details">,
@@ -206,7 +206,7 @@ export function commitCompactionSummary(
     "messagesToSummarize" | "turnPrefixMessages" | "summaryTokenBudget"
   > & { settings: { maxSummaryChars?: number; reserveTokens?: number } },
   withoutSummary: boolean,
-  window?: { contextWindow?: number; retainedMessages: readonly AgentMessage[] },
+  window?: () => { contextWindow?: number; retainedTokens: number },
 ): string {
   const { maxSummaryChars, reserveTokens = 0 } = preparation.settings;
   const summary = capCompactionSummary(result.summary, maxSummaryChars);
@@ -214,13 +214,10 @@ export function commitCompactionSummary(
     return summary;
   }
   // Accepted edge case: with an unknown window the floor is bounded only by its own budget.
-  const windowTokens =
-    window?.contextWindow && window.contextWindow > 0
-      ? window.retainedMessages.reduce(
-          (left, message) => left - estimateTokens(message),
-          window.contextWindow - reserveTokens,
-        )
-      : undefined;
+  const fit = preparation.summaryTokenBudget === undefined ? window?.() : undefined;
+  const windowTokens = fit?.contextWindow
+    ? fit.contextWindow - reserveTokens - fit.retainedTokens
+    : undefined;
   return appendSummaryFloor(
     summary,
     [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages],

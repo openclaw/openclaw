@@ -166,6 +166,27 @@ export function estimateCompactedRequestTokens(
   );
 }
 
+/** The window a replacement without a foreground budget must fit: fixed prompt, tools, history. */
+export function replayWindow(
+  model: { contextWindow?: number },
+  agent: {
+    state: Pick<Parameters<typeof createCompactionRequestBudget>[0], "systemPrompt" | "tools">;
+  },
+  messages: AgentMessage[],
+) {
+  const { systemPrompt, tools } = agent.state;
+  const budget = createCompactionRequestBudget({
+    contextWindow: 0,
+    reserveTokens: 0,
+    systemPrompt,
+    tools,
+  });
+  return {
+    contextWindow: model.contextWindow,
+    retainedTokens: estimateCompactedRequestTokens(messages, budget),
+  };
+}
+
 export function assertCompactionRequestCanFit(
   messages: AgentMessage[],
   budget: CompactionRequestBudget | undefined,

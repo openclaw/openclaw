@@ -447,9 +447,10 @@ describe("AgentSession compaction", () => {
     expect(manualRequestState).toBeUndefined();
   });
 
-  it("drops the floor when it cannot fit the window without a foreground budget", async () => {
+  it("drops the floor when fixed context leaves no window room without a foreground budget", async () => {
     const { session } = await createTestSession({
-      model: { ...testModel, contextWindow: 40 },
+      model: { ...testModel, contextWindow: 2_000 },
+      systemPrompt: "Keep the project requirements. ".repeat(250),
       sessionManager: oldHistory(),
       settingsManager: compactionSettings(),
       extension: createResultHandlers("short summary"),
