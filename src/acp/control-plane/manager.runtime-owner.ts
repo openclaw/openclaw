@@ -3,7 +3,16 @@ import {
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { assertNoUnmigratedWorkspaceState } from "../../agents/workspace-legacy-state.js";
+import { resolveCanonicalWorkspacePath } from "../../agents/workspace-state-identity.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPathInside } from "../../infra/path-guards.js";
+import {
+  findStartupMaintenanceRequiredError,
+  StartupMaintenanceRequiredError,
+} from "../../infra/startup-maintenance-required.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpSessionTarget } from "./manager.types.js";
@@ -30,6 +39,36 @@ export function isAcpOwnerRepairRequired(error: unknown): boolean {
     current = current.cause;
   }
   return false;
+}
+
+/** Refuse a persisted ACP turn before its prompt reaches an affected workspace. */
+export function assertAcpWorkspaceMigrationReady(
+  cfg: OpenClawConfig,
+  agentId: string,
+  handle: AcpRuntimeHandle,
+  meta: SessionAcpMeta,
+): void {
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const managed = resolveCanonicalWorkspacePath(workspaceDir);
+  const cwd = handle.cwd ?? meta.runtimeOptions?.cwd ?? meta.cwd;
+  const current = cwd && resolveCanonicalWorkspacePath(cwd);
+  if (current && !isPathInside(managed, current)) {
+    return;
+  }
+  try {
+    assertNoUnmigratedWorkspaceState({ workspaceDir });
+    if (cwd && current !== managed) {
+      assertNoUnmigratedWorkspaceState({ workspaceDir: cwd });
+    }
+  } catch (error) {
+    if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
+      throw error;
+    }
+    throw new StartupMaintenanceRequiredError(
+      "legacy-workspace",
+      "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.",
+    );
+  }
 }
 
 export function persistedAcpRuntimeHandle(

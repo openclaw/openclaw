@@ -1,5 +1,4 @@
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
-import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   assertOperatorModelAllowed,
@@ -7,10 +6,8 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
-import { normalizeModelRef } from "../../agents/model-ref-shared.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
-import { getProcessGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import type { SessionControllerProducer } from "../../sessions/session-controller.producer-custody.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
@@ -26,9 +23,15 @@ import {
   type BackendAttempt,
 } from "./manager.backend-failover.js";
 import { cancelManagerActiveTurn } from "./manager.cancel-session.js";
-import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
+import {
+  applyManagerRuntimeControls,
+  createAcpModelRefResolver,
+} from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
+import {
+  assertAcpWorkspaceMigrationReady,
+  isAcpOwnerRepairRequired,
+} from "./manager.runtime-owner.js";
 import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
 import {
@@ -85,16 +88,7 @@ export async function runManagerTurn(params: {
     throw error;
   };
   const operatorAuthority = readAdmittedRunOperatorAuthority(input.admittedRunContext);
-  const manifestPlugins = getProcessGatewayPluginMetadataSnapshot() ?? [];
-  const resolveModelRef = (model: string | undefined) => {
-    const ref = model ? parseModelCatalogRef(model) : undefined;
-    return ref
-      ? normalizeModelRef(ref.provider, ref.modelId, {
-          allowPluginNormalization: false,
-          manifestPlugins,
-        })
-      : undefined;
-  };
+  const resolveModelRef = createAcpModelRefResolver();
   const assertModelAllowed = (model: string | undefined) =>
     assertOperatorModelAllowed(operatorAuthority, resolveModelRef(model));
   if (input.admittedRunContext.operationalRunInstance.runId !== input.requestId) {
@@ -477,6 +471,12 @@ export async function runManagerTurn(params: {
                 eventGate,
                 onBeforePrompt: async () => {
                   await input.onBeforePrompt?.();
+                  assertAcpWorkspaceMigrationReady(
+                    input.cfg,
+                    agentId,
+                    ensured.handle,
+                    ensured.meta,
+                  );
                   modelExecution?.assertCurrent();
                 },
                 onCancellation: cancelTurn,

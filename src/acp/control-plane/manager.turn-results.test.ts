@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type {
   AcpRuntimeEvent,
   AcpRuntimeTurn,
@@ -5,9 +6,11 @@ import type {
 } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { createAcceptedFixture } from "./manager.ownership.test-support.js";
 import {
+  baseCfg,
   extractStatesFromUpserts,
   installAcpSessionManagerTestLifecycle,
   mockParentedAcpSessionEntries,
@@ -82,6 +85,21 @@ describe("AcpSessionManager turn results", () => {
     expect(onBeforePrompt).toHaveBeenCalledOnce();
     expect(startTurn).not.toHaveBeenCalled();
     expect(state.runTurn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a persisted ACP turn while its workspace needs migration", async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
+      const workspaceDir = resolveAgentWorkspaceDir(baseCfg, "codex");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(`${workspaceDir}/openclaw-workspace-state.json`, "retained");
+      const state = setupRuntime(readySessionMeta({ cwd: workspaceDir }));
+      const startTurn = state.start();
+      const failure = await state.run().catch((error: unknown) => error);
+      expect(failure).toMatchObject({ message: expect.stringContaining("openclaw doctor --fix") });
+      expect(String(failure)).not.toContain(workspaceDir);
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(state.runTurn).not.toHaveBeenCalled();
+    });
   });
 
   it("notifies submission after readiness and finishes work despite an observer failure", async () => {

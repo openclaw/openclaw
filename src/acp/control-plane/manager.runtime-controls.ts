@@ -4,8 +4,11 @@ import type {
   AcpRuntimeHandle,
   AcpRuntimeStatus,
 } from "@openclaw/acp-core/runtime/types";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeModelRef } from "../../agents/model-ref-shared.js";
+import { getProcessGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import {
   AcpRuntimeError,
   formatAcpErrorChain,
@@ -31,6 +34,20 @@ const OPTIONAL_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
 const ACP_CONFIG_REJECTION_CODE_RE = /-3260[23]/;
 const CONFIG_OPTION_REJECTION_RE =
   /invalid params|unsupported|not supported|not implement|invalid value|unknown config option|unknown value|not a valid value|must be one of/;
+
+/** Keep one plugin catalog snapshot for every model check within an ACP turn. */
+export function createAcpModelRefResolver() {
+  const manifestPlugins = getProcessGatewayPluginMetadataSnapshot() ?? [];
+  return (model: string | undefined) => {
+    const ref = model ? parseModelCatalogRef(model) : undefined;
+    return ref
+      ? normalizeModelRef(ref.provider, ref.modelId, {
+          allowPluginNormalization: false,
+          manifestPlugins,
+        })
+      : undefined;
+  };
+}
 
 function extractConfigOptionKeys(value: unknown): string[] {
   if (!Array.isArray(value)) {

@@ -47,6 +47,7 @@ export async function resolveRuntimeCwdForAcpSpawn(params: {
   }
   const explicitCwd = normalizeOptionalString(params.explicitCwd);
   if (!explicitCwd || params.requireExistingCwd) {
+    assertNoUnmigratedWorkspaceState({ workspaceDir: params.resolvedCwd });
     try {
       await fs.access(params.resolvedCwd);
     } catch (error) {
@@ -55,7 +56,6 @@ export async function resolveRuntimeCwdForAcpSpawn(params: {
       }
       throw error;
     }
-    assertNoUnmigratedWorkspaceState({ workspaceDir: params.resolvedCwd });
   }
   if (
     isPathInside(

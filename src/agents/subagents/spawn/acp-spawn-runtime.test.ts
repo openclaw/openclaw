@@ -57,3 +57,19 @@ it("leaves an explicit external cwd to its owner", async () => {
     expect(await fs.readFile(source, "utf8")).toBe("not-json");
   });
 });
+
+it("refuses an inherited missing cwd with a retained sibling marker", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    const managed = state.path("managed");
+    const missing = path.join(managed, "missing");
+    await fs.mkdir(managed);
+    await fs.writeFile(`${missing}.attested`, "openclaw-workspace-attestation:v1\n");
+    await expect(
+      resolveRuntimeCwdForAcpSpawn({ resolvedCwd: missing, managedWorkspaceDir: managed }),
+    ).rejects.toMatchObject({ kind: "legacy-workspace" });
+    await fs.rm(`${missing}.attested`);
+    await expect(
+      resolveRuntimeCwdForAcpSpawn({ resolvedCwd: missing, managedWorkspaceDir: managed }),
+    ).resolves.toBeUndefined();
+  });
+});
