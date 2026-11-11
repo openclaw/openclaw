@@ -104,7 +104,11 @@ export function prepareLocalWorkspaceFingerprints(
     encode(
       currentRecords: ReadonlyMap<string, LocalWorkspaceManifestRecord>,
       currentTreeRef: string,
+      invalidatedPaths?: ReadonlySet<string>,
     ) {
+      if (invalidatedPaths && !decoded) {
+        return null;
+      }
       // Every file matched its exact non-racy slot; the stored blob is already the publication.
       if (currentTreeRef === treeRef && allReusable && observedReusable === paths.length) {
         return storedBlob;
@@ -137,11 +141,14 @@ export function prepareLocalWorkspaceFingerprints(
       bytes.writeUInt8(FORMAT_VERSION, 0);
       Buffer.from(currentTreeRef.slice("sha256:".length), "hex").copy(bytes, 9);
       bytes.writeUInt32LE(currentPaths.length, 41);
-      let dev: bigint | undefined;
+      let dev = invalidatedPaths ? device : undefined;
       for (let index = 0; index < currentPaths.length; index++) {
         const entryPath = currentPaths[index]!;
         const targetOffset = HEADER_BYTES + index * FILE_BYTES;
-        if (reused.has(entryPath)) {
+        if (
+          reused.has(entryPath) ||
+          (invalidatedPaths && offsets.has(entryPath) && !invalidatedPaths.has(entryPath))
+        ) {
           const offset = offsets.get(entryPath)!;
           dev ??= device;
           if (dev !== device) {
@@ -152,6 +159,11 @@ export function prepareLocalWorkspaceFingerprints(
         }
         const identity = changed.get(entryPath);
         if (!identity) {
+          if (invalidatedPaths) {
+            // An applied path needs a fresh identity; unchanged target slots keep their own stats.
+            bytes.writeBigInt64LE(RACY_CTIME_NS, targetOffset + 8);
+            continue;
+          }
           return null;
         }
         const fields = identity.split(":");

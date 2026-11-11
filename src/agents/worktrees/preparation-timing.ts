@@ -52,6 +52,8 @@ type PreparationPhase =
   | "templatePrepare"
   | "templateRetire"
   | "templateValidate"
+  | "templateClone"
+  | "templateValidateOutput"
   | "templateApply"
   | "snapshot"
   | "synchronizeCanonical"
