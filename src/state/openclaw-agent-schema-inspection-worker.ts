@@ -166,8 +166,10 @@ export function createAgentSchemaInspectionWorker() {
         }
       }
       // The in-flight child clears `busy` from its own finally while this wait is pending.
-      // oxlint-disable-next-line no-unmodified-loop-condition -- busy changes across the await, not in this body.
-      while (busy) {
+      for (;;) {
+        if (!busy) {
+          break;
+        }
         await new Promise<void>((resolve) => {
           childWaiters.push(resolve);
         });

@@ -12,6 +12,7 @@ import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
+  agentConfig,
   compatible,
   databaseFixture,
   supportedVersions,
@@ -19,6 +20,7 @@ import {
   closeDatabases,
   execSql,
 } from "./database-preflight-fixtures.test-support.js";
+import { pendingAgentDatabaseSnapshotSlots } from "./openclaw-database-preflight-agent-scheduler.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -457,3 +459,98 @@ it.each(["cancel", "failure"] as const)(
     );
   },
 );
+
+it("keeps fallback snapshot preparation and cleanup within two slots after startup release", async () => {
+  const root = tempDirs.make("openclaw-preflight-snapshot-cap-");
+  const initialized = databaseFixture(path.join(root, "initialized"));
+  const ids = ["slot-a", "slot-b", "slot-c", "slot-d"];
+  const paths = ids.map((id) => initialized.agent(id).path);
+  closeDatabases();
+  const { inspect: inspectDatabases, statePath } = createPreflightState(path.join(root, "state"));
+  for (const pathname of paths) {
+    execSql(pathname, "PRAGMA journal_mode=WAL;");
+    expectFiles([`${pathname}-wal`, `${pathname}-shm`], false);
+  }
+  const sourcePaths = new Set(paths.map((pathname) => fs.realpathSync.native(pathname)));
+  const prepare = snapshots.prepareSqliteReadOnlyLocation;
+  const hold = createDeferred();
+  let inFlight = 0;
+  let peak = 0;
+  let cleanupActive = 0;
+  let cleanupPeak = 0;
+  let preparedCount = 0;
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
+    async (pathname, options) => {
+      const preparedLocation = await prepare(pathname, options);
+      if (pathname === statePath || !sourcePaths.has(pathname)) {
+        return preparedLocation;
+      }
+      preparedCount += 1;
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      // Stay here, before the snapshot reader starts, so the startup timer can
+      // release the inspection slots while these two copies are still open.
+      await hold.promise;
+      return {
+        ...preparedLocation,
+        cleanupAsync: async () => {
+          cleanupActive += 1;
+          cleanupPeak = Math.max(cleanupPeak, cleanupActive);
+          try {
+            return await preparedLocation.cleanupAsync();
+          } finally {
+            cleanupActive -= 1;
+            inFlight -= 1;
+          }
+        },
+      };
+    },
+  );
+  const waitUntil = async (ready: () => boolean, label: string) => {
+    const deadline = Date.now() + 20_000;
+    while (!ready()) {
+      if (Date.now() > deadline) {
+        throw new Error(
+          `${label} (prepared=${preparedCount}, inFlight=${inFlight}, cleanup=${cleanupActive}, waiting=${pendingAgentDatabaseSnapshotSlots()})`,
+        );
+      }
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    }
+  };
+  try {
+    await withAgentDatabaseStartupAdmission(
+      async () => {
+        const controller = new AbortController();
+        const run = inspectDatabases({
+          supportedVersions,
+          agentAdmissionConfig: agentConfig(ids, "slot-a"),
+          configuredAgentDatabaseCandidatePaths: paths,
+          verifyCurrentSchemaShape: true,
+          requireStartupMigrationReadiness: true,
+          signal: controller.signal,
+        });
+        void run.catch(() => undefined);
+        await waitUntil(() => inFlight === 2, "startup did not open two fallback snapshots");
+        await waitUntil(
+          () => pendingAgentDatabaseSnapshotSlots() >= 1,
+          "a later snapshot did not wait after the startup slots were released",
+        );
+        expect({ inFlight, preparedCount, peak }).toEqual({
+          inFlight: 2,
+          preparedCount: 2,
+          peak: 2,
+        });
+        controller.abort(new Error("snapshot cap observed"));
+        hold.resolve();
+        await expect(run).resolves.toMatchObject({ incompatible: [], indeterminate: [] });
+        expect(peak).toBeLessThanOrEqual(2);
+        expect(cleanupPeak).toBeLessThanOrEqual(2);
+      },
+      { deferInspections: true },
+    );
+  } finally {
+    hold.resolve();
+  }
+});

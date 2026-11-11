@@ -31,6 +31,55 @@ export function openClawDatabasePreflightClaimKey(target: {
 // Claim misses and clean-close reads settle in a few microtasks. A reader child does not.
 const FAST_INSPECTION_TURNS = 8;
 
+// Fallback copies stay at the same bound as inspections (#139878): two snapshots
+// may exist, and each slot is held until that copy is cleaned up. Cached reads
+// do not take a slot. The counters are process-local; preflight runs in one process.
+let agentDatabaseSnapshotSlotsInUse = 0;
+const agentDatabaseSnapshotSlotWaiters: Array<() => void> = [];
+
+/** Inspections waiting to copy a fallback snapshot while two copies are already open. */
+export function pendingAgentDatabaseSnapshotSlots(): number {
+  return agentDatabaseSnapshotSlotWaiters.length;
+}
+
+/** Holds one of the two fallback-snapshot slots until the caller finishes cleanup. */
+export async function acquireAgentDatabaseSnapshotSlot(signal?: AbortSignal): Promise<() => void> {
+  signal?.throwIfAborted();
+  for (;;) {
+    if (agentDatabaseSnapshotSlotsInUse < AGENT_DATABASE_PREFLIGHT_CONCURRENCY) {
+      break;
+    }
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      const onAbort = () => {
+        const index = agentDatabaseSnapshotSlotWaiters.indexOf(finish);
+        if (index >= 0) {
+          agentDatabaseSnapshotSlotWaiters.splice(index, 1);
+        }
+        finish();
+      };
+      agentDatabaseSnapshotSlotWaiters.push(finish);
+      if (signal) {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    });
+    signal?.throwIfAborted();
+  }
+  agentDatabaseSnapshotSlotsInUse += 1;
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    agentDatabaseSnapshotSlotsInUse -= 1;
+    agentDatabaseSnapshotSlotWaiters.shift()?.();
+  };
+}
+
 export async function preflightAgentDatabasesBounded<T>(
   targets: readonly T[],
   inspect: (
@@ -265,6 +314,9 @@ export async function preflightAgentDatabasesBounded<T>(
           if (quick === undefined) {
             if (startup.canDefer(target)) {
               deferred.add(index);
+              // The startup slot moves on for a sealed cache hit. Snapshot copy and
+              // cleanup stay inside acquireAgentDatabaseSnapshotSlot, so this does not
+              // add a third retained fallback snapshot.
               finishInBackground(index, inspection, watched);
               continue;
             }
