@@ -21,6 +21,7 @@ import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveThinkingSelection } from "./model-thinking-default.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
 import { resolveTranscriptPolicy } from "./transcript-policy.js";
@@ -39,7 +40,7 @@ type SideQuestionStreamInput = {
   workspaceDir: string;
 };
 
-function resolveSideQuestionStream(input: SideQuestionStreamInput) {
+async function resolveSideQuestionStream(input: SideQuestionStreamInput) {
   const {
     params,
     modelRegistry,
@@ -116,20 +117,23 @@ function resolveSideQuestionStream(input: SideQuestionStreamInput) {
     ),
   };
   const thinkingLevel = mapThinkingLevelForProvider(thinkLevel, runtimeModel);
-  applyExtraParamsToAgent(
-    agent,
-    params.cfg,
-    runtimeModel.provider,
-    runtimeModel.id,
-    undefined,
-    thinkingLevel,
-    params.agentId,
-    workspaceDir,
-    runtimeModel,
-    params.agentDir,
-    undefined,
-    // Hosted tools change the provider prefix; apply the parent's configured tool policy.
-    { auth, nativeWebSearchPolicyContext: { sessionKey: params.sessionKey } },
+  // Hosted tools change the provider prefix; apply the parent's configured tool policy, whose
+  // delegated envelope reads persisted ancestor rows the fork's own read did not prepare.
+  await withPreparedSessionCapabilityRead(() =>
+    applyExtraParamsToAgent(
+      agent,
+      params.cfg,
+      runtimeModel.provider,
+      runtimeModel.id,
+      undefined,
+      thinkingLevel,
+      params.agentId,
+      workspaceDir,
+      runtimeModel,
+      params.agentDir,
+      undefined,
+      { auth, nativeWebSearchPolicyContext: { sessionKey: params.sessionKey } },
+    ),
   );
   const preparedStream = agent.streamFn;
   // The parent's agent loop derives its request reasoning from the level the same way.
@@ -173,7 +177,7 @@ export async function runBtwSessionFork(
   assertCurrent();
   return runEmbeddedSessionFork({
     context,
-    streamFn: resolveSideQuestionStream(input),
+    streamFn: await resolveSideQuestionStream(input),
     options: { promptCacheKey },
     question: params.question,
     model: runtimeModel,
@@ -195,7 +199,7 @@ export async function runLightweightBtwStream(
   const { params, runtimeModel, apiKey, imageLimits, messages, inFlightPrompt, recordBtwUsage } =
     input;
   const streamFn = wrapStreamFnSanitizeMalformedToolCalls(
-    resolveSideQuestionStream(input),
+    await resolveSideQuestionStream(input),
     undefined,
     resolveTranscriptPolicy({
       provider: runtimeModel.provider,

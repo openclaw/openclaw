@@ -154,14 +154,28 @@ it.each([
         throwOnLoadError: true,
       });
       const sessionId = `fork-${provider}`;
-      const sessionKey = `agent:main:direct:${sessionId}`;
+      const sessionKey = `agent:main:subagent:${sessionId}`;
       const target = {
         agentId: "main",
         sessionId,
         sessionKey,
         storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
       };
-      await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+      // The delegated child's fork tool policy reads its cold, persisted ancestor row.
+      const ancestor = {
+        ...target,
+        sessionKey: "agent:main:dashboard:coding",
+        sessionId: "coding",
+      };
+      const policy = { requesterSessionKey: "agent:main:main", targetAgentId: "main" };
+      const delegatedToolPolicy = { ...policy, deny: [], requesterDeny: [] };
+      for (const [row, spawnedBy] of [
+        [ancestor, "agent:main:main"],
+        [target, ancestor.sessionKey],
+      ] as const) {
+        const lineage = { spawnedBy, inheritedToolPolicyVersion: 1 as const, delegatedToolPolicy };
+        await upsertSessionEntryCore(row, { ...lineage, sessionId: row.sessionId, updatedAt: 1 });
+      }
       const host = getAiTransportHost();
       const payloads: Array<Record<string, unknown>> = [];
       let toolsRemaining = 0;
@@ -180,8 +194,7 @@ it.each([
           return response(api, model, tool);
         },
       });
-      const onUsage = vi.fn();
-      const onBlockReply = vi.fn();
+      const [onUsage, onBlockReply] = [vi.fn(), vi.fn()];
       let sessionReadCurrent = true;
       const fork = (abortSignal?: AbortSignal, denyTools = true) =>
         runBtwSideQuestion({
@@ -258,23 +271,9 @@ it.each([
         const original = structuredClone(payloads[0]!);
         // Reconstruct after process-local transport state is discarded, as after restart.
         cleanupSessionResources(sessionId);
-        const sessionFile = resolveBtwSessionTranscriptPath({
-          sessionId,
-          sessionKey,
-          storePath: target.storePath,
-          sessionEntry: { sessionId, updatedAt: 1 },
-        });
-        if (!sessionFile) {
-          throw new Error("Parent transcript was not created");
-        }
-        const readTranscript = () =>
-          readBtwTranscriptMessages({
-            agentId: "main",
-            sessionFile,
-            sessionId,
-            sessionKey,
-            storePath: target.storePath,
-          });
+        const sessionEntry = { sessionId, updatedAt: 1 };
+        const sessionFile = resolveBtwSessionTranscriptPath({ ...target, sessionEntry })!;
+        const readTranscript = () => readBtwTranscriptMessages({ ...target, sessionFile });
         const parentTranscript = await readTranscript();
         const database = openOpenClawStateDatabase();
         const placements = createWorkerSessionPlacementStore({ database });
