@@ -98,7 +98,10 @@ export function projectModelContextEventSql(
     return /* kysely-allow-raw: Serialize once at the model payload boundary. */ sql<string>`(CASE WHEN ${omitCheckpoint} = 1
       THEN ${bounded} #- '{message,providerReplay}' ELSE ${bounded} END)::text`;
   }
-  const payload = sql.ref<string>("model_context_payload.event");
+  const payload =
+    /* kysely-allow-raw: Fixed event column of the local materialized CTE. */ sql.ref<string>(
+      "model_context_payload.event",
+    );
   const paths = MODEL_CONTEXT_PRIVATE_METADATA_KEYS.map((key) => `$.message.__openclaw.${key}`);
   const projected = jsonRemovePaths(
     db,
