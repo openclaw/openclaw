@@ -1,0 +1,3 @@
+# Exact 11-line net regression growth for read-only Home entry/reconnect confirmation.
+# Extends the existing access matrices and preserves real Gateway denial proof.
+11
