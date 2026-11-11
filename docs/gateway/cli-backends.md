@@ -227,9 +227,12 @@ a project's `.claude/agents/` are not loaded.
 - The same list applies to ordinary turns, verified child completions, and cron
   turns in a session, so the tool definitions and cached prefix stay stable.
   Changing the list keeps the native session; its next turn rebuilds the
-  cached prefix once. Upgrading to the release that keeps `WebSearch` by
-  default does this once for each existing `claude-cli` session: the
-  conversation resumes, and that first turn pays a full prompt-cache write.
+  cached prefix once. Upgrading from a release before `WebSearch` became the
+  default changes the launch tool list, so each existing `claude-cli`
+  conversation starts one fresh Claude Code session on its next turn
+  (`cli session reset: reason=prompt-tools`). OpenClaw keeps the chat history;
+  earlier turns reach the new session as a history notice rather than being
+  replayed, and that first turn pays a full prompt-cache write.
 - Managed isolation stays in force: Claude settings, hooks, plugins, slash
   commands, Chrome, and Claude-only MCP servers remain excluded, and scheduled
   wake-ups, cron creation, background shell commands, and monitors stay blocked.

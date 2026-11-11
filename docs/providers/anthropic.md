@@ -1126,10 +1126,12 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     turn native web search off, or `[]` for one agent.
     Accepted values: `Agent`, `Workflow`, `WebSearch`.
 
-    Upgrading to the release that keeps `WebSearch` by default changes the launch
-    tool list. Each existing `claude-cli` conversation resumes its Claude Code
-    session, and its first turn after the upgrade rebuilds the cached prompt
-    prefix once.
+    Upgrading from a release before `WebSearch` became the default changes the
+    launch tool list. Each existing `claude-cli` conversation starts one fresh
+    Claude Code session on its next turn (logged as `reason=prompt-tools`).
+    OpenClaw keeps the chat history; earlier turns reach the new session as a
+    history notice rather than being replayed, and that first turn rebuilds the
+    cached prompt prefix once.
 
     ```json5
     {
