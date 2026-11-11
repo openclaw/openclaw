@@ -2,11 +2,29 @@ import {
   estimateStringCharsWithMinimumRawWeight as estimateToolResultTextChars,
   type StringCharBudgetOptions,
 } from "@openclaw/normalization-core/cjk-chars";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { memoizeFrozenPlainDataProjection } from "../../shared/immutable-data.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 export { estimateToolResultTextChars };
+
+export function cacheTtlText(block: unknown, serializeMalformed = true): string | undefined {
+  if (!isRecord(block) || block.type !== "text") {
+    return undefined;
+  }
+  if (typeof block.text === "string") {
+    return block.text;
+  }
+  if (!serializeMalformed) {
+    return undefined;
+  }
+  try {
+    return JSON.stringify(block) ?? "[malformed text block]";
+  } catch {
+    return "[malformed text block]";
+  }
+}
 
 const getToolResultContentBudget = memoizeFrozenPlainDataProjection((content: unknown[]) => {
   let chars = 0;

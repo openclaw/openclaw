@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
-import { truncateOversizedToolResultsInMessages } from "../embedded-agent-runner/tool-result-truncation.js";
+import { createToolResultPromptProjectionState } from "../embedded-agent-runner/session-prompt-state.js";
+import {
+  pruneExpiredCacheTtlToolResults,
+  truncateOversizedToolResultsInMessages,
+} from "../embedded-agent-runner/tool-result-truncation.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { convertToLlm } from "../sessions/messages.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -16,7 +20,7 @@ import { createToolSearchTools } from "../tool-search.js";
 import { createInstalledSkillTools } from "./installed-skill-tools.js";
 
 for (const deferred of [false, true]) {
-  it.each(["fits", "live limit", "prompt limit", "envelope limit"] as const)(
+  it.each(["fits", "live limit", "prompt limit", "envelope limit", "cache TTL"] as const)(
     `delivers whole instructions or refuses %s through ${deferred ? "deferred dispatch" : "native read"}`,
     async (scenario) => {
       const body =
@@ -24,7 +28,11 @@ for (const deferred of [false, true]) {
         (scenario === "envelope limit"
           ? "x\n".repeat(21_500)
           : "Complete synthetic example.\n".repeat(
-              scenario === "live limit" ? 6_500 : scenario === "prompt limit" ? 1_000 : 1,
+              scenario === "live limit"
+                ? 6_500
+                : scenario === "prompt limit" || scenario === "cache TTL"
+                  ? 1_000
+                  : 1,
             )) +
         "END SKILL\n";
       const location = "/synthetic/guide/SKILL.md";
@@ -67,10 +75,40 @@ for (const deferred of [false, true]) {
         timestamp: 1,
       });
       const context = session.buildSessionContext().messages;
-      const projected =
+      let projected =
         scenario === "prompt limit"
           ? truncateOversizedToolResultsInMessages(context, 300_000, 1_024).messages
           : context;
+      if (scenario === "cache TTL") {
+        const original = structuredClone(context);
+        const projectionState = createToolResultPromptProjectionState();
+        let pruned = 0;
+        // Age the skill past three protected assistant rounds and cross the TTL occupancy gate.
+        projected = pruneExpiredCacheTtlToolResults({
+          messages: [
+            ...context,
+            makeAgentUserMessage({ content: "Unrelated history filler. ".repeat(16_000) }),
+            ...Array.from({ length: 3 }, () =>
+              makeAgentAssistantMessage({ content: [{ type: "text", text: "Later answer." }] }),
+            ),
+          ],
+          settings: {
+            ttlMs: 300_000,
+            hardClear: false,
+            placeholder: "[Old tool result content cleared]",
+            isToolPrunable: () => true,
+          },
+          contextWindowTokens: 300_000,
+          lastCacheTouchAt: 1,
+          now: 300_002,
+          dropThinkingBlocksForEstimate: false,
+          projectionState,
+          pruneNewRounds: true,
+          onPruned: () => pruned++,
+        });
+        expect(pruned).toBe(1);
+        expect(context).toEqual(original);
+      }
       const delivered = convertToLlm(projected).find((message) => message.role === "toolResult");
       if (delivered?.role !== "toolResult") {
         throw new Error("Skill read was not delivered to the model context");

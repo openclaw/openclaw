@@ -32,6 +32,7 @@ import {
 import { projectToolResultMessage } from "./tool-result-projection-message.js";
 import {
   appendBoundedTruncationSuffix,
+  cacheTtlText,
   estimateToolResultTextChars,
   getToolResultHistoryTextBudget,
   getToolResultTextBudget,
@@ -87,23 +88,6 @@ export function resolveCacheTtlPruningSettings(
       );
     },
   };
-}
-
-function cacheTtlText(block: unknown, serializeMalformed = true): string | undefined {
-  if (!isRecord(block) || block.type !== "text") {
-    return undefined;
-  }
-  if (typeof block.text === "string") {
-    return block.text;
-  }
-  if (!serializeMalformed) {
-    return undefined;
-  }
-  try {
-    return JSON.stringify(block) ?? "[malformed text block]";
-  } catch {
-    return "[malformed text block]";
-  }
 }
 
 function cacheTtlMessageChars(message: AgentMessage): number {
@@ -164,6 +148,9 @@ function softPruneCacheTtlToolResult(
     .join("\n");
   if (!hasImage && text.length <= 4_000) {
     return message;
+  }
+  if (isRecord(message.details) && message.details.contentPolicy === "whole") {
+    return truncateToolResultMessage(message, 4_000);
   }
   const projected =
     text.length <= 4_000
