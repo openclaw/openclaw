@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import * as cron from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
 import * as work from "../process/gateway-work-admission.js";
 import { CommandLane } from "../process/lanes.js";
@@ -10,6 +11,7 @@ import * as clocks from "../test-utils/gateway-scheduler-clock.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import { handOver, start, stop } from "./service/ops-lifecycle.js";
 import { waitForCronRunQueue } from "./service/run-queue.js";
+import { resolveCronRunSlots } from "./service/run-slots.js";
 import { startCronScheduler } from "./service/scheduler-actor.js";
 import { captureCronSchedulerWakeForTest } from "./service/scheduler-actor.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
@@ -460,6 +462,85 @@ it("runs as many automations as the agent limit leaves free of conversations", a
     turnEnds.resolve();
     finish.resolve();
     await Promise.all(turns);
+    await waitForCronRunQueue(state);
+    stop(state);
+  }
+});
+
+it("halves automation's sessions on a provider rate limit and adds a slot a minute while runs wait", async () => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const store = await seedJobs(
+    Array.from({ length: 32 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
+  );
+  const release = createDeferred();
+  const finish = createDeferred();
+  const started: string[] = [];
+  const state = cron.createCronRegressionState({
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
+      await (started.push(job.id) === 1 ? release : finish).promise;
+      return { status: "ok" as const, summary: job.id };
+    },
+  });
+  // An agent limit of thirty. The stubbed runner starts no agent turns, so parked tasks stand
+  // for twenty-two of them in the lane automation's turns run in.
+  setCommandLaneConcurrency(CommandLane.Main, 30);
+  setCommandLaneConcurrency(CommandLane.CronNested, 30);
+  const sessions = Array.from({ length: 22 }, () =>
+    enqueueCommandInLane(CommandLane.CronNested, async () => await finish.promise),
+  );
+  const rateLimited = () =>
+    emitAgentEvent({
+      runId: "attempt",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        errorObservation: { provider: "stand-in", failoverReason: "rate_limit" },
+      },
+    });
+  const tickAfter = async (ms: number) => {
+    vi.setSystemTime(Date.now() + ms);
+    await running.wake(state);
+  };
+  const running = await captureCronSchedulerWakeForTest(() => start(state));
+  const jobs = async () => (await loadCronStore(store.storePath)).jobs;
+  try {
+    nowMs = dueAtMs;
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(30));
+
+    // A model attempt reports that its provider rate-limited it: half the sessions in flight.
+    rateLimited();
+    expect(resolveCronRunSlots()).toBe(11);
+    // Those sessions keep retrying; their pushback does not halve the limit again.
+    rateLimited();
+    expect(resolveCronRunSlots()).toBe(11);
+
+    // A run ends: its slot is not handed to a queued run.
+    release.resolve();
+    await vi.waitFor(async () =>
+      expect((await jobs()).find((job) => job.id === started[0])?.state.lastRunStatus).toBe("ok"),
+    );
+    await tickAfter(0);
+    expect((await jobs()).filter((job) => job.state.runningAtMs)).toHaveLength(29);
+
+    // One more slot a minute while runs wait, but not within a minute of pushback.
+    await tickAfter(60_000);
+    expect(resolveCronRunSlots()).toBe(12);
+    rateLimited();
+    await tickAfter(30_000);
+    expect(resolveCronRunSlots()).toBe(12);
+    await tickAfter(30_000);
+    expect(resolveCronRunSlots()).toBe(13);
+    // After an hour without pushback the reduction lapses.
+    vi.setSystemTime(Date.now() + 60 * 60_000);
+    expect(resolveCronRunSlots()).toBe(30);
+  } finally {
+    release.resolve();
+    finish.resolve();
+    await Promise.all(sessions);
     await waitForCronRunQueue(state);
     stop(state);
   }

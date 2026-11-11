@@ -42,12 +42,12 @@ import {
   releaseCronRunQueue,
   wakeCronRunQueues,
 } from "./run-queue-wake.js";
+import { growCronRunSlots, resolveCronRunSlots } from "./run-slots.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
   busyConversationCronJobIds,
   busyCronConversation,
   preparingCronAgentIds,
-  resolveCronRunSlots,
 } from "./scheduler-config.js";
 import {
   emit,
@@ -446,6 +446,9 @@ export async function launchCronRunQueueResult(
   observedRevision = getCronJobsStoreRevision(state.deps.storeKey),
 ): Promise<void> {
   notifyCronRunQueueTurn(state);
+  if (result.awaitingRunSlot) {
+    growCronRunSlots();
+  }
   if (result.launches.length || result.skipped.length) {
     const jobs = [...result.skipped, ...result.launches].flatMap(({ job }) => (job ? [job] : []));
     applyCronRuntimeRowsToState(state, jobs);

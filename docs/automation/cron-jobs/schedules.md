@@ -347,8 +347,9 @@ run, and the check of a job with a script payload, takes a run slot first.
 Run slots come from the agent concurrency limit
 ([`agents.defaults.maxConcurrent`](/gateway/config-agents/models), sized from the host's
 CPUs by default), which automation shares with conversations. Automation uses the slots
-that conversation turns leave free and always keeps at least eight. See
-[how automation works](/automation/cron-jobs/how-it-works).
+that conversation turns leave free and always keeps at least eight. After a provider
+rate limit or critical memory pressure it runs fewer jobs at once and steps back up while
+runs wait. See [how automation works](/automation/cron-jobs/how-it-works).
 
 Cold runtime preparation can continue after an evaluation times out, so a later
 tick can reuse it. Preparation is limited to two minutes, or the script payload's
