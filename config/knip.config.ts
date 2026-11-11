@@ -33,6 +33,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 const repositoryScriptEntries = [
   "scripts/boat-release-runner.mjs!",
   "scripts/build-iroh.mjs!",
+  // The macOS packager verifies the staged app before signing.
+  "scripts/lib/mac-runtime-portability.mjs!",
   "scripts/perf/agent-deletion-cancellation-measure.ts",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
