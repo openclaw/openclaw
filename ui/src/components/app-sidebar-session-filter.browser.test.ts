@@ -561,11 +561,17 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     });
     await expect.element(role("button", "Group by: Person")).toBeVisible();
     await expect.poll(sectionIds).toEqual(["person:profile:profile-ada"]);
-    expect(
-      query('[data-session-section="person:profile:profile-ada"]')!.querySelectorAll(
-        "[data-session-key]",
-      ),
-    ).toHaveLength(2);
+    // The section settles before its window finishes placing the moved rows.
+    await expect
+      .poll(() =>
+        Array.from(
+          query('[data-session-section="person:profile:profile-ada"]')!.querySelectorAll(
+            "[data-session-key]",
+          ),
+          (row) => row.getAttribute("data-session-key")!,
+        ).toSorted((a, b) => a.localeCompare(b)),
+      )
+      .toEqual(["agent:main:ada", "agent:main:bob"]);
     await role("button", "Reset").click();
     expect(loadStoredSidebarSessionsGrouping()).toBe("category");
   });
