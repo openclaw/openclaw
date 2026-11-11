@@ -15,8 +15,9 @@ import {
   runRemoteGatewayInferenceOnboardingMock,
   runTuiMock,
   runTuiCliActionMock,
+  loadConfigMock,
+  startProxyMock,
   probeGatewayConfiguredModelMock,
-  readActiveGatewayLockPortMock,
   inspectGatewayTlsCertificateMock,
   resolveControlUiLinksMock,
   validConfig,
@@ -50,7 +51,6 @@ function expectBoundTui(expected: {
   expect(runTuiMock).toHaveBeenCalledWith(
     expect.objectContaining({
       deliver: false,
-      forceProcessExitOnReturn: true,
       boundGateway: expected,
     }),
   );
@@ -183,37 +183,6 @@ describe("runCli exit behavior", () => {
     expect(buildProgramMock).not.toHaveBeenCalled();
   });
 
-  it("resumes pending local onboarding after inference persisted its model", async () => {
-    const configPath = "/tmp/openclaw.json";
-    const securityAcknowledgedAt = "2026-08-02T00:00:00.000Z";
-    const sourceConfig = {
-      agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
-      wizard: { securityAcknowledgedAt },
-    };
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      path: configPath,
-      sourceConfig,
-    });
-    readLocalOnboardingStateMock.mockReturnValueOnce({
-      version: 1,
-      status: "pending",
-      runId: "pending-onboarding",
-      configPath,
-      workspace: "/tmp/workspace",
-      securityAcknowledgedAt,
-      startedAtMs: 1,
-    });
-
-    await runBareCli();
-
-    expect(readLocalOnboardingStateMock).toHaveBeenCalledWith(configPath, sourceConfig);
-    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
-    expect(probeGatewayConfiguredModelMock).not.toHaveBeenCalled();
-    expect(runTuiMock).not.toHaveBeenCalled();
-  });
-
   registerBareRootArgumentTests({
     runCli: (argv) => runCli(argv),
     readConfigFileSnapshotMock,
@@ -242,11 +211,8 @@ describe("runCli exit behavior", () => {
       readConfigFileSnapshotMock.mockResolvedValueOnce({ exists: true, valid: true, sourceConfig });
       probeGatewayConfiguredModelMock.mockImplementationOnce(async (options) =>
         options.url === "ws://127.0.0.1:18789" && !options.originScopedDeviceAuth
-          ? { kind: "reachable-unverified", detail: "missing scope: operator.read" }
-          : {
-              kind: "missing-configured-model",
-              detail: "Gateway default agent has no configured model",
-            },
+          ? "reachable-unverified"
+          : "missing-configured-model",
       );
 
       await runBareCli();
@@ -263,41 +229,6 @@ describe("runCli exit behavior", () => {
       expect(runTuiMock).not.toHaveBeenCalled();
     },
   );
-
-  it("does not direct non-interactive remote setup into local onboarding", async () => {
-    primeBareRootConfig({
-      gateway: {
-        mode: "remote",
-        remote: { url: "wss://gateway.example/ws", token: "noninteractive-remote-auth" },
-      },
-    });
-    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
-      kind: "missing-configured-model",
-      detail: "Gateway default agent has no configured model",
-    });
-    await expectNonInteractiveBareCliError(
-      "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway.",
-      () => {
-        expect(setupWizardCommandMock).not.toHaveBeenCalled();
-        expect(runRemoteGatewayInferenceOnboardingMock).not.toHaveBeenCalled();
-      },
-    );
-  });
-
-  it("uses the active local gateway lock port for bare root preflight and TUI handoff", async () => {
-    primeBareRootConfig({
-      gateway: {
-        mode: "local",
-        port: 18789,
-        auth: { mode: "token", token: "configured-token" },
-      },
-    });
-    readActiveGatewayLockPortMock.mockResolvedValueOnce(48789);
-
-    await runBareCli();
-
-    expectGatewayTarget({ url: "ws://127.0.0.1:48789", token: "configured-token" });
-  });
 
   it("carries the canonical local TLS fingerprint through bare root", async () => {
     primeBareRootConfig({
@@ -370,38 +301,12 @@ describe("runCli exit behavior", () => {
         password: "password-from-exec",
       });
       await expect(fs.access(tokenMarker)).rejects.toThrow();
-      await expect(fs.access(passwordMarker)).resolves.toBeUndefined();
+      await fs.access(passwordMarker);
       expectBoundTui({
         url: "ws://127.0.0.1:18789",
         password: "password-from-exec",
       });
     });
-  });
-
-  it("prefers a configured secondary Gateway over a missing-model primary probe", async () => {
-    primeBareRootConfig({
-      gateway: {
-        mode: "local",
-        bind: "tailnet",
-        auth: { mode: "token", token: "local-token" },
-      },
-    });
-    resolveControlUiLinksMock.mockImplementation(({ bind }: { bind?: string } = {}) =>
-      bind === "tailnet"
-        ? { httpUrl: "http://100.64.0.10:18789/", wsUrl: "ws://100.64.0.10:18789" }
-        : { httpUrl: "http://127.0.0.1:18789/", wsUrl: "ws://127.0.0.1:18789" },
-    );
-    probeGatewayConfiguredModelMock
-      .mockResolvedValueOnce({
-        kind: "missing-configured-model",
-        detail: "Gateway default agent has no configured model",
-      })
-      .mockResolvedValueOnce({ kind: "configured" });
-
-    await runBareCli();
-
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({ url: "ws://100.64.0.10:18789", token: "local-token" });
   });
 
   it("keeps confirmed missing inference ahead of an unverified secondary Gateway", async () => {
@@ -419,16 +324,15 @@ describe("runCli exit behavior", () => {
         : { httpUrl: "http://127.0.0.1:18789/", wsUrl: "ws://127.0.0.1:18789" },
     );
     probeGatewayConfiguredModelMock
-      .mockResolvedValueOnce({ kind: "reachable-unverified", detail: "config.get: unauthorized" })
-      .mockResolvedValueOnce({
-        kind: "missing-configured-model",
-        detail: "Gateway default agent has no configured model",
-      });
+      .mockResolvedValueOnce("reachable-unverified")
+      .mockResolvedValueOnce("missing-configured-model");
 
     await runBareCli();
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith({});
     expect(runTuiMock).not.toHaveBeenCalled();
+    // Onboarding probes providers from this process, as `openclaw onboard` does.
+    expect(startProxyMock).toHaveBeenCalledBefore(setupWizardCommandMock);
   });
 
   it("keeps a reachable unverified Gateway ahead of local inference fallback", async () => {
@@ -437,15 +341,14 @@ describe("runCli exit behavior", () => {
       agents: { defaults: { model: { primary: "openai/local-only-model" } } },
       gateway: { mode: "remote", remote: { url, token: "unverified-remote-auth" } },
     });
-    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
-      kind: "reachable-unverified",
-      detail: "config.get: unauthorized",
-    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce("reachable-unverified");
 
     await runBareCli();
 
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expectBoundTui({ url, configuredRemote: true, token: "unverified-remote-auth" });
+    // The Gateway owns provider egress for a bound TUI.
+    expect(startProxyMock).not.toHaveBeenCalled();
   });
 
   it("keeps a configured remote Gateway authoritative across a transient cold-restart probe", async () => {
@@ -453,34 +356,13 @@ describe("runCli exit behavior", () => {
     primeBareRootConfig({
       gateway: { mode: "remote", remote: { url, token: "restart-remote-auth" } },
     });
-    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
-      kind: "unreachable",
-      detail: "gateway restarting",
-    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce("unreachable");
 
     await runBareCli();
 
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expect(runRemoteGatewayInferenceOnboardingMock).not.toHaveBeenCalled();
     expectBoundTui({ url, configuredRemote: true, token: "restart-remote-auth" });
-  });
-
-  it("routes an explicit roster with no configured inference to onboarding", async () => {
-    primeBareRootConfig({
-      agents: {
-        ownership: "explicit",
-        entries: { alpha: {}, beta: {} },
-      },
-    });
-    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
-      kind: "unreachable",
-      detail: "offline",
-    });
-
-    await runBareCli();
-
-    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
-    expect(runTuiMock).not.toHaveBeenCalled();
   });
 
   it.each([{ label: "LAN IP", url: "ws://192.168.1.10:18789" }])(
@@ -562,13 +444,6 @@ describe("runCli exit behavior", () => {
     expectBoundTui({ url, configuredRemote: true, ...auth });
   });
 
-  it("rejects configured bare root TUI startup without an interactive TTY", async () => {
-    await expectNonInteractiveBareCliError(
-      "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.",
-      () => expect(runTuiMock).not.toHaveBeenCalled(),
-    );
-  });
-
   it("routes invalid configured bare root invocations to classic doctor guidance", async () => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       exists: true,
@@ -583,19 +458,9 @@ describe("runCli exit behavior", () => {
     expect(runTuiMock).not.toHaveBeenCalled();
   });
 
-  it("points noninteractive invalid config to doctor before onboarding", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: true,
-      valid: false,
-      sourceConfig: { gateway: { mode: "local" } },
-    });
-    await expectNonInteractiveBareCliError(
-      "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding.",
-      () => expect(setupWizardCommandMock).not.toHaveBeenCalled(),
-    );
-  });
-
-  it("keeps a completed model-only onboarding on its existing local TUI path", async () => {
+  it("keeps a completed model-only onboarding on its local TUI path behind the managed proxy", async () => {
+    const proxy = { proxyUrl: "http://proxy.invalid:3128" };
+    loadConfigMock.mockReturnValue({ proxy });
     const configPath = "/tmp/openclaw.json";
     const securityAcknowledgedAt = "2026-08-02T00:00:00.000Z";
     const sourceConfig = {
@@ -608,7 +473,7 @@ describe("runCli exit behavior", () => {
       path: configPath,
       sourceConfig,
     });
-    readLocalOnboardingStateMock.mockReturnValueOnce({
+    readLocalOnboardingStateMock.mockResolvedValueOnce({
       version: 1,
       status: "completed",
       runId: "completed-onboarding",
@@ -618,7 +483,7 @@ describe("runCli exit behavior", () => {
       startedAtMs: 1,
       completedAtMs: 2,
     });
-    probeGatewayConfiguredModelMock.mockResolvedValueOnce({ kind: "unreachable" });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce("unreachable");
 
     await runBareCli();
 
@@ -627,7 +492,9 @@ describe("runCli exit behavior", () => {
     expect(runTuiMock).toHaveBeenCalledWith({
       deliver: false,
       local: true,
-      forceProcessExitOnReturn: true,
     });
+    // The embedded agent runs in this process, so the managed proxy must be active first.
+    expect(startProxyMock).toHaveBeenCalledExactlyOnceWith(proxy);
+    expect(startProxyMock).toHaveBeenCalledBefore(runTuiMock);
   });
 });

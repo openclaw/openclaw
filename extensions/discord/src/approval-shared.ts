@@ -2,7 +2,7 @@ import {
   isChannelExecApprovalClientEnabledFromConfig,
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-client-runtime";
-import { doesApprovalRequestSelectChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
+import { doesApprovalRequestSelectChannelAccountAsync } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
@@ -36,24 +36,21 @@ function isDiscordApprovalAccountEligible(
   );
 }
 
-export function shouldHandleDiscordApprovalRequest(params: {
+export async function shouldHandleDiscordApprovalRequest(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   request: ApprovalRequest;
   configOverride?: DiscordExecApprovalConfig | null;
-}): boolean {
+}): Promise<boolean> {
   const accountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
-  if (
-    !doesApprovalRequestSelectChannelAccount({
+  return (
+    (await doesApprovalRequestSelectChannelAccountAsync({
       ...params,
       channel: "discord",
       defaultAccountId: resolveDefaultDiscordAccountId(params.cfg),
       eligibleAccountIds: isDiscordApprovalAccountEligible({ ...params, accountId })
         ? [accountId]
         : [],
-    })
-  ) {
-    return false;
-  }
-  return isDiscordApprovalAccountEligible(params);
+    })) && isDiscordApprovalAccountEligible(params)
+  );
 }

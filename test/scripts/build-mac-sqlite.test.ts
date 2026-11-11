@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
 const it = createMacScriptTest();
@@ -14,35 +15,22 @@ describe.runIf(process.platform === "darwin")("bundled SQLite library", () => {
     (scenario, { mac, expect }) =>
       mac.lifetime.run(async () => {
         const root = mac.createTempDir("openclaw-sqlite-build-");
-        const scripts = path.join(root, "scripts");
-        const cache = path.join(root, "apps/macos/.build/sqlite/3.53.4");
-        const source = path.join(root, "sqlite-amalgamation-3530400");
-        const tools = path.join(root, "tools");
-        const runtime = path.join(root, "runtime");
-        for (const directory of [
-          path.join(scripts, "lib"),
-          cache,
-          source,
-          tools,
-          path.join(runtime, "lib"),
-        ]) {
-          await mkdir(directory, { recursive: true });
-        }
-        await copyFile("scripts/build-mac-sqlite.sh", path.join(scripts, "build-mac-sqlite.sh"));
+        const at = (file: string) => path.join(root, file);
+        const write = async (file: string, data: string | Uint8Array, mode?: number) => {
+          await mkdir(path.dirname(at(file)), { recursive: true });
+          await writeFile(at(file), data, { mode });
+        };
+        const archive = "apps/macos/.build/sqlite/3.53.4/sqlite-amalgamation-3530400.zip";
         // Compile an inert library through the real builder without downloading upstream code.
-        await writeFile(
-          path.join(source, "sqlite3.c"),
-          'const char *sqlite3_libversion(void) { return "fixture"; }\n',
+        await write(
+          archive,
+          makeStoredZip({
+            "sqlite-amalgamation-3530400/sqlite3.c":
+              'const char *sqlite3_libversion(void) { return "fixture"; }\n',
+          }),
         );
-        const archive = path.join(cache, "sqlite-amalgamation-3530400.zip");
-        const zipped = await mac.run(
-          "/usr/bin/zip",
-          ["-q", archive, "sqlite-amalgamation-3530400/sqlite3.c"],
-          { cwd: root },
-        );
-        expect(zipped.status).toBe(0);
-        await writeFile(
-          path.join(scripts, "lib/sqlite-macos.json"),
+        await write(
+          "scripts/lib/sqlite-macos.json",
           JSON.stringify({
             version: "3.53.4",
             url: "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
@@ -50,13 +38,14 @@ describe.runIf(process.platform === "darwin")("bundled SQLite library", () => {
               scenario === "wrong-checksum"
                 ? "0".repeat(64)
                 : createHash("sha256")
-                    .update(await readFile(archive))
+                    .update(await readFile(at(archive)))
                     .digest("hex"),
           }),
         );
+        await copyFile("scripts/build-mac-sqlite.sh", at("scripts/build-mac-sqlite.sh"));
         // A damaged cache must be downloaded and verified again before replacing the library.
-        await writeFile(
-          path.join(tools, "curl"),
+        await write(
+          "tools/curl",
           `#!/bin/bash
 set -euo pipefail
 while [[ "$#" -gt 0 ]]; do
@@ -65,20 +54,20 @@ while [[ "$#" -gt 0 ]]; do
 done
 exit 2
 `,
-          { mode: 0o755 },
+          0o755,
         );
-        const library = path.join(runtime, "lib/libsqlite3.dylib");
-        await writeFile(library, "previous library");
+        const library = at("runtime/lib/libsqlite3.dylib");
+        await write("runtime/lib/libsqlite3.dylib", "previous library");
         const arch = scenario === "wrong-checksum" ? "arm64" : scenario;
         const result = await mac.run(
           "/bin/bash",
-          [path.join(scripts, "build-mac-sqlite.sh"), arch, runtime],
+          [at("scripts/build-mac-sqlite.sh"), arch, at("runtime")],
           {
             encoding: "utf8",
             env: {
-              PATH: `${tools}:${nodeDirectory}:/usr/bin:/bin`,
+              PATH: `${at("tools")}:${nodeDirectory}:/usr/bin:/bin`,
               TMPDIR: root,
-              fixture_archive: archive,
+              fixture_archive: at(archive),
             },
           },
         );

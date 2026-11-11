@@ -78,7 +78,7 @@ type PublishablePluginPackageSource = Pick<
   "extensionId" | "packageDir" | "packageName"
 >;
 
-export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
+const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const SAFE_CLAWHUB_EXTENSION_ID = /^[a-z0-9][a-z0-9._-]*$/;
 
 function collectRequiredLatestDependencies(packageJson: PluginPackageJson): {

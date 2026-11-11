@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import type { SourceReplyDeliveryMode } from "../source-reply-delivery-mode.types.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
 type CompletionChatType = ChatType | "unknown";
@@ -18,14 +17,10 @@ const COMPLETION_TARGET_CHAT_TYPES = new Map<string, CompletionChatType>([
   ["user:", "direct"],
 ]);
 
-type DurableCompletionDeliveryMode = "automatic" | "host_owned";
-
-type CompletionDeliverySessionEntry = Pick<SessionEntry, "chatType" | "delivery">;
-
 function resolveCompletionChatType(params: {
   requesterSessionKey?: string | null;
   targetRequesterSessionKey?: string | null;
-  requesterEntry?: CompletionDeliverySessionEntry;
+  requesterEntry?: Pick<SessionEntry, "chatType" | "delivery">;
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;
 }): CompletionChatType {
@@ -43,15 +38,15 @@ function resolveCompletionChatType(params: {
     }
   }
 
-  return inferCompletionChatTypeFromTarget(
-    params.directOrigin?.to ?? params.requesterSessionOrigin?.to,
-  );
+  const target =
+    (params.directOrigin?.to ?? params.requesterSessionOrigin?.to)?.trim().toLowerCase() ?? "";
+  const prefix = target.slice(0, target.indexOf(":") + 1);
+  return COMPLETION_TARGET_CHAT_TYPES.get(prefix) ?? "unknown";
 }
 
 export function completionRequiresMessageToolDelivery(
   params: Parameters<typeof resolveCompletionChatType>[0] & {
     cfg: OpenClawConfig;
-    messageToolAvailable?: boolean;
   },
 ): boolean {
   return (
@@ -60,22 +55,6 @@ export function completionRequiresMessageToolDelivery(
       ctx: {
         ChatType: resolveCompletionChatType(params),
       },
-      messageToolAvailable: params.messageToolAvailable,
     }) === "message_tool_only"
   );
-}
-
-/** Resolve transport authority for a durable, fixed-route agent completion. */
-export function resolveDurableCompletionDeliveryMode(
-  sourceReplyDeliveryMode: SourceReplyDeliveryMode,
-): DurableCompletionDeliveryMode {
-  // Message-tool-only blocks ambient model replies. A durable completion is an
-  // explicit system send: the host fixes route/payload and withholds the message tool.
-  return sourceReplyDeliveryMode === "message_tool_only" ? "host_owned" : "automatic";
-}
-
-function inferCompletionChatTypeFromTarget(to: string | undefined): CompletionChatType {
-  const normalized = to?.trim().toLowerCase() ?? "";
-  const prefix = normalized.slice(0, normalized.indexOf(":") + 1);
-  return COMPLETION_TARGET_CHAT_TYPES.get(prefix) ?? "unknown";
 }

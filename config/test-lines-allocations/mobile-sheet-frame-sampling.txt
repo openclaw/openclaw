@@ -1,0 +1,2 @@
+# Sample release easing and retained pages in the transition frame without browser round-trip races.
+24

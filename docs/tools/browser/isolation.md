@@ -11,7 +11,7 @@ read_when:
 
 - **Dedicated user data dir**: never touches your personal browser profile.
 - **Dedicated ports**: avoids `9222` to prevent collisions with dev workflows.
-- **Deterministic tab control**: `tabs` returns `suggestedTargetId` first, then
+- **Stable tab handles**: `tabs` returns `suggestedTargetId` first, then
   stable `tabId` handles such as `t1`, optional labels, and the raw `targetId`.
   Agents should reuse `suggestedTargetId`; raw ids remain available for
   debugging and compatibility. Profiles configured with `driver: "extension"`

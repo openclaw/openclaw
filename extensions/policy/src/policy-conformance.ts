@@ -1,14 +1,14 @@
 import { promises as fs } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  POLICY_RULE_METADATA,
-  type PolicyRuleMetadata,
-  type PolicyScopeSelectorKind,
-} from "./doctor/metadata.js";
+import { POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./doctor/metadata.js";
 import { policyRuleValueIsValid } from "./doctor/ordered-shape.js";
+import {
+  normalizePolicySelectorValues,
+  scopedPolicyFields,
+  scopedPolicyOverlays,
+} from "./doctor/policy-scope.js";
 import { policyContainerShapeFindings } from "./doctor/policy-shape.js";
 import { isPolicyValueAtLeastAsStrict } from "./doctor/strictness.js";
 import { ocPathSegment } from "./doctor/utils.js";
@@ -59,10 +59,7 @@ type PolicyRuleClaim = {
   readonly value: unknown;
   readonly target: string;
   readonly propertyPath: string;
-  readonly selector?: {
-    readonly kind: PolicyScopeSelectorKind;
-    readonly value: string;
-  };
+  readonly scoped?: true;
 };
 
 export async function buildPolicyConformanceReport(params: {
@@ -195,7 +192,7 @@ function collectInvalidScopedPolicyFindings(
         continue;
       }
       const selectorMatches = (metadata.scopeSelectors ?? []).some(
-        (selector) => normalizeSelectorValues(overlay[selector], selector).length > 0,
+        (selector) => normalizePolicySelectorValues(overlay[selector], selector).length > 0,
       );
       if (selectorMatches) {
         continue;
@@ -242,32 +239,27 @@ function conformanceFinding(
   }
   const exactCandidates = candidateClaims.filter((candidate) => candidate.key === baseline.key);
   const candidates =
-    baseline.selector === undefined || exactCandidates.length > 0
+    baseline.scoped === undefined || exactCandidates.length > 0
       ? exactCandidates
       : candidateClaims.filter(
-          (candidate) =>
-            candidate.selector === undefined && candidate.metadata === baseline.metadata,
+          (candidate) => candidate.scoped === undefined && candidate.metadata === baseline.metadata,
         );
   if (candidates.length === 0) {
     return unsatisfiedConformanceFinding(baseline, policyDisplayName);
   }
   const satisfies = (candidate: PolicyRuleClaim) =>
     isPolicyValueAtLeastAsStrict(baseline.metadata, candidate.value, baseline.value);
-  if (
-    baseline.selector !== undefined &&
-    exactCandidates.length === 0 &&
-    candidates.some(satisfies)
-  ) {
+  if (baseline.scoped !== undefined && exactCandidates.length === 0 && candidates.some(satisfies)) {
     return undefined;
   }
   const weaker = candidates.find((candidate) => !satisfies(candidate));
   if (weaker !== undefined) {
     return unsatisfiedConformanceFinding(baseline, policyDisplayName, weaker);
   }
-  if (baseline.selector === undefined) {
+  if (baseline.scoped === undefined) {
     const weakerScopedOverride = candidateClaims.find(
       (candidate) =>
-        candidate.selector !== undefined &&
+        candidate.scoped !== undefined &&
         candidate.metadata === baseline.metadata &&
         !satisfies(candidate),
     );
@@ -352,33 +344,18 @@ function collectTopLevelPolicyRuleClaims(document: PolicyDocument): readonly Pol
 }
 
 function collectScopedPolicyRuleClaims(document: PolicyDocument): readonly PolicyRuleClaim[] {
-  if (!isRecord(document.value) || !isRecord(document.value.scopes)) {
-    return [];
-  }
   const claims: PolicyRuleClaim[] = [];
-  for (const [scopeName, overlay] of Object.entries(document.value.scopes)) {
-    if (!isRecord(overlay)) {
-      continue;
-    }
+  for (const [scopeName, overlay] of scopedPolicyOverlays(document.value)) {
     for (const selector of ["agentIds", "channelIds"] as const) {
-      const selectorValues = normalizeSelectorValues(overlay[selector], selector);
+      const selectorValues = normalizePolicySelectorValues(overlay[selector], selector);
       if (selectorValues.length === 0) {
         continue;
       }
-      const rules = POLICY_RULE_METADATA.filter(
-        (metadata) => metadata.scopeSelectors?.includes(selector) === true,
-      );
-      for (const metadata of rules) {
-        const value = getPolicyPath(overlay, metadata.policyPath);
-        if (value === undefined) {
-          continue;
-        }
-        const propertyPath = metadata.policyPath.join(".");
-        const targetPath = [
-          "scopes",
-          ocPathSegment(scopeName),
-          ...metadata.policyPath.map(ocPathSegment),
-        ].join("/");
+      for (const { metadata, value, propertyPath, targetPath } of scopedPolicyFields(
+        scopeName,
+        overlay,
+        selector,
+      )) {
         for (const selectorValue of selectorValues) {
           claims.push({
             key: `${selector}:${selectorValue}:${propertyPath}`,
@@ -386,7 +363,7 @@ function collectScopedPolicyRuleClaims(document: PolicyDocument): readonly Polic
             value,
             target: `oc://${document.displayName}/${targetPath}`,
             propertyPath: `scopes.${scopeName}.${propertyPath}`,
-            selector: { kind: selector, value: selectorValue },
+            scoped: true,
           });
         }
       }
@@ -409,20 +386,6 @@ function coalesceScopedPolicyRuleClaims(
     }
   }
   return [...byKey.values()];
-}
-
-function normalizeSelectorValues(
-  value: unknown,
-  selector: PolicyScopeSelectorKind,
-): readonly string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
-    .map((entry) =>
-      selector === "agentIds" ? normalizeAgentId(entry) : entry.trim().toLowerCase(),
-    );
 }
 
 async function readPolicyDocument(path: string): Promise<PolicyDocumentReadResult> {

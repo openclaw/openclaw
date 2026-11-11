@@ -1,7 +1,11 @@
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { isConversationToolAllowed } from "../../agents/conversation-tool-policy-pipeline.js";
+import type { SessionCapabilityLookup } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import type { WorkerEnvironmentSessionIdentity } from "../worker-environments/session-attachment.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -41,9 +45,32 @@ export function captureSessionEnvironmentToolPolicy(
       } else if ((runtime || options.client?.internal?.agentToolCaller) && !inheritedPolicy) {
         throw new Error(`Environment ${tool} has no captured tool authority`);
       }
+      const config = options.context.getRuntimeConfig();
+      const readCapabilityEntry = (
+        agentId: string,
+        query: { key: string } | { sessionId: string },
+      ) => {
+        const current = requireSessionRowProjection(options.context).readCapabilityEntry({
+          ...query,
+          agentId,
+          storePath: resolveSessionStorePathCore(config.session?.store, { agentId }),
+        });
+        if (!current) {
+          throw new Error("Conversation capability projection is unavailable");
+        }
+        return current.entry;
+      };
       const capability = resolveConversationCapabilityProfile({
-        config: options.context.getRuntimeConfig(),
+        config,
         ...caller.identity,
+        preparedSessionCapabilityStore: {
+          authoritative: true,
+          get: (key) => {
+            const agentId = parseAgentSessionKey(key)?.agentId ?? caller.identity.agentId;
+            return readCapabilityEntry(agentId, { key });
+          },
+          getById: (sessionId) => readCapabilityEntry(caller.identity.agentId, { sessionId }),
+        } satisfies SessionCapabilityLookup,
         modelProvider: runtime?.sessionSpawnContext?.resolvedModel?.provider,
         modelId: runtime?.sessionSpawnContext?.resolvedModel?.model,
       });

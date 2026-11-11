@@ -287,12 +287,7 @@ final class ShareComposeView: UIView, UITextViewDelegate {
     }
 
     private static func makeSendConfiguration() -> UIButton.Configuration {
-        // Keep the filled fallback on iOS 18 hosts (see DESIGN.md).
-        var configuration: UIButton.Configuration = if #available(iOS 26.0, *) {
-            .prominentGlass()
-        } else {
-            .filled()
-        }
+        var configuration = UIButton.Configuration.prominentGlass()
         configuration.cornerStyle = .capsule
         configuration.baseBackgroundColor = self.accent
         configuration.baseForegroundColor = .white

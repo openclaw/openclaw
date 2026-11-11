@@ -8,17 +8,12 @@ import {
   type ChannelSetupWizardAdapter,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
+import { listBuzzAccountIds, resolveBuzzAccountConfig } from "./account-config.js";
 import { waitForBuzzRoomAccess } from "./room-access-wait.js";
 import { discoverBuzzRooms, type BuzzDiscoveredRoom } from "./room-discovery.js";
 import { patchBuzzAccountConfig } from "./setup-core.js";
 import { verifyBuzzAfterSetup } from "./setup-verify.js";
-import {
-  decodeBuzzPrivateKey,
-  listBuzzAccountIds,
-  resolveBuzzAccount,
-  resolveBuzzAccountConfig,
-  resolveBuzzPublicKey,
-} from "./types.js";
+import { decodeBuzzPrivateKey, resolveBuzzAccount, resolveBuzzPublicKey } from "./types.js";
 
 const channel = "buzz" as const;
 type BuzzSetupPrompter = Parameters<ChannelSetupWizardAdapter["configure"]>[0]["prompter"];
@@ -43,37 +38,6 @@ function isRemoteInsecureRelayUrl(value: string): boolean {
     hostname === "::1" ||
     isIpv4Loopback;
   return url.protocol === "ws:" && !isLoopback;
-}
-
-async function resolveRelayUrl(params: {
-  configuredValue?: string;
-  prompter: BuzzSetupPrompter;
-}): Promise<string> {
-  const configuredValue = params.configuredValue?.trim();
-  let relayUrl =
-    configuredValue && validateRelayUrl(configuredValue) === undefined
-      ? configuredValue
-      : undefined;
-  while (true) {
-    relayUrl ??= (
-      await params.prompter.text({
-        message: "Buzz relay WebSocket URL",
-        placeholder: "wss://buzz.example.com",
-        initialValue: configuredValue || undefined,
-        validate: validateRelayUrl,
-      })
-    ).trim();
-    if (
-      !isRemoteInsecureRelayUrl(relayUrl) ||
-      (await params.prompter.confirm({
-        message: "This remote ws:// relay is unencrypted. Continue anyway?",
-        initialValue: false,
-      }))
-    ) {
-      return relayUrl;
-    }
-    relayUrl = undefined;
-  }
 }
 
 async function resolveSetupCredential(params: {
@@ -103,140 +67,6 @@ async function resolveSetupCredential(params: {
     );
   }
   return resolved.value;
-}
-
-async function resolvePrivateKey(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  prompter: BuzzSetupPrompter;
-  secretInputMode?: "plaintext" | "ref";
-}): Promise<{ cfg: OpenClawConfig; resolvedPrivateKey: string }> {
-  const { allowEnv } = resolveBuzzAccountConfig(params);
-  const currentPrivateKey = await resolveSetupCredential({ ...params, field: "privateKey" });
-  if (currentPrivateKey) {
-    decodeBuzzPrivateKey(currentPrivateKey);
-    return { cfg: params.cfg, resolvedPrivateKey: currentPrivateKey };
-  }
-  if (params.secretInputMode !== "ref") {
-    // Back navigation replays the full channel setup function. Keep one generated
-    // identity per account/session so replay cannot invalidate already granted access.
-    let accountKeys = generatedPrivateKeys.get(params.prompter);
-    if (!accountKeys) {
-      accountKeys = new Map();
-      generatedPrivateKeys.set(params.prompter, accountKeys);
-    }
-    let privateKey = accountKeys.get(params.accountId);
-    if (!privateKey) {
-      privateKey = nip19.nsecEncode(generateSecretKey());
-      accountKeys.set(params.accountId, privateKey);
-    }
-    return {
-      cfg: patchBuzzAccountConfig({
-        cfg: params.cfg,
-        accountId: params.accountId,
-        patch: { enabled: true, privateKey },
-        clearFields: ["authTag"],
-      }),
-      resolvedPrivateKey: privateKey,
-    };
-  }
-
-  const secretStep = await runSingleChannelSecretStep({
-    cfg: params.cfg,
-    prompter: params.prompter,
-    providerHint: channel,
-    credentialLabel: "Buzz bot private key",
-    secretInputMode: params.secretInputMode,
-    accountConfigured: false,
-    hasConfigToken: false,
-    allowEnv,
-    envValue: allowEnv ? process.env.BUZZ_PRIVATE_KEY : undefined,
-    envPrompt: "Use BUZZ_PRIVATE_KEY?",
-    keepPrompt: "Keep the existing Buzz bot private key?",
-    inputPrompt: "Buzz bot private key (nsec or 64-character hex)",
-    ...(allowEnv ? { preferredEnvVar: "BUZZ_PRIVATE_KEY" } : {}),
-    applyUseEnv: (cfg) =>
-      patchBuzzAccountConfig({
-        cfg,
-        accountId: params.accountId,
-        patch: { enabled: true },
-        clearFields: ["privateKey", "authTag"],
-      }),
-    applySet: (cfg, value: SecretInput) =>
-      patchBuzzAccountConfig({
-        cfg,
-        accountId: params.accountId,
-        patch: { enabled: true, privateKey: value },
-        clearFields: ["authTag"],
-      }),
-  });
-  const resolvedPrivateKey = secretStep.resolvedValue;
-  if (!resolvedPrivateKey) {
-    throw new Error(
-      "Buzz bot private key could not be resolved. Make the secret available and rerun setup.",
-    );
-  }
-  decodeBuzzPrivateKey(resolvedPrivateKey);
-  return { cfg: secretStep.cfg, resolvedPrivateKey };
-}
-
-async function promptRooms(params: {
-  rooms: BuzzDiscoveredRoom[];
-  configuredRoomIds: string[];
-  prompter: Parameters<ChannelSetupWizardAdapter["configure"]>[0]["prompter"];
-}): Promise<string[]> {
-  if (params.rooms.length === 1) {
-    return [params.rooms[0]!.id];
-  }
-  const configuredRooms = new Set(params.configuredRoomIds);
-  const preservedRoomIds = params.rooms
-    .map((room) => room.id)
-    .filter((roomId) => configuredRooms.has(roomId));
-  while (true) {
-    const roomIds = await params.prompter.multiselect({
-      message: "Select authorized Buzz rooms",
-      options: params.rooms.map((room) => ({
-        value: room.id,
-        label: room.name,
-        hint: room.about ?? room.id,
-      })),
-      initialValues:
-        preservedRoomIds.length > 0 ? preservedRoomIds : params.rooms.map((room) => room.id),
-    });
-    if (roomIds.length > 0) {
-      return roomIds;
-    }
-    await params.prompter.note(
-      "Select at least one authorized room, or go back to leave setup.",
-      "Buzz room selection required",
-    );
-  }
-}
-
-async function noteBuzzAccessInstructions(params: {
-  relayUrl: string;
-  publicKey: string;
-  prompter: Parameters<ChannelSetupWizardAdapter["configure"]>[0]["prompter"];
-  discoveryError?: string;
-}) {
-  const npub = nip19.npubEncode(params.publicKey);
-  await params.prompter.note(
-    [
-      ...(params.discoveryError ? [`Status: ${params.discoveryError}`, ""] : []),
-      `Relay: ${params.relayUrl}`,
-      `Bot npub: ${npub}`,
-      `Bot hex public key: ${params.publicKey}`,
-      "",
-      "Run as the existing human room owner/admin:",
-      `buzz channels add-member --channel <ROOM_UUID> --pubkey ${params.publicKey} --role bot`,
-      "",
-      "OpenClaw is waiting for Buzz to confirm the Bot role automatically.",
-      "Local `just dev` needs no separate community-member step.",
-      `Closed relay only: first run buzz-admin add-member --pubkey ${params.publicKey} --role member.`,
-      "Never paste that human private key into OpenClaw.",
-    ].join("\n"),
-    "Buzz room access required",
-  );
 }
 
 const generatedPrivateKeys = new WeakMap<BuzzSetupPrompter, Map<string, string>>();
@@ -281,17 +111,103 @@ export const buzzSetupWizard: ChannelSetupWizardAdapter = {
     const existingAccount = resolveBuzzAccount({ cfg, accountId });
     const useFreshAccessDefaults = !existingAccount.configured && !hasExistingAccessConfig;
     const configuredRelayUrl = existingAccount.relayUrl;
-    const relayUrl = await resolveRelayUrl({ configuredValue: configuredRelayUrl, prompter });
+    const configuredValue = configuredRelayUrl?.trim();
+    let relayUrl =
+      configuredValue && validateRelayUrl(configuredValue) === undefined
+        ? configuredValue
+        : undefined;
+    while (true) {
+      relayUrl ??= (
+        await prompter.text({
+          message: "Buzz relay WebSocket URL",
+          placeholder: "wss://buzz.example.com",
+          initialValue: configuredValue || undefined,
+          validate: validateRelayUrl,
+        })
+      ).trim();
+      if (
+        !isRemoteInsecureRelayUrl(relayUrl) ||
+        (await prompter.confirm({
+          message: "This remote ws:// relay is unencrypted. Continue anyway?",
+          initialValue: false,
+        }))
+      ) {
+        break;
+      }
+      relayUrl = undefined;
+    }
     let next = patchBuzzAccountConfig({ cfg, accountId, patch: { enabled: true, relayUrl } });
-    const identity = await resolvePrivateKey({
+    const secretInputMode = options?.secretInputMode;
+    const { allowEnv } = resolveBuzzAccountConfig({ cfg: next, accountId });
+    const currentPrivateKey = await resolveSetupCredential({
       cfg: next,
       accountId,
-      prompter,
-      secretInputMode: options?.secretInputMode,
+      field: "privateKey",
     });
-    next = identity.cfg;
-
-    const privateKey = identity.resolvedPrivateKey;
+    let privateKey: string;
+    if (currentPrivateKey) {
+      decodeBuzzPrivateKey(currentPrivateKey);
+      privateKey = currentPrivateKey;
+    } else if (secretInputMode !== "ref") {
+      // Back navigation replays the full channel setup function. Keep one generated
+      // identity per account/session so replay cannot invalidate already granted access.
+      let accountKeys = generatedPrivateKeys.get(prompter);
+      if (!accountKeys) {
+        accountKeys = new Map();
+        generatedPrivateKeys.set(prompter, accountKeys);
+      }
+      let generatedPrivateKey = accountKeys.get(accountId);
+      if (!generatedPrivateKey) {
+        generatedPrivateKey = nip19.nsecEncode(generateSecretKey());
+        accountKeys.set(accountId, generatedPrivateKey);
+      }
+      next = patchBuzzAccountConfig({
+        cfg: next,
+        accountId,
+        patch: { enabled: true, privateKey: generatedPrivateKey },
+        clearFields: ["authTag"],
+      });
+      privateKey = generatedPrivateKey;
+    } else {
+      const secretStep = await runSingleChannelSecretStep({
+        cfg: next,
+        prompter,
+        providerHint: channel,
+        credentialLabel: "Buzz bot private key",
+        secretInputMode,
+        accountConfigured: false,
+        hasConfigToken: false,
+        allowEnv,
+        envValue: allowEnv ? process.env.BUZZ_PRIVATE_KEY : undefined,
+        envPrompt: "Use BUZZ_PRIVATE_KEY?",
+        keepPrompt: "Keep the existing Buzz bot private key?",
+        inputPrompt: "Buzz bot private key (nsec or 64-character hex)",
+        ...(allowEnv ? { preferredEnvVar: "BUZZ_PRIVATE_KEY" } : {}),
+        applyUseEnv: (secretConfig) =>
+          patchBuzzAccountConfig({
+            cfg: secretConfig,
+            accountId,
+            patch: { enabled: true },
+            clearFields: ["privateKey", "authTag"],
+          }),
+        applySet: (secretConfig, value: SecretInput) =>
+          patchBuzzAccountConfig({
+            cfg: secretConfig,
+            accountId,
+            patch: { enabled: true, privateKey: value },
+            clearFields: ["authTag"],
+          }),
+      });
+      const resolvedPrivateKey = secretStep.resolvedValue;
+      if (!resolvedPrivateKey) {
+        throw new Error(
+          "Buzz bot private key could not be resolved. Make the secret available and rerun setup.",
+        );
+      }
+      decodeBuzzPrivateKey(resolvedPrivateKey);
+      next = secretStep.cfg;
+      privateKey = resolvedPrivateKey;
+    }
     const publicKey = resolveBuzzPublicKey(privateKey);
 
     let discoveredRooms: BuzzDiscoveredRoom[] = [];
@@ -314,12 +230,24 @@ export const buzzSetupWizard: ChannelSetupWizardAdapter = {
     };
     discoveredRooms = await discoverAuthorizedRooms();
     if (discoveredRooms.length === 0) {
-      await noteBuzzAccessInstructions({
-        relayUrl,
-        publicKey,
-        prompter,
-        discoveryError,
-      });
+      const npub = nip19.npubEncode(publicKey);
+      await prompter.note(
+        [
+          ...(discoveryError ? [`Status: ${discoveryError}`, ""] : []),
+          `Relay: ${relayUrl}`,
+          `Bot npub: ${npub}`,
+          `Bot hex public key: ${publicKey}`,
+          "",
+          "Run as the existing human room owner/admin:",
+          `buzz channels add-member --channel <ROOM_UUID> --pubkey ${publicKey} --role bot`,
+          "",
+          "OpenClaw is waiting for Buzz to confirm the Bot role automatically.",
+          "Local `just dev` needs no separate community-member step.",
+          `Closed relay only: first run buzz-admin add-member --pubkey ${publicKey} --role member.`,
+          "Never paste that human private key into OpenClaw.",
+        ].join("\n"),
+        "Buzz room access required",
+      );
       const progress = prompter.progress("Waiting for Buzz room access...");
       try {
         discoveredRooms = await waitForBuzzRoomAccess({
@@ -363,11 +291,34 @@ export const buzzSetupWizard: ChannelSetupWizardAdapter = {
     }
 
     const configuredGroups = existingBuzzConfig.groups ?? {};
-    const roomIds = await promptRooms({
-      rooms: discoveredRooms,
-      configuredRoomIds: Object.keys(configuredGroups),
-      prompter,
-    });
+    let roomIds: string[];
+    if (discoveredRooms.length === 1) {
+      roomIds = [discoveredRooms[0]!.id];
+    } else {
+      const configuredRooms = new Set(Object.keys(configuredGroups));
+      const preservedRoomIds = discoveredRooms
+        .map((room) => room.id)
+        .filter((roomId) => configuredRooms.has(roomId));
+      while (true) {
+        roomIds = await prompter.multiselect({
+          message: "Select authorized Buzz rooms",
+          options: discoveredRooms.map((room) => ({
+            value: room.id,
+            label: room.name,
+            hint: room.about ?? room.id,
+          })),
+          initialValues:
+            preservedRoomIds.length > 0 ? preservedRoomIds : discoveredRooms.map((room) => room.id),
+        });
+        if (roomIds.length > 0) {
+          break;
+        }
+        await prompter.note(
+          "Select at least one authorized room, or go back to leave setup.",
+          "Buzz room selection required",
+        );
+      }
+    }
     const existingDefault = existingBuzzConfig.defaultTo;
     const defaultTo =
       roomIds.length === 1

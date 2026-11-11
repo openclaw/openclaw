@@ -4,7 +4,6 @@ import type { ContextEngineHostSupport } from "./host-compat.js";
 import type {
   ContextEngineRuntimeReasonCode,
   ContextEngineSelectionSource,
-  ContextEngineRuntimeMode,
   ContextEngineRuntimeSettings,
 } from "./types.js";
 
@@ -27,7 +26,6 @@ function normalizeReasonCode(value: OptionalString): ContextEngineRuntimeReasonC
 }
 
 export function buildContextEngineRuntimeSettings(params: {
-  mode?: ContextEngineRuntimeMode;
   harnessId?: OptionalString;
   runtimeId?: OptionalString;
   requestedModel?: OptionalString;
@@ -53,9 +51,11 @@ export function buildContextEngineRuntimeSettings(params: {
   const degradedReason = normalizeReasonCode(params.degradedReason);
   const resolvedViaFallback =
     requestedModel !== null && resolvedModel !== null && requestedModel !== resolvedModel;
-  const mode =
-    params.mode ??
-    (degradedReason ? "degraded" : fallbackReason || resolvedViaFallback ? "fallback" : "normal");
+  const mode = degradedReason
+    ? "degraded"
+    : fallbackReason || resolvedViaFallback
+      ? "fallback"
+      : "normal";
 
   return {
     schemaVersion: 1,

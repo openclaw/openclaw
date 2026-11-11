@@ -17,7 +17,6 @@ struct ChatMermaidBlockView: View {
     @State private var width = 0
     @State private var result: Result<ChatMermaidRenderedImage, ChatMermaidFailure>?
     @State private var token: UUID?
-    @State private var generation = UUID()
     @State private var showSource = false
     @State private var isHovered = false
     /// Keep the selected preview stable while rotation re-renders the inline diagram.
@@ -190,15 +189,12 @@ struct ChatMermaidBlockView: View {
         self.cancel()
         self.result = nil
         guard let request = self.request else { return }
-        let generation = self.generation
         self.token = ChatMermaidRenderer.shared.render(request) { result in
-            guard self.generation == generation else { return }
             self.result = result
         }
     }
 
     private func cancel() {
-        self.generation = UUID()
         if let token = self.token {
             self.token = nil
             ChatMermaidRenderer.shared.cancel(token)

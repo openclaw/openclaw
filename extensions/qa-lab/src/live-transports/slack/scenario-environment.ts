@@ -1,10 +1,12 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import type { QaChannelE2eDriver } from "../shared/channel-e2e.types.js";
 import {
   patchLiveQaGatewayConfig,
   readLiveQaGatewayConfig,
 } from "../shared/live-gateway-config.runtime.js";
+import type { SlackChannelE2eSession } from "./channel-e2e.js";
 import { buildSlackQaConfig } from "./slack-live.config.js";
 import type {
   SlackAuthIdentity,
@@ -24,6 +26,7 @@ type FlowPreparationInput = Parameters<NonNullable<AdapterDefinition["prepareFlo
 
 export type SlackQaScenarioEnvironment = {
   channelId: string;
+  channelE2e?: QaChannelE2eDriver;
   configureScenario: (implementation: SlackQaScenarioImplementation) => Promise<{
     cfg: OpenClawConfig;
     primaryModel: string;
@@ -33,6 +36,7 @@ export type SlackQaScenarioEnvironment = {
   getMessageWriteCursor: () => Promise<number>;
   observedMessages: SlackObservedMessage[];
   readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
+  recordScenarioMessages?: SlackChannelE2eSession["recordScenarioMessages"];
   scenario: SlackQaScenarioMetadata;
   stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
   sutAccountId: string;
@@ -57,6 +61,8 @@ export function createSlackQaScenarioEnvironment(params: {
 
   const prepareFlow = async (
     input: FlowPreparationInput,
+    channelE2e?: QaChannelE2eDriver,
+    recordScenarioMessages?: SlackChannelE2eSession["recordScenarioMessages"],
   ): Promise<{ slackScenarioContext: SlackQaScenarioEnvironment }> => {
     const context = {
       channelId: params.channelId,
@@ -68,6 +74,8 @@ export function createSlackQaScenarioEnvironment(params: {
     return {
       slackScenarioContext: {
         channelId: params.channelId,
+        channelE2e,
+        recordScenarioMessages,
         configureScenario: async (implementation: SlackQaScenarioImplementation) => {
           if (!input.primaryModel) {
             throw new Error("Slack QA module flow requires a primary model");

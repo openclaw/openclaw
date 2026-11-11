@@ -41,8 +41,8 @@ func TestLocalizeBodyLinks(t *testing.T) {
 		},
 		{
 			name:  "images stay unchanged",
-			input: `![Diagram](/images/diagram.svg)`,
-			want:  `![Diagram](/images/diagram.svg)`,
+			input: `![Config](/gateway/configuration)`,
+			want:  `![Config](/gateway/configuration)`,
 		},
 		{
 			name:  "already localized stays unchanged",
@@ -167,13 +167,13 @@ func setupDocsTree(t *testing.T) string {
 		"channels/troubleshooting.md":           "# Troubleshooting\n",
 		"gateway/configuration.md":              "# Config\n",
 		"gateway/sandboxing.md":                 "# Sandboxing\n",
-		"security/formal-verification.md":       "---\npermalink: /security/formal-verification/\n---\n\n# Formal verification\n",
+		"security/verification-method.md":       "---\npermalink: /security/formal-verification/\n---\n\n# Formal verification\n",
 		"help/faq.md":                           "# FAQ\n",
 		"zh-CN/index.md":                        "# Home\n",
 		"zh-CN/channels/troubleshooting.md":     "# Troubleshooting\n",
 		"zh-CN/gateway/configuration.md":        "# Config\n",
 		"zh-CN/gateway/sandboxing.md":           "# Sandboxing\n",
-		"zh-CN/security/formal-verification.md": "---\npermalink: /security/formal-verification/\n---\n\n# Formal verification\n",
+		"zh-CN/security/verification-method.md": "---\npermalink: /security/formal-verification/\n---\n\n# Formal verification\n",
 		"ja-JP/index.md":                        "# Home\n",
 	}
 

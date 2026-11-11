@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
+import { readBoundedRequestBody } from "../request-body.mjs";
 
 const port = readTcpPortEnv("CLICKCLACK_FIXTURE_PORT", 44181);
 const requestMaxBytes = readPositiveIntEnv("CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES", 4 * 1024 * 1024);
@@ -82,49 +83,17 @@ function checkAuth(req, res) {
   return true;
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    let bytes = 0;
-    let settled = false;
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      if (settled) {
-        return;
-      }
-      bytes += Buffer.byteLength(chunk, "utf8");
-      if (bytes > requestMaxBytes) {
-        settled = true;
-        body = "";
-        req.resume();
-        reject(
-          Object.assign(
-            new Error(`ClickClack fixture request body exceeded ${requestMaxBytes} bytes`),
-            { code: "ETOOBIG" },
-          ),
-        );
-        return;
-      }
-      body += chunk;
-    });
-    req.on("end", () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch {
-        resolve({});
-      }
-    });
-    req.on("error", (error) => {
-      if (!settled) {
-        settled = true;
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  });
+async function readBody(req) {
+  const body = await readBoundedRequestBody(req, requestMaxBytes, (limit) =>
+    Object.assign(new Error(`ClickClack fixture request body exceeded ${limit} bytes`), {
+      code: "ETOOBIG",
+    }),
+  );
+  try {
+    return body ? JSON.parse(body) : {};
+  } catch {
+    return {};
+  }
 }
 
 function handleRequestError(res, error) {
@@ -200,6 +169,24 @@ function frameText(text) {
   header[1] = 127;
   header.writeBigUInt64BE(BigInt(payload.length), 2);
   return Buffer.concat([header, payload]);
+}
+
+// The real server answers pings, and the Gateway reconnects a socket whose
+// pongs stop. Its client only sends masked control frames (under 126 bytes).
+function answerPings(socket) {
+  let pending = Buffer.alloc(0);
+  socket.on("data", (chunk) => {
+    pending = Buffer.concat([pending, chunk]);
+    while (pending.length >= 6 && pending.length >= 6 + (pending[1] & 0x7f)) {
+      const length = pending[1] & 0x7f;
+      if ((pending[0] & 0x0f) === 0x9) {
+        const mask = pending.subarray(2, 6);
+        const payload = pending.subarray(6, 6 + length).map((byte, i) => byte ^ mask[i % 4]);
+        socket.write(Buffer.concat([Buffer.from([0x8a, length]), payload]));
+      }
+      pending = pending.subarray(6 + length);
+    }
+  });
 }
 
 function broadcast(event) {
@@ -336,7 +323,7 @@ server.on("upgrade", (req, socket) => {
     socket.end();
   });
   socket.on("error", cleanupSocket);
-  socket.resume();
+  answerPings(socket);
 });
 
 persist();

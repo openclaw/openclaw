@@ -14,6 +14,7 @@ type PlatformClaimParams = {
   requiresProducerClaim?: boolean;
   reconciledPlatformSendAttemptId?: string;
   reconciledPlatformSendStartedAt?: number;
+  allowUnknownSendReplay?: true;
 };
 
 export const PLATFORM_SEND_OWNER_LEASE_MS = 60_000;
@@ -131,15 +132,17 @@ export function claimDeliveryQueueEntryPlatformSendInDatabase(
     params,
     "claim",
     (entry, now) => {
-      const reconciledNotSent =
-        entry.recoveryState === "send_attempt_started" &&
+      const reconciledForReplay =
+        (entry.recoveryState === "send_attempt_started" ||
+          (entry.recoveryState === "unknown_after_send" &&
+            params.allowUnknownSendReplay === true)) &&
         typeof params.reconciledPlatformSendStartedAt === "number" &&
         entry.platformSendStartedAt === params.reconciledPlatformSendStartedAt &&
         typeof params.reconciledPlatformSendAttemptId === "string" &&
         entry.platformSendAttemptId === params.reconciledPlatformSendAttemptId;
       if (
         entry.recoveryState &&
-        !reconciledNotSent &&
+        !reconciledForReplay &&
         (entry.recoveryState !== "producer_claimed" ||
           typeof entry.availableAt !== "number" ||
           entry.availableAt > now)
@@ -188,64 +191,51 @@ export function renewDeliveryQueueEntryPlatformSendLeaseInDatabase(
     : undefined;
 }
 
-function startDeliveryQueuePlatformSend(
-  database: OpenClawStateDatabase,
-  params: Parameters<typeof promoteDeliveryQueueEntryPlatformSendInDatabase>[1],
-  operation: "promote" | "dispatch",
-): boolean {
-  return transitionDeliveryQueueEntryPlatformSendInDatabase(
-    database,
-    params,
-    operation,
-    (entry, now) => {
-      if (
-        (operation === "promote" && entry.recoveryState !== "producer_claimed") ||
-        !hasLiveDeliveryQueueClaim(entry, params.claimId, now)
-      ) {
-        return undefined;
-      }
-      return {
-        ...entry,
-        // Exact reconciliation can skip pre-send promotion, so publish attempt identity
-        // atomically; later batch dispatches retain stronger unknown-after-send evidence.
-        availableAt:
-          entry.requiresProducerClaim === true
-            ? entry.recoveryState === "producer_claimed"
-              ? now + PLATFORM_SEND_OWNER_LEASE_MS
-              : entry.availableAt
-            : undefined,
-        producerClaimId: undefined,
-        platformSendAttemptId: params.claimId,
-        platformSendStartedAt: now,
-        ...(params.route && "replyToId" in params.route
-          ? { effectiveReplyToId: params.route.replyToId ?? null }
-          : {}),
-        recoveryState:
-          entry.recoveryState === "unknown_after_send"
-            ? "unknown_after_send"
-            : "send_attempt_started",
-      };
+function platformSendTransition(operation: "promote" | "dispatch") {
+  return (
+    database: OpenClawStateDatabase,
+    params: PlatformClaimParams & {
+      claimId: string;
+      route?: { replyToId?: string | null };
     },
-  );
+  ): boolean => {
+    return transitionDeliveryQueueEntryPlatformSendInDatabase(
+      database,
+      params,
+      operation,
+      (entry, now) => {
+        if (
+          (operation === "promote" && entry.recoveryState !== "producer_claimed") ||
+          !hasLiveDeliveryQueueClaim(entry, params.claimId, now)
+        ) {
+          return undefined;
+        }
+        return {
+          ...entry,
+          // Exact reconciliation can skip pre-send promotion, so publish attempt identity
+          // atomically; later batch dispatches retain stronger unknown-after-send evidence.
+          availableAt:
+            entry.requiresProducerClaim === true
+              ? entry.recoveryState === "producer_claimed"
+                ? now + PLATFORM_SEND_OWNER_LEASE_MS
+                : entry.availableAt
+              : undefined,
+          producerClaimId: undefined,
+          platformSendAttemptId: params.claimId,
+          platformSendStartedAt: now,
+          ...(params.route && "replyToId" in params.route
+            ? { effectiveReplyToId: params.route.replyToId ?? null }
+            : {}),
+          recoveryState:
+            entry.recoveryState === "unknown_after_send"
+              ? "unknown_after_send"
+              : "send_attempt_started",
+        };
+      },
+    );
+  };
 }
 
 /** Atomically fence the exact unexpired owner at the real provider boundary. */
-export function promoteDeliveryQueueEntryPlatformSendInDatabase(
-  database: OpenClawStateDatabase,
-  params: PlatformClaimParams & {
-    claimId: string;
-    route?: { replyToId?: string | null };
-  },
-): boolean {
-  return startDeliveryQueuePlatformSend(database, params, "promote");
-}
-
-export function dispatchDeliveryQueueEntryPlatformSendInDatabase(
-  database: OpenClawStateDatabase,
-  params: PlatformClaimParams & {
-    claimId: string;
-    route?: { replyToId?: string | null };
-  },
-): boolean {
-  return startDeliveryQueuePlatformSend(database, params, "dispatch");
-}
+export const promoteDeliveryQueueEntryPlatformSendInDatabase = platformSendTransition("promote");
+export const dispatchDeliveryQueueEntryPlatformSendInDatabase = platformSendTransition("dispatch");

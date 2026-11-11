@@ -1,4 +1,4 @@
-import { parseUsageCountedSessionIdFromFileName } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import { parseUsageCountedSessionIdFromFileName } from "openclaw/plugin-sdk/session-key-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export function referencesSession(

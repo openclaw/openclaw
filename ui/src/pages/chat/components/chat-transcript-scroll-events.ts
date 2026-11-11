@@ -1,10 +1,6 @@
-export type TranscriptViewportMeasurement = {
-  clientHeight: number;
-  scrollHeight: number;
-  scrollTop: number;
-};
+export type TranscriptViewportMeasurement = ReturnType<typeof readTranscriptViewport>;
 
-export function readTranscriptViewport(element: HTMLElement): TranscriptViewportMeasurement {
+export function readTranscriptViewport(element: HTMLElement) {
   return {
     scrollTop: element.scrollTop,
     clientHeight: element.clientHeight,
@@ -20,6 +16,7 @@ export type TranscriptScrollObservation =
       type: "resize";
       viewport: TranscriptViewportMeasurement;
       scrollCorrection?: { before: number; after: number };
+      resumeFollow?: boolean;
     }
   | { type: "input"; event: Event; touching: boolean }
   | {

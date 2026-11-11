@@ -4,6 +4,7 @@ import path from "node:path";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
 import type { HealthCheck, HealthRepairEffect } from "./health-checks.js";
@@ -15,18 +16,8 @@ function resolveRemovedWorkspacesStateDir(): string {
 }
 
 async function pathKind(target: string): Promise<"directory" | "file" | null> {
-  try {
-    const stats = await lstat(target);
-    if (stats.isDirectory()) {
-      return "directory";
-    }
-    return stats.isFile() ? "file" : null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
+  const stats = await lstat(target).catch(ignoreMissingPath);
+  return stats?.isDirectory() ? "directory" : stats?.isFile() ? "file" : null;
 }
 
 async function hasRemovedWorkspacesFingerprint(target: string): Promise<boolean> {
@@ -118,23 +109,18 @@ export const removedWorkspacesStateCheck: HealthCheck = {
       return [];
     }
     const collisions = await configuredAgentWorkspaceCollisions(ctx.cfg, target);
-    if (collisions.length > 0) {
-      return [
-        {
-          checkId: CHECK_ID,
-          severity: "warning",
-          message: collisionWarning(target, collisions),
-          path: target,
-        },
-      ];
-    }
     return [
       {
         checkId: CHECK_ID,
         severity: "warning",
-        message: `Retired Workspaces plugin state remains at ${target}.`,
+        message:
+          collisions.length > 0
+            ? collisionWarning(target, collisions)
+            : `Retired Workspaces plugin state remains at ${target}.`,
         path: target,
-        fixHint: "Run `openclaw doctor --fix` to remove the stale plugin state.",
+        ...(collisions.length > 0
+          ? {}
+          : { fixHint: "Run `openclaw doctor --fix` to remove the stale plugin state." }),
       },
     ];
   },

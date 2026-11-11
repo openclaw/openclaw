@@ -49,6 +49,7 @@ private actor ReactionTestTransport: OpenClawChatTransport {
     let access: OpenClawChatReactionAccess
     let listGate: ReactionRequestGate?
     let setGate: ReactionRequestGate?
+    let secondSetGate: ReactionRequestGate?
     let setFails: Bool
     let listOmitsMessage: Bool
     let initial: [OpenClawChatReactionSummary]
@@ -60,15 +61,20 @@ private actor ReactionTestTransport: OpenClawChatTransport {
         cap: String? = "write",
         listGate: ReactionRequestGate? = nil,
         setGate: ReactionRequestGate? = nil,
+        secondSetGate: ReactionRequestGate? = nil,
         setFails: Bool = false,
         listOmitsMessage: Bool = false,
         initial: [OpenClawChatReactionSummary] = [])
     {
         self.access = OpenClawChatReactionAccess(
-            role: "operator", scopes: ["operator.write"], sessionCap: cap,
-            methods: ["session.reactions.list", "session.reactions.set"], userID: "self")
+            role: "operator",
+            scopes: ["operator.write"],
+            sessionCap: cap,
+            methods: ["session.reactions.list", "session.reactions.set"],
+            userID: "self")
         self.listGate = listGate
         self.setGate = setGate
+        self.secondSetGate = secondSetGate
         self.setFails = setFails
         self.listOmitsMessage = listOmitsMessage
         self.initial = initial
@@ -103,7 +109,11 @@ private actor ReactionTestTransport: OpenClawChatTransport {
 
     private func set(_ request: Write) async throws -> OpenClawChatReactionsSetResult {
         self.writes.append(request)
-        if self.writes.count == 1 { await self.setGate?.wait() }
+        if self.writes.count == 1 {
+            await self.setGate?.wait()
+        } else if self.writes.count == 2 {
+            await self.secondSetGate?.wait()
+        }
         if self.setFails { throw Failure.rejected }
         let reactions: [OpenClawChatReactionSummary] = request.remove ? [] : [
             .init(emoji: request.emoji, count: 1, identities: [.init(id: "self", label: "You")]),
@@ -112,16 +122,19 @@ private actor ReactionTestTransport: OpenClawChatTransport {
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        .init(sessionKey: sessionKey, sessionId: "session-\(sessionKey)", messages: [
-            AnyCodable([
-                "role": "user", "content": "Saved prompt", "timestamp": 1,
-                "__openclaw": ["id": "saved"],
-            ]),
-            AnyCodable([
-                "role": "assistant", "content": "Saved reply", "timestamp": 2,
-                "__openclaw": ["id": "reply"],
-            ]),
-        ], thinkingLevel: "off")
+        .init(
+            sessionKey: sessionKey,
+            sessionId: "session-\(sessionKey)",
+            messages: [
+                AnyCodable([
+                    "role": "user", "content": "Saved prompt", "timestamp": 1,
+                    "__openclaw": ["id": "saved"],
+                ]),
+                AnyCodable([
+                    "role": "assistant", "content": "Saved reply", "timestamp": 2,
+                    "__openclaw": ["id": "reply"],
+                ]),
+            ], thinkingLevel: "off")
     }
 
     func listSessions(
@@ -144,7 +157,10 @@ private actor ReactionTestTransport: OpenClawChatTransport {
     }
 
     func sendMessage(
-        sessionKey _: String, message _: String, thinking _: String, idempotencyKey _: String,
+        sessionKey _: String,
+        message _: String,
+        thinking _: String,
+        idempotencyKey _: String,
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
         throw Failure.rejected
@@ -164,7 +180,9 @@ private final class ReactionViewModelFixture {
     init(transport: ReactionTestTransport, sessionKey: String = "agent:main:a") {
         self.defaults = UserDefaults(suiteName: self.suite)!
         self.model = OpenClawChatViewModel(
-            sessionKey: sessionKey, transport: transport, activeAgentId: "main",
+            sessionKey: sessionKey,
+            transport: transport,
+            activeAgentId: "main",
             modelPickerStore: ChatModelPickerStore(defaults: self.defaults))
     }
 
@@ -399,6 +417,31 @@ struct ChatViewModelReactionsTests {
         #expect(!fixture.model.isReactionPending(for: nextPrompt, emoji: "🎉"))
     }
 
+    @Test func `old session completion leaves a matching new session reaction pending`() async throws {
+        let oldGate = ReactionRequestGate()
+        let newGate = ReactionRequestGate()
+        let fixture = ReactionViewModelFixture(transport: .init(setGate: oldGate, secondSetGate: newGate))
+        defer { fixture.close() }
+        await fixture.load()
+        let prompt = try #require(fixture.model.messages.first)
+        let oldWrite = await self.startReaction(fixture.model, message: prompt, emoji: "👍")
+        await oldGate.waitForArrival()
+        fixture.model.switchSession(to: "agent:main:b")
+        await fixture.model.bootstrapTask?.value
+        await fixture.model.reactionState.refreshTask?.value
+        let nextPrompt = try #require(fixture.model.messages.first)
+        let newWrite = await self.startReaction(fixture.model, message: nextPrompt, emoji: "👍")
+        await newGate.waitForArrival()
+        await oldGate.release()
+        await oldWrite.value
+        #expect(fixture.model.isReactionPending(for: nextPrompt, emoji: "👍"))
+        #expect(fixture.model.messageReactions(for: nextPrompt).isEmpty)
+        await newGate.release()
+        await newWrite.value
+        #expect(!fixture.model.isReactionPending(for: nextPrompt, emoji: "👍"))
+        #expect(fixture.model.messageReactions(for: nextPrompt) == [self.summary("👍", identity: "self")])
+    }
+
     @Test func `a new transcript instance invalidates writes before its session row refreshes`() async throws {
         let gate = ReactionRequestGate()
         let transport = ReactionTestTransport(setGate: gate, initial: [self.summary("👀", identity: "someone")])
@@ -410,8 +453,10 @@ struct ChatViewModelReactionsTests {
         await gate.waitForArrival()
         let original = try await transport.requestHistory(sessionKey: fixture.model.sessionKey)
         let replacement = OpenClawChatHistoryPayload(
-            sessionKey: fixture.model.sessionKey, sessionId: "replacement-transcript",
-            messages: original.messages, thinkingLevel: "off")
+            sessionKey: fixture.model.sessionKey,
+            sessionId: "replacement-transcript",
+            messages: original.messages,
+            thinkingLevel: "off")
         #expect(fixture.model.applyHistoryPayload(
             replacement, for: fixture.model.beginHistoryRequest(), preservingOptimisticLocalMessages: false))
         #expect(fixture.model.messageReactions(for: prompt).isEmpty)
@@ -438,7 +483,7 @@ struct ChatViewModelReactionsTests {
         #expect(!fixture.model.canReact(to: prompt))
     }
 
-    @Test func `saved prompts and replies use live role metadata while optimistic rows stay unavailable`() async throws {
+    @Test func `saved rows use live role metadata and optimistic rows stay unavailable`() async throws {
         let fixture = ReactionViewModelFixture(transport: .init())
         defer { fixture.close() }
         await fixture.load()
@@ -533,7 +578,9 @@ struct ChatViewModelReactionsTests {
     }
 
     private func access(
-        role: String? = "operator", scopes: Set<String>? = ["operator.write"], cap: String? = nil,
+        role: String? = "operator",
+        scopes: Set<String>? = ["operator.write"],
+        cap: String? = nil,
         methods: Set<String>? = ["session.reactions.set"]) -> OpenClawChatReactionAccess
     {
         .init(role: role, scopes: scopes, sessionCap: cap, methods: methods)
@@ -544,7 +591,8 @@ struct ChatViewModelReactionsTests {
     }
 
     private func event(
-        sessionKey: String = "agent:main:a", agentID: String = "main",
+        sessionKey: String = "agent:main:a",
+        agentID: String = "main",
         sessionID: String = "session-agent:main:a",
         reactions: [OpenClawChatReactionSummary]) -> OpenClawChatReactionEvent
     {

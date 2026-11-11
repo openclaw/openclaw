@@ -90,15 +90,9 @@ export async function collectTelegramSecurityAuditFindings(params: {
     if (!value || typeof value !== "object") {
       return [];
     }
-    const group = value as Record<string, unknown>;
-    const topics = group.topics;
-    const scopes: unknown[] = [group];
-    if (topics && typeof topics === "object") {
-      for (const topic of Object.values(topics)) {
-        scopes.push(topic);
-      }
-    }
-    return scopes;
+    const topics = (value as Record<string, unknown>).topics;
+    const scopes: unknown[] = [value];
+    return scopes.concat(topics && typeof topics === "object" ? Object.values(topics) : []);
   });
   let anyGroupOverride = false;
   for (const scope of groupScopes) {

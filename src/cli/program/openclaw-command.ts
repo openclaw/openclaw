@@ -43,15 +43,11 @@ export class OpenClawCommand extends Command {
           throw error;
         }
         applyResolvedCommandOutputMode(true);
-        throw createCliParseError(
-          message,
-          {
-            argv: process.argv,
-            commandPath: getCommanderErrorCommandPath(this),
-            commandNames: getCommanderErrorCommandNames(this),
-          },
-          { humanOutputWritten: true },
-        );
+        throw createCliParseError(message, {
+          argv: process.argv,
+          commandPath: getCommanderErrorCommandPath(this),
+          commandNames: getCommanderErrorCommandNames(this),
+        });
       }
       throw error;
     } finally {

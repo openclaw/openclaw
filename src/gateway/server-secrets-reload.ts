@@ -48,7 +48,6 @@ type SecretsReloadPublication = {
 
 export type GatewaySecretsReloaderParams = {
   activateRuntimeSecrets: ActivateRuntimeSecrets;
-  buildReloadPlan?: (changedPaths: string[]) => GatewayReloadPlan;
   sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
   resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
   clients: Iterable<SharedGatewayAuthClient>;
@@ -62,7 +61,6 @@ export type GatewaySecretsReloaderParams = {
 
 /** Keeps snapshot CAS, generation ownership, and exact account recovery in one transaction. */
 export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParams) {
-  const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
   const manager = params.channelManager;
   const capturePublication = (
     generationOwnership: SharedGatewaySessionGenerationOwnership,
@@ -125,12 +123,20 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
       const touchedTargets: Array<{ target: ReloadChannelTarget; restarted: boolean }> = [];
       const startTarget = ({ channel, accountId }: ReloadChannelTarget) =>
         accountId
-          ? manager.startChannel(channel, accountId, { preserveManualStop: true })
-          : manager.startChannel(channel);
+          ? manager.startChannel(channel, accountId, {
+              reason: "secrets-reload",
+              preserveManualStop: true,
+            })
+          : manager.startChannel(channel, undefined, { reason: "secrets-reload" });
       const stopTarget = ({ channel, accountId }: ReloadChannelTarget) =>
         accountId
           ? manager.stopChannel(channel, accountId, { manual: false })
           : manager.stopChannel(channel);
+      const assertGenerationOwned = () => {
+        if (!transaction?.isCurrent()) {
+          throw new Error("secrets.reload was superseded by a newer config write");
+        }
+      };
 
       try {
         for (;;) {
@@ -152,7 +158,8 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
             canPublishFailureAsDegraded: () =>
               getActiveSecretsRuntimeSnapshotRevisionState() === previousRevision,
           });
-          const plan = buildReloadPlan(diffConfigPaths(previousSnapshot.config, prepared.config));
+          const changedPaths = diffConfigPaths(previousSnapshot.config, prepared.config);
+          const plan = buildGatewayReloadPlan(changedPaths);
           const nextGeneration = params.resolveSharedGatewaySessionGenerationForConfig(
             prepared.config,
           );
@@ -206,17 +213,13 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
           if (!transaction) {
             throw new Error("Secrets runtime activation did not publish ownership.");
           }
-          if (!transaction.isCurrent()) {
-            throw new Error("secrets.reload was superseded by a newer config write");
-          }
+          assertGenerationOwned();
           break;
         }
 
         const { prepared, plan, credentialOwners, generationOwnership, isCurrent } = transaction;
         await transaction.modelPublication;
-        if (!isCurrent()) {
-          throw new Error("secrets.reload was superseded by a newer config write");
-        }
+        assertGenerationOwned();
         const targets: ReloadChannelTarget[] = [...plan.restartChannels].map((channel) => ({
           channel,
         }));
@@ -284,11 +287,6 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
           for (const target of restartTargets) {
             const { channel, accountId, credentialOwnerId, inspectOnly } = target;
             const label = accountId ? `${channel} account ${accountId}` : `${channel} channel`;
-            const assertGenerationOwned = () => {
-              if (!isCurrent()) {
-                throw new Error("secrets.reload was superseded by a newer config write");
-              }
-            };
             assertGenerationOwned();
             params.logChannels.info(
               `${inspectOnly ? "reinspecting" : "restarting"} ${label} after secrets reload`,

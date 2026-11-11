@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
 import { nativeProcessTestEntrypoints } from "./native-process-runtime.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
-const coreUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.fsSafeCore);
-const envUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.fsSafeEnv);
-const memoryUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.memoryFsUtils);
+const modules = {
+  coreUrl: resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.fsSafeCore),
+  envUrl: resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.fsSafeEnv),
+  memoryUrl: resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.memoryFsUtils),
+};
 
 type NativeMode = "auto" | "off" | "require";
 
@@ -29,7 +31,7 @@ function inspectNativeDefaults(params: {
   const output = execFileSync(
     process.execPath,
     [
-      ...resolveRuntimeWorkerArgv(coreUrl).slice(0, -1),
+      ...resolveRuntimeWorkerArgv(modules.coreUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
       `
@@ -45,12 +47,7 @@ function inspectNativeDefaults(params: {
       const after = config.getFsSafeNativeConfig().mode;
       process.stdout.write(JSON.stringify({ before, after }));
     `,
-      JSON.stringify({
-        ...params,
-        coreUrl: coreUrl.href,
-        envUrl: envUrl.href,
-        memoryUrl: memoryUrl.href,
-      }),
+      JSON.stringify({ ...params, ...modules }),
     ],
     {
       cwd: fileURLToPath(new URL("../../", import.meta.url)),

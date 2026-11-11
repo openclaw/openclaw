@@ -1,0 +1,2 @@
+# Subagents summary regression: at most two statuses, Stopped folds into Done.
+30

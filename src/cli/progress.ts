@@ -119,7 +119,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   }
 
   const delayMs = resolveTimerTimeoutMs(options.delayMs, 0, 0);
-  const canOsc = isTty && supportsOscProgress(process.env, isTty);
+  const canOsc = isTty && supportsOscProgress(process.env);
   const stdinIsRaw = process.stdin.isRaw;
   const wantsSpinner = fallback === undefined || fallback === "spinner";
   const allowSpinner = wantsSpinner && isTty && !stdinIsRaw;

@@ -28,6 +28,14 @@ export type FeatureContract = {
   events: Readonly<Record<string, TSchema>>;
 };
 
+/** Browser runtime metadata; schemas stay in the canonical contract's type. */
+export type FeatureClientContract<C extends FeatureContract> = {
+  pluginId: C["pluginId"];
+  operations: {
+    [K in keyof C["operations"]]: Pick<C["operations"][K], "kind">;
+  };
+};
+
 export type FeatureOperationName<C extends FeatureContract> = keyof C["operations"] & string;
 export type FeatureEventName<C extends FeatureContract> = keyof C["events"] & string;
 export type FeatureInput<C extends FeatureContract, K extends FeatureOperationName<C>> = Static<
@@ -89,6 +97,14 @@ export type FeatureClient<C extends FeatureContract> = {
 /** Uses only the current browser connection; it does not mint scopes or a backend client. */
 export function createFeatureClient<C extends FeatureContract>(
   contract: C,
+  host: FeatureTransport,
+): FeatureClient<C>;
+export function createFeatureClient<C extends FeatureContract>(
+  contract: FeatureClientContract<C>,
+  host: FeatureTransport,
+): FeatureClient<C>;
+export function createFeatureClient<C extends FeatureContract>(
+  contract: FeatureClientContract<C>,
   host: FeatureTransport,
 ): FeatureClient<C> {
   if (host.pluginId !== contract.pluginId) {
