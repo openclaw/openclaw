@@ -36,8 +36,10 @@ correction, which the agent sees before its next step under the run's own
 permissions. If the run already ended, the correction is dropped. When the agent
 is on track, nothing happens.
 
-Each review is an extra model call on the session's model, at most one per
-`everyMinutes` of work in a run. A review that misses the provider cache
+Each review is an extra model call on the session's model. With the default
+`everyToolCalls: 0`, that is at most one per `everyMinutes` of work in a run.
+Turning on `everyToolCalls` adds a second trigger, so reviews can run sooner
+and more often. A review that misses the provider cache
 processes the whole conversation again, which on a long session can be hundreds
 of thousands of tokens.
 
