@@ -1,0 +1,5 @@
+14
+# LOCAL 2026.11.8 row 41; source da5333972ac13a707e0003fcd6e423d479a7a6ad.
+# Template defaults use existing profile-aware state-dir owner; explicit workspace unchanged.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
