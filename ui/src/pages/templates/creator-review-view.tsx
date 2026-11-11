@@ -1,6 +1,6 @@
 import type { TemplateDraftReviewItem } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, For, Show } from "solid-js";
-import { CopyButton } from "../../components/solid/copy-button.tsx";
+import { createMemo, createSignal, For, Loading, Show } from "solid-js";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -8,9 +8,11 @@ import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
 import { TemplateArtwork } from "../agents-home/template-artwork.tsx";
 import { agentDocuments, fileRole } from "../agents-home/template-workspace-file-roles.ts";
+import { createSessionAutomationSchedule } from "../chat/components/session-automation-schedule-loader.ts";
 import "../../styles/template-creator.css";
 import { TemplateItemDetails } from "./creator-item-details.tsx";
 import type { TemplateCreator } from "./creator-publication.ts";
+import "../../components/tooltip.ts";
 
 type CreatorView = SourceProjection<TemplateCreator, TemplateCreator>;
 type Kind = TemplateDraftReviewItem["kind"];
@@ -30,6 +32,11 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
   const [allFiles, setAllFiles] = createSignal(false);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const busy = () => state().busy === "publishing";
+  const publicationStatus = () =>
+    state().publicationIssue
+      ? undefined
+      : (state().publication?.publicationStatus ?? "unpublished");
+  const schedule = createSessionAutomationSchedule();
   const entries = (kind: Kind): TemplateDraftReviewItem[] =>
     kind === "file"
       ? review().files.map((file) => ({
@@ -47,12 +54,23 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
     t("templatesDraft." + sections.find((section) => section.kind === category())?.key);
   const currentSection = () => sections.find((entry) => entry.kind === category())!;
   const hint = () => t("templatesDraft." + currentSection().key + "Hint");
-  const summary = (detail: string) => {
-    if (category() === "mcp") {
-      const server: { url?: string; command?: string } = JSON.parse(detail);
+  const summary = (item: TemplateDraftReviewItem) => {
+    if (item.automation) {
+      return (
+        schedule({
+          kind: "cron",
+          expr: item.automation.schedule.cron,
+          tz: item.automation.schedule.timezone,
+        }) +
+        " · " +
+        item.automation.schedule.timezone
+      );
+    }
+    if (item.kind === "mcp") {
+      const server: { url?: string; command?: string } = JSON.parse(item.detail);
       return server.url ?? server.command;
     }
-    return detail
+    return item.detail
       .trim()
       .split("\n")
       .find((line) => line && line !== "---")
@@ -132,6 +150,25 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
           </button>
         </Show>
         <div>
+          <Show when={!category() && publicationStatus()}>
+            <span class="template-creator__status-anchor">
+              <openclaw-tooltip
+                prop:content={
+                  publicationStatus() === "pending" ? t("templatesDraft.awaitingReview") : ""
+                }
+                prop:disabled={publicationStatus() !== "pending"}
+              >
+                <span
+                  class="template-creator__status"
+                  data-state={publicationStatus()}
+                  role="status"
+                  tabindex={publicationStatus() === "pending" ? 0 : undefined}
+                >
+                  {t("templatesDraft." + publicationStatus())}
+                </span>
+              </openclaw-tooltip>
+            </span>
+          </Show>
           <h2 ref={(element) => (heading = element)} tabindex={-1}>
             {title()}
           </h2>
@@ -213,7 +250,9 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
                         </Show>
                         <span>
                           <strong>{item().label}</strong>
-                          <small>{summary(item().detail)}</small>
+                          <Loading fallback={<small>{t("common.loading")}</small>}>
+                            <small>{summary(item())}</small>
+                          </Loading>
                         </span>
                         <Icon name="chevronRight" />
                       </button>
@@ -300,31 +339,40 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
               >
                 {(publication) => (
                   <>
-                    <span role="status">
-                      {t(
-                        publication().publicationStatus === "published"
-                          ? "templatesDraft.published"
-                          : "templatesDraft.pending",
-                      )}
-                    </span>
-                    <Show when={publication().publicationStatus === "published"}>
-                      <CopyButton
-                        text={publication().url}
-                        idleLabel={t("templatesDraft.copyLink")}
-                      />
-                    </Show>
-                    <a
-                      class="btn"
-                      href={publication().url}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <Show
+                      when={publication().publicationStatus === "published"}
+                      fallback={
+                        <a
+                          class="btn primary"
+                          href={publication().url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {t("templatesDraft.viewSubmission")}
+                        </a>
+                      }
                     >
-                      {t(
-                        publication().publicationStatus === "published"
-                          ? "templatesDraft.viewPublication"
-                          : "templatesDraft.viewSubmission",
-                      )}
-                    </a>
+                      <For each={[publication().url]}>
+                        {(url) => {
+                          let copyLabel!: HTMLSpanElement;
+                          return (
+                            <button
+                              type="button"
+                              class="btn primary"
+                              onClick={(event) =>
+                                void handleCopyButton(event, url, t("templatesDraft.copyLink"), {
+                                  label: copyLabel,
+                                })
+                              }
+                            >
+                              <span ref={(element) => (copyLabel = element)}>
+                                {t("templatesDraft.copyLink")}
+                              </span>
+                            </button>
+                          );
+                        }}
+                      </For>
+                    </Show>
                   </>
                 )}
               </Show>

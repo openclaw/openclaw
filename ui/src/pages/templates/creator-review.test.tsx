@@ -147,6 +147,11 @@ it("reviews the exact assembled package inline without editable fields or model 
     );
     expect(page.container.querySelector("input, textarea")).toBeNull();
     expect(page.container.querySelector(".template-creator__category-icon")).not.toBeNull();
+    if (label === "Automations") {
+      await waitForSolid(() =>
+        expect(page.getByText("Weekdays at 9:00 AM · America/Los_Angeles")).toBeTruthy(),
+      );
+    }
     const entry = page.container.querySelector<HTMLButtonElement>(
       ".template-creator__body button",
     )!;
@@ -202,6 +207,9 @@ it("keeps the original card through a single explicit publication and pending re
     method === "templates.drafts.publish" ? pending.promise : reviewed,
   );
   await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
+  expect(page.container.querySelector(".template-creator__header [role=status]")?.textContent).toBe(
+    "Unpublished",
+  );
   const card = page.container.querySelector(".template-creator");
   const publish = page.getByRole("button", { name: "Publish" });
   fireEvent.click(publish);
@@ -214,10 +222,15 @@ it("keeps the original card through a single explicit publication and pending re
     url: "https://example.test/maker/templates/release-brief",
     publicationStatus: "pending",
   });
-  await waitForSolid(() => expect(page.getByText("Pending security scans")).toBeTruthy());
+  await waitForSolid(() => expect(page.getByText("Pending", { exact: true })).toBeTruthy());
   expect(page.container.querySelector(".template-creator")).toBe(card);
   expect(page.queryByText("Published")).toBeNull();
-  expect(page.getByRole("link", { name: "View submission" })).toBeTruthy();
+  expect(page.getByRole("link", { name: "View submission" }).classList.contains("primary")).toBe(
+    true,
+  );
+  expect(page.container.querySelector(".template-creator__header [role=status]")?.textContent).toBe(
+    "Pending",
+  );
 });
 
 it.each(["none", "unconfirmed", "transport"])(
@@ -303,6 +316,8 @@ it("retains pending receipt across remount and promotes only a matching registry
     />
   ));
   await waitForSolid(() => expect(remounted.getByText("Published", { exact: true })).toBeTruthy());
+  expect(remounted.getByRole("button", { name: "Copy link" }).textContent).toBe("Copy link");
+  expect(remounted.queryByRole("link", { name: "View on ClawHub" })).toBeNull();
   expect(request.mock.calls.findLast(([m]) => m === "templates.drafts.review")?.[1]).toMatchObject({
     checkPublication: true,
     attemptId: "attempt-1",

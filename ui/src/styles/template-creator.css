@@ -30,6 +30,34 @@
     }
   }
 }
+.template-creator__status-anchor {
+  float: inline-end;
+  margin-inline-start: 8px;
+}
+.template-creator__status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 99px;
+  background: var(--card-highlight);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  &::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  &[data-state="pending"]::before {
+    background: var(--warn);
+  }
+  &[data-state="published"]::before {
+    background: var(--ok);
+  }
+}
 .template-creator__header--detail {
   align-items: center;
   position: relative;

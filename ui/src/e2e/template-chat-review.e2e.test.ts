@@ -214,6 +214,11 @@ it.skipIf(!available).each([true, false])(
       }
       const card = inline.getByRole("region", { name: "Review your Template" });
       await card.getByRole("heading", { name: "Research Brief", exact: true }).waitFor();
+      expect(await page.getByText("Template ready for review", { exact: true }).count()).toBe(0);
+      await card
+        .locator(".template-creator__header")
+        .getByText("Unpublished", { exact: true })
+        .waitFor();
       const capture = async (stage: string) => {
         if (!proof) {
           return;
@@ -246,6 +251,12 @@ it.skipIf(!available).each([true, false])(
         expect((await card.boundingBox())?.height).toBe(565);
         expect((await card.locator(".template-creator__header").boundingBox())?.height).toBe(60);
         await card.locator(".template-creator__category-icon").waitFor();
+        if (label === "Automations") {
+          await card
+            .getByText("Weekdays at 9:00 AM · America/Los_Angeles", { exact: true })
+            .waitFor();
+          expect(await card.getByText("0 9 * * *", { exact: false }).count()).toBe(0);
+        }
         await capture(label.toLowerCase().replaceAll(" ", "-") + "-list");
         if (label === "Workspace files") {
           await card.getByRole("button", { name: "AGENTS.md", exact: true }).click();
@@ -294,8 +305,19 @@ it.skipIf(!available).each([true, false])(
         publicationState: { status: "pending", publication },
       });
       await gateway.setMethodDelay("templates.drafts.publish", null);
-      await card.getByText("Pending security scans", { exact: true }).waitFor();
+      const pending = card.locator(".template-creator__header [role=status]");
+      await card
+        .locator(".template-creator__header")
+        .getByText("Pending", { exact: true })
+        .waitFor();
+      await page.keyboard.press("Tab");
+      await pending.focus();
+      await page
+        .getByRole("tooltip")
+        .getByText("Awaiting security review", { exact: true })
+        .waitFor();
       await capture("pending");
+      await pending.blur();
       expect(await card.getByText("Published", { exact: true }).count()).toBe(0);
       await gateway.setMethodResponse("templates.drafts.review", {
         ...reviewed,
@@ -307,6 +329,11 @@ it.skipIf(!available).each([true, false])(
       await card.getByText("Published", { exact: true }).waitFor({ timeout: 10_000 });
       await capture("published");
       expect(await card.getByRole("button", { name: "Copy link", exact: true }).count()).toBe(1);
+      expect(await card.locator(".template-creator__footer a").count()).toBe(0);
+      await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+      await card.getByRole("button", { name: "Copy link", exact: true }).click();
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(publication.url);
+      await card.getByRole("button", { name: "Copied", exact: true }).waitFor();
       expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.setViewportSize({ width: 400, height: 900 });
