@@ -58,8 +58,9 @@ export function isBotMentioned(
 
   const normalizedBotShip = normalizeShip(botShipName);
   const escapedShip = escapeRegExp(normalizedBotShip);
-  const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
-  if (mentionPattern.test(messageText)) {
+  // Bold, italic and strike render as *, ** and ~~ around the ship; code spans never mention.
+  const mentionPattern = new RegExp(`(^|[\\s*~])${escapedShip}(?=$|[\\s*~,.!?;:])`, "i");
+  if (mentionPattern.test(messageText.replace(/(`+)[\s\S]*?\1/g, " "))) {
     return true;
   }
 

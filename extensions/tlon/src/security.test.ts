@@ -51,17 +51,15 @@ it.each([
 });
 
 it.each([
-  ["@ALL uppercase", "~sampel-palnet", undefined, true],
-  ["~sampel-palnet-extra", "~sampel-palnet", undefined, false],
-  ["my~sampel-palnetfriend", "~sampel-palnet", undefined, false],
-  ["prenimbus", "~sampel-palnet", "nimbus", false],
-  ["nimbusy", "~sampel-palnet", "nimbus", false],
-  ["nimbus, hello", "~sampel-palnet", "nimbus", true],
-  ["", "~sampel-palnet", undefined, false],
-  ["test", "", undefined, false],
-  [null as unknown as string, "~sampel-palnet", undefined, false],
-] as const)("detects mentions in %j", (text, ship, nick, expected) => {
-  expect(isBotMentioned(text, ship, nick)).toBe(expected);
+  [["@ALL uppercase", "~sampel-palnet, hi", "**~sampel-palnet** hi", "~~~sampel-palnet~~?"], true],
+  [["nimbus, hello", "say *~sampel-palnet*.", "Are you there, ~sampel-palnet?"], true],
+  [["~sampel-palnet-extra", "my~sampel-palnetfriend", "`ping ~sampel-palnet, now`"], false],
+  [["https://tlon.io/~sampel-palnet", "nimbusy", "prenimbus", "", null], false],
+] as const)("detects mentions in %j", (texts, expected) => {
+  for (const text of texts) {
+    expect(isBotMentioned(text as string, "~sampel-palnet", "nimbus")).toBe(expected);
+  }
+  expect(isBotMentioned("test", "")).toBe(false);
 });
 
 it.each([false, true])("admits thread follow-up with explicit mention: %s", async (explicit) => {
