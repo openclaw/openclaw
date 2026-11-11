@@ -8,11 +8,14 @@ title: "Query a running Gateway"
 sidebarTitle: "Query"
 ---
 
-The WebSocket RPC query subcommands and their shared options. Part of the [`openclaw gateway`](/cli/gateway) reference.
+Subcommands for live queries and local diagnostics. Part of the [`openclaw gateway`](/cli/gateway) reference.
 
 ## Query a running Gateway
 
-All query commands use WebSocket RPC.
+Live queries use WebSocket RPC. When the Gateway is offline, use
+`openclaw gateway stability --bundle latest` to read a saved bundle from disk.
+`openclaw gateway diagnostics export` can collect local diagnostics even if
+live snapshots are unavailable.
 
 With token, password, or `none` authentication, ordinary RPC calls to the
 configured local loopback Gateway do not open the shared state database for device
