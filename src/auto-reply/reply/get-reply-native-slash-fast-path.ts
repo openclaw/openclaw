@@ -136,9 +136,23 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return { handled: false };
   }
 
-  assertNoUnmigratedWorkspaceState({ workspaceDir: params.workspaceDir });
-
   const sessionState = await initFastReplySessionState(params);
+  const commandContext = {
+    ctx: params.ctx,
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: sessionState.sessionKey,
+    isGroup: sessionState.isGroup,
+    triggerBodyNormalized: sessionState.triggerBodyNormalized,
+    commandAuthorized: params.commandAuthorized,
+  };
+  const command = buildCommandContext(
+    commandContext,
+    await resolveCommandAuthorizationAsync(commandContext),
+  );
+  if (command.isAuthorizedSender) {
+    assertNoUnmigratedWorkspaceState({ workspaceDir: params.workspaceDir });
+  }
   if (params.commandAuthorized) {
     const creatingSession = sessionState.initialSessionEntry === undefined;
     const initializationEntry = sessionState.initialSessionEntry ?? sessionState.sessionEntry;
@@ -173,19 +187,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionState.sessionEntryHandle.replaceCurrent(persistedInitialEntry);
     sessionState.sessionId = persistedInitialEntry.sessionId;
   }
-  const commandContext = {
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: sessionState.sessionKey,
-    isGroup: sessionState.isGroup,
-    triggerBodyNormalized: sessionState.triggerBodyNormalized,
-    commandAuthorized: params.commandAuthorized,
-  };
-  const command = buildCommandContext(
-    commandContext,
-    await resolveCommandAuthorizationAsync(commandContext),
-  );
   const commandScope = () => ({
     cfg: params.cfg,
     agentId: params.agentId,

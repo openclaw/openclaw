@@ -90,6 +90,19 @@ function registerFileTests(storage: "local" | "remote") {
     fs.writeFileSync(path.join(storageDir, name), content);
   }
 
+  it("refuses a document save while its workspace needs repair", async () => {
+    const source = path.join(workspace, "openclaw-workspace-state.json");
+    fs.writeFileSync(source, "retained");
+    const result = await setFile("# New instructions\n", {}, "AGENTS.md");
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("openclaw doctor --fix") },
+    });
+    expect(result.error?.message).not.toContain(workspace);
+    expect(fs.existsSync(path.join(storageDir, "AGENTS.md"))).toBe(false);
+    expect(fs.readFileSync(source, "utf8")).toBe("retained");
+  });
+
   it.each(["x", "é"])("bounds UTF-8 bytes (%s)", async (character) => {
     const name = "AGENTS.md";
     const accepted = character.repeat((2 * 1024 * 1024) / Buffer.byteLength(character));

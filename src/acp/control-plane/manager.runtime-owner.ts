@@ -49,11 +49,11 @@ export function isAcpOwnerRepairRequired(error: unknown): boolean {
 export function assertAcpWorkspaceMigrationReady(
   cfg: OpenClawConfig,
   agentId: string,
-  handle: AcpRuntimeHandle,
+  handle: AcpRuntimeHandle | undefined,
   meta: SessionAcpMeta,
 ): void {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const cwd = handle.cwd ?? meta.runtimeOptions?.cwd ?? meta.cwd;
+  const cwd = handle?.cwd ?? meta.runtimeOptions?.cwd ?? meta.cwd;
   const current = resolveCanonicalWorkspacePath(cwd || workspaceDir);
   try {
     for (const managedWorkspaceDir of [workspaceDir, ...listAgentWorkspaceDirs(cfg)]) {

@@ -459,7 +459,7 @@ async function prepareGatewayServerBootstrapSelected(input: {
         runtimeEnv.env,
       );
     const runtimeConfig = reapplyRuntimeOverlays(params.runtimeConfig);
-    // Both managed writes and watcher reloads must reject unmigrated workspaces
+    // Both managed writes and watcher reloads must reject state-directory attestations
     // before persistence or publication, using the candidate's final config and env.
     await assertConfiguredWorkspaceStateReady({ cfg: runtimeConfig, env: runtimeEnv.env });
     return {

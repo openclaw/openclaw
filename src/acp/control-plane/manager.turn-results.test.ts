@@ -104,6 +104,7 @@ describe("AcpSessionManager turn results", () => {
       expect(failure).toMatchObject({ message: expect.stringContaining("openclaw doctor --fix") });
       expect(String(failure)).toContain("Gateway log");
       expect(String(failure)).not.toContain(workspaceDir);
+      expect(state.ensureSession).not.toHaveBeenCalled();
       expect(startTurn).not.toHaveBeenCalled();
       expect(state.runTurn).not.toHaveBeenCalled();
     });
@@ -126,6 +127,7 @@ describe("AcpSessionManager turn results", () => {
       await expect(state.run()).rejects.toMatchObject({
         cause: { kind: "legacy-workspace" },
       });
+      expect(state.ensureSession).not.toHaveBeenCalled();
       expect(startTurn).not.toHaveBeenCalled();
       expect(state.runTurn).not.toHaveBeenCalled();
     });

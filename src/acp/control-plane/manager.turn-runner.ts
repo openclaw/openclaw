@@ -340,10 +340,9 @@ export async function runManagerTurn(params: {
             let onTurnAborted: (() => void) | undefined;
             try {
               // Failed setup still belongs to the runtime selected before ensure yielded.
-              runtimeLocator = {
-                backend: resolvedMeta.backend,
-                runtimeSessionName: resolvedMeta.runtimeSessionName,
-              };
+              const { backend, runtimeSessionName } = resolvedMeta;
+              runtimeLocator = { backend, runtimeSessionName };
+              assertAcpWorkspaceMigrationReady(input.cfg, agentId, undefined, resolvedMeta);
               const ensured = await params.ensureRuntimeHandle({
                 readAcpControl: () =>
                   signal.aborted

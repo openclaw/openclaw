@@ -16,6 +16,7 @@ import {
 } from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
+import { assertNoUnmigratedWorkspaceState } from "../../agents/workspace-legacy-state.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
@@ -27,6 +28,7 @@ import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
 import { respondError } from "./response.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -97,6 +99,23 @@ function respondWorkspaceFileUnsafe(respond: RespondFn, name: string): void {
   respondError(respond, ErrorCodes.INVALID_REQUEST, `unsafe workspace file "${name}"`);
 }
 
+function assertWorkspaceDocumentReadyOrRespond(respond: RespondFn, workspaceDir: string): boolean {
+  try {
+    assertNoUnmigratedWorkspaceState({ workspaceDir });
+    return true;
+  } catch (error) {
+    if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
+      throw error;
+    }
+    respondError(
+      respond,
+      ErrorCodes.UNAVAILABLE,
+      "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.",
+    );
+    return false;
+  }
+}
+
 export async function writeWorkspaceFileOrRespond(params: {
   respond: RespondFn;
   workspaceDir: string;
@@ -104,6 +123,9 @@ export async function writeWorkspaceFileOrRespond(params: {
   content: string;
   assertCurrent?: () => void;
 }): Promise<boolean> {
+  if (!assertWorkspaceDocumentReadyOrRespond(params.respond, params.workspaceDir)) {
+    return false;
+  }
   const access = getAgentWorkspaceAccess(params.workspaceDir);
   if (access) {
     if (Buffer.byteLength(params.content) > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
@@ -375,6 +397,9 @@ export const agentFileHandlers: Pick<
         `Agent workspace changed since "${name}" was read. Your draft is preserved. Reload to use the current workspace file, or Overwrite to save this draft there.`,
         { details: { type: "agent_file_conflict", name } },
       );
+      return;
+    }
+    if (!assertWorkspaceDocumentReadyOrRespond(respond, workspaceDir)) {
       return;
     }
     const access = getAgentWorkspaceAccess(workspaceDir);

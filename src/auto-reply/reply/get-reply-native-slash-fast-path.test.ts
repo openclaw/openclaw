@@ -667,7 +667,9 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
 
   it.each([
     { commandName: "config show", authorized: false },
+    { commandName: "config show", authorized: false, retained: true },
     { commandName: "compact", authorized: true, deniedByPolicy: true },
+    { commandName: "compact", authorized: true, deniedByPolicy: true, retained: true },
   ])("rejects unauthorized native /$commandName before model selection", async (testCase) => {
     const { commandName, authorized } = testCase;
     const storePath = path.join(
@@ -675,6 +677,10 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       "sessions.json",
     );
     const sessionKey = "agent:main:telegram:slash:unauthorized";
+    const workspaceDir = tempDirs.make("openclaw-native-slash-unauthorized-workspace-");
+    if ("retained" in testCase) {
+      await fs.writeFile(path.join(workspaceDir, "openclaw-workspace-state.json"), "retained");
+    }
     handleCommandsMock.mockResolvedValueOnce({
       shouldContinue: false,
       reply: { text: "You are not authorized to use this command." },
@@ -696,6 +702,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
           : {}),
       } as OpenClawConfig),
       commandAuthorized: authorized,
+      workspaceDir,
     });
 
     expect(result).toEqual({
