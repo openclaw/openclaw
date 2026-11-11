@@ -317,10 +317,8 @@
   flex-wrap: nowrap;
 }
 
-.openclaw-id-devices .openclaw-id-devices__confirmation .btn {
-  max-width: none;
+.openclaw-id-devices .openclaw-id-devices__confirmation .btn:first-child {
   flex-shrink: 0;
-  white-space: nowrap;
 }
 
 .openclaw-id-devices .openclaw-id-devices__confirm-revoke {
